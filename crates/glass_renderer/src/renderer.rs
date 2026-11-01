@@ -1,4 +1,5 @@
 use crate::context::VulkanContext;
+use crate::mesh::GpuMesh;
 use crate::offscreen::OffscreenTarget;
 use crate::pipeline::GraphicsPipeline;
 use crate::swapchain::SwapchainContext;
@@ -9,6 +10,8 @@ use thiserror::Error;
 
 const VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/triangle.vert.spv");
 const FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/triangle.frag.spv");
+const MESH_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/mesh.vert.spv");
+const MESH_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/mesh.frag.spv");
 
 #[derive(Error, Debug)]
 pub enum RendererError {
@@ -34,6 +37,7 @@ pub struct GlassRenderer {
     pub swapchain_framebuffers: Vec<vk::Framebuffer>,
     pub offscreen: OffscreenTarget,
     pub pipeline: GraphicsPipeline,
+    pub mesh_pipeline: GraphicsPipeline,
     pub command_pool: vk::CommandPool,
     pub command_buffer: vk::CommandBuffer,
     pub fence: vk::Fence,
@@ -144,8 +148,9 @@ impl GlassRenderer {
             720,
         )?;
 
-        // 5. Inicializar Pipeline Gráfico con shaders SPIR-V
+        // 5. Inicializar Pipelines Gráficos (Triángulo por defecto + Mallas 3D)
         let pipeline = GraphicsPipeline::new(device.clone(), offscreen.render_pass, VERT_SPV, FRAG_SPV)?;
+        let mesh_pipeline = GraphicsPipeline::new_mesh_pipeline(device.clone(), offscreen.render_pass, MESH_VERT_SPV, MESH_FRAG_SPV)?;
 
         // 6. Command Pool y Buffers
         let pool_info = vk::CommandPoolCreateInfo::default()
@@ -177,6 +182,7 @@ impl GlassRenderer {
             swapchain_framebuffers,
             offscreen,
             pipeline,
+            mesh_pipeline,
             command_pool,
             command_buffer,
             fence,
@@ -244,8 +250,12 @@ impl GlassRenderer {
         Ok((layout, pool, set))
     }
 
-    /// Renderiza la escena 3D a la textura offscreen desacoplada.
-    pub fn render_offscreen(&mut self, queue: vk::Queue) -> Result<(), RendererError> {
+    /// Renderiza la escena 3D a la textura offscreen desacoplada (con soporte opcional de malla 3D indexada)
+    pub fn render_offscreen_mesh(
+        &mut self,
+        queue: vk::Queue,
+        mesh_data: Option<(&GpuMesh, [f32; 16])>,
+    ) -> Result<(), RendererError> {
         unsafe {
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
             self.device.reset_fences(&[self.fence])?;
@@ -300,10 +310,36 @@ impl GlassRenderer {
             }];
             self.device.cmd_set_scissor(cmd, 0, &scissor);
 
-            self.device
-                .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline.pipeline);
+            if let Some((mesh, mvp)) = mesh_data {
+                // Dibujar malla 3D indexada con pipeline de mallas
+                self.device.cmd_bind_pipeline(
+                    cmd,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.mesh_pipeline.pipeline,
+                );
 
-            self.device.cmd_draw(cmd, 3, 1, 0, 0);
+                let push_constants_bytes = bytemuck::cast_slice(&mvp);
+                self.device.cmd_push_constants(
+                    cmd,
+                    self.mesh_pipeline.layout,
+                    vk::ShaderStageFlags::VERTEX,
+                    0,
+                    push_constants_bytes,
+                );
+
+                self.device
+                    .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
+                self.device
+                    .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
+
+                self.device
+                    .cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+            } else {
+                // Fallback al triángulo procedural por defecto
+                self.device
+                    .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline.pipeline);
+                self.device.cmd_draw(cmd, 3, 1, 0, 0);
+            }
 
             self.device.cmd_end_render_pass(cmd);
             self.device.end_command_buffer(cmd)?;
@@ -315,6 +351,10 @@ impl GlassRenderer {
         }
 
         Ok(())
+    }
+
+    pub fn render_offscreen(&mut self, queue: vk::Queue) -> Result<(), RendererError> {
+        self.render_offscreen_mesh(queue, None)
     }
 }
 
