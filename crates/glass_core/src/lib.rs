@@ -1,10 +1,12 @@
 //! glass_core: Window management, OS event abstractions and lifecycle contracts.
 
 pub mod events;
+pub mod scene;
 pub mod types;
 pub mod window;
 
 pub use events::EngineEvent;
+pub use scene::{EntityData, MeshData, SceneState, TransformData};
 pub use types::TransformFfi;
 pub use window::{GlassWindow, WindowConfig};
 

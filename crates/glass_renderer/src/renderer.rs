@@ -356,6 +356,173 @@ impl GlassRenderer {
     pub fn render_offscreen(&mut self, queue: vk::Queue) -> Result<(), RendererError> {
         self.render_offscreen_mesh(queue, None)
     }
+
+    /// Presenta la textura offscreen directamente sobre una imagen del Swapchain mediante hardware blit.
+    /// Utilizado en modo Standalone (runtime de juego) para máximo rendimiento sin overhead de UI.
+    pub fn blit_offscreen_to_swapchain(
+        &mut self,
+        queue: vk::Queue,
+        image_index: u32,
+    ) -> Result<(), RendererError> {
+        let swapchain_image = self.swapchain.images[image_index as usize];
+        let offscreen_image = self.offscreen.color_image;
+
+        unsafe {
+            self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
+            self.device.reset_fences(&[self.fence])?;
+
+            let cmd = self.command_buffer;
+            let begin_info = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            self.device.begin_command_buffer(cmd, &begin_info)?;
+
+            // 1. Transición del buffer offscreen de SHADER_READ_ONLY_OPTIMAL a TRANSFER_SRC_OPTIMAL
+            let barrier_offscreen_src = vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(offscreen_image)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .src_access_mask(vk::AccessFlags::SHADER_READ)
+                .dst_access_mask(vk::AccessFlags::TRANSFER_READ);
+
+            // 2. Transición de la imagen del Swapchain de UNDEFINED a TRANSFER_DST_OPTIMAL
+            let barrier_swapchain_dst = vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(swapchain_image)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .src_access_mask(vk::AccessFlags::empty())
+                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
+
+            self.device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_offscreen_src, barrier_swapchain_dst],
+            );
+
+            // 3. Hardware Blit con escalado bilineal automático si el swapchain difiere de la resolución interna
+            let blit_region = vk::ImageBlit::default()
+                .src_subresource(vk::ImageSubresourceLayers {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .src_offsets([
+                    vk::Offset3D { x: 0, y: 0, z: 0 },
+                    vk::Offset3D {
+                        x: self.offscreen.extent.width as i32,
+                        y: self.offscreen.extent.height as i32,
+                        z: 1,
+                    },
+                ])
+                .dst_subresource(vk::ImageSubresourceLayers {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .dst_offsets([
+                    vk::Offset3D { x: 0, y: 0, z: 0 },
+                    vk::Offset3D {
+                        x: self.swapchain.extent.width as i32,
+                        y: self.swapchain.extent.height as i32,
+                        z: 1,
+                    },
+                ]);
+
+            self.device.cmd_blit_image(
+                cmd,
+                offscreen_image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                swapchain_image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[blit_region],
+                vk::Filter::LINEAR,
+            );
+
+            // 4. Transición de la imagen del swapchain a PRESENT_SRC_KHR para la presentación
+            let barrier_swapchain_present = vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(swapchain_image)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .dst_access_mask(vk::AccessFlags::MEMORY_READ);
+
+            // 5. Transición del buffer offscreen de vuelta a SHADER_READ_ONLY_OPTIMAL
+            let barrier_offscreen_restore = vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(offscreen_image)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .src_access_mask(vk::AccessFlags::TRANSFER_READ)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ);
+
+            self.device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_swapchain_present, barrier_offscreen_restore],
+            );
+
+            self.device.end_command_buffer(cmd)?;
+
+            let wait_semaphores = [self.image_available_semaphore];
+            let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+            let signal_semaphores = [self.render_finished_semaphore];
+            let command_buffers = [cmd];
+
+            let submit_info = [vk::SubmitInfo::default()
+                .wait_semaphores(&wait_semaphores)
+                .wait_dst_stage_mask(&wait_stages)
+                .command_buffers(&command_buffers)
+                .signal_semaphores(&signal_semaphores)];
+
+            self.device.queue_submit(queue, &submit_info, self.fence)?;
+        }
+
+        Ok(())
+    }
 }
 
 impl Drop for GlassRenderer {
