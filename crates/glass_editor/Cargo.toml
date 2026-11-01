@@ -7,6 +7,11 @@ license.workspace = true
 
 [dependencies]
 glass_core.workspace = true
+glass_renderer.workspace = true
+ash.workspace = true
+gpu-allocator.workspace = true
 egui.workspace = true
+egui-winit.workspace = true
+egui-ash-renderer.workspace = true
 log.workspace = true
 serde.workspace = true

@@ -10,6 +10,7 @@ glass_core.workspace = true
 ash.workspace = true
 ash-window.workspace = true
 gpu-allocator.workspace = true
+egui-ash-renderer.workspace = true
 log.workspace = true
 thiserror.workspace = true
 raw-window-handle.workspace = true
