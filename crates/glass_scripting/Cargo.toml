@@ -8,5 +8,9 @@ license.workspace = true
 [dependencies]
 glass_core.workspace = true
 log.workspace = true
+netcorehost = "0.22.0"
 serde.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+env_logger.workspace = true

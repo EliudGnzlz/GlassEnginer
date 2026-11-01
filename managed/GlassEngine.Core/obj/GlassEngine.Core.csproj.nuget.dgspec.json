@@ -1,0 +1,68 @@
+{
+  "format": 1,
+  "restore": {
+    "/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/GlassEngine.Core.csproj": {}
+  },
+  "projects": {
+    "/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/GlassEngine.Core.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/GlassEngine.Core.csproj",
+        "projectName": "GlassEngine.Core",
+        "projectPath": "/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/GlassEngine.Core.csproj",
+        "packagesPath": "/home/d3/.nuget/packages/",
+        "outputPath": "/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/obj/",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "/home/d3/.nuget/NuGet/NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0"
+        ],
+        "sources": {
+          "/usr/share/dotnet/library-packs": {},
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net8.0": {
+            "targetAlias": "net8.0",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        }
+      },
+      "frameworks": {
+        "net8.0": {
+          "targetAlias": "net8.0",
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "downloadDependencies": [
+            {
+              "name": "Microsoft.AspNetCore.App.Ref",
+              "version": "[8.0.32, 8.0.32]"
+            }
+          ],
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "/usr/share/dotnet/sdk/8.0.132/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}

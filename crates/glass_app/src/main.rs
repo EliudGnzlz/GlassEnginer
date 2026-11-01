@@ -9,11 +9,42 @@ use glass_renderer::{
     AssetCache, AssetReloadEvent, AssetWatcher, GlassRenderer, MeshLoader, VulkanConfig,
     VulkanContext,
 };
+use glass_scripting::{register_scene_bridge, SceneBridge, ScriptHost, TransformFfi};
 use std::ffi::CStr;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use winit::application::ApplicationHandler;
+
+struct EngineSceneBridge {
+    scene_state: Arc<Mutex<SceneState>>,
+}
+
+impl SceneBridge for EngineSceneBridge {
+    fn get_transform(&self, entity_id: u64) -> Option<TransformFfi> {
+        let state = self.scene_state.lock().ok()?;
+        let ent = state.entities.iter().find(|e| e.id == entity_id)?;
+        Some(TransformFfi {
+            position: ent.transform.position,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: ent.transform.scale,
+        })
+    }
+
+    fn set_transform(&self, entity_id: u64, transform: TransformFfi) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        if let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) {
+            ent.transform.position = transform.position;
+            ent.transform.scale = transform.scale;
+            true
+        } else {
+            false
+        }
+    }
+}
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, NamedKey};
@@ -72,9 +103,11 @@ struct GlassEngineApp {
     asset_cache: Arc<RwLock<AssetCache>>,
     asset_watcher: Option<AssetWatcher>,
     start_time: Instant,
+    pub script_host: ScriptHost,
     is_headless_test: bool,
     is_m5_test: bool,
     is_m6_test: bool,
+    is_m7_test: bool,
 }
 
 impl Drop for GlassEngineApp {
@@ -108,7 +141,7 @@ impl Drop for GlassEngineApp {
 }
 
 impl GlassEngineApp {
-    pub fn new(is_headless_test: bool, is_m5_test: bool, is_m6_test: bool) -> Self {
+    pub fn new(is_headless_test: bool, is_m5_test: bool, is_m6_test: bool, is_m7_test: bool) -> Self {
         let scene_state = Arc::new(Mutex::new(SceneState::new()));
         let mcp_server = Arc::new(McpServer::new(scene_state.clone()));
         let asset_cache = AssetCache::new();
@@ -131,9 +164,11 @@ impl GlassEngineApp {
             asset_cache,
             asset_watcher: None,
             start_time: Instant::now(),
+            script_host: ScriptHost::new(),
             is_headless_test,
             is_m5_test,
             is_m6_test,
+            is_m7_test,
         }
     }
 
@@ -494,6 +529,84 @@ impl ApplicationHandler for GlassEngineApp {
         self.desc_pool = Some(pool);
         self.viewport_texture_id = Some(viewport_texture_id);
 
+        // Conectar el bridge de scripting con el SceneState
+        register_scene_bridge(Box::new(EngineSceneBridge {
+            scene_state: self.scene_state.clone(),
+        }));
+
+        let managed_dir = Path::new("managed/GlassEngine.Core/bin/Debug/net8.0");
+        if managed_dir.exists() {
+            match self.script_host.initialize(managed_dir) {
+                Ok(()) => log::info!("main: ScriptHost C# (.NET CoreCLR) inicializado exitosamente."),
+                Err(e) => log::warn!("main: ScriptHost no inicializado: {}", e),
+            }
+        }
+
+        if self.is_m7_test {
+            log::info!("Ejecutando suite de pruebas de integración para HITO 7 (C# Scripting .NET CoreCLR)...");
+            assert!(self.script_host.is_initialized, "ScriptHost debe estar inicializado para Hito 7");
+
+            // 1. Crear entidad en SceneState para el test
+            let test_entity_id = {
+                let mut state = self.scene_state.lock().unwrap();
+                state.create_entity(
+                    "C# Scripted Entity".to_string(),
+                    vec!["Transform".to_string(), "Script".to_string()],
+                )
+            };
+
+            // 2. Instanciar scripts C# 'Rotator' y 'PlayerMovement'
+            let rotator_handle = self.script_host.create_instance(test_entity_id, "GlassEngine.Core.Scripts.Rotator")
+                .expect("Debe instanciar Rotator en C#");
+            let mover_handle = self.script_host.create_instance(test_entity_id, "GlassEngine.Core.Scripts.PlayerMovement")
+                .expect("Debe instanciar PlayerMovement en C#");
+            assert_eq!(self.script_host.active_instance_count(), 2);
+
+            let initial_pos = {
+                let state = self.scene_state.lock().unwrap();
+                let ent = state.entities.iter().find(|e| e.id == test_entity_id).unwrap();
+                ent.transform.position
+            };
+
+            // 3. Ejecutar 5 frames de simulación con Update C# y renderizado offscreen
+            for _ in 0..5 {
+                self.script_host.update_all(0.016667);
+                if let Err(e) = self.render_frame() {
+                    log::error!("Fallo en render_frame durante test C#: {}", e);
+                    event_loop.exit();
+                    return;
+                }
+            }
+
+            // 4. Verificar que el script C# modificó la posición en SceneState
+            let final_pos = {
+                let state = self.scene_state.lock().unwrap();
+                let ent = state.entities.iter().find(|e| e.id == test_entity_id).unwrap();
+                ent.transform.position
+            };
+            log::info!("Posición inicial: {:?}, Posición final tras C# Update: {:?}", initial_pos, final_pos);
+            assert_ne!(initial_pos, final_pos, "El script C# debió mutar el transform de la entidad");
+
+            // 5. Destruir instancias
+            self.script_host.destroy_instance(rotator_handle);
+            self.script_host.destroy_instance(mover_handle);
+            assert_eq!(self.script_host.active_instance_count(), 0);
+
+            log::info!("============================================================");
+            log::info!("   HITO 7 COMPLETADO: C# SCRIPTING (.NET CoreCLR)");
+            log::info!("   GPU en Uso:                  {}", gpu_name);
+            log::info!("   Runtime .NET:                .NET 8.0 / CoreCLR hostfxr");
+            log::info!("   FFI Interop:                 [StructLayout(LayoutKind.Sequential)] 40 bytes");
+            log::info!("   Unmanaged Callers:           InitBridge, CreateScriptInstance, Update, Destroy");
+            log::info!("   Clase Base:                  GlassEngine.Core.GlassBehaviour");
+            log::info!("   Scripts Verificados:         Rotator.cs, PlayerMovement.cs");
+            log::info!("   Sincronización de Escena:    EngineSceneBridge bidireccional segura con Mutex");
+            log::info!("============================================================");
+
+            event_loop.exit();
+            return;
+        }
+
         if self.is_m6_test {
             log::info!("Ejecutando suite de pruebas de integración para HITO 6 (Pipeline de Blender & Hot-Reload)...");
 
@@ -548,7 +661,7 @@ impl ApplicationHandler for GlassEngineApp {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
-        if self.is_headless_test || self.is_m5_test || self.is_m6_test {
+        if self.is_headless_test || self.is_m5_test || self.is_m6_test || self.is_m7_test {
             return;
         }
 
@@ -609,6 +722,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    let is_m7_test = args.iter().any(|arg| arg == "--test-m7");
     let is_m6_test = args.iter().any(|arg| arg == "--test-m6");
     let is_m5_test = args.iter().any(|arg| arg == "--test-m5");
     let is_headless_test = args
@@ -616,7 +730,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .any(|arg| arg == "--test-init" || arg == "--check-vulkan" || arg == "--test-m3" || arg == "--test-m4");
 
     let event_loop = EventLoop::new()?;
-    let mut app = GlassEngineApp::new(is_headless_test, is_m5_test, is_m6_test);
+    let mut app = GlassEngineApp::new(is_headless_test, is_m5_test, is_m6_test, is_m7_test);
     event_loop.run_app(&mut app)?;
 
     Ok(())

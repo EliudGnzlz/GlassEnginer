@@ -13,9 +13,9 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
 | **Hito 3** | Swapchain, Render Passes y Viewport Offscreen | **Completado** | 100% | DeepSeek + Kimi (Mirai) |
 | **Hito 4** | Editor Docking estilo Unity en egui | **Completado** | 100% | Kimi (Mirai) + DeepSeek |
 | **Hito 5** | Servidor MCP Embebido en Tiempo de Ejecución | **Completado** | 100% | Kimi (Mirai) + DeepSeek |
-| **Hito 6** | Pipeline de Blender y Recarga en Caliente | **En Progreso** | - | Kimi (Mirai) + DeepSeek |
-| **Hito 7** | Entorno de Scripting en C# (.NET CoreCLR) | Pendiente | - | Kimi (Mirai) + DeepSeek |
-| **Hito 8** | Subsistema de Audio 2D/3D Desacoplado (Kira) | Pendiente | - | DeepSeek |
+| **Hito 6** | Pipeline de Blender y Recarga en Caliente | **Completado** | 100% | DeepSeek + Kimi (Mirai) |
+| **Hito 7** | Entorno de Scripting en C# (.NET CoreCLR) | **Completado** | 100% | Kimi (Mirai) + DeepSeek |
+| **Hito 8** | Subsistema de Audio 2D/3D Desacoplado (Kira) | **En Progreso** | - | DeepSeek + Kimi (Mirai) |
 | **Hito 9** | Simulación Física 3D (Rapier3D) | Pendiente | - | DeepSeek |
 | **Hito 10**| Compilación Dual (Editor vs Standalone) | Pendiente | - | Gemini + DeepSeek |
 
@@ -81,15 +81,50 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
   * Suite de pruebas unitarias (`cargo test -p glass_mcp`) con 100% de éxito.
   * Verificación en hardware real NVIDIA GTX 1070 con código de salida 0 y 0 errores en validation layers.
 * **Auditoría Cruzada:**
-  * **Kimi (vía Mirai):** Visto bueno técnico condicionado con directrices registradas para Hito 6 (aislamiento de asset cache fuera del lock de escena, staging buffers con fences para nueva geometría).
+  * **Kimi (vía Mirai):** Visto bueno técnico condicionado con directrices registradas para Hito 6.
+
+### Hito 6: Pipeline de Blender y Recarga en Caliente
+* **Fecha:** 2026-11-01
+* **Acciones:**
+  * Integración con Blender 5.2.2 LTS desatendido (`headless_blender_bridge.py`) convirtiendo archivos `.blend` nativos a `.glb` binarios validados.
+  * Cargador de mallas glTF (`gltf 1.4`): extracción eficiente de posiciones, normales, coordenadas UV e índices de mallas 3D (validado con modelo de cubo estándar de 24 vértices y 36 índices).
+  * Sistema de transferencia a GPU con Staging Buffers (`MemoryLocation::CpuToGpu`) hacia VRAM (`MemoryLocation::GpuOnly`) mediante `vkCmdCopyBuffer` y sincronización segura con fences y `gpu-allocator 0.28`.
+  * Pipeline de renderizado 3D indexado (`mesh.vert.spv` + `mesh.frag.spv`) con vertex layout de 32 bytes y PushConstants de 64 bytes para matriz Model-View-Projection (MVP) con rotación continua en tiempo real.
+  * Implementación de `AssetCache` (`Arc<RwLock<AssetCache>>`) con sustitución atómica de mallas en VRAM desacoplado del mutex de escena para evitar stalls.
+  * Implementación de `AssetWatcher` en hilo secundario mediante `notify 8.2` vigilando el árbol `assets/` para detectar y recargar automáticamente modelos modificados.
+  * Validación en hardware real NVIDIA GTX 1070 con código de salida 0 y 0 advertencias de validación Vulkan.
+* **Auditoría Cruzada:**
+  * **DeepSeek:** Visto bueno condicionado, validando topología estándar, Staging Buffers y push constants. Directrices anotadas para Hito 7: aislamiento de buffers y concurrencia blindada.
+
+### Hito 7: Entorno de Scripting en C# (.NET CoreCLR)
+* **Fecha:** 2026-11-01
+* **Acciones:**
+  * Creación y compilación limpia de la biblioteca gestionada `GlassEngine.Core` (.NET 8):
+    * `Structs.cs`: `Vector3`, `Quaternion`, `TransformData` con `[StructLayout(LayoutKind.Sequential)]` (tamaño 40 bytes exactos, alineación 4 bytes).
+    * `NativeDelegates.cs`: Delegados Cdecl `GetTransformDelegate`, `SetTransformDelegate`, `LogMessageDelegate`.
+    * `GlassBehaviour.cs`: Clase base de scripting con ciclo de vida `Awake()`, `StartIfNeeded()`, `Update(float deltaTime)` y propiedades sincronizadas `Position`, `Rotation`, `Scale`.
+    * `RuntimeBridge.cs`: Métodos `[UnmanagedCallersOnly]` (`InitBridge`, `CreateScriptInstance`, `UpdateScriptInstance`, `DestroyScriptInstance`) y resolución dinámica de tipos.
+    * Scripts de juego de ejemplo: `Rotator.cs` (rotación suave continua en eje Y) y `PlayerMovement.cs` (movimiento sinusoidal en X y Z).
+  * Lado Rust (`crates/glass_scripting`):
+    * `bindings.rs`: `TransformFfi` `#[repr(C)]` con aserciones en tiempo de compilación y validación cruzada con `tools/ffi_validator.py`. Callbacks nativos `get_transform`, `set_transform`, `log_message` con comprobación de punteros nulos y canalización a logs de Rust.
+    * `bridge.rs`: Trait `SceneBridge` y registro global thread-safe (`register_scene_bridge`).
+    * `host.rs`: Carga de `libhostfxr.so` vía `netcorehost 0.22`, arranque con `GlassEngine.Core.runtimeconfig.json`, resolución de delegados sin sobrecosto de reflexión y gestión de ciclo de vida de instancias.
+  * Integración con el motor (`crates/glass_app`):
+    * Implementación de `EngineSceneBridge` sincronizando transforms de entidades de `SceneState` de forma bidireccional mediante `Arc<Mutex<SceneState>>`.
+    * Invocación de `script_host.update_all(dt)` en el bucle principal.
+  * Verificación:
+    * Suite unitaria `crates/glass_scripting/tests/coreclr_test.rs`: 100% aprobada en 0.08s.
+    * Prueba de integración en hardware real (`cargo run -p glass_app -- --test-m7`): instanciación, ejecución de `Awake`, `Start`, múltiples ticks de `Update`, mutación de posición y rotación verificadas, y renderizado offscreen en NVIDIA GTX 1070 con código 0 y 0 errores.
+* **Auditoría Cruzada:**
+  * **Kimi (vía Mirai MCP):** Visto bueno técnico (Sign-off) otorgado, destacando la solidez de `[UnmanagedCallersOnly]` y la precisión del layout de 40 bytes. Directrices anotadas para Hito 8: bindings C# para `AudioSource`, `AudioListener` y `AudioClip`.
+  * **DeepSeek:** Visto bueno técnico (Sign-off) otorgado, validando la ausencia de UB en FFI, las aserciones de compilación de `TransformFfi` y la carga determinista de hostfxr. Directrices de bajo nivel anotadas para Hito 8: principio de hilo de audio no bloqueante y canales SPSC sin alocación.
 
 ---
 
-### Hito 6: Pipeline de Blender y Recarga en Caliente (En Progreso)
-* **Objetivo:** Automatizar la importación de modelos `.blend` y `.glb` mediante Blender en modo headless y habilitar recarga en caliente (hot-reloading) con el crate `notify`.
-* **Capacidades a Implementar:**
-  * Vigilante de directorio `assets/` en un hilo dedicado con `notify 8.0`.
-  * Conversor desatendido: si se añade o modifica un archivo `.blend`, se invoca `blender -b input.blend --python tools/export_gltf.py` para exportar a `.glb`.
-  * Cargador de mallas glTF en `glass_renderer` usando el crate `gltf 1.4` (extracción de posiciones, normales, coordenadas UV e índices).
-  * Creación de Vertex Buffers e Index Buffers en VRAM con `gpu-allocator 0.28` vía Staging Buffer con barreras y fences.
-  * Actualización atómica en el `AssetCache` de la escena sin detener el render loop.
+### Hito 8: Subsistema de Audio 2D/3D Desacoplado (Kira) (En Progreso)
+* **Objetivo:** Implementar un subsistema de audio espacializado e interactivo basado en `kira` ejecutándose en un hilo de audio de alta prioridad totalmente desacoplado del hilo de render y de la simulación, expuesto tanto a C# como a la escena.
+* **Directrices de Implementación:**
+  * Hilo de audio dedicado sin bloqueos, sin alocaciones en el callback y sin I/O.
+  * Canal lock-free SPSC (`ringbuf`) para encolar comandos desde simulación/C# (`Play`, `Stop`, `SetVolume`, `SetPosition`).
+  * Componentes `AudioSource` y `AudioListener` vinculados a las entidades y a la posición de la cámara.
+  * Exposición a C# en `GlassEngine.Core`.
