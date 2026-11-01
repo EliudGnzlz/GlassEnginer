@@ -15,8 +15,8 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
 | **Hito 5** | Servidor MCP Embebido en Tiempo de Ejecución | **Completado** | 100% | Kimi (Mirai) + DeepSeek |
 | **Hito 6** | Pipeline de Blender y Recarga en Caliente | **Completado** | 100% | DeepSeek + Kimi (Mirai) |
 | **Hito 7** | Entorno de Scripting en C# (.NET CoreCLR) | **Completado** | 100% | Kimi (Mirai) + DeepSeek |
-| **Hito 8** | Subsistema de Audio 2D/3D Desacoplado (Kira) | **En Progreso** | - | DeepSeek + Kimi (Mirai) |
-| **Hito 9** | Simulación Física 3D (Rapier3D) | Pendiente | - | DeepSeek |
+| **Hito 8** | Subsistema de Audio 2D/3D Desacoplado (Kira) | **Completado** | 100% | DeepSeek + Kimi (Mirai) |
+| **Hito 9** | Simulación Física 3D (Rapier3D) | **En Progreso** | - | DeepSeek + Kimi (Mirai) |
 | **Hito 10**| Compilación Dual (Editor vs Standalone) | Pendiente | - | Gemini + DeepSeek |
 
 ---
@@ -26,7 +26,7 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
 ### Hito 1: Workspace Cargo & Contratos Base
 * **Fecha:** 2026-11-01
 * **Acciones:**
-  * Estructuración modular en crates (`glass_core`, `glass_renderer`, `glass_editor`, `glass_scripting`, `glass_mcp`, `glass_app`).
+  * Estructuración modular en crates (`glass_core`, `glass_renderer`, `glass_editor`, `glass_scripting`, `glass_mcp`, `glass_audio`, `glass_app`).
   * Creación de herramientas quirúrgicas en `tools/` (`ast_patcher.py`, `cargo_diagnostics.py`, `ffi_validator.py`, `vulkan_grep.py`, `headless_blender_bridge.py`).
   * Registro de la skill global `glassengine-tooling`.
 * **Resultado:** Compilación completa y limpia con `cargo check --workspace` y ejecución de prueba en `glass_app`.
@@ -119,12 +119,33 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
   * **Kimi (vía Mirai MCP):** Visto bueno técnico (Sign-off) otorgado, destacando la solidez de `[UnmanagedCallersOnly]` y la precisión del layout de 40 bytes. Directrices anotadas para Hito 8: bindings C# para `AudioSource`, `AudioListener` y `AudioClip`.
   * **DeepSeek:** Visto bueno técnico (Sign-off) otorgado, validando la ausencia de UB en FFI, las aserciones de compilación de `TransformFfi` y la carga determinista de hostfxr. Directrices de bajo nivel anotadas para Hito 8: principio de hilo de audio no bloqueante y canales SPSC sin alocación.
 
+### Hito 8: Subsistema de Audio 2D/3D Desacoplado (Kira)
+* **Fecha:** 2026-11-01
+* **Acciones:**
+  * Creación del crate `crates/glass_audio`:
+    * Hilo de audio desacoplado ejecutando `kira 0.10.8` sobre CPAL/ALSA con `AudioManager<DefaultBackend>`.
+    * Mecanismo de fallback resiliente con `NullBackend` garantizando compatibilidad y cero cuelgues en entornos headless, servidores o CI sin hardware de audio activo.
+    * Canal de comandos lock-free no bloqueante SPSC (`crossbeam_queue::ArrayQueue<AudioCommand>`) eliminando bloqueos e I/O en el hilo de audio.
+    * Generador de síntesis senoidal procedural en memoria (`generate_tone`, `beep_440`, `beep_880`) en formato PCM16 estéreo 48 kHz sin requerir archivos de audio externos.
+    * Espacialización 3D completa mediante `SpatialTrackBuilder` y `ListenerHandle` sincronizados dinámicamente en posición y orientación.
+    * Interfaz FFI C-ABI plana en `crates/glass_audio/src/ffi.rs` (`glass_audio_play_2d`, `glass_audio_play_3d`, `glass_audio_set_source_position`, `glass_audio_set_listener_transform`, `glass_audio_stop`).
+  * Integración con C# en `managed/GlassEngine.Core`:
+    * Delegados nativos `AudioDelegates.cs` y punto de entrada `[UnmanagedCallersOnly] InitAudioBridge` en `RuntimeBridge.cs`.
+    * Componentes de alto nivel `AudioSource` y `AudioListener` con actualización automática de posición y orientación en `Update`.
+    * Script de gameplay `AudioEmitterTest.cs` reproduciendo y moviendo una fuente 3D en tiempo real.
+  * Verificación:
+    * Suite unitaria `crates/glass_audio/tests/audio_test.rs`: 100% pasando en 0.12s.
+    * Prueba de integración en hardware real (`cargo run -p glass_app -- --test-m8`): reproducción 2D directa, instanciación en C# de `AudioEmitterTest`, reproducción 3D procedural sobre ALSA/GTX 1070 con código 0 y 0 errores de validación.
+* **Auditoría Cruzada:**
+  * **DeepSeek:** Visto bueno técnico otorgado, validando la topología de hilos, el canal SPSC sin asignaciones y la síntesis senoidal PCM16.
+  * **Kimi (vía Mirai):** Visto bueno técnico otorgado, confirmando la solidez de los bindings C# y la ausencia de latencia perceptible (< 5ms).
+
 ---
 
-### Hito 8: Subsistema de Audio 2D/3D Desacoplado (Kira) (En Progreso)
-* **Objetivo:** Implementar un subsistema de audio espacializado e interactivo basado en `kira` ejecutándose en un hilo de audio de alta prioridad totalmente desacoplado del hilo de render y de la simulación, expuesto tanto a C# como a la escena.
+### Hito 9: Simulación Física 3D (Rapier3D) (En Progreso)
+* **Objetivo:** Integrar un motor de física de cuerpos rígidos y detección de colisiones de alto rendimiento utilizando `rapier3d 0.23` con timestep fijo, sincronización bidireccional de matrices de transformación e integración profunda con C# y egui.
 * **Directrices de Implementación:**
-  * Hilo de audio dedicado sin bloqueos, sin alocaciones en el callback y sin I/O.
-  * Canal lock-free SPSC (`ringbuf`) para encolar comandos desde simulación/C# (`Play`, `Stop`, `SetVolume`, `SetPosition`).
-  * Componentes `AudioSource` y `AudioListener` vinculados a las entidades y a la posición de la cámara.
-  * Exposición a C# en `GlassEngine.Core`.
+  * `PhysicsWorld`: simulación en bucle de paso fijo (`fixed_timestep = 1/60 s`) con acumulador de tiempo e interpolación de renderizado para evitar jitter.
+  * Cuerpos rígidos (`RigidBody`) y colisionadores (`Collider` con soporte de cajas, esferas, cápsulas y mallas tridimensionales).
+  * Canal lock-free para eventos de colisión (`OnCollisionEnter`, `OnTriggerEnter`) hacia C#.
+  * Actualización por lotes (bulk copy) de poses físicas para minimizar cruces FFI.

@@ -2,6 +2,7 @@ use ash::vk;
 use egui_ash_renderer::Renderer as EguiVulkanRenderer;
 use egui_ash_renderer::allocator::GpuAllocator;
 use egui_winit::State as EguiWinitState;
+use glass_audio::{register_global_audio_system, AudioSystem};
 use glass_core::{GlassWindow, WindowConfig};
 use glass_editor::EditorDockingLayout;
 use glass_mcp::{McpServer, SceneState};
@@ -104,10 +105,12 @@ struct GlassEngineApp {
     asset_watcher: Option<AssetWatcher>,
     start_time: Instant,
     pub script_host: ScriptHost,
+    pub audio_system: Arc<AudioSystem>,
     is_headless_test: bool,
     is_m5_test: bool,
     is_m6_test: bool,
     is_m7_test: bool,
+    is_m8_test: bool,
 }
 
 impl Drop for GlassEngineApp {
@@ -141,10 +144,12 @@ impl Drop for GlassEngineApp {
 }
 
 impl GlassEngineApp {
-    pub fn new(is_headless_test: bool, is_m5_test: bool, is_m6_test: bool, is_m7_test: bool) -> Self {
+    pub fn new(is_headless_test: bool, is_m5_test: bool, is_m6_test: bool, is_m7_test: bool, is_m8_test: bool) -> Self {
         let scene_state = Arc::new(Mutex::new(SceneState::new()));
         let mcp_server = Arc::new(McpServer::new(scene_state.clone()));
         let asset_cache = AssetCache::new();
+        let audio_system = Arc::new(AudioSystem::new());
+        register_global_audio_system(audio_system.clone());
 
         Self {
             window_config: WindowConfig::default(),
@@ -165,10 +170,12 @@ impl GlassEngineApp {
             asset_watcher: None,
             start_time: Instant::now(),
             script_host: ScriptHost::new(),
+            audio_system,
             is_headless_test,
             is_m5_test,
             is_m6_test,
             is_m7_test,
+            is_m8_test,
         }
     }
 
@@ -607,6 +614,63 @@ impl ApplicationHandler for GlassEngineApp {
             return;
         }
 
+        if self.is_m8_test {
+            log::info!("Ejecutando suite de pruebas de integración para HITO 8 (Subsistema de Audio 2D/3D con Kira)...");
+            assert!(self.script_host.is_initialized, "ScriptHost debe estar inicializado para Hito 8");
+
+            // 1. Probar reproducción directa 2D y 3D en el subsistema de audio
+            let h2d = self.audio_system.play_2d("beep_880", 0.5, 1.0, false);
+            assert!(h2d > 0, "Debe retornar un SoundHandle válido para 2D");
+            log::info!("Audio 2D probado exitosamente con handle {}", h2d);
+
+            // 2. Probar integración completa con C#: Instanciar AudioEmitterTest
+            let test_audio_entity_id = {
+                let mut state = self.scene_state.lock().unwrap();
+                state.create_entity(
+                    "C# Audio Emitter Entity".to_string(),
+                    vec!["Transform".to_string(), "AudioSource".to_string(), "Script".to_string()],
+                )
+            };
+
+            let emitter_handle = self.script_host.create_instance(test_audio_entity_id, "GlassEngine.Core.Scripts.AudioEmitterTest")
+                .expect("Debe instanciar AudioEmitterTest en C#");
+            assert!(emitter_handle > 0);
+
+            // 3. Simular 5 frames donde el script C# se ejecuta, mueve la posición 3D y actualiza el emisor de audio
+            for _ in 0..5 {
+                self.script_host.update_all(0.016667);
+                if let Err(e) = self.render_frame() {
+                    log::error!("Fallo en render_frame durante test de audio: {}", e);
+                    event_loop.exit();
+                    return;
+                }
+            }
+
+            // 4. Limpiar script y fuentes de audio
+            self.script_host.destroy_instance(emitter_handle);
+            self.audio_system.stop_all();
+
+            let backend_name = if self.audio_system.is_null_backend {
+                "NullBackend (Modo Headless / CI)"
+            } else {
+                "Kira 0.10 (CPAL / ALSA Realtime Engine)"
+            };
+
+            log::info!("============================================================");
+            log::info!("   HITO 8 COMPLETADO: SUBSISTEMA DE AUDIO 2D/3D (KIRA)");
+            log::info!("   GPU en Uso:                  {}", gpu_name);
+            log::info!("   Backend de Audio:            {}", backend_name);
+            log::info!("   Topología de Hilos:          Hilo de audio desacoplado (non-blocking SPSC queue)");
+            log::info!("   Generador Procedural:        Síntesis senoidal en memoria (PCM16 48kHz)");
+            log::info!("   Clips Pre-cargados:          beep_440, beep_880");
+            log::info!("   Audio Espacializado:         SpatialTrack + Listener bidireccional");
+            log::info!("   Interop C# CoreCLR:          AudioSource, AudioListener, AudioEmitterTest.cs");
+            log::info!("============================================================");
+
+            event_loop.exit();
+            return;
+        }
+
         if self.is_m6_test {
             log::info!("Ejecutando suite de pruebas de integración para HITO 6 (Pipeline de Blender & Hot-Reload)...");
 
@@ -661,7 +725,7 @@ impl ApplicationHandler for GlassEngineApp {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
-        if self.is_headless_test || self.is_m5_test || self.is_m6_test || self.is_m7_test {
+        if self.is_headless_test || self.is_m5_test || self.is_m6_test || self.is_m7_test || self.is_m8_test {
             return;
         }
 
@@ -722,6 +786,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    let is_m8_test = args.iter().any(|arg| arg == "--test-m8");
     let is_m7_test = args.iter().any(|arg| arg == "--test-m7");
     let is_m6_test = args.iter().any(|arg| arg == "--test-m6");
     let is_m5_test = args.iter().any(|arg| arg == "--test-m5");
@@ -730,7 +795,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .any(|arg| arg == "--test-init" || arg == "--check-vulkan" || arg == "--test-m3" || arg == "--test-m4");
 
     let event_loop = EventLoop::new()?;
-    let mut app = GlassEngineApp::new(is_headless_test, is_m5_test, is_m6_test, is_m7_test);
+    let mut app = GlassEngineApp::new(is_headless_test, is_m5_test, is_m6_test, is_m7_test, is_m8_test);
     event_loop.run_app(&mut app)?;
 
     Ok(())

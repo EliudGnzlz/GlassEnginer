@@ -13,9 +13,80 @@ public static class RuntimeBridge
     private static SetTransformDelegate? _setTransform;
     private static LogMessageDelegate? _logMessage;
 
+    private static PlayAudio2DDelegate? _playAudio2D;
+    private static PlayAudio3DDelegate? _playAudio3D;
+    private static SetAudioSourcePositionDelegate? _setAudioSourcePos;
+    private static SetListenerTransformDelegate? _setListenerTransform;
+    private static StopAudioDelegate? _stopAudio;
+
     private static readonly Dictionary<int, GlassBehaviour> _instances = new();
     private static int _nextHandle = 1;
     private static readonly object _sync = new();
+
+    [UnmanagedCallersOnly(EntryPoint = "InitAudioBridge")]
+    public static void InitAudioBridge(
+        IntPtr play2dFn,
+        IntPtr play3dFn,
+        IntPtr setPosFn,
+        IntPtr setListenerFn,
+        IntPtr stopFn)
+    {
+        if (play2dFn != IntPtr.Zero)
+            _playAudio2D = Marshal.GetDelegateForFunctionPointer<PlayAudio2DDelegate>(play2dFn);
+        if (play3dFn != IntPtr.Zero)
+            _playAudio3D = Marshal.GetDelegateForFunctionPointer<PlayAudio3DDelegate>(play3dFn);
+        if (setPosFn != IntPtr.Zero)
+            _setAudioSourcePos = Marshal.GetDelegateForFunctionPointer<SetAudioSourcePositionDelegate>(setPosFn);
+        if (setListenerFn != IntPtr.Zero)
+            _setListenerTransform = Marshal.GetDelegateForFunctionPointer<SetListenerTransformDelegate>(setListenerFn);
+        if (stopFn != IntPtr.Zero)
+            _stopAudio = Marshal.GetDelegateForFunctionPointer<StopAudioDelegate>(stopFn);
+
+        Log(2, "GlassEngine.Core AudioBridge inicializado exitosamente desde Rust.");
+    }
+
+    public static ulong PlayAudio2D(string clipName, float volume, float pitch, bool looping)
+    {
+        if (_playAudio2D is null) return 0;
+        IntPtr utf8 = Marshal.StringToCoTaskMemUTF8(clipName);
+        try
+        {
+            return _playAudio2D(utf8, volume, pitch, looping);
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(utf8);
+        }
+    }
+
+    public static ulong PlayAudio3D(string clipName, Vector3 position, float volume, float pitch, bool looping)
+    {
+        if (_playAudio3D is null) return 0;
+        IntPtr utf8 = Marshal.StringToCoTaskMemUTF8(clipName);
+        try
+        {
+            return _playAudio3D(utf8, position.X, position.Y, position.Z, volume, pitch, looping);
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(utf8);
+        }
+    }
+
+    public static void SetAudioSourcePosition(ulong handle, Vector3 position)
+    {
+        _setAudioSourcePos?.Invoke(handle, position.X, position.Y, position.Z);
+    }
+
+    public static void SetListenerTransform(Vector3 position, Quaternion rotation)
+    {
+        _setListenerTransform?.Invoke(position.X, position.Y, position.Z, rotation.X, rotation.Y, rotation.Z, rotation.W);
+    }
+
+    public static void StopAudio(ulong handle)
+    {
+        _stopAudio?.Invoke(handle);
+    }
 
     [UnmanagedCallersOnly(EntryPoint = "InitBridge")]
     public static void InitBridge(IntPtr getTransformFn, IntPtr setTransformFn, IntPtr logFn)

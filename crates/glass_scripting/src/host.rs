@@ -25,6 +25,13 @@ pub enum ScriptError {
 }
 
 type InitBridgeFn = unsafe extern "system" fn(*const c_void, *const c_void, *const c_void);
+type InitAudioBridgeFn = unsafe extern "system" fn(
+    *const c_void,
+    *const c_void,
+    *const c_void,
+    *const c_void,
+    *const c_void,
+);
 type CreateScriptInstanceFn = unsafe extern "system" fn(u64, *const c_char) -> i32;
 type UpdateScriptInstanceFn = unsafe extern "system" fn(i32, f32);
 type DestroyScriptInstanceFn = unsafe extern "system" fn(i32);
@@ -109,6 +116,22 @@ impl ScriptHost {
                 set_transform as *const c_void,
                 log_message as *const c_void,
             );
+        }
+
+        if let Ok(init_audio_fn) = loader.get_function_with_unmanaged_callers_only::<InitAudioBridgeFn>(
+            bridge_type,
+            pdcstr!("InitAudioBridge"),
+        ) {
+            log::info!("Vinculando callbacks Rust <-> C# Audio FFI...");
+            unsafe {
+                init_audio_fn(
+                    glass_audio::glass_audio_play_2d as *const c_void,
+                    glass_audio::glass_audio_play_3d as *const c_void,
+                    glass_audio::glass_audio_set_source_position as *const c_void,
+                    glass_audio::glass_audio_set_listener_transform as *const c_void,
+                    glass_audio::glass_audio_stop as *const c_void,
+                );
+            }
         }
 
         self.create_instance_fn = Some(*create_fn);
