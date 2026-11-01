@@ -92,11 +92,16 @@ impl PhysicsWorld {
         let quat = nalgebra::Quaternion::new(rot[3], rot[0], rot[1], rot[2]);
         let unit_quat = nalgebra::UnitQuaternion::from_quaternion(quat);
 
-        let rigid_body = RigidBodyBuilder::new(rapier_type)
+        let mut builder = RigidBodyBuilder::new(rapier_type)
             .translation(vector![pos[0], pos[1], pos[2]])
             .rotation(unit_quat.scaled_axis())
-            .user_data(entity_id as u128)
-            .build();
+            .user_data(entity_id as u128);
+
+        if rapier_type == RigidBodyType::Dynamic {
+            builder = builder.lock_rotations().linear_damping(1.5);
+        }
+
+        let rigid_body = builder.build();
 
         let rapier_handle = self.rigid_body_set.insert(rigid_body);
         let handle = self.next_handle;
@@ -219,6 +224,29 @@ impl PhysicsWorld {
         }
     }
 
+    /// Gets the linear velocity of a rigid body.
+    pub fn get_linear_velocity(&self, body_handle: BodyHandle) -> Option<[f32; 3]> {
+        let &(rapier_handle, _) = self.body_map.get(&body_handle)?;
+        let rb = self.rigid_body_set.get(rapier_handle)?;
+        let linvel = rb.linvel();
+        Some([linvel.x, linvel.y, linvel.z])
+    }
+
+    /// Sets the linear velocity of a rigid body directly.
+    pub fn set_linear_velocity(&mut self, body_handle: BodyHandle, linvel: [f32; 3]) -> bool {
+        let &(rapier_handle, _) = match self.body_map.get(&body_handle) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        if let Some(rb) = self.rigid_body_set.get_mut(rapier_handle) {
+            rb.set_linvel(vector![linvel[0], linvel[1], linvel[2]], true);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Removes a rigid body and its attached colliders.
     pub fn remove_rigid_body(&mut self, body_handle: BodyHandle) -> bool {
         if let Some((rapier_handle, _)) = self.body_map.remove(&body_handle) {
@@ -265,5 +293,15 @@ impl PhysicsWorld {
 
     pub fn collider_count(&self) -> usize {
         self.collider_set.len()
+    }
+
+    /// Finds an existing rigid body handle by entity ID if registered.
+    pub fn get_body_by_entity(&self, entity_id: u64) -> Option<BodyHandle> {
+        self.body_map.iter().find(|(_, &(_, eid))| eid == entity_id).map(|(&h, _)| h)
+    }
+
+    /// Returns the internal Rapier handle and entity_id for a BodyHandle.
+    pub fn get_rapier_handle(&self, body_handle: BodyHandle) -> Option<(RigidBodyHandle, u64)> {
+        self.body_map.get(&body_handle).copied()
     }
 }

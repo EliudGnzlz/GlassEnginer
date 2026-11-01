@@ -130,6 +130,7 @@ struct GlassEngineApp {
     is_m8_test: bool,
     is_m9_test: bool,
     is_m10_test: bool,
+    is_platformer_test: bool,
 }
 
 impl Drop for GlassEngineApp {
@@ -182,6 +183,7 @@ impl GlassEngineApp {
         is_m8_test: bool,
         is_m9_test: bool,
         is_m10_test: bool,
+        is_platformer_test: bool,
     ) -> Self {
         let scene_state = Arc::new(Mutex::new(SceneState::new()));
         #[cfg(feature = "editor")]
@@ -229,6 +231,7 @@ impl GlassEngineApp {
             is_m8_test,
             is_m9_test,
             is_m10_test,
+            is_platformer_test,
         }
     }
 
@@ -935,6 +938,107 @@ impl ApplicationHandler for GlassEngineApp {
             return;
         }
 
+        if self.is_platformer_test {
+            log::info!("Ejecutando suite de pruebas de integración para ESCENA 3D BÁSICA (Cubo jugador, Físicas, MCP, Salto y Escalada de Plataformas)...");
+            assert!(self.script_host.is_initialized, "ScriptHost debe estar inicializado para el test de plataformas");
+
+            #[cfg(feature = "editor")]
+            {
+                // 1. Invocar MCP para inicializar protocolo
+                let init_req = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
+                let init_resp = self.mcp_server.handle_json(init_req).expect("Fallo al inicializar servidor MCP");
+                log::info!("MCP Handshake: {}", init_resp);
+
+                // 2. Aprovisionar Escena de Plataformas a través de herramienta MCP glass_setup_platformer_scene
+                let setup_req = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"glass_setup_platformer_scene","arguments":{"player_initial_y":0.5}}}"#;
+                let setup_resp = self.mcp_server.handle_json(setup_req).expect("Fallo al aprovisionar escena via MCP");
+                log::info!("MCP glass_setup_platformer_scene Respuesta: {}", setup_resp);
+                assert!(setup_resp.contains("Suelo Estático"), "La escena debe contener suelo estático");
+                assert!(setup_resp.contains("Escalón 1"), "La escena debe contener escalón 1");
+                assert!(setup_resp.contains("Escalón 2"), "La escena debe contener escalón 2");
+                assert!(setup_resp.contains("Cubo Jugador 3D"), "La escena debe contener cubo jugador");
+
+                // 3. Inspeccionar jerarquía a través de MCP glass_get_scene_hierarchy
+                let hier_req = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"glass_get_scene_hierarchy"}}"#;
+                let hier_resp = self.mcp_server.handle_json(hier_req).expect("Fallo al consultar jerarquía");
+                log::info!("MCP Jerarquía de Escena: {}", hier_resp);
+                assert!(hier_resp.contains("Static Floor"));
+                assert!(hier_resp.contains("Low Platform Step 1"));
+                assert!(hier_resp.contains("High Platform Step 2"));
+                assert!(hier_resp.contains("Player 3D Cube"));
+
+                // 4. Instanciar script de C# 'PlayerController' en el cubo jugador
+                let player_entity_id = {
+                    let state = self.scene_state.lock().unwrap();
+                    state.entities.iter().find(|e| e.name == "Player 3D Cube").map(|e| e.id).expect("Debe existir entidad Player 3D Cube")
+                };
+
+                let script_handle = self.script_host.create_instance(player_entity_id, "GlassEngine.Core.Scripts.PlayerController")
+                    .expect("Debe instanciar PlayerController en C#");
+                assert!(script_handle > 0, "Handle de script C# debe ser válido");
+
+                // 5. Simular frames de renderizado, física y C# scripts (movimiento, salto y escalada de plataformas)
+                let mut max_x = 0.0_f32;
+                let mut max_y = 0.0_f32;
+                let mut climbed_step1 = false;
+                let mut climbed_step2 = false;
+
+                for _ in 0..360 {
+                    self.script_host.update_all(0.016667);
+                    if let Err(e) = self.render_frame() {
+                        log::error!("Fallo en render_frame durante test de plataformas: {}", e);
+                        event_loop.exit();
+                        return;
+                    }
+
+                    if let Ok(state) = self.scene_state.lock() {
+                        if let Some(ent) = state.entities.iter().find(|e| e.id == player_entity_id) {
+                            let cur_x = ent.transform.position[0];
+                            let cur_y = ent.transform.position[1];
+                            if cur_x > max_x { max_x = cur_x; }
+                            if cur_y > max_y { max_y = cur_y; }
+                            if cur_x >= 2.0 && cur_x <= 4.2 && cur_y >= 1.35 {
+                                climbed_step1 = true;
+                            }
+                            if cur_x >= 4.8 && cur_x <= 7.5 && cur_y >= 2.30 {
+                                climbed_step2 = true;
+                            }
+                        }
+                    }
+                }
+
+                log::info!("Resultados Simulación: MaxX={:.2}m, MaxY={:.2}m, Escaló Step 1: {}, Escaló Step 2: {}", max_x, max_y, climbed_step1, climbed_step2);
+                assert!(max_x > 2.5, "El jugador debió avanzar horizontalmente hacia los obstáculos (alcanzó X={:.2})", max_x);
+                assert!(max_y >= 1.35, "El jugador debió saltar y subir a la plataforma (alcanzó Y={:.2})", max_y);
+                assert!(climbed_step1, "El jugador debió escalar con éxito la plataforma Step 1 (Y=1.0m, pos_y=1.50m)");
+                assert!(climbed_step2, "El jugador debió escalar con éxito la plataforma Step 2 (Y=2.0m, pos_y=2.50m)");
+
+                // 6. Captura de Viewport a través de MCP
+                let capture_req = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"glass_capture_viewport"}}"#;
+                let capture_resp = self.mcp_server.handle_json(capture_req).expect("Fallo al capturar viewport");
+                assert!(capture_resp.contains("image/png"), "MCP debe capturar imagen PNG");
+
+                // 7. Limpieza de script C#
+                self.script_host.destroy_instance(script_handle);
+
+                log::info!("============================================================");
+                log::info!("   ESCENA 3D BÁSICA & SERVIDOR MCP VALIDADOS EXITOSAMENTE");
+                log::info!("   GPU en Uso:                  {}", gpu_name);
+                log::info!("   Aprovisionamiento MCP:       glass_setup_platformer_scene (Suelo + Escalón 1 + Escalón 2 + Jugador)");
+                log::info!("   Introspección MCP:           glass_get_scene_hierarchy, glass_get_audio_status");
+                log::info!("   Física 3D Dinámica:          Rapier3D 0.23 (Cubo Rigidbody, Gravedad, Impulso de Salto)");
+                log::info!("   Colisiones 3D:               Cuboid vs Cuboid (Suelo y Plataformas)");
+                log::info!("   Escalada de Objetos:         Superó Step 1 (Y=1.0m) y escaló Step 2 (Y=2.0m)");
+                log::info!("   Audio Feedback 3D:           Kira (ALSA/CPAL): Disparo 'beep_880' (Salto) y 'beep_440' (Aterrizaje)");
+                log::info!("   Controlador C#:              PlayerController.cs con GlassBehaviour CoreCLR");
+                log::info!("   Snapshot MCP:                glass_capture_viewport (PNG Base64)");
+                log::info!("============================================================");
+            }
+
+            event_loop.exit();
+            return;
+        }
+
         if self.is_m6_test {
             log::info!("Ejecutando suite de pruebas de integración para HITO 6 (Pipeline de Blender & Hot-Reload)...");
 
@@ -996,6 +1100,7 @@ impl ApplicationHandler for GlassEngineApp {
             || self.is_m8_test
             || self.is_m9_test
             || self.is_m10_test
+            || self.is_platformer_test
         {
             return;
         }
@@ -1062,6 +1167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let is_standalone = args.iter().any(|arg| arg == "--standalone" || arg == "--game");
+    let is_platformer_test = args.iter().any(|arg| arg == "--test-platformer" || arg == "--platformer");
     let is_m10_test = args.iter().any(|arg| arg == "--test-m10");
     let is_m9_test = args.iter().any(|arg| arg == "--test-m9");
     let is_m8_test = args.iter().any(|arg| arg == "--test-m8");
@@ -1082,6 +1188,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         is_m8_test,
         is_m9_test,
         is_m10_test,
+        is_platformer_test,
     );
     event_loop.run_app(&mut app)?;
 

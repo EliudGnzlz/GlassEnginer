@@ -43,4 +43,14 @@ public sealed class AudioSource
             ActiveHandle = 0;
         }
     }
+
+    public static ulong PlayClipAtPoint(string clipName, Vector3 position, float volume = 1.0f, float pitch = 1.0f)
+    {
+        return RuntimeBridge.PlayAudio3D(clipName, position, volume, pitch, false);
+    }
+
+    public static ulong Play2D(string clipName, float volume = 1.0f, float pitch = 1.0f, bool looping = false)
+    {
+        return RuntimeBridge.PlayAudio2D(clipName, volume, pitch, looping);
+    }
 }

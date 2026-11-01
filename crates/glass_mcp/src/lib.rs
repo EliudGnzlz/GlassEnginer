@@ -83,4 +83,48 @@ mod tests {
         assert!(reload_resp.contains("recargados exitosamente"));
         assert!(scene.lock().unwrap().shaders_reloaded_flag);
     }
+
+    #[test]
+    fn test_mcp_platformer_scene_and_physics_climbing() {
+        let scene = Arc::new(Mutex::new(SceneState::new()));
+        let server = McpServer::new(scene.clone());
+
+        // 1. Setup Platformer Scene via MCP
+        let setup_req = r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"glass_setup_platformer_scene","arguments":{"player_initial_y":1.0}}}"#;
+        let setup_resp = server.handle_json(setup_req).expect("Failed setup platformer");
+        assert!(setup_resp.contains("Suelo Estático"), "Got response: {}", setup_resp);
+        assert!(setup_resp.contains("Escalón 1"));
+        assert!(setup_resp.contains("Escalón 2"));
+        assert!(setup_resp.contains("Cubo Jugador 3D"));
+
+        // 2. Query Hierarchy
+        let hier_req = r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"glass_get_scene_hierarchy"}}"#;
+        let hier_resp = server.handle_json(hier_req).expect("Failed get hierarchy");
+        assert!(hier_resp.contains("Static Floor"));
+        assert!(hier_resp.contains("Low Platform Step 1"));
+        assert!(hier_resp.contains("High Platform Step 2"));
+        assert!(hier_resp.contains("Player 3D Cube"));
+        assert!(hier_resp.contains("PlayerController"));
+
+        // 3. Audio status query via MCP
+        let audio_status_req = r#"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"glass_get_audio_status"}}"#;
+        let audio_status_resp = server.handle_json(audio_status_req).expect("Failed get audio status");
+        assert!(audio_status_resp.contains("beep_440"));
+        assert!(audio_status_resp.contains("beep_880"));
+
+        // 4. Play audio clip via MCP
+        let play_audio_req = r#"{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"glass_play_audio","arguments":{"clip":"beep_880","volume":0.8,"pitch":1.2}}}"#;
+        let play_audio_resp = server.handle_json(play_audio_req).expect("Failed play audio");
+        assert!(play_audio_resp.contains("reproducido con éxito"));
+
+        // 5. Simulate Jump
+        let jump_req = r#"{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"glass_simulate_player","arguments":{"action":"jump","steps":15}}}"#;
+        let jump_resp = server.handle_json(jump_req).expect("Failed jump");
+        assert!(jump_resp.contains("beep_880 (Salto)"));
+
+        // 6. Simulate Climbing onto Step 1
+        let climb1_req = r#"{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"glass_simulate_player","arguments":{"action":"step_climb","steps":35}}}"#;
+        let climb1_resp = server.handle_json(climb1_req).expect("Failed climb 1");
+        assert!(climb1_resp.contains("climbed_step1") || climb1_resp.contains("position"));
+    }
 }

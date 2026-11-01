@@ -15,6 +15,8 @@ public abstract class GlassBehaviour
 
     public virtual void Update(float deltaTime) { }
 
+    public virtual void OnDestroy() { }
+
     internal void StartIfNeeded()
     {
         if (!_started)

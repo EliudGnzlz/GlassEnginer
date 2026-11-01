@@ -27,6 +27,8 @@ public static class RuntimeBridge
     private static GetPhysicsTransformDelegate? _getPhysicsTransform;
     private static SetPhysicsTransformDelegate? _setPhysicsTransform;
     private static RemoveRigidBodyDelegate? _removeRigidBody;
+    private static GetLinearVelocityDelegate? _getLinearVelocity;
+    private static SetLinearVelocityDelegate? _setLinearVelocity;
 
     private static readonly Dictionary<int, GlassBehaviour> _instances = new();
     private static int _nextHandle = 1;
@@ -108,6 +110,8 @@ public static class RuntimeBridge
         public IntPtr GetTransform;
         public IntPtr SetTransform;
         public IntPtr RemoveBody;
+        public IntPtr GetVelocity;
+        public IntPtr SetVelocity;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitPhysicsBridge")]
@@ -130,6 +134,10 @@ public static class RuntimeBridge
             _setPhysicsTransform = Marshal.GetDelegateForFunctionPointer<SetPhysicsTransformDelegate>(callbacks->SetTransform);
         if (callbacks->RemoveBody != IntPtr.Zero)
             _removeRigidBody = Marshal.GetDelegateForFunctionPointer<RemoveRigidBodyDelegate>(callbacks->RemoveBody);
+        if (callbacks->GetVelocity != IntPtr.Zero)
+            _getLinearVelocity = Marshal.GetDelegateForFunctionPointer<GetLinearVelocityDelegate>(callbacks->GetVelocity);
+        if (callbacks->SetVelocity != IntPtr.Zero)
+            _setLinearVelocity = Marshal.GetDelegateForFunctionPointer<SetLinearVelocityDelegate>(callbacks->SetVelocity);
 
         Log(2, "GlassEngine.Core PhysicsBridge inicializado exitosamente desde Rust.");
     }
@@ -185,6 +193,22 @@ public static class RuntimeBridge
     {
         if (_removeRigidBody is null) return false;
         return _removeRigidBody(bodyHandle);
+    }
+
+    public static bool GetLinearVelocity(ulong bodyHandle, out Vector3 velocity)
+    {
+        if (_getLinearVelocity is null)
+        {
+            velocity = Vector3.Zero;
+            return false;
+        }
+        return _getLinearVelocity(bodyHandle, out velocity);
+    }
+
+    public static bool SetLinearVelocity(ulong bodyHandle, Vector3 velocity)
+    {
+        if (_setLinearVelocity is null) return false;
+        return _setLinearVelocity(bodyHandle, velocity.X, velocity.Y, velocity.Z);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitBridge")]
@@ -305,10 +329,19 @@ public static class RuntimeBridge
     [UnmanagedCallersOnly(EntryPoint = "DestroyScriptInstance")]
     public static void DestroyScriptInstance(int handle)
     {
+        GlassBehaviour? inst;
         lock (_sync)
         {
-            if (_instances.Remove(handle))
+            if (_instances.Remove(handle, out inst))
             {
+                try
+                {
+                    inst?.OnDestroy();
+                }
+                catch (Exception ex)
+                {
+                    Log(4, $"Error en OnDestroy para handle {handle}: {ex.Message}");
+                }
                 Log(2, $"Instancia de script handle {handle} destruida.");
             }
         }

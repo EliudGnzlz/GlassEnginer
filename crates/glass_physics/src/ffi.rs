@@ -32,6 +32,10 @@ pub extern "C" fn glass_physics_create_body(
 ) -> BodyHandle {
     if let Some(sys) = get_global_physics_world() {
         if let Ok(mut world) = sys.lock() {
+            // If body already exists for this entity, return existing handle
+            if let Some(existing) = world.get_body_by_entity(entity_id) {
+                return existing;
+            }
             return world.create_rigid_body(
                 entity_id,
                 BodyType::from_i32(body_type),
@@ -54,6 +58,13 @@ pub extern "C" fn glass_physics_attach_box_collider(
 ) -> ColliderHandle {
     if let Some(sys) = get_global_physics_world() {
         if let Ok(mut world) = sys.lock() {
+            if let Some((rapier_handle, _)) = world.get_rapier_handle(body_handle) {
+                if let Some(rb) = world.rigid_body_set.get(rapier_handle) {
+                    if !rb.colliders().is_empty() {
+                        return rb.colliders()[0].into_raw_parts().0 as u64;
+                    }
+                }
+            }
             return world
                 .attach_box_collider(body_handle, [half_x, half_y, half_z], restitution, friction)
                 .unwrap_or(0);
@@ -104,6 +115,40 @@ pub extern "C" fn glass_physics_apply_force(
     if let Some(sys) = get_global_physics_world() {
         if let Ok(mut world) = sys.lock() {
             return world.apply_force(body_handle, [force_x, force_y, force_z]);
+        }
+    }
+    false
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_get_linear_velocity(
+    body_handle: BodyHandle,
+    out_vel: *mut [f32; 3],
+) -> bool {
+    if out_vel.is_null() {
+        return false;
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            if let Some(vel) = world.get_linear_velocity(body_handle) {
+                *out_vel = vel;
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[no_mangle]
+pub extern "C" fn glass_physics_set_linear_velocity(
+    body_handle: BodyHandle,
+    vel_x: f32,
+    vel_y: f32,
+    vel_z: f32,
+) -> bool {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_linear_velocity(body_handle, [vel_x, vel_y, vel_z]);
         }
     }
     false

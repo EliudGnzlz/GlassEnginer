@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 glass_core.workspace = true
+glass_audio.workspace = true
+glass_physics.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 image.workspace = true

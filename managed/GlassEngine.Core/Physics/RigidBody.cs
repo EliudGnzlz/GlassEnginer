@@ -66,6 +66,22 @@ public sealed class RigidBody
         return RuntimeBridge.SetPhysicsTransform(Handle, position, rotation);
     }
 
+    public bool GetLinearVelocity(out Vector3 velocity)
+    {
+        if (!IsValid)
+        {
+            velocity = Vector3.Zero;
+            return false;
+        }
+        return RuntimeBridge.GetLinearVelocity(Handle, out velocity);
+    }
+
+    public bool SetLinearVelocity(Vector3 velocity)
+    {
+        if (!IsValid) return false;
+        return RuntimeBridge.SetLinearVelocity(Handle, velocity);
+    }
+
     public void Destroy()
     {
         if (IsValid)

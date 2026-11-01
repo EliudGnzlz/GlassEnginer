@@ -64,3 +64,15 @@ public delegate bool SetPhysicsTransformDelegate(
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate bool RemoveRigidBodyDelegate(ulong bodyHandle);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate bool GetLinearVelocityDelegate(
+    ulong bodyHandle,
+    out Vector3 velocity);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate bool SetLinearVelocityDelegate(
+    ulong bodyHandle,
+    float velX,
+    float velY,
+    float velZ);

@@ -191,6 +191,18 @@ impl SceneState {
         }
     }
 
+    pub fn modify_script(&mut self, id: u64, script_name: Option<String>) -> bool {
+        if let Some(entity) = self.get_entity_mut(id) {
+            entity.script = script_name;
+            if entity.script.is_some() && !entity.components.iter().any(|c| c == "Script") {
+                entity.components.push("Script".to_string());
+            }
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn update_viewport_snapshot(&mut self, png_bytes: Vec<u8>) {
         self.viewport_snapshot_png = Some(png_bytes);
     }

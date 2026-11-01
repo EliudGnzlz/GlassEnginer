@@ -43,6 +43,8 @@ struct PhysicsBridgeCallbacks {
     get_transform: *const c_void,
     set_transform: *const c_void,
     remove_body: *const c_void,
+    get_velocity: *const c_void,
+    set_velocity: *const c_void,
 }
 
 type InitPhysicsBridgeFn = unsafe extern "system" fn(*const PhysicsBridgeCallbacks);
@@ -162,6 +164,8 @@ impl ScriptHost {
                 get_transform: glass_physics::glass_physics_get_transform as *const c_void,
                 set_transform: glass_physics::glass_physics_set_transform as *const c_void,
                 remove_body: glass_physics::glass_physics_remove_body as *const c_void,
+                get_velocity: glass_physics::glass_physics_get_linear_velocity as *const c_void,
+                set_velocity: glass_physics::glass_physics_set_linear_velocity as *const c_void,
             };
             unsafe {
                 init_physics_fn(&callbacks as *const PhysicsBridgeCallbacks);
