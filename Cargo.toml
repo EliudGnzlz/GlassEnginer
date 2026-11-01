@@ -34,6 +34,8 @@ gltf = "1.4"
 notify = "8.0"
 rapier3d = "0.23"
 kira = { version = "0.10", default-features = false, features = ["cpal"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
 glass_core = { path = "crates/glass_core" }
 glass_renderer = { path = "crates/glass_renderer" }
 glass_editor = { path = "crates/glass_editor" }

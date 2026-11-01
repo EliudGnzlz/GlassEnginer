@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 glass_core.workspace = true
 glass_renderer.workspace = true
+glass_mcp.workspace = true
 ash.workspace = true
 gpu-allocator.workspace = true
 egui.workspace = true

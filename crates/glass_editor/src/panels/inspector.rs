@@ -1,54 +1,44 @@
 use egui::{DragValue, Ui};
+use glass_mcp::{MeshData, SceneState};
+use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone)]
-pub struct TransformComponent {
-    pub position: [f32; 3],
-    pub rotation: [f32; 3],
-    pub scale: [f32; 3],
-}
-
-impl Default for TransformComponent {
-    fn default() -> Self {
-        Self {
-            position: [0.0, 0.0, 0.0],
-            rotation: [0.0, 0.0, 0.0],
-            scale: [1.0, 1.0, 1.0],
-        }
-    }
-}
-
-pub struct InspectorPanel {
-    pub entity_name: String,
-    pub is_active: bool,
-    pub transform: TransformComponent,
-    pub mesh_color: [f32; 3],
-    pub wireframe: bool,
-    pub script_name: String,
-}
-
-impl Default for InspectorPanel {
-    fn default() -> Self {
-        Self {
-            entity_name: "Vulkan Viewport Triangle".into(),
-            is_active: true,
-            transform: TransformComponent::default(),
-            mesh_color: [0.0, 0.8, 0.9],
-            wireframe: false,
-            script_name: "PlayerMovement.cs".into(),
-        }
-    }
-}
+#[derive(Default)]
+pub struct InspectorPanel;
 
 impl InspectorPanel {
-    pub fn render(&mut self, ui: &mut Ui) {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn render(
+        &mut self,
+        ui: &mut Ui,
+        selected_id: Option<u64>,
+        scene_state: &Arc<Mutex<SceneState>>,
+    ) {
         ui.heading("🔍 Inspector");
         ui.separator();
 
+        let mut scene = match scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+
+        let entity = match selected_id.and_then(|id| scene.entities.iter_mut().find(|e| e.id == id)) {
+            Some(e) => e,
+            None => {
+                ui.centered_and_justified(|ui| {
+                    ui.label("Ninguna entidad seleccionada.");
+                });
+                return;
+            }
+        };
+
         egui::ScrollArea::vertical().show(ui, |ui| {
-            // Cabecera de la Entidad
+            // Nombre de la Entidad
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.is_active, "");
-                ui.text_edit_singleline(&mut self.entity_name);
+                ui.label(format!("ID: #{}", entity.id));
+                ui.text_edit_singleline(&mut entity.name);
             });
 
             ui.separator();
@@ -62,33 +52,33 @@ impl InspectorPanel {
                         ui.label("Posición");
                         ui.horizontal(|ui| {
                             ui.label("X");
-                            ui.add(DragValue::new(&mut self.transform.position[0]).speed(0.1));
+                            ui.add(DragValue::new(&mut entity.transform.position[0]).speed(0.1));
                             ui.label("Y");
-                            ui.add(DragValue::new(&mut self.transform.position[1]).speed(0.1));
+                            ui.add(DragValue::new(&mut entity.transform.position[1]).speed(0.1));
                             ui.label("Z");
-                            ui.add(DragValue::new(&mut self.transform.position[2]).speed(0.1));
+                            ui.add(DragValue::new(&mut entity.transform.position[2]).speed(0.1));
                         });
                         ui.end_row();
 
                         ui.label("Rotación");
                         ui.horizontal(|ui| {
                             ui.label("X");
-                            ui.add(DragValue::new(&mut self.transform.rotation[0]).speed(0.5));
+                            ui.add(DragValue::new(&mut entity.transform.rotation[0]).speed(0.5));
                             ui.label("Y");
-                            ui.add(DragValue::new(&mut self.transform.rotation[1]).speed(0.5));
+                            ui.add(DragValue::new(&mut entity.transform.rotation[1]).speed(0.5));
                             ui.label("Z");
-                            ui.add(DragValue::new(&mut self.transform.rotation[2]).speed(0.5));
+                            ui.add(DragValue::new(&mut entity.transform.rotation[2]).speed(0.5));
                         });
                         ui.end_row();
 
                         ui.label("Escala");
                         ui.horizontal(|ui| {
                             ui.label("X");
-                            ui.add(DragValue::new(&mut self.transform.scale[0]).speed(0.05));
+                            ui.add(DragValue::new(&mut entity.transform.scale[0]).speed(0.05));
                             ui.label("Y");
-                            ui.add(DragValue::new(&mut self.transform.scale[1]).speed(0.05));
+                            ui.add(DragValue::new(&mut entity.transform.scale[1]).speed(0.05));
                             ui.label("Z");
-                            ui.add(DragValue::new(&mut self.transform.scale[2]).speed(0.05));
+                            ui.add(DragValue::new(&mut entity.transform.scale[2]).speed(0.05));
                         });
                         ui.end_row();
                     });
@@ -96,34 +86,50 @@ impl InspectorPanel {
 
             ui.separator();
 
-            // Componente Renderizador de Malla (Mesh Renderer)
-            ui.collapsing("🎨 Mesh Renderer & Material", |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Color Albedo:");
-                    ui.color_edit_button_rgb(&mut self.mesh_color);
+            // Componente Mesh Renderer & Material si existe
+            let mut add_mesh = false;
+            if let Some(ref mut mesh) = entity.mesh {
+                ui.collapsing("🎨 Mesh Renderer & Material", |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Color Albedo:");
+                        ui.color_edit_button_rgb(&mut mesh.color);
+                    });
+                    ui.checkbox(&mut mesh.wireframe, "Modo Wireframe");
+                    ui.label(format!("Shader: {}", mesh.shader));
                 });
-                ui.checkbox(&mut self.wireframe, "Modo Wireframe");
-                ui.label("Shader: triangle.vert.spv / triangle.frag.spv");
-            });
-
-            ui.separator();
-
-            // Componente de Scripting C# (.NET)
-            ui.collapsing("📜 Script C# (.NET CoreCLR)", |ui| {
+            } else {
                 ui.horizontal(|ui| {
-                    ui.label("Script:");
-                    ui.text_edit_singleline(&mut self.script_name);
+                    if ui.button("➕ Añadir MeshRenderer").clicked() {
+                        add_mesh = true;
+                    }
                 });
-                ui.label("Estado de Compilación: ✅ Compilado (.NET 10.0)");
-            });
-
-            ui.separator();
-
-            ui.vertical_centered(|ui| {
-                if ui.button("➕ Añadir Componente").clicked() {
-                    // Selector de componentes futuros
+            }
+            if add_mesh {
+                entity.mesh = Some(MeshData::default());
+                if !entity.components.contains(&"MeshRenderer".to_string()) {
+                    entity.components.push("MeshRenderer".into());
                 }
-            });
+            }
+
+            ui.separator();
+
+            // Componente Script C# si existe
+            if let Some(ref mut script) = entity.script {
+                ui.collapsing("📜 Script C# (.NET CoreCLR)", |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Script:");
+                        ui.text_edit_singleline(script);
+                    });
+                    ui.label("Estado: ✅ Sincronizado con MCP");
+                });
+            } else {
+                if ui.button("➕ Añadir Script C#").clicked() {
+                    entity.script = Some("PlayerMovement.cs".into());
+                    if !entity.components.contains(&"Script".to_string()) {
+                        entity.components.push("Script".into());
+                    }
+                }
+            }
         });
     }
 }

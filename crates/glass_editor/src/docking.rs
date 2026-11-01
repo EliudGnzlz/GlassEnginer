@@ -1,5 +1,7 @@
 use crate::panels::{ConsolePanel, HierarchyPanel, InspectorPanel, ViewportPanel};
 use egui::Panel;
+use glass_mcp::SceneState;
+use std::sync::{Arc, Mutex};
 
 pub struct EditorDockingLayout {
     pub hierarchy: HierarchyPanel,
@@ -11,9 +13,9 @@ pub struct EditorDockingLayout {
 impl Default for EditorDockingLayout {
     fn default() -> Self {
         Self {
-            hierarchy: HierarchyPanel::default(),
+            hierarchy: HierarchyPanel::new(),
             viewport: ViewportPanel::default(),
-            inspector: InspectorPanel::default(),
+            inspector: InspectorPanel::new(),
             console: ConsolePanel::default(),
         }
     }
@@ -24,15 +26,22 @@ impl EditorDockingLayout {
         Self::default()
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, viewport_texture_id: Option<egui::TextureId>) {
+    pub fn render(
+        &mut self,
+        ui: &mut egui::Ui,
+        viewport_texture_id: Option<egui::TextureId>,
+        scene_state: &Arc<Mutex<SceneState>>,
+    ) {
         Panel::left("hierarchy_panel")
             .resizable(true)
             .default_size(240.0)
             .min_size(160.0)
             .max_size(450.0)
             .show(ui, |ui| {
-                self.hierarchy.render(ui);
+                self.hierarchy.render(ui, scene_state);
             });
+
+        let selected_id = self.hierarchy.selected_entity;
 
         Panel::right("inspector_panel")
             .resizable(true)
@@ -40,7 +49,7 @@ impl EditorDockingLayout {
             .min_size(200.0)
             .max_size(500.0)
             .show(ui, |ui| {
-                self.inspector.render(ui);
+                self.inspector.render(ui, selected_id, scene_state);
             });
 
         Panel::bottom("console_panel")
