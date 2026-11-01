@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use glass_audio::{
-    beep_440, beep_880, generate_tone, glass_audio_play_2d, glass_audio_play_3d,
+    generate_tone, glass_audio_play_2d, glass_audio_play_3d,
     glass_audio_set_listener_transform, glass_audio_set_source_position, glass_audio_stop,
     register_global_audio_system, AudioSystem,
 };
