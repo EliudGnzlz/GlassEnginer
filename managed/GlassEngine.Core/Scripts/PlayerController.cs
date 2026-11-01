@@ -115,6 +115,19 @@ public sealed class PlayerController : GlassBehaviour
 
             case 4: // Estabilización en reposo sobre Step 2
                 _rigidBody.SetLinearVelocity(new Vector3(0.0f, curVel.Y, 0.0f));
+                _jumpTimer += deltaTime;
+                if (_jumpTimer >= 2.5f)
+                {
+                    Log("PlayerController: Ciclo completado. Reiniciando posición del jugador para demostración interactiva continua...");
+                    _rigidBody.SetTransform(new Vector3(0.0f, 0.5f, 0.0f), Quaternion.Identity);
+                    _rigidBody.SetLinearVelocity(Vector3.Zero);
+                    _hasJumpedStep1 = false;
+                    _hasLandedStep1 = false;
+                    _hasJumpedStep2 = false;
+                    _hasLandedStep2 = false;
+                    _jumpTimer = 0.0f;
+                    _stage = 0;
+                }
                 break;
         }
     }

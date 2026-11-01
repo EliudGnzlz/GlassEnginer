@@ -198,7 +198,7 @@ impl GlassRenderer {
         width: u32,
         height: u32,
     ) -> Result<(), RendererError> {
-        if width == 0 || height == 0 {
+        if width == 0 || height == 0 || (width == self.swapchain.extent.width && height == self.swapchain.extent.height) {
             return Ok(());
         }
         unsafe {
@@ -250,11 +250,11 @@ impl GlassRenderer {
         Ok((layout, pool, set))
     }
 
-    /// Renderiza la escena 3D a la textura offscreen desacoplada (con soporte opcional de malla 3D indexada)
-    pub fn render_offscreen_mesh(
+    /// Renderiza múltiples mallas 3D a la textura offscreen desacoplada
+    pub fn render_offscreen_scene(
         &mut self,
         queue: vk::Queue,
-        mesh_data: Option<(&GpuMesh, [f32; 16])>,
+        meshes: &[(&GpuMesh, [f32; 16])],
     ) -> Result<(), RendererError> {
         unsafe {
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
@@ -310,30 +310,32 @@ impl GlassRenderer {
             }];
             self.device.cmd_set_scissor(cmd, 0, &scissor);
 
-            if let Some((mesh, mvp)) = mesh_data {
-                // Dibujar malla 3D indexada con pipeline de mallas
+            if !meshes.is_empty() {
+                // Dibujar mallas 3D indexadas con pipeline de mallas
                 self.device.cmd_bind_pipeline(
                     cmd,
                     vk::PipelineBindPoint::GRAPHICS,
                     self.mesh_pipeline.pipeline,
                 );
 
-                let push_constants_bytes = bytemuck::cast_slice(&mvp);
-                self.device.cmd_push_constants(
-                    cmd,
-                    self.mesh_pipeline.layout,
-                    vk::ShaderStageFlags::VERTEX,
-                    0,
-                    push_constants_bytes,
-                );
+                for (mesh, mvp) in meshes {
+                    let push_constants_bytes = bytemuck::cast_slice(mvp);
+                    self.device.cmd_push_constants(
+                        cmd,
+                        self.mesh_pipeline.layout,
+                        vk::ShaderStageFlags::VERTEX,
+                        0,
+                        push_constants_bytes,
+                    );
 
-                self.device
-                    .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
-                self.device
-                    .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
+                    self.device
+                        .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
+                    self.device
+                        .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
 
-                self.device
-                    .cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                    self.device
+                        .cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                }
             } else {
                 // Fallback al triángulo procedural por defecto
                 self.device
@@ -351,6 +353,18 @@ impl GlassRenderer {
         }
 
         Ok(())
+    }
+
+    /// Renderiza la escena 3D a la textura offscreen desacoplada (con soporte opcional de malla 3D indexada)
+    pub fn render_offscreen_mesh(
+        &mut self,
+        queue: vk::Queue,
+        mesh_data: Option<(&GpuMesh, [f32; 16])>,
+    ) -> Result<(), RendererError> {
+        match mesh_data {
+            Some(data) => self.render_offscreen_scene(queue, &[data]),
+            None => self.render_offscreen_scene(queue, &[]),
+        }
     }
 
     pub fn render_offscreen(&mut self, queue: vk::Queue) -> Result<(), RendererError> {

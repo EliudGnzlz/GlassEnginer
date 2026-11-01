@@ -78,6 +78,51 @@ fn model_matrix(pos: [f32; 3], rot_y: f32) -> [f32; 16] {
     ]
 }
 
+fn model_matrix_trs(pos: [f32; 3], scale: [f32; 3], rot_y: f32) -> [f32; 16] {
+    let cos = rot_y.cos();
+    let sin = rot_y.sin();
+    [
+        cos * scale[0], 0.0, -sin * scale[0], 0.0,
+        0.0, scale[1], 0.0, 0.0,
+        sin * scale[2], 0.0, cos * scale[2], 0.0,
+        pos[0], pos[1], pos[2], 1.0,
+    ]
+}
+
+fn look_at(eye: [f32; 3], target: [f32; 3], up: [f32; 3]) -> [f32; 16] {
+    let f = [
+        target[0] - eye[0],
+        target[1] - eye[1],
+        target[2] - eye[2],
+    ];
+    let f_len = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt().max(0.0001);
+    let f = [f[0] / f_len, f[1] / f_len, f[2] / f_len];
+
+    let r = [
+        f[1] * up[2] - f[2] * up[1],
+        f[2] * up[0] - f[0] * up[2],
+        f[0] * up[1] - f[1] * up[0],
+    ];
+    let r_len = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt().max(0.0001);
+    let r = [r[0] / r_len, r[1] / r_len, r[2] / r_len];
+
+    let u = [
+        r[1] * f[2] - r[2] * f[1],
+        r[2] * f[0] - r[0] * f[2],
+        r[0] * f[1] - r[1] * f[0],
+    ];
+
+    [
+        r[0], u[0], -f[0], 0.0,
+        r[1], u[1], -f[1], 0.0,
+        r[2], u[2], -f[2], 0.0,
+        -(r[0] * eye[0] + r[1] * eye[1] + r[2] * eye[2]),
+        -(u[0] * eye[0] + u[1] * eye[1] + u[2] * eye[2]),
+        f[0] * eye[0] + f[1] * eye[1] + f[2] * eye[2],
+        1.0,
+    ]
+}
+
 fn matmul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
     let mut res = [0.0; 16];
     for col in 0..4 {
@@ -131,11 +176,15 @@ struct GlassEngineApp {
     is_m9_test: bool,
     is_m10_test: bool,
     is_platformer_test: bool,
+    player_script_handle: Option<i32>,
 }
 
 impl Drop for GlassEngineApp {
     fn drop(&mut self) {
         log::info!("Limpiando GlassEngineApp en orden estricto de dependencias...");
+        if let Some(h) = self.player_script_handle {
+            self.script_host.destroy_instance(h);
+        }
         if let Some(vk_ctx) = &self.vulkan_context {
             unsafe {
                 let _ = vk_ctx.device.device_wait_idle();
@@ -232,6 +281,84 @@ impl GlassEngineApp {
             is_m9_test,
             is_m10_test,
             is_platformer_test,
+            player_script_handle: None,
+        }
+    }
+
+    pub fn setup_interactive_platformer_scene(&mut self) {
+        let initial_y = 0.5;
+
+        // 1. Limpiar o configurar entidades en SceneState
+        let (floor_id, step1_id, step2_id, player_id) = {
+            let mut state = self.scene_state.lock().unwrap();
+            state.entities.clear();
+
+            let floor_id = state.create_entity(
+                "Static Floor".into(),
+                vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
+            );
+            state.modify_transform(floor_id, Some([3.5, -0.5, 0.0]), None, Some([30.0, 1.0, 30.0]));
+            state.modify_material(floor_id, [0.2, 0.6, 0.2], Some(false));
+
+            let step1_id = state.create_entity(
+                "Low Platform Step 1".into(),
+                vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
+            );
+            state.modify_transform(step1_id, Some([3.0, 0.5, 0.0]), None, Some([2.0, 1.0, 2.0]));
+            state.modify_material(step1_id, [0.8, 0.6, 0.2], Some(false));
+
+            let step2_id = state.create_entity(
+                "High Platform Step 2".into(),
+                vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
+            );
+            state.modify_transform(step2_id, Some([6.0, 1.5, 0.0]), None, Some([2.0, 1.0, 2.0]));
+            state.modify_material(step2_id, [0.9, 0.3, 0.2], Some(false));
+
+            let player_id = state.create_entity(
+                "Player 3D Cube".into(),
+                vec![
+                    "Transform".into(),
+                    "MeshRenderer".into(),
+                    "RigidBody".into(),
+                    "Collider".into(),
+                    "Script".into(),
+                    "AudioSource".into(),
+                ],
+            );
+            state.modify_transform(player_id, Some([0.0, initial_y, 0.0]), None, Some([1.0, 1.0, 1.0]));
+            state.modify_material(player_id, [0.1, 0.8, 1.0], Some(false));
+            state.modify_script(player_id, Some("GlassEngine.Core.Scripts.PlayerController".into()));
+
+            (floor_id, step1_id, step2_id, player_id)
+        };
+
+        // 2. Configurar simulación física en Rapier3D
+        {
+            let mut phys = self.physics_world.lock().unwrap();
+            *phys = PhysicsWorld::new();
+
+            let fb = phys.create_rigid_body(floor_id, BodyType::Static, [3.5, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
+            phys.attach_box_collider(fb, [15.0, 0.5, 15.0], 0.05, 0.7);
+
+            let s1b = phys.create_rigid_body(step1_id, BodyType::Static, [3.0, 0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
+            phys.attach_box_collider(s1b, [1.0, 0.5, 1.0], 0.05, 0.7);
+
+            let s2b = phys.create_rigid_body(step2_id, BodyType::Static, [6.0, 1.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
+            phys.attach_box_collider(s2b, [1.0, 0.5, 1.0], 0.05, 0.7);
+
+            let pb = phys.create_rigid_body(player_id, BodyType::Dynamic, [0.0, initial_y, 0.0], [0.0, 0.0, 0.0, 1.0]);
+            phys.attach_box_collider(pb, [0.5, 0.5, 0.5], 0.02, 0.6);
+        }
+
+        // 3. Instanciar script C# PlayerController
+        if self.script_host.is_initialized {
+            match self.script_host.create_instance(player_id, "GlassEngine.Core.Scripts.PlayerController") {
+                Ok(h) => {
+                    log::info!("Script PlayerController instanciado exitosamente para el jugador (handle: {})", h);
+                    self.player_script_handle = Some(h);
+                }
+                Err(e) => log::warn!("No se pudo instanciar PlayerController: {}", e),
+            }
         }
     }
 
@@ -298,7 +425,12 @@ impl GlassEngineApp {
             _ => return Ok(()),
         };
 
-        // 0. Simular paso de física con Rapier3D y sincronizar transforms dinámicos a SceneState
+        // 0. Ejecutar paso de C# Scripting (.NET CoreCLR)
+        if self.script_host.is_initialized {
+            self.script_host.update_all(0.016667);
+        }
+
+        // 1. Simular paso de física con Rapier3D y sincronizar transforms dinámicos a SceneState
         if let Ok(mut physics) = self.physics_world.lock() {
             physics.step(0.016667);
             let sync_transforms = physics.sync_all_transforms();
@@ -314,15 +446,40 @@ impl GlassEngineApp {
             }
         }
 
-        // 1. Renderizar geometría 3D a la textura offscreen en VRAM
-        let elapsed = self.start_time.elapsed().as_secs_f32();
+        // 2. Renderizar geometría 3D a la textura offscreen en VRAM
         let proj = perspective_matrix(45.0_f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
-        let model = model_matrix([0.0, 0.0, -3.5], elapsed * 0.8);
-        let mvp = matmul(&proj, &model);
+        let view = look_at([3.5, 3.2, 9.5], [3.5, 1.4, 0.0], [0.0, 1.0, 0.0]);
+        let vp = matmul(&proj, &view);
 
         let cache = self.asset_cache.read().unwrap();
         if let Some(cube_mesh) = cache.meshes.get("cube") {
-            renderer.render_offscreen_mesh(vk_ctx.graphics_queue, Some((cube_mesh, mvp)))?;
+            let mut mesh_batches: Vec<(&glass_renderer::GpuMesh, [f32; 16])> = Vec::new();
+
+            if let Ok(scene) = self.scene_state.lock() {
+                for ent in &scene.entities {
+                    if ent.components.iter().any(|c| c == "MeshRenderer" || c == "Collider" || c == "StaticCollider") {
+                        let pos = ent.transform.position;
+                        // Escalado a half-extents (cube.glb tiene vértices de -1 a +1)
+                        let scale = [
+                            ent.transform.scale[0] * 0.5,
+                            ent.transform.scale[1] * 0.5,
+                            ent.transform.scale[2] * 0.5,
+                        ];
+                        let model = model_matrix_trs(pos, scale, 0.0);
+                        let mvp = matmul(&vp, &model);
+                        mesh_batches.push((cube_mesh, mvp));
+                    }
+                }
+            }
+
+            if !mesh_batches.is_empty() {
+                renderer.render_offscreen_scene(vk_ctx.graphics_queue, &mesh_batches)?;
+            } else {
+                let elapsed = self.start_time.elapsed().as_secs_f32();
+                let model = model_matrix([0.0, 0.0, -3.5], elapsed * 0.8);
+                let mvp = matmul(&proj, &model);
+                renderer.render_offscreen_mesh(vk_ctx.graphics_queue, Some((cube_mesh, mvp)))?;
+            }
         } else {
             renderer.render_offscreen(vk_ctx.graphics_queue)?;
         }
@@ -669,6 +826,20 @@ impl ApplicationHandler for GlassEngineApp {
                 Ok(()) => log::info!("main: ScriptHost C# (.NET CoreCLR) inicializado exitosamente."),
                 Err(e) => log::warn!("main: ScriptHost no inicializado: {}", e),
             }
+        }
+
+        let is_test_run = self.is_headless_test
+            || self.is_m5_test
+            || self.is_m6_test
+            || self.is_m7_test
+            || self.is_m8_test
+            || self.is_m9_test
+            || self.is_m10_test
+            || self.is_platformer_test;
+
+        if !is_test_run {
+            log::info!("Iniciando escena interactiva 3D con plataformas y cubo jugador...");
+            self.setup_interactive_platformer_scene();
         }
 
         if self.is_m7_test {
@@ -1089,6 +1260,11 @@ impl ApplicationHandler for GlassEngineApp {
             log::info!("Ejecutando frame de prueba...");
             let _ = self.render_frame();
             event_loop.exit();
+            return;
+        }
+
+        if let Some(w) = &self.window {
+            w.request_redraw();
         }
     }
 
@@ -1136,7 +1312,13 @@ impl ApplicationHandler for GlassEngineApp {
             }
             WindowEvent::Resized(physical_size) => {
                 if let (Some(renderer), Some(vk_ctx)) = (&mut self.renderer, &self.vulkan_context) {
-                    let _ = renderer.resize(vk_ctx, physical_size.width, physical_size.height);
+                    if physical_size.width > 0
+                        && physical_size.height > 0
+                        && (physical_size.width != renderer.swapchain.extent.width
+                            || physical_size.height != renderer.swapchain.extent.height)
+                    {
+                        let _ = renderer.resize(vk_ctx, physical_size.width, physical_size.height);
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -1167,7 +1349,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let is_standalone = args.iter().any(|arg| arg == "--standalone" || arg == "--game");
-    let is_platformer_test = args.iter().any(|arg| arg == "--test-platformer" || arg == "--platformer");
+    let is_platformer_test = args.iter().any(|arg| arg == "--test-platformer");
     let is_m10_test = args.iter().any(|arg| arg == "--test-m10");
     let is_m9_test = args.iter().any(|arg| arg == "--test-m9");
     let is_m8_test = args.iter().any(|arg| arg == "--test-m8");
