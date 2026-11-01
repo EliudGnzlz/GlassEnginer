@@ -1,0 +1,39 @@
+[workspace]
+members = [
+    "crates/glass_core",
+    "crates/glass_renderer",
+    "crates/glass_editor",
+    "crates/glass_scripting",
+    "crates/glass_mcp",
+    "crates/glass_app",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["GlassEngine Team"]
+license = "MIT OR Apache-2.0"
+rust-version = "1.80"
+
+[workspace.dependencies]
+log = "0.4"
+env_logger = "0.11"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+raw-window-handle = "0.6"
+winit = "0.30"
+ash = "0.38"
+ash-window = "0.13.0"
+gpu-allocator = { version = "0.27", default-features = false, features = ["vulkan"] }
+egui = "0.31"
+gltf = "1.4"
+notify = "8.0"
+rapier3d = "0.23"
+kira = { version = "0.10", default-features = false, features = ["cpal"] }
+glass_core = { path = "crates/glass_core" }
+glass_renderer = { path = "crates/glass_renderer" }
+glass_editor = { path = "crates/glass_editor" }
+glass_scripting = { path = "crates/glass_scripting" }
+glass_mcp = { path = "crates/glass_mcp" }

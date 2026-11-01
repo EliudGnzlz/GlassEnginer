@@ -1,0 +1,12 @@
+[package]
+name = "glass_editor"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+glass_core.workspace = true
+egui.workspace = true
+log.workspace = true
+serde.workspace = true

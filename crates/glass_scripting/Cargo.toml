@@ -1,0 +1,12 @@
+[package]
+name = "glass_scripting"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+glass_core.workspace = true
+log.workspace = true
+serde.workspace = true
+thiserror.workspace = true
