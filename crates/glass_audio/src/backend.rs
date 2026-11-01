@@ -2,9 +2,12 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use kira::{
     listener::ListenerHandle,
-    sound::static_sound::{StaticSoundData, StaticSoundHandle},
+    sound::{
+        static_sound::{StaticSoundData, StaticSoundHandle},
+        PlaybackState,
+    },
     track::{SpatialTrackBuilder, SpatialTrackHandle},
-    AudioManager, AudioManagerSettings, Decibels, DefaultBackend, PlaybackRate, Tween,
+    AudioManager, AudioManagerSettings, Capacities, Decibels, DefaultBackend, PlaybackRate, Tween,
 };
 use crate::command::SoundHandle;
 
@@ -28,7 +31,15 @@ pub struct KiraBackend {
 
 impl KiraBackend {
     pub fn try_new() -> Result<Self, String> {
-        let mut manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default())
+        let settings = AudioManagerSettings {
+            capacities: Capacities {
+                sub_track_capacity: 512,
+                listener_capacity: 16,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut manager = AudioManager::<DefaultBackend>::new(settings)
             .map_err(|e| format!("Fallo al inicializar CPAL AudioManager: {:?}", e))?;
 
         let listener = manager
@@ -61,6 +72,7 @@ impl AudioBackend for KiraBackend {
     }
 
     fn play_2d(&mut self, name: &str, volume: f32, pitch: f32, looping: bool, handle: SoundHandle) -> bool {
+        self.active_2d.retain(|_, sound| sound.state() != PlaybackState::Stopped);
         let sound_data = match self.clips.get(name) {
             Some(d) => d.clone(),
             None => {
@@ -97,6 +109,7 @@ impl AudioBackend for KiraBackend {
     }
 
     fn play_3d(&mut self, name: &str, position: [f32; 3], volume: f32, pitch: f32, looping: bool, handle: SoundHandle) -> bool {
+        self.active_3d.retain(|_, (_, sound)| sound.state() != PlaybackState::Stopped);
         let sound_data = match self.clips.get(name) {
             Some(d) => d.clone(),
             None => {
