@@ -32,6 +32,20 @@ type InitAudioBridgeFn = unsafe extern "system" fn(
     *const c_void,
     *const c_void,
 );
+
+#[repr(C)]
+struct PhysicsBridgeCallbacks {
+    create_body: *const c_void,
+    attach_box: *const c_void,
+    attach_sphere: *const c_void,
+    apply_impulse: *const c_void,
+    apply_force: *const c_void,
+    get_transform: *const c_void,
+    set_transform: *const c_void,
+    remove_body: *const c_void,
+}
+
+type InitPhysicsBridgeFn = unsafe extern "system" fn(*const PhysicsBridgeCallbacks);
 type CreateScriptInstanceFn = unsafe extern "system" fn(u64, *const c_char) -> i32;
 type UpdateScriptInstanceFn = unsafe extern "system" fn(i32, f32);
 type DestroyScriptInstanceFn = unsafe extern "system" fn(i32);
@@ -131,6 +145,26 @@ impl ScriptHost {
                     glass_audio::glass_audio_set_listener_transform as *const c_void,
                     glass_audio::glass_audio_stop as *const c_void,
                 );
+            }
+        }
+
+        if let Ok(init_physics_fn) = loader.get_function_with_unmanaged_callers_only::<InitPhysicsBridgeFn>(
+            bridge_type,
+            pdcstr!("InitPhysicsBridge"),
+        ) {
+            log::info!("Vinculando callbacks Rust <-> C# Physics FFI...");
+            let callbacks = PhysicsBridgeCallbacks {
+                create_body: glass_physics::glass_physics_create_body as *const c_void,
+                attach_box: glass_physics::glass_physics_attach_box_collider as *const c_void,
+                attach_sphere: glass_physics::glass_physics_attach_sphere_collider as *const c_void,
+                apply_impulse: glass_physics::glass_physics_apply_impulse as *const c_void,
+                apply_force: glass_physics::glass_physics_apply_force as *const c_void,
+                get_transform: glass_physics::glass_physics_get_transform as *const c_void,
+                set_transform: glass_physics::glass_physics_set_transform as *const c_void,
+                remove_body: glass_physics::glass_physics_remove_body as *const c_void,
+            };
+            unsafe {
+                init_physics_fn(&callbacks as *const PhysicsBridgeCallbacks);
             }
         }
 

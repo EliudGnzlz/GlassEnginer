@@ -1,0 +1,13 @@
+/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/obj/Release/net8.0/GlassEngine.Core.GeneratedMSBuildEditorConfig.editorconfig
+/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/obj/Release/net8.0/GlassEngine.Core.AssemblyInfoInputs.cache
+/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/obj/Release/net8.0/GlassEngine.Core.AssemblyInfo.cs
+/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/obj/Release/net8.0/GlassEngine.Core.csproj.CoreCompileInputs.cache
+/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/bin/Release/net8.0/GlassEngine.Core.deps.json
+/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/bin/Release/net8.0/GlassEngine.Core.runtimeconfig.json
+/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/bin/Release/net8.0/GlassEngine.Core.dll
+/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/bin/Release/net8.0/GlassEngine.Core.pdb
+/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/obj/Release/net8.0/GlassEngine.Core.dll
+/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/obj/Release/net8.0/refint/GlassEngine.Core.dll
+/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/obj/Release/net8.0/GlassEngine.Core.pdb
+/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/obj/Release/net8.0/GlassEngine.Core.genruntimeconfig.cache
+/home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/obj/Release/net8.0/ref/GlassEngine.Core.dll

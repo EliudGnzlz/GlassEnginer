@@ -6,6 +6,7 @@ members = [
     "crates/glass_scripting",
     "crates/glass_mcp",
     "crates/glass_audio",
+    "crates/glass_physics",
     "crates/glass_app",
 ]
 resolver = "2"
@@ -33,7 +34,7 @@ egui-winit = "0.36"
 egui-ash-renderer = { version = "0.13", features = ["gpu-allocator"] }
 gltf = "1.4"
 notify = "8.0"
-rapier3d = "0.23"
+rapier3d = { version = "0.23", default-features = false, features = ["dim3", "f32"] }
 kira = { version = "0.10", default-features = false, features = ["cpal", "wav"] }
 crossbeam-queue = "0.3"
 image = { version = "0.25", default-features = false, features = ["png"] }
@@ -44,3 +45,4 @@ glass_editor = { path = "crates/glass_editor" }
 glass_scripting = { path = "crates/glass_scripting" }
 glass_mcp = { path = "crates/glass_mcp" }
 glass_audio = { path = "crates/glass_audio" }
+glass_physics = { path = "crates/glass_physics" }

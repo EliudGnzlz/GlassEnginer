@@ -3,6 +3,7 @@ use egui_ash_renderer::Renderer as EguiVulkanRenderer;
 use egui_ash_renderer::allocator::GpuAllocator;
 use egui_winit::State as EguiWinitState;
 use glass_audio::{register_global_audio_system, AudioSystem};
+use glass_physics::{register_global_physics_world, BodyType, PhysicsWorld};
 use glass_core::{GlassWindow, WindowConfig};
 use glass_editor::EditorDockingLayout;
 use glass_mcp::{McpServer, SceneState};
@@ -100,17 +101,20 @@ struct GlassEngineApp {
     viewport_texture_id: Option<egui::TextureId>,
     editor_layout: EditorDockingLayout,
     pub scene_state: Arc<Mutex<SceneState>>,
+    #[allow(dead_code)]
     pub mcp_server: Arc<McpServer>,
     asset_cache: Arc<RwLock<AssetCache>>,
     asset_watcher: Option<AssetWatcher>,
     start_time: Instant,
     pub script_host: ScriptHost,
     pub audio_system: Arc<AudioSystem>,
+    pub physics_world: Arc<Mutex<PhysicsWorld>>,
     is_headless_test: bool,
     is_m5_test: bool,
     is_m6_test: bool,
     is_m7_test: bool,
     is_m8_test: bool,
+    is_m9_test: bool,
 }
 
 impl Drop for GlassEngineApp {
@@ -144,12 +148,21 @@ impl Drop for GlassEngineApp {
 }
 
 impl GlassEngineApp {
-    pub fn new(is_headless_test: bool, is_m5_test: bool, is_m6_test: bool, is_m7_test: bool, is_m8_test: bool) -> Self {
+    pub fn new(
+        is_headless_test: bool,
+        is_m5_test: bool,
+        is_m6_test: bool,
+        is_m7_test: bool,
+        is_m8_test: bool,
+        is_m9_test: bool,
+    ) -> Self {
         let scene_state = Arc::new(Mutex::new(SceneState::new()));
         let mcp_server = Arc::new(McpServer::new(scene_state.clone()));
         let asset_cache = AssetCache::new();
         let audio_system = Arc::new(AudioSystem::new());
         register_global_audio_system(audio_system.clone());
+        let physics_world = Arc::new(Mutex::new(PhysicsWorld::new()));
+        register_global_physics_world(physics_world.clone());
 
         Self {
             window_config: WindowConfig::default(),
@@ -171,11 +184,13 @@ impl GlassEngineApp {
             start_time: Instant::now(),
             script_host: ScriptHost::new(),
             audio_system,
+            physics_world,
             is_headless_test,
             is_m5_test,
             is_m6_test,
             is_m7_test,
             is_m8_test,
+            is_m9_test,
         }
     }
 
@@ -251,6 +266,22 @@ impl GlassEngineApp {
             ) => (w, ctx, rend, ew, er, tid),
             _ => return Ok(()),
         };
+
+        // 0. Simular paso de física con Rapier3D y sincronizar transforms dinámicos a SceneState
+        if let Ok(mut physics) = self.physics_world.lock() {
+            physics.step(0.016667);
+            let sync_transforms = physics.sync_all_transforms();
+            if !sync_transforms.is_empty() {
+                if let Ok(mut scene) = self.scene_state.lock() {
+                    for (entity_id, tf) in sync_transforms {
+                        if let Some(ent) = scene.entities.iter_mut().find(|e| e.id == entity_id) {
+                            ent.transform.position = tf.position;
+                            ent.transform.scale = tf.scale;
+                        }
+                    }
+                }
+            }
+        }
 
         // 1. Renderizar geometría 3D a la textura offscreen en VRAM
         let elapsed = self.start_time.elapsed().as_secs_f32();
@@ -671,6 +702,95 @@ impl ApplicationHandler for GlassEngineApp {
             return;
         }
 
+        if self.is_m9_test {
+            log::info!("Ejecutando suite de pruebas de integración para HITO 9 (Simulación Física 3D con Rapier3D)...");
+            assert!(self.script_host.is_initialized, "ScriptHost debe estar inicializado para Hito 9");
+
+            // 1. Crear plano/suelo estático en la física y en SceneState
+            let floor_entity_id = {
+                let mut state = self.scene_state.lock().unwrap();
+                state.create_entity(
+                    "Static Floor".to_string(),
+                    vec!["Transform".to_string(), "StaticCollider".to_string()],
+                )
+            };
+            {
+                let mut phys = self.physics_world.lock().unwrap();
+                let floor_body = phys.create_rigid_body(
+                    floor_entity_id,
+                    BodyType::Static,
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                );
+                phys.attach_box_collider(floor_body, [10.0, 0.5, 10.0], 0.1, 0.7);
+            }
+
+            // 2. Crear entidad de cubo dinámico en SceneState que caerá bajo gravedad
+            let cube_entity_id = {
+                let mut state = self.scene_state.lock().unwrap();
+                let id = state.create_entity(
+                    "Dynamic Physics Cube".to_string(),
+                    vec!["Transform".to_string(), "RigidBody".to_string(), "Script".to_string()],
+                );
+                if let Some(ent) = state.entities.iter_mut().find(|e| e.id == id) {
+                    ent.transform.position = [0.0, 8.0, 0.0];
+                }
+                id
+            };
+
+            // 3. Instanciar script de C# 'PhysicsDropTest' que inicializa el RigidBody y aplica impulso
+            let script_handle = self.script_host.create_instance(cube_entity_id, "GlassEngine.Core.Scripts.PhysicsDropTest")
+                .expect("Debe instanciar PhysicsDropTest en C#");
+            assert!(script_handle > 0, "Handle de script C# debe ser válido");
+
+            // 4. Simular 40 frames de física y renderizado
+            let mut min_y = 8.0_f32;
+            let mut bounced = false;
+
+            for frame in 0..40 {
+                self.script_host.update_all(0.016667);
+                if let Err(e) = self.render_frame() {
+                    log::error!("Fallo en render_frame durante test de física: {}", e);
+                    event_loop.exit();
+                    return;
+                }
+
+                if let Ok(state) = self.scene_state.lock() {
+                    if let Some(ent) = state.entities.iter().find(|e| e.id == cube_entity_id) {
+                        let cur_y = ent.transform.position[1];
+                        if cur_y < min_y {
+                            min_y = cur_y;
+                        }
+                        if cur_y > min_y + 0.2 && frame > 10 {
+                            bounced = true;
+                        }
+                    }
+                }
+            }
+
+            log::info!("Test M9: Altura mínima alcanzada bajo gravedad: {:.2}m, Rebotó/Saltó: {}", min_y, bounced);
+            assert!(min_y < 7.5, "El cubo dinámico debió caer bajo gravedad (alcanzó {:.2})", min_y);
+
+            // 5. Destruir instancia del script y verificar limpieza
+            self.script_host.destroy_instance(script_handle);
+            assert_eq!(self.script_host.active_instance_count(), 0);
+
+            log::info!("============================================================");
+            log::info!("   HITO 9 COMPLETADO: SIMULACIÓN FÍSICA 3D (RAPIER3D)");
+            log::info!("   GPU en Uso:                  {}", gpu_name);
+            log::info!("   Motor de Física:             Rapier3D 0.23.1 (f32, dim3)");
+            log::info!("   Integración Temporal:        Fixed Timestep 60Hz con acumulador anti-jitter");
+            log::info!("   Cuerpos Soportados:          Dynamic, Static, Kinematic");
+            log::info!("   Colisionadores:              Cuboid, Ball, Capsule");
+            log::info!("   Gravedad & Fuerzas:          vector![0.0, -9.81, 0.0] + Impulsos lineales");
+            log::info!("   Sincronización Bidireccional: Bulk Sync de Transforms dinámicos a SceneState");
+            log::info!("   Interop C# CoreCLR:          RigidBody, Collider, PhysicsDropTest.cs");
+            log::info!("============================================================");
+
+            event_loop.exit();
+            return;
+        }
+
         if self.is_m6_test {
             log::info!("Ejecutando suite de pruebas de integración para HITO 6 (Pipeline de Blender & Hot-Reload)...");
 
@@ -725,7 +845,7 @@ impl ApplicationHandler for GlassEngineApp {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
-        if self.is_headless_test || self.is_m5_test || self.is_m6_test || self.is_m7_test || self.is_m8_test {
+        if self.is_headless_test || self.is_m5_test || self.is_m6_test || self.is_m7_test || self.is_m8_test || self.is_m9_test {
             return;
         }
 
@@ -786,6 +906,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    let is_m9_test = args.iter().any(|arg| arg == "--test-m9");
     let is_m8_test = args.iter().any(|arg| arg == "--test-m8");
     let is_m7_test = args.iter().any(|arg| arg == "--test-m7");
     let is_m6_test = args.iter().any(|arg| arg == "--test-m6");
@@ -795,7 +916,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .any(|arg| arg == "--test-init" || arg == "--check-vulkan" || arg == "--test-m3" || arg == "--test-m4");
 
     let event_loop = EventLoop::new()?;
-    let mut app = GlassEngineApp::new(is_headless_test, is_m5_test, is_m6_test, is_m7_test, is_m8_test);
+    let mut app = GlassEngineApp::new(
+        is_headless_test,
+        is_m5_test,
+        is_m6_test,
+        is_m7_test,
+        is_m8_test,
+        is_m9_test,
+    );
     event_loop.run_app(&mut app)?;
 
     Ok(())

@@ -1,25 +1,6 @@
 use std::ffi::{c_char, CStr};
-use serde::{Deserialize, Serialize};
 
-/// Flat C-ABI Transform structure matching C# [StructLayout(LayoutKind.Sequential)].
-/// Total size: 40 bytes, Alignment: 4 bytes.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct TransformFfi {
-    pub position: [f32; 3],
-    pub rotation: [f32; 4], // Quaternion (X, Y, Z, W)
-    pub scale: [f32; 3],
-}
-
-impl Default for TransformFfi {
-    fn default() -> Self {
-        Self {
-            position: [0.0, 0.0, 0.0],
-            rotation: [0.0, 0.0, 0.0, 1.0],
-            scale: [1.0, 1.0, 1.0],
-        }
-    }
-}
+pub use glass_core::TransformFfi;
 
 // Compile-time sanity check for memory alignment and size
 const _: () = {

@@ -19,6 +19,15 @@ public static class RuntimeBridge
     private static SetListenerTransformDelegate? _setListenerTransform;
     private static StopAudioDelegate? _stopAudio;
 
+    private static CreateRigidBodyDelegate? _createRigidBody;
+    private static AttachBoxColliderDelegate? _attachBoxCollider;
+    private static AttachSphereColliderDelegate? _attachSphereCollider;
+    private static ApplyImpulseDelegate? _applyImpulse;
+    private static ApplyForceDelegate? _applyForce;
+    private static GetPhysicsTransformDelegate? _getPhysicsTransform;
+    private static SetPhysicsTransformDelegate? _setPhysicsTransform;
+    private static RemoveRigidBodyDelegate? _removeRigidBody;
+
     private static readonly Dictionary<int, GlassBehaviour> _instances = new();
     private static int _nextHandle = 1;
     private static readonly object _sync = new();
@@ -86,6 +95,96 @@ public static class RuntimeBridge
     public static void StopAudio(ulong handle)
     {
         _stopAudio?.Invoke(handle);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PhysicsBridgeCallbacks
+    {
+        public IntPtr CreateBody;
+        public IntPtr AttachBox;
+        public IntPtr AttachSphere;
+        public IntPtr ApplyImpulse;
+        public IntPtr ApplyForce;
+        public IntPtr GetTransform;
+        public IntPtr SetTransform;
+        public IntPtr RemoveBody;
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "InitPhysicsBridge")]
+    public static unsafe void InitPhysicsBridge(PhysicsBridgeCallbacks* callbacks)
+    {
+        if (callbacks == null) return;
+        if (callbacks->CreateBody != IntPtr.Zero)
+            _createRigidBody = Marshal.GetDelegateForFunctionPointer<CreateRigidBodyDelegate>(callbacks->CreateBody);
+        if (callbacks->AttachBox != IntPtr.Zero)
+            _attachBoxCollider = Marshal.GetDelegateForFunctionPointer<AttachBoxColliderDelegate>(callbacks->AttachBox);
+        if (callbacks->AttachSphere != IntPtr.Zero)
+            _attachSphereCollider = Marshal.GetDelegateForFunctionPointer<AttachSphereColliderDelegate>(callbacks->AttachSphere);
+        if (callbacks->ApplyImpulse != IntPtr.Zero)
+            _applyImpulse = Marshal.GetDelegateForFunctionPointer<ApplyImpulseDelegate>(callbacks->ApplyImpulse);
+        if (callbacks->ApplyForce != IntPtr.Zero)
+            _applyForce = Marshal.GetDelegateForFunctionPointer<ApplyForceDelegate>(callbacks->ApplyForce);
+        if (callbacks->GetTransform != IntPtr.Zero)
+            _getPhysicsTransform = Marshal.GetDelegateForFunctionPointer<GetPhysicsTransformDelegate>(callbacks->GetTransform);
+        if (callbacks->SetTransform != IntPtr.Zero)
+            _setPhysicsTransform = Marshal.GetDelegateForFunctionPointer<SetPhysicsTransformDelegate>(callbacks->SetTransform);
+        if (callbacks->RemoveBody != IntPtr.Zero)
+            _removeRigidBody = Marshal.GetDelegateForFunctionPointer<RemoveRigidBodyDelegate>(callbacks->RemoveBody);
+
+        Log(2, "GlassEngine.Core PhysicsBridge inicializado exitosamente desde Rust.");
+    }
+
+    public static ulong CreateRigidBody(ulong entityId, int bodyType, Vector3 position, Quaternion rotation)
+    {
+        if (_createRigidBody is null) return 0;
+        return _createRigidBody(entityId, bodyType, position.X, position.Y, position.Z, rotation.X, rotation.Y, rotation.Z, rotation.W);
+    }
+
+    public static ulong AttachBoxCollider(ulong bodyHandle, Vector3 halfExtents, float restitution, float friction)
+    {
+        if (_attachBoxCollider is null) return 0;
+        return _attachBoxCollider(bodyHandle, halfExtents.X, halfExtents.Y, halfExtents.Z, restitution, friction);
+    }
+
+    public static ulong AttachSphereCollider(ulong bodyHandle, float radius, float restitution, float friction)
+    {
+        if (_attachSphereCollider is null) return 0;
+        return _attachSphereCollider(bodyHandle, radius, restitution, friction);
+    }
+
+    public static bool ApplyImpulse(ulong bodyHandle, Vector3 impulse)
+    {
+        if (_applyImpulse is null) return false;
+        return _applyImpulse(bodyHandle, impulse.X, impulse.Y, impulse.Z);
+    }
+
+    public static bool ApplyForce(ulong bodyHandle, Vector3 force)
+    {
+        if (_applyForce is null) return false;
+        return _applyForce(bodyHandle, force.X, force.Y, force.Z);
+    }
+
+    public static bool GetPhysicsTransform(ulong bodyHandle, out Vector3 position, out Quaternion rotation)
+    {
+        if (_getPhysicsTransform is null)
+        {
+            position = Vector3.Zero;
+            rotation = Quaternion.Identity;
+            return false;
+        }
+        return _getPhysicsTransform(bodyHandle, out position, out rotation);
+    }
+
+    public static bool SetPhysicsTransform(ulong bodyHandle, Vector3 position, Quaternion rotation)
+    {
+        if (_setPhysicsTransform is null) return false;
+        return _setPhysicsTransform(bodyHandle, position.X, position.Y, position.Z, rotation.X, rotation.Y, rotation.Z, rotation.W);
+    }
+
+    public static bool RemoveRigidBody(ulong bodyHandle)
+    {
+        if (_removeRigidBody is null) return false;
+        return _removeRigidBody(bodyHandle);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitBridge")]

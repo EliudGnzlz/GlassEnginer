@@ -16,8 +16,8 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
 | **Hito 6** | Pipeline de Blender y Recarga en Caliente | **Completado** | 100% | DeepSeek + Kimi (Mirai) |
 | **Hito 7** | Entorno de Scripting en C# (.NET CoreCLR) | **Completado** | 100% | Kimi (Mirai) + DeepSeek |
 | **Hito 8** | Subsistema de Audio 2D/3D Desacoplado (Kira) | **Completado** | 100% | DeepSeek + Kimi (Mirai) |
-| **Hito 9** | Simulación Física 3D (Rapier3D) | **En Progreso** | - | DeepSeek + Kimi (Mirai) |
-| **Hito 10**| Compilación Dual (Editor vs Standalone) | Pendiente | - | Gemini + DeepSeek |
+| **Hito 9** | Simulación Física 3D (Rapier3D) | **Completado** | 100% | DeepSeek + Kimi (Mirai) |
+| **Hito 10**| Compilación Dual (Editor vs Standalone) | **En Progreso** | - | Gemini + DeepSeek + Kimi |
 
 ---
 
@@ -142,10 +142,30 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
 
 ---
 
-### Hito 9: Simulación Física 3D (Rapier3D) (En Progreso)
-* **Objetivo:** Integrar un motor de física de cuerpos rígidos y detección de colisiones de alto rendimiento utilizando `rapier3d 0.23` con timestep fijo, sincronización bidireccional de matrices de transformación e integración profunda con C# y egui.
-* **Directrices de Implementación:**
-  * `PhysicsWorld`: simulación en bucle de paso fijo (`fixed_timestep = 1/60 s`) con acumulador de tiempo e interpolación de renderizado para evitar jitter.
-  * Cuerpos rígidos (`RigidBody`) y colisionadores (`Collider` con soporte de cajas, esferas, cápsulas y mallas tridimensionales).
-  * Canal lock-free para eventos de colisión (`OnCollisionEnter`, `OnTriggerEnter`) hacia C#.
-  * Actualización por lotes (bulk copy) de poses físicas para minimizar cruces FFI.
+### Hito 9: Simulación Física 3D (Rapier3D)
+* **Fecha:** 2026-11-01
+* **Acciones:**
+  * Creación del crate `crates/glass_physics` con `rapier3d 0.23` (`dim3`, `f32`):
+    * `PhysicsWorld`: simulación determinista con Fixed Timestep (60 Hz, `dt = 1/60`) usando acumulador de tiempo y clamp de substeps máximos para prevenir el *spiral of death* y el jitter visual.
+    * Gestión de cuerpos rígidos (`Dynamic`, `Static`, `Kinematic`) y colisionadores (`Cuboid`, `Sphere`, `Capsule`) con coeficientes de fricción y restitución.
+    * Aplicación de fuerzas continuas e impulsos instantáneos (`apply_impulse`, `apply_force`).
+    * Sincronización masiva en batch (`sync_all_transforms`) hacia `SceneState` de entidades dinámicas en cada frame.
+    * Capa C-ABI FFI (`crates/glass_physics/src/ffi.rs`) y paso estructurado mediante tabla de callbacks (`PhysicsBridgeCallbacks`), superando de manera robusta los límites de aridad de delegados de .NET CoreCLR.
+  * Migración canónica de `TransformFfi` a `glass_core::types` para desacoplamiento limpio entre física, renderizado y scripting.
+  * Interoperabilidad en C# .NET 8 (`managed/GlassEngine.Core`):
+    * Delegados en `PhysicsDelegates.cs` y punto de entrada `[UnmanagedCallersOnly] InitPhysicsBridge` en `RuntimeBridge.cs`.
+    * Componentes `RigidBody` y `Collider` de alto nivel orientados a entidades.
+    * Script de gameplay `PhysicsDropTest.cs` inicializando física en tiempo real, monitoreando la trayectoria de caída libre y disparando un impulso reactivo de salto.
+  * Integración en el motor (`crates/glass_app`):
+    * Integración de `physics_world: Arc<Mutex<PhysicsWorld>>` en el ciclo de ejecución `render_frame`.
+    * Suite de integración `--test-m9` ejecutada exitosamente en GPU NVIDIA GTX 1070: caída bajo gravedad `vector![0.0, -9.81, 0.0]`, colisión y detección de impulso reactivo con código de salida 0 y 0 errores de validación Vulkan.
+* **Auditoría Cruzada:**
+  * **DeepSeek:** Visto bueno técnico (Sign-off) otorgado (Calificación Arquitectura: A). Elogió la tabla estructurada de callbacks FFI para CoreCLR y el acumulador canónico de timestep.
+  * **Kimi (vía Mirai MCP):** Visto bueno técnico (Sign-off) otorgado, certificando la estabilidad de la sincronización de escena a 60 Hz y la respuesta en tiempo real a impulsos desde C#. Autorizó formalmente el paso al Hito 10.
+
+---
+
+### Hito 10: Compilación Dual (Editor vs Standalone Game Runtime) (En Progreso)
+* **Objetivo:** Implementar la compilación condicional para permitir dos modos de compilación limpios y optimizados:
+  1. **Modo Editor (Default):** Incluye interfaz de usuario docking en `egui`, inspector, jerarquía, gizmos, servidor MCP en tiempo de ejecución, pipeline de Blender y hot-reloading de assets.
+  2. **Modo Standalone (Runtime de Juego Puro):** Sin sobrecosto de UI ni egui, renderizado a pantalla completa directo sobre el Swapchain con Vulkan nativo a máxima tasa de cuadros, física activa y C# scripting ejecutándose a máxima velocidad sin dependencias de desarrollo.

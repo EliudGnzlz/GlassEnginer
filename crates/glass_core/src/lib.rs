@@ -1,9 +1,11 @@
 //! glass_core: Window management, OS event abstractions and lifecycle contracts.
 
 pub mod events;
+pub mod types;
 pub mod window;
 
 pub use events::EngineEvent;
+pub use types::TransformFfi;
 pub use window::{GlassWindow, WindowConfig};
 
 /// Trait representing an engine subsystem lifecycle.
