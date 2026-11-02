@@ -258,12 +258,36 @@ namespace UnityEngine
     {
         public string name { get; set; } = "GameObject";
 
+        public static T Instantiate<T>(T original) where T : Object
+        {
+            if (original is GameObject go)
+            {
+                var clone = new GameObject($"{go.name} (Clone)");
+                clone.transform.position = go.transform.position;
+                clone.transform.rotation = go.transform.rotation;
+                clone.transform.localScale = go.transform.localScale;
+                Debug.Log($"[Instantiate] Clonado GameObject '{clone.name}' en Pos={clone.transform.position}");
+                return (T)(object)clone;
+            }
+            return original;
+        }
+
+        public static T Instantiate<T>(T original, Vector3 position, Quaternion rotation) where T : Object
+        {
+            var res = Instantiate(original);
+            if (res is GameObject go)
+            {
+                go.transform.position = position;
+                go.transform.rotation = rotation;
+            }
+            return res;
+        }
+
         public static void Destroy(Object obj)
         {
             if (obj is GameObject go)
             {
-                // Podría enviar señal de destrucción de la entidad
-                Debug.Log($"Destruyendo objeto {go.name} (EntityId: {go.EntityId})");
+                Debug.Log($"[Destroy] Destruyendo objeto '{go.name}' (EntityId: {go.EntityId})");
             }
         }
     }
@@ -554,5 +578,18 @@ namespace UnityEngine.UI
         {
             onClick?.Invoke();
         }
+    }
+}
+
+namespace UnityEngine.SceneManagement
+{
+    public static class SceneManager
+    {
+        public static void LoadScene(string sceneName)
+        {
+            Debug.Log($"[SceneManager] Solicitando carga de escena: '{sceneName}'");
+        }
+
+        public static string GetActiveSceneName() => "SampleScene";
     }
 }

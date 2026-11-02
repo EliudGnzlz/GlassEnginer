@@ -32,6 +32,11 @@ pub struct EditorDockingLayout {
     pub dock_state: DockState<EditorTab>,
     pub current_preset: LayoutPreset,
     pub request_launcher: bool,
+    pub request_build_and_run: bool,
+    pub request_build_settings: bool,
+    pub show_project_settings_dialog: bool,
+    pub project_settings: glass_core::ProjectSettings,
+    pub status_message: Option<(String, std::time::Instant)>,
 }
 
 impl Default for EditorDockingLayout {
@@ -50,6 +55,11 @@ impl EditorDockingLayout {
             dock_state: DockState::new(vec![EditorTab::SceneView, EditorTab::GameView]),
             current_preset: LayoutPreset::Default,
             request_launcher: false,
+            request_build_and_run: false,
+            request_build_settings: false,
+            show_project_settings_dialog: false,
+            project_settings: glass_core::ProjectSettings::load_or_default("project.json"),
+            status_message: None,
         };
         slf.apply_preset(LayoutPreset::Default);
         slf
@@ -128,7 +138,30 @@ impl EditorDockingLayout {
     ) {
         let mut selected_id = self.hierarchy.selected_entity;
 
-        // --- 0. BARRA DE MENÚS PRINCIPAL ESTILO UNITY / UNREAL ---
+        // --- 0. ATAJOS DE TECLADO GLOBALES ESTILO UNITY ---
+        if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::B)) {
+            self.request_build_and_run = true;
+        }
+        if ui.input(|i| i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::B)) {
+            self.request_build_settings = true;
+        }
+        if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::P)) {
+            self.viewport.play_state = match self.viewport.play_state {
+                PlayState::Edit | PlayState::Paused => PlayState::Playing,
+                PlayState::Playing => {
+                    self.viewport.request_reset_to_spawn = true;
+                    PlayState::Edit
+                }
+            };
+        }
+        if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
+            if let Ok(sc) = scene_state.lock() {
+                let _ = sc.save_to_json("assets/scenes/SampleScene.scene.json");
+            }
+            self.status_message = Some(("Escena guardada en assets/scenes/SampleScene.scene.json".into(), std::time::Instant::now()));
+        }
+
+        // --- 1. BARRA DE MENÚS PRINCIPAL ESTILO UNITY / UNREAL ---
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             ui.menu_button("File", |ui| {
@@ -136,13 +169,38 @@ impl EditorDockingLayout {
                     if let Ok(mut sc) = scene_state.lock() {
                         sc.entities.clear();
                         sc.next_entity_id = 1;
+                        sc.create_entity("Main Camera".into(), vec!["Transform".into(), "Camera".into()]);
+                        sc.create_entity("Directional Light".into(), vec!["Transform".into(), "Light".into()]);
                     }
+                    self.status_message = Some(("Nueva escena inicializada".into(), std::time::Instant::now()));
                     ui.close();
                 }
                 if ui.button("💾 Save Scene\tCtrl+S").clicked() {
                     if let Ok(sc) = scene_state.lock() {
-                        let _ = sc.save_to_json("assets/scenes/scene.json");
+                        let _ = sc.save_to_json("assets/scenes/SampleScene.scene.json");
                     }
+                    self.status_message = Some(("Escena guardada en assets/scenes/SampleScene.scene.json".into(), std::time::Instant::now()));
+                    ui.close();
+                }
+                if ui.button("💾 Save Scene As...").clicked() {
+                    if let Ok(sc) = scene_state.lock() {
+                        let _ = sc.save_to_json("assets/scenes/BuildScene.scene.json");
+                    }
+                    self.status_message = Some(("Escena guardada en assets/scenes/BuildScene.scene.json".into(), std::time::Instant::now()));
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("⚙ Build Settings...\tCtrl+Shift+B").clicked() {
+                    self.request_build_settings = true;
+                    ui.close();
+                }
+                if ui.button("🚀 Build And Run\tCtrl+B").clicked() {
+                    self.request_build_and_run = true;
+                    ui.close();
+                }
+                if ui.button("💾 Save Project").clicked() {
+                    let _ = self.project_settings.save_to_file("project.json");
+                    self.status_message = Some(("Configuración del proyecto guardada en project.json".into(), std::time::Instant::now()));
                     ui.close();
                 }
                 ui.separator();
@@ -153,6 +211,18 @@ impl EditorDockingLayout {
             });
 
             ui.menu_button("Edit", |ui| {
+                let play_label = if self.viewport.play_state == PlayState::Playing { "⏹ Stop\tCtrl+P" } else { "▶ Play\tCtrl+P" };
+                if ui.button(play_label).clicked() {
+                    self.viewport.play_state = match self.viewport.play_state {
+                        PlayState::Edit | PlayState::Paused => PlayState::Playing,
+                        PlayState::Playing => {
+                            self.viewport.request_reset_to_spawn = true;
+                            PlayState::Edit
+                        }
+                    };
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button("📋 Duplicate\tCtrl+D").clicked() {
                     if let Some(id) = self.hierarchy.selected_entity {
                         if let Ok(mut sc) = scene_state.lock() {
@@ -186,14 +256,75 @@ impl EditorDockingLayout {
                     }
                     ui.close();
                 }
+                ui.separator();
+                if ui.button("⚙ Project Settings...").clicked() {
+                    self.show_project_settings_dialog = true;
+                    ui.close();
+                }
             });
 
             ui.menu_button("Assets", |ui| {
-                if ui.button("📁 New Folder").clicked() { ui.close(); }
-                if ui.button("📜 C# Script").clicked() { ui.close(); }
-                if ui.button("🎨 Material (PBR)").clicked() { ui.close(); }
+                if let Some(id) = self.hierarchy.selected_entity {
+                    if ui.button("📦 Save Selection as Prefab").clicked() {
+                        if let Ok(sc) = scene_state.lock() {
+                            if let Ok(prefab) = glass_core::Prefab::from_entity(&sc, id) {
+                                let clean_name = prefab.name.replace(" ", "_");
+                                let path = format!("assets/prefabs/{}.prefab.json", clean_name);
+                                let _ = prefab.save_to_file(&path);
+                                self.status_message = Some((format!("Prefab guardado exitosamente en {}", path), std::time::Instant::now()));
+                            }
+                        }
+                        ui.close();
+                    }
+                } else {
+                    ui.label("📦 Save as Prefab (Seleccione objeto)");
+                }
+                ui.menu_button("🧩 Instantiate Prefab", |ui| {
+                    let mut found_prefabs = Vec::new();
+                    if let Ok(entries) = std::fs::read_dir("assets/prefabs") {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                                found_prefabs.push(path);
+                            }
+                        }
+                    }
+                    if found_prefabs.is_empty() {
+                        ui.label("No hay prefabs en assets/prefabs/");
+                    } else {
+                        for p in found_prefabs {
+                            let file_name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Prefab");
+                            if ui.button(format!("🧩 {}", file_name)).clicked() {
+                                if let Ok(prefab) = glass_core::Prefab::load_from_file(&p) {
+                                    if let Ok(mut sc) = scene_state.lock() {
+                                        let new_id = sc.instantiate_prefab(&prefab, None, Some([0.0, 1.0, 0.0]));
+                                        self.hierarchy.selected_entity = Some(new_id);
+                                    }
+                                    self.status_message = Some((format!("Prefab {} instanciado", file_name), std::time::Instant::now()));
+                                }
+                                ui.close();
+                            }
+                        }
+                    }
+                });
                 ui.separator();
-                if ui.button("🔄 Refresh Assets").clicked() { ui.close(); }
+                if ui.button("🔄 Recompile C# Scripts").clicked() {
+                    let res = std::process::Command::new("dotnet")
+                        .args(["build", "managed/GlassEngine.Core/GlassEngine.Core.csproj"])
+                        .status();
+                    if let Ok(status) = res {
+                        if status.success() {
+                            self.status_message = Some(("✅ C# Scripts recompilados exitosamente (0 errores)".into(), std::time::Instant::now()));
+                        } else {
+                            self.status_message = Some(("❌ Fallo en compilación C#".into(), std::time::Instant::now()));
+                        }
+                    }
+                    ui.close();
+                }
+                if ui.button("🔄 Refresh Assets").clicked() {
+                    self.status_message = Some(("Assets actualizados".into(), std::time::Instant::now()));
+                    ui.close();
+                }
             });
 
             ui.menu_button("GameObject", |ui| {
@@ -226,6 +357,13 @@ impl EditorDockingLayout {
                         }
                         ui.close();
                     }
+                    if ui.button("▮ Cylinder").clicked() {
+                        if let Ok(mut sc) = scene_state.lock() {
+                            let id = sc.create_entity("Cylinder".into(), vec!["Transform".into(), "MeshRenderer".into(), "RigidBody".into(), "Collider".into()]);
+                            self.hierarchy.selected_entity = Some(id);
+                        }
+                        ui.close();
+                    }
                 });
                 ui.menu_button("☼ Light", |ui| {
                     if ui.button("☼ Directional Light").clicked() {
@@ -238,6 +376,18 @@ impl EditorDockingLayout {
                     if ui.button("✦ Point Light").clicked() {
                         if let Ok(mut sc) = scene_state.lock() {
                             let id = sc.create_entity("Point Light".into(), vec!["Transform".into(), "Light".into()]);
+                            self.hierarchy.selected_entity = Some(id);
+                        }
+                        ui.close();
+                    }
+                    if ui.button("▼ Spot Light").clicked() {
+                        if let Ok(mut sc) = scene_state.lock() {
+                            let id = sc.create_entity("Spot Light".into(), vec!["Transform".into(), "Light".into()]);
+                            if let Some(ent) = sc.get_entity_mut(id) {
+                                if let Some(ref mut l) = ent.light {
+                                    l.light_type = "Spot".into();
+                                }
+                            }
                             self.hierarchy.selected_entity = Some(id);
                         }
                         ui.close();
@@ -273,6 +423,15 @@ impl EditorDockingLayout {
                                     txt.text = "Button".into();
                                 }
                             }
+                            self.hierarchy.selected_entity = Some(id);
+                        }
+                        ui.close();
+                    }
+                });
+                ui.menu_button("🔊 Audio", |ui| {
+                    if ui.button("🔊 Audio Source").clicked() {
+                        if let Ok(mut sc) = scene_state.lock() {
+                            let id = sc.create_entity("Audio Source".into(), vec!["Transform".into(), "AudioSource".into()]);
                             self.hierarchy.selected_entity = Some(id);
                         }
                         ui.close();
@@ -326,6 +485,14 @@ impl EditorDockingLayout {
                 if ui.button("📖 GlassEngine Documentation").clicked() { ui.close(); }
                 if ui.button("ℹ About GlassEngine Beta").clicked() { ui.close(); }
             });
+
+            // Feedback de estado en la barra superior
+            if let Some((msg, time)) = &self.status_message {
+                if time.elapsed().as_secs() < 6 {
+                    ui.separator();
+                    ui.label(egui::RichText::new(msg).italics().color(egui::Color32::from_rgb(100, 220, 160)));
+                }
+            }
         });
 
         ui.separator();
@@ -481,6 +648,81 @@ impl EditorDockingLayout {
         if selected_id != self.hierarchy.selected_entity {
             self.hierarchy.selected_entity = selected_id;
             ui.ctx().request_repaint();
+        }
+
+        // --- DIÁLOGOS MODALES ESTILO UNITY (Project Settings y Build Settings) ---
+        if self.show_project_settings_dialog {
+            let mut open = true;
+            egui::Window::new("⚙ Project Settings")
+                .open(&mut open)
+                .resizable(false)
+                .default_width(360.0)
+                .show(ui.ctx(), |ui| {
+                    ui.heading("Configuración del Proyecto");
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Product Name:  ");
+                        ui.text_edit_singleline(&mut self.project_settings.name);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Company Name:  ");
+                        ui.text_edit_singleline(&mut self.project_settings.company_name);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Version:       ");
+                        ui.text_edit_singleline(&mut self.project_settings.version);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Default Scene: ");
+                        ui.text_edit_singleline(&mut self.project_settings.default_scene);
+                    });
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.button("💾 Guardar").clicked() {
+                            let _ = self.project_settings.save_to_file("project.json");
+                            self.status_message = Some(("project.json actualizado".into(), std::time::Instant::now()));
+                            self.show_project_settings_dialog = false;
+                        }
+                        if ui.button("Cerrar").clicked() {
+                            self.show_project_settings_dialog = false;
+                        }
+                    });
+                });
+            if !open {
+                self.show_project_settings_dialog = false;
+            }
+        }
+
+        if self.request_build_settings {
+            let mut open = true;
+            egui::Window::new("🚀 Build Settings")
+                .open(&mut open)
+                .resizable(false)
+                .default_width(400.0)
+                .show(ui.ctx(), |ui| {
+                    ui.heading("Ajustes de Compilación Standalone");
+                    ui.add_space(4.0);
+                    ui.label("Plataforma Destino: Linux x86_64 (Vulkan Nativo)");
+                    ui.label("Arquitectura:       64-bit Clr .NET 8");
+                    ui.separator();
+                    ui.label(egui::RichText::new("Escenas en el Build:").strong());
+                    for sc_path in &self.project_settings.scenes_in_build {
+                        ui.label(format!("  ☑ {}", sc_path));
+                    }
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.button(egui::RichText::new("🚀 Build & Run").strong().color(egui::Color32::from_rgb(80, 220, 120))).clicked() {
+                            self.request_build_and_run = true;
+                            self.request_build_settings = false;
+                        }
+                        if ui.button("Cerrar").clicked() {
+                            self.request_build_settings = false;
+                        }
+                    });
+                });
+            if !open {
+                self.request_build_settings = false;
+            }
         }
     }
 }

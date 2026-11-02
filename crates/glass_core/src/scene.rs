@@ -668,6 +668,65 @@ impl SceneState {
         self.next_entity_id = self.entities.iter().map(|e| e.id).max().unwrap_or(0) + 1;
         Ok(())
     }
+
+    /// Instancia un Prefab dentro de la escena, reasignando IDs únicos y emparentando correctamente.
+    pub fn instantiate_prefab(
+        &mut self,
+        prefab: &crate::prefab::Prefab,
+        parent_id: Option<u64>,
+        world_pos: Option<[f32; 3]>,
+    ) -> u64 {
+        use std::collections::HashMap;
+        let mut id_map: HashMap<u64, u64> = HashMap::new();
+
+        let new_root_id = self.next_entity_id;
+        self.next_entity_id += 1;
+        id_map.insert(prefab.root_entity.id, new_root_id);
+
+        for desc in &prefab.descendant_entities {
+            let new_id = self.next_entity_id;
+            self.next_entity_id += 1;
+            id_map.insert(desc.id, new_id);
+        }
+
+        let mut root_clone = prefab.root_entity.clone();
+        root_clone.id = new_root_id;
+        root_clone.parent = parent_id;
+        if let Some(pos) = world_pos {
+            root_clone.transform.position = pos;
+        }
+        root_clone.children = root_clone
+            .children
+            .iter()
+            .filter_map(|cid| id_map.get(cid).copied())
+            .collect();
+
+        // Si se emparentó a un padre existente, añadir el nuevo id a sus hijos
+        if let Some(pid) = parent_id {
+            if let Some(p) = self.get_entity_mut(pid) {
+                if !p.children.contains(&new_root_id) {
+                    p.children.push(new_root_id);
+                }
+            }
+        }
+
+        self.entities.push(root_clone);
+
+        for desc in &prefab.descendant_entities {
+            let mut desc_clone = desc.clone();
+            let new_id = id_map[&desc.id];
+            desc_clone.id = new_id;
+            desc_clone.parent = desc.parent.and_then(|old_pid| id_map.get(&old_pid).copied());
+            desc_clone.children = desc_clone
+                .children
+                .iter()
+                .filter_map(|cid| id_map.get(cid).copied())
+                .collect();
+            self.entities.push(desc_clone);
+        }
+
+        new_root_id
+    }
 }
 
 #[cfg(test)]

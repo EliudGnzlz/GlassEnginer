@@ -1,0 +1,45 @@
+{
+  "format_version": 1,
+  "name": "Gold_Coin",
+  "root_entity": {
+    "id": 1,
+    "active": true,
+    "name": "Gold_Coin",
+    "tag": "Coin",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "AudioSource"
+    ],
+    "transform": {
+      "position": [0.0, 1.0, 0.0],
+      "rotation": [0.0, 45.0, 0.0],
+      "scale": [0.5, 0.5, 0.15]
+    },
+    "mesh": {
+      "color": [1.0, 0.84, 0.0],
+      "wireframe": false,
+      "shader": "pbr.vert.spv"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": null,
+    "audio": {
+      "clip_name": "beep_880",
+      "volume": 1.0,
+      "pitch": 1.4,
+      "is_playing": false
+    },
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  "descendant_entities": []
+}

@@ -1,11 +1,15 @@
 //! glass_core: Window management, OS event abstractions and lifecycle contracts.
 
 pub mod events;
+pub mod prefab;
+pub mod project;
 pub mod scene;
 pub mod types;
 pub mod window;
 
 pub use events::EngineEvent;
+pub use prefab::Prefab;
+pub use project::ProjectSettings;
 pub use scene::{
     AudioSourceData, CameraData, CanvasData, EntityData, LightData, MeshData, PhysicsData,
     RectTransformData, SceneState, ScriptComponentData, TransformData, UIButtonData, UITextData,
