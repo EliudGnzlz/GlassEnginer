@@ -185,12 +185,20 @@ impl ViewportPanel {
         self.width = available.x.max(64.0);
         self.height = available.y.max(64.0);
 
-        // Calcular matrices de la cámara libre del editor
+        // Calcular matrices y vectores directores de la cámara libre del editor
+        let cy = self.editor_cam_pitch.cos();
+        let sy = self.editor_cam_pitch.sin();
+        let cx = self.editor_cam_yaw.sin();
+        let cz = self.editor_cam_yaw.cos();
+
         let eye = [
-            self.editor_cam_center[0] + self.editor_cam_dist * self.editor_cam_pitch.cos() * self.editor_cam_yaw.sin(),
-            self.editor_cam_center[1] + self.editor_cam_dist * self.editor_cam_pitch.sin(),
-            self.editor_cam_center[2] + self.editor_cam_dist * self.editor_cam_pitch.cos() * self.editor_cam_yaw.cos(),
+            self.editor_cam_center[0] + self.editor_cam_dist * cy * cx,
+            self.editor_cam_center[1] + self.editor_cam_dist * sy,
+            self.editor_cam_center[2] + self.editor_cam_dist * cy * cz,
         ];
+        let cam_right = [cz, 0.0, -cx];
+        let cam_up = [-sy * cx, cy, -sy * cz];
+
         let view = gizmo_3d::look_at(eye, self.editor_cam_center, [0.0, 1.0, 0.0]);
         let proj = gizmo_3d::perspective_matrix(45.0_f32.to_radians(), (self.width / self.height).max(0.1), 0.1, 100.0);
         let view_proj = gizmo_3d::matmul(&proj, &view);
@@ -231,12 +239,25 @@ impl ViewportPanel {
 
             let painter = ui.painter_at(rect);
 
+            // ==============================================================
+            // DIBUJAR LÍNEA DE SELECCIÓN / CAJA DELIMITADORA 3D ESTILO UNITY
+            // ==============================================================
+            if self.active_tab == ViewportTab::SceneView && self.play_state == PlayState::Edit {
+                if let Some(target_id) = *selected_entity_id {
+                    if let Ok(scene) = scene_state.lock() {
+                        if let Some(ent) = scene.entities.iter().find(|e| e.id == target_id) {
+                            gizmo_3d::draw_selection_bounding_box(&painter, ent, &view_proj, rect);
+                        }
+                    }
+                }
+            }
+
             // ==========================================
             // DIBUJAR GIZMO 3D ESTILO UNITY (LA CRUZ 3D)
             // ==========================================
             let mut hovered_gizmo_axis = GizmoAxis::None;
 
-            if self.active_tab == ViewportTab::SceneView && self.play_state == PlayState::Edit {
+            if self.active_tab == ViewportTab::SceneView && self.play_state == PlayState::Edit && self.gizmo_mode != GizmoMode::View {
                 if let Some(pos_3d) = selected_pos {
                     hovered_gizmo_axis = gizmo_3d::render_3d_transform_gizmo(
                         &painter,
@@ -250,11 +271,24 @@ impl ViewportPanel {
                 }
             }
 
+            // Actualizar icono del cursor según herramienta y estado
+            if response.hovered() && self.active_tab == ViewportTab::SceneView && self.play_state == PlayState::Edit {
+                if self.gizmo_mode == GizmoMode::View {
+                    if response.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    } else {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                    }
+                } else if hovered_gizmo_axis != GizmoAxis::None || self.active_drag_axis != GizmoAxis::None {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                }
+            }
+
             // ==========================================
             // GESTIÓN DE EVENTOS DE RATÓN Y SELECCIÓN 3D
             // ==========================================
             if self.active_tab == ViewportTab::SceneView {
-                // 1. Zoom con la rueda del ratón
+                // 1. Zoom fluido con la rueda del ratón
                 if response.hovered() {
                     let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
                     if scroll_delta.abs() > 0.0 {
@@ -262,28 +296,41 @@ impl ViewportPanel {
                     }
                 }
 
+                // Factor de velocidad para paneo libre dependiente de la distancia
+                let pan_speed = (self.editor_cam_dist * 0.0015).clamp(0.003, 0.08);
+
                 // 2. Paneo con botón central del ratón
                 if response.dragged_by(egui::PointerButton::Middle) {
                     let delta = response.drag_delta();
-                    self.editor_cam_center[0] -= delta.x * 0.01;
-                    self.editor_cam_center[1] += delta.y * 0.01;
+                    self.editor_cam_center[0] -= (cam_right[0] * delta.x - cam_up[0] * delta.y) * pan_speed;
+                    self.editor_cam_center[1] -= (cam_right[1] * delta.x - cam_up[1] * delta.y) * pan_speed;
+                    self.editor_cam_center[2] -= (cam_right[2] * delta.x - cam_up[2] * delta.y) * pan_speed;
                 }
 
-                // 3. Órbita con botón secundario (derecho)
+                // 3. Órbita / Navegación con botón secundario (derecho)
                 if response.dragged_by(egui::PointerButton::Secondary) {
                     let delta = response.drag_delta();
-                    self.editor_cam_yaw += delta.x * 0.005;
-                    self.editor_cam_pitch = (self.editor_cam_pitch + delta.y * 0.005).clamp(-1.4, 1.4);
+                    let is_shift = ui.input(|i| i.modifiers.shift);
+                    if is_shift {
+                        self.editor_cam_center[0] -= (cam_right[0] * delta.x - cam_up[0] * delta.y) * pan_speed;
+                        self.editor_cam_center[1] -= (cam_right[1] * delta.x - cam_up[1] * delta.y) * pan_speed;
+                        self.editor_cam_center[2] -= (cam_right[2] * delta.x - cam_up[2] * delta.y) * pan_speed;
+                    } else {
+                        self.editor_cam_yaw += delta.x * 0.005;
+                        self.editor_cam_pitch = (self.editor_cam_pitch + delta.y * 0.005).clamp(-1.45, 1.45);
+                    }
                 }
 
                 // 4. Clic primario: Seleccionar eje del Gizmo o Raycasting Picking sobre la escena 3D
                 if response.drag_started_by(egui::PointerButton::Primary) {
-                    if hovered_gizmo_axis != GizmoAxis::None {
+                    if self.gizmo_mode != GizmoMode::View && hovered_gizmo_axis != GizmoAxis::None {
                         self.active_drag_axis = hovered_gizmo_axis;
+                    } else {
+                        self.active_drag_axis = GizmoAxis::None;
                     }
                 }
 
-                if response.clicked() && hovered_gizmo_axis == GizmoAxis::None {
+                if response.clicked() && hovered_gizmo_axis == GizmoAxis::None && self.gizmo_mode != GizmoMode::View {
                     // Clic sobre la escena 3D: Raycasting picking para seleccionar el objeto bajo el cursor
                     if let Some(click_pos) = response.interact_pointer_pos() {
                         if let Ok(scene) = scene_state.lock() {
@@ -301,7 +348,8 @@ impl ViewportPanel {
                     }
                 }
 
-                // 5. Arrastre primario: Manipulación del objeto con la cruz de Unity
+                // 5. Arrastre primario (Clic izquierdo):
+                // Manipulación con Gizmo si hay eje agarrado, O NAVEGACIÓN LIBRE SI ESTÁ LA MANO [Q] O SE ARRASTRA EL ESPACIO LIBRE
                 if response.dragged_by(egui::PointerButton::Primary) {
                     let delta = response.drag_delta();
                     let is_shift = ui.input(|i| i.modifiers.shift);
@@ -353,10 +401,19 @@ impl ViewportPanel {
                                 }
                             }
                         }
-                    } else if self.gizmo_mode == GizmoMode::View {
-                        // En modo Mano [Q], el botón primario orbita la cámara
-                        self.editor_cam_yaw += delta.x * 0.005;
-                        self.editor_cam_pitch = (self.editor_cam_pitch + delta.y * 0.005).clamp(-1.4, 1.4);
+                    } else {
+                        // Navegación libre con Clic Izquierdo (Mano [Q] o arrastre en espacio libre)
+                        // ¡El comportamiento del clic derecho integrado en el clic izquierdo!
+                        if is_shift {
+                            // Con Shift: Paneo libre de la cámara
+                            self.editor_cam_center[0] -= (cam_right[0] * delta.x - cam_up[0] * delta.y) * pan_speed;
+                            self.editor_cam_center[1] -= (cam_right[1] * delta.x - cam_up[1] * delta.y) * pan_speed;
+                            self.editor_cam_center[2] -= (cam_right[2] * delta.x - cam_up[2] * delta.y) * pan_speed;
+                        } else {
+                            // Clic izquierdo normal: Órbita libre de la cámara (360°)
+                            self.editor_cam_yaw += delta.x * 0.005;
+                            self.editor_cam_pitch = (self.editor_cam_pitch + delta.y * 0.005).clamp(-1.45, 1.45);
+                        }
                     }
                 }
 
@@ -405,14 +462,14 @@ impl ViewportPanel {
                                 Color32::from_rgb(110, 190, 255),
                             ),
                             GizmoMode::View => (
-                                format!("✋ [Q] Mano: Clic en objetos para seleccionarlos | Arrastre para orbitar cámara",),
+                                format!("✋ [Q] Mano: Clic Izquierdo arrastra y mueve la vista libremente (360°) | Shift + Clic Izquierdo desplaza (Pan)"),
                                 Color32::from_rgb(240, 220, 110),
                             ),
                         };
 
                         let banner_rect = egui::Rect::from_min_size(
                             rect.left_bottom() + vec2(12.0, -36.0),
-                            vec2(640.0, 24.0),
+                            vec2(720.0, 24.0),
                         );
                         painter.rect_filled(banner_rect, 4.0, Color32::from_black_alpha(200));
                         painter.text(
@@ -425,13 +482,13 @@ impl ViewportPanel {
                     } else {
                         let hint_rect = egui::Rect::from_min_size(
                             rect.left_bottom() + vec2(12.0, -36.0),
-                            vec2(440.0, 24.0),
+                            vec2(600.0, 24.0),
                         );
                         painter.rect_filled(hint_rect, 4.0, Color32::from_black_alpha(190));
                         painter.text(
                             hint_rect.min + vec2(8.0, 4.0),
                             egui::Align2::LEFT_TOP,
-                            "💡 Haz clic sobre cualquier objeto 3D en la escena para seleccionarlo e inspeccionarlo.",
+                            "💡 Clic izquierdo sobre objetos para seleccionar | Clic izquierdo y arrastrar para mover la vista libremente.",
                             egui::FontId::proportional(12.0),
                             Color32::from_rgb(220, 220, 230),
                         );

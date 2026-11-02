@@ -292,3 +292,143 @@ pub fn pick_entity_at_screen(
 
     best_id
 }
+
+/// Dibuja la caja delimitadora 3D orientada (12 aristas con halo y esquinas) estilo Unity
+/// para el GameObject seleccionado en la ventana de escena.
+pub fn draw_selection_bounding_box(
+    painter: &Painter,
+    entity: &EntityData,
+    vp: &[f32; 16],
+    rect: Rect,
+) {
+    let pos = entity.transform.position;
+    let rot = entity.transform.rotation;
+    let scale = entity.transform.scale;
+
+    // Determinar las medias extensiones (half-extents) locales
+    let (hx, hy, hz) = if let Some(phys) = &entity.physics {
+        (
+            phys.box_extents[0].max(0.25),
+            phys.box_extents[1].max(0.25),
+            phys.box_extents[2].max(0.25),
+        )
+    } else {
+        (
+            (scale[0].abs() * 0.5).max(0.25),
+            (scale[1].abs() * 0.5).max(0.25),
+            (scale[2].abs() * 0.5).max(0.25),
+        )
+    };
+
+    // 8 esquinas en espacio local
+    let corners_local = [
+        [-hx, -hy, -hz],
+        [ hx, -hy, -hz],
+        [ hx,  hy, -hz],
+        [-hx,  hy, -hz],
+        [-hx, -hy,  hz],
+        [ hx, -hy,  hz],
+        [ hx,  hy,  hz],
+        [-hx,  hy,  hz],
+    ];
+
+    // Convertir rotación Euler de grados a radianes
+    let rx = rot[0].to_radians();
+    let ry = rot[1].to_radians();
+    let rz = rot[2].to_radians();
+
+    let (sx, cx) = (rx.sin(), rx.cos());
+    let (sy, cy) = (ry.sin(), ry.cos());
+    let (sz, cz) = (rz.sin(), rz.cos());
+
+    // Transformar cada esquina a coordenadas de mundo
+    let mut corners_world = [[0.0f32; 3]; 8];
+    for (i, c) in corners_local.iter().enumerate() {
+        let (x, y, z) = (c[0], c[1], c[2]);
+
+        // Rotación Euler (X luego Y luego Z)
+        let y1 = y * cx - z * sx;
+        let z1 = y * sx + z * cx;
+
+        let x2 = x * cy + z1 * sy;
+        let z2 = -x * sy + z1 * cy;
+
+        let x3 = x2 * cz - y1 * sz;
+        let y3 = x2 * sz + y1 * cz;
+
+        corners_world[i] = [pos[0] + x3, pos[1] + y3, pos[2] + z2];
+    }
+
+    // Proyectar las 8 esquinas a pantalla
+    let mut corners_screen: [Option<Pos2>; 8] = [None; 8];
+    for (i, p) in corners_world.iter().enumerate() {
+        corners_screen[i] = world_to_screen(*p, vp, rect);
+    }
+
+    // 12 aristas del paralelepípedo
+    const EDGES: [(usize, usize); 12] = [
+        (0, 1), (1, 2), (2, 3), (3, 0), // Base
+        (4, 5), (5, 6), (6, 7), (7, 4), // Techo
+        (0, 4), (1, 5), (2, 6), (3, 7), // Pilares verticales
+    ];
+
+    // Colores estilo Unity para la selección (Línea de selección naranja)
+    let halo_stroke = Stroke::new(3.5, Color32::from_rgba_unmultiplied(255, 255, 255, 120));
+    let main_stroke = Stroke::new(2.0, Color32::from_rgb(255, 149, 0)); // Naranja brillante Unity
+    let corner_fill = Color32::from_rgb(255, 215, 60);
+
+    // Dibujar las 12 aristas
+    for &(a, b) in &EDGES {
+        if let (Some(pa), Some(pb)) = (corners_screen[a], corners_screen[b]) {
+            painter.line_segment([pa, pb], halo_stroke);
+            painter.line_segment([pa, pb], main_stroke);
+        }
+    }
+
+    // Dibujar pequeños vértices ancla en las esquinas visibles
+    for opt_pt in &corners_screen {
+        if let Some(pt) = *opt_pt {
+            painter.circle_filled(pt, 3.0, corner_fill);
+            painter.circle_stroke(pt, 3.0, Stroke::new(1.0, Color32::BLACK));
+        }
+    }
+
+    // Etiqueta flotante con el nombre del GameObject sobre el objeto
+    let mut top_screen_pos: Option<Pos2> = None;
+    for opt_pt in &corners_screen {
+        if let Some(pt) = *opt_pt {
+            top_screen_pos = match top_screen_pos {
+                None => Some(pt),
+                Some(cur) => {
+                    if pt.y < cur.y {
+                        Some(pt)
+                    } else {
+                        Some(cur)
+                    }
+                }
+            };
+        }
+    }
+
+    if let Some(top_pt) = top_screen_pos {
+        let badge_pos = top_pt + vec2(0.0, -16.0);
+        let badge_text = format!("📦 {} (#{})", entity.name, entity.id);
+
+        let font_id = egui::FontId::proportional(11.0);
+        let text_color = Color32::from_rgb(255, 245, 220);
+        let bg_color = Color32::from_rgba_unmultiplied(20, 20, 25, 220);
+
+        let galley = painter.layout_no_wrap(badge_text, font_id, text_color);
+        let text_size = galley.size();
+        let badge_rect = Rect::from_center_size(badge_pos, text_size + vec2(12.0, 6.0));
+
+        painter.rect(
+            badge_rect,
+            4.0,
+            bg_color,
+            Stroke::new(1.0, Color32::from_rgb(255, 149, 0)),
+            egui::StrokeKind::Inside,
+        );
+        painter.galley(badge_pos - text_size * 0.5, galley, text_color);
+    }
+}

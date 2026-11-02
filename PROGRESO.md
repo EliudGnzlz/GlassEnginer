@@ -22,6 +22,7 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
 | **Hito 12**| Viewports Duales Scene/Game, Play/Pause/Stop & Controles WASD | **Completado** | 100% | Kimi K3 + DeepSeek 4 Pro (Mirai) |
 | **Hito 13**| Inspector Estilo Unity, Variables C# en Vivo y Atajos QWER | **Completado** | 100% | DeepSeek 4.1 Flash (Mirai) |
 | **Hito 14**| Raycasting 3D Picking en Viewport & Transform Gizmo 3D Unity | **Completado** | 100% | DeepSeek 4.1 Flash + Kimi K3 (Mirai) |
+| **Hito 15**| Bounding Box 3D de Selección & Navegación Libre con Clic Izquierdo | **Completado** | 100% | DeepSeek 4.1 Flash + Kimi K3 (Mirai) |
 
 ---
 
@@ -354,11 +355,38 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
     * **DeepSeek 4.1 Flash:** Formulaciones analíticas de proyección en espacio de corte, desproyección de pantalla a rayo 3D y prueba de proximidad rayo-segmento validadas.
     * **Kimi K3:** Desacoplamiento de estado de selección del editor (`EditorSelection`, `GizmoState`), proyección de AABB a pantalla para picking robusto y gestión limpia de capas en el painter de egui.
 
+### Hito 15: Bounding Box 3D de Selección & Navegación Libre con Clic Izquierdo en Mano [Q]
+* **Fecha:** 2026-11-01
+* **Acciones:**
+  * **Línea de Selección / Bounding Box 3D Estilo Unity (`draw_selection_bounding_box` en `gizmo_3d.rs`):**
+    * Cálculo de las 8 esquinas del paralelepípedo delimitador (AABB orientado) en base a las medias extensiones del GameObject (half-extents de colisionador físico o escala geométrica del Transform).
+    * Transformación tridimensional completa con rotación Euler (ejes X, Y, Z convertidos a radianes) y posición del mundo.
+    * Proyección de las 8 esquinas al canvas del Viewport mediante `world_to_screen`.
+    * Renderizado de las 12 aristas con trazo dual:
+      * Halo exterior blanco translúcido (`#FFFFFF`, alfa 120, grosor 3.5 px) para contraste óptimo contra cualquier fondo de escena.
+      * Trazo principal en **Naranja brillante característico de Unity** (`#FF9500`, grosor 2.0 px).
+      * Anclas de esquina destacadas con círculos sólidos y borde negro en cada vértice proyectado.
+      * Insignia flotante con efecto translúcido sobre el objeto: `📦 [Nombre (#ID)]` enmarcada en naranja, indicando instantáneamente el GameObject activo.
+  * **Rediseño Ergonómico de Navegación de Cámara (Comportamiento de Clic Derecho en Clic Izquierdo):**
+    * **Herramienta Mano `[Q]`:**
+      * El cursor cambia de forma reactiva a `CursorIcon::Grab` (y `CursorIcon::Grabbing` al arrastrar).
+      * **Clic Izquierdo (Primario) y arrastrar:**
+        * Arrastre normal: Órbita libre en 360° alrededor del punto de enfoque (trasladando el comportamiento tradicional del clic derecho al clic izquierdo como fue solicitado).
+        * `Shift` + Clic Izquierdo (o botón central): Paneo tridimensional libre en el plano de cámara (ejes Right y Up).
+        * Rueda del ratón: Zoom fluido hacia adelante y hacia atrás.
+    * **Modos de Manipulación `[W]`, `[E]`, `[R]`:**
+      * Si el usuario agarra un eje del Gizmo 3D (X, Y o Z), se manipula exclusivamente dicho componente del Transform.
+      * Si el usuario hace clic y arrastra con el botón izquierdo en el **espacio vacío / fondo**: la cámara se orbita libremente (órbita 360° con clic izquierdo) o se desplaza con `Shift`, unificando la experiencia de navegación fluida.
+      * Se preserva el clic derecho como órbita secundaria para compatibilidad universal.
+  * **Auditoría Externa Multi-IA (Mirai MCP - DeepSeek 4.1 Flash & Kimi K3):**
+    * **DeepSeek 4.1 Flash:** Aprobó la formulación OBB de 12 aristas proyectadas con overlay de egui y la máquina de estados de navegación desacoplada.
+    * **Kimi K3:** Validó la matriz de transformación para AABB corners, el color naranja `#FF9500` con halo para visibilidad de selección, y el mapeo directo de `drag_delta()` proporcional a `distance` para paneo natural.
+
 ---
 
-## Certificación Final de Arquitectura: GlassEngine 1.4
+## Certificación Final de Arquitectura: GlassEngine 1.5
 
-Los 14 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
+Los 15 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
 
 1. **Hito 1 — Workspace Cargo & Contratos Base:** 100% Verificado.
 2. **Hito 2 — Contexto Vulkan Multi-GPU Universal (NVIDIA, AMD, Intel, Integradas y Dedicadas):** 100% Verificado.
@@ -374,3 +402,4 @@ Los 14 hitos arquitectónicos, de edición y de gameplay del motor han sido comp
 12. **Hito 12 — Viewports Duales Scene/Game, Play/Pause/Stop & Controles WASD:** 100% Verificado.
 13. **Hito 13 — Inspector Estilo Unity, Variables C# en Vivo y Atajos QWER:** 100% Verificado.
 14. **Hito 14 — Raycasting 3D Picking en Viewport & Transform Gizmo 3D Unity:** 100% Verificado.
+15. **Hito 15 — Bounding Box 3D de Selección & Navegación Libre con Clic Izquierdo:** 100% Verificado.
