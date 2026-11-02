@@ -96,6 +96,44 @@ impl Default for AudioSourceData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraData {
+    pub fov: f32,
+    pub near_clip: f32,
+    pub far_clip: f32,
+    pub is_main: bool,
+}
+
+impl Default for CameraData {
+    fn default() -> Self {
+        Self {
+            fov: 60.0,
+            near_clip: 0.1,
+            far_clip: 1000.0,
+            is_main: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LightData {
+    pub light_type: String, // "Directional", "Point", "Spot"
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub range: f32,
+}
+
+impl Default for LightData {
+    fn default() -> Self {
+        Self {
+            light_type: "Directional".into(),
+            color: [1.0, 0.98, 0.92],
+            intensity: 1.0,
+            range: 10.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityData {
     pub id: u64,
     pub active: bool,
@@ -110,6 +148,8 @@ pub struct EntityData {
     pub script_data: Option<ScriptComponentData>,
     pub physics: Option<PhysicsData>,
     pub audio: Option<AudioSourceData>,
+    pub camera: Option<CameraData>,
+    pub light: Option<LightData>,
 }
 
 impl EntityData {
@@ -148,6 +188,16 @@ impl EntityData {
         } else {
             None
         };
+        let camera = if components.iter().any(|c| c == "Camera") {
+            Some(CameraData::default())
+        } else {
+            None
+        };
+        let light = if components.iter().any(|c| c == "Light") {
+            Some(LightData::default())
+        } else {
+            None
+        };
         let tag = if name.contains("Player") {
             "Player".into()
         } else if name.contains("Camera") {
@@ -170,6 +220,8 @@ impl EntityData {
             script_data,
             physics,
             audio,
+            camera,
+            light,
         }
     }
 }
@@ -284,5 +336,15 @@ impl SceneState {
 
     pub fn update_viewport_snapshot(&mut self, png_bytes: Vec<u8>) {
         self.viewport_snapshot_png = Some(png_bytes);
+    }
+
+    /// Retorna la primera cámara activa disponible en la escena
+    pub fn active_camera(&self) -> Option<&EntityData> {
+        self.entities.iter().find(|e| e.active && e.camera.is_some())
+    }
+
+    /// Retorna la luz direccional o principal activa en la escena
+    pub fn main_light(&self) -> Option<&EntityData> {
+        self.entities.iter().find(|e| e.active && e.light.is_some())
     }
 }

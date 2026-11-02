@@ -14,6 +14,6 @@ pub use context::{VulkanConfig, VulkanContext};
 pub use mesh::{GpuMesh, MeshLoader, Vertex};
 pub use offscreen::OffscreenTarget;
 pub use pipeline::GraphicsPipeline;
-pub use renderer::GlassRenderer;
+pub use renderer::{GlassRenderer, MeshPushConstants};
 pub use swapchain::SwapchainContext;
 pub use watcher::{AssetReloadEvent, AssetWatcher};

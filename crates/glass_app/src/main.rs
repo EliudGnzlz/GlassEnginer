@@ -68,6 +68,7 @@ fn perspective_matrix(fov_rad: f32, aspect: f32, near: f32, far: f32) -> [f32; 1
     ]
 }
 
+#[allow(dead_code)]
 fn model_matrix(pos: [f32; 3], rot_y: f32) -> [f32; 16] {
     let cos = rot_y.cos();
     let sin = rot_y.sin();
@@ -142,6 +143,23 @@ fn look_at(eye: [f32; 3], target: [f32; 3], up: [f32; 3]) -> [f32; 16] {
     ]
 }
 
+fn camera_view_matrix(pos: [f32; 3], rot_deg: [f32; 3]) -> [f32; 16] {
+    let rx = rot_deg[0].to_radians();
+    let ry = rot_deg[1].to_radians();
+    let rz = rot_deg[2].to_radians();
+
+    let (sx, cx) = (rx.sin(), rx.cos());
+    let (sy, cy) = (ry.sin(), ry.cos());
+    let (sz, cz) = (rz.sin(), rz.cos());
+
+    // Vector forward hacia -Z local con rotación Euler
+    let fwd = [sy, -sx * cy, -cx * cy];
+    let up = [cy * sz, sx * sy * sz + cx * cz, cx * sy * sz - sx * cz];
+
+    let target = [pos[0] + fwd[0], pos[1] + fwd[1], pos[2] + fwd[2]];
+    look_at(pos, target, [up[0], up[1], up[2]])
+}
+
 fn matmul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
     let mut res = [0.0; 16];
     for col in 0..4 {
@@ -175,6 +193,12 @@ struct GlassEngineApp {
     #[cfg(feature = "editor")]
     viewport_texture_id: Option<egui::TextureId>,
     #[cfg(feature = "editor")]
+    game_desc_layout: Option<vk::DescriptorSetLayout>,
+    #[cfg(feature = "editor")]
+    game_desc_pool: Option<vk::DescriptorPool>,
+    #[cfg(feature = "editor")]
+    game_viewport_texture_id: Option<egui::TextureId>,
+    #[cfg(feature = "editor")]
     editor_layout: EditorDockingLayout,
     pub scene_state: Arc<Mutex<SceneState>>,
     #[cfg(feature = "editor")]
@@ -182,6 +206,7 @@ struct GlassEngineApp {
     pub mcp_server: Arc<McpServer>,
     asset_cache: Arc<RwLock<AssetCache>>,
     asset_watcher: Option<AssetWatcher>,
+    #[allow(dead_code)]
     start_time: Instant,
     pub script_host: ScriptHost,
     pub audio_system: Arc<AudioSystem>,
@@ -224,6 +249,10 @@ impl Drop for GlassEngineApp {
             unsafe {
                 renderer.device.destroy_descriptor_pool(pool, None);
                 renderer.device.destroy_descriptor_set_layout(layout, None);
+                if let (Some(g_pool), Some(g_layout)) = (self.game_desc_pool, self.game_desc_layout) {
+                    renderer.device.destroy_descriptor_pool(g_pool, None);
+                    renderer.device.destroy_descriptor_set_layout(g_layout, None);
+                }
             }
         }
         #[cfg(not(feature = "editor"))]
@@ -285,6 +314,12 @@ impl GlassEngineApp {
             #[cfg(feature = "editor")]
             viewport_texture_id: None,
             #[cfg(feature = "editor")]
+            game_desc_layout: None,
+            #[cfg(feature = "editor")]
+            game_desc_pool: None,
+            #[cfg(feature = "editor")]
+            game_viewport_texture_id: None,
+            #[cfg(feature = "editor")]
             editor_layout: EditorDockingLayout::new(),
             scene_state,
             #[cfg(feature = "editor")]
@@ -317,6 +352,19 @@ impl GlassEngineApp {
         let (floor_id, step1_id, step2_id, player_id) = {
             let mut state = self.scene_state.lock().unwrap();
             state.entities.clear();
+
+            // Instanciar Cámara Principal y Luz Direccional (Game View y Shading)
+            let cam_id = state.create_entity(
+                "Main Camera".into(),
+                vec!["Transform".into(), "Camera".into()],
+            );
+            state.modify_transform(cam_id, Some([3.5, 3.2, 9.5]), Some([10.0, 0.0, 0.0]), Some([1.0, 1.0, 1.0]));
+
+            let light_id = state.create_entity(
+                "Directional Light".into(),
+                vec!["Transform".into(), "Light".into()],
+            );
+            state.modify_transform(light_id, Some([0.0, 10.0, 0.0]), Some([50.0, -30.0, 0.0]), Some([1.0, 1.0, 1.0]));
 
             let floor_id = state.create_entity(
                 "Static Floor".into(),
@@ -571,43 +619,110 @@ impl GlassEngineApp {
             }
         }
 
-        // 4. Renderizar geometría 3D a la textura offscreen en VRAM con la cámara correspondiente
+        // 4. Renderizar geometría 3D a las texturas offscreen en VRAM (Scene View y Game View independientes)
         #[cfg(feature = "editor")]
-        let (view, proj) = match self.editor_layout.viewport.active_tab {
-            glass_editor::ViewportTab::SceneView => {
-                let ed = &self.editor_layout.viewport;
-                let eye = [
-                    ed.editor_cam_center[0] + ed.editor_cam_dist * ed.editor_cam_pitch.cos() * ed.editor_cam_yaw.sin(),
-                    ed.editor_cam_center[1] + ed.editor_cam_dist * ed.editor_cam_pitch.sin(),
-                    ed.editor_cam_center[2] + ed.editor_cam_dist * ed.editor_cam_pitch.cos() * ed.editor_cam_yaw.cos(),
-                ];
-                let v = look_at(eye, ed.editor_cam_center, [0.0, 1.0, 0.0]);
-                let aspect = (ed.scene_width / ed.scene_height).max(0.1);
-                let p = perspective_matrix(45.0_f32.to_radians(), aspect, 0.1, 100.0);
-                (v, p)
-            }
-            glass_editor::ViewportTab::GameView => {
-                let v = look_at([3.5, 3.2, 9.5], [3.5, 1.4, 0.0], [0.0, 1.0, 0.0]);
-                let aspect = self.editor_layout.viewport.game_resolution.aspect_ratio()
-                    .unwrap_or(self.editor_layout.viewport.game_width / self.editor_layout.viewport.game_height)
-                    .max(0.1);
-                let p = perspective_matrix(45.0_f32.to_radians(), aspect, 0.1, 100.0);
-                (v, p)
-            }
+        let (vp_scene, vp_game_opt, light_dir, light_color) = {
+            let ed = &self.editor_layout.viewport;
+            let eye = [
+                ed.editor_cam_center[0] + ed.editor_cam_dist * ed.editor_cam_pitch.cos() * ed.editor_cam_yaw.sin(),
+                ed.editor_cam_center[1] + ed.editor_cam_dist * ed.editor_cam_pitch.sin(),
+                ed.editor_cam_center[2] + ed.editor_cam_dist * ed.editor_cam_pitch.cos() * ed.editor_cam_yaw.cos(),
+            ];
+            let view_scene = look_at(eye, ed.editor_cam_center, [0.0, 1.0, 0.0]);
+            let aspect_scene = (ed.scene_width / ed.scene_height).max(0.1);
+            let proj_scene = perspective_matrix(45.0_f32.to_radians(), aspect_scene, 0.1, 100.0);
+            let vp_s = matmul(&proj_scene, &view_scene);
+
+            let (vp_g, l_dir, l_col) = if let Ok(scene) = self.scene_state.lock() {
+                let vp_g = if let Some(cam) = scene.active_camera() {
+                    let view_g = camera_view_matrix(cam.transform.position, cam.transform.rotation);
+                    let fov = cam.camera.as_ref().map(|c| c.fov).unwrap_or(60.0);
+                    let near = cam.camera.as_ref().map(|c| c.near_clip).unwrap_or(0.1);
+                    let far = cam.camera.as_ref().map(|c| c.far_clip).unwrap_or(1000.0);
+                    let aspect_g = ed.game_resolution.aspect_ratio()
+                        .unwrap_or(ed.game_width / ed.game_height)
+                        .max(0.1);
+                    let proj_g = perspective_matrix(fov.to_radians(), aspect_g, near, far);
+                    Some(matmul(&proj_g, &view_g))
+                } else {
+                    None
+                };
+
+                let (ld, lc) = if let Some(light_ent) = scene.main_light() {
+                    let rot = light_ent.transform.rotation;
+                    let rx = rot[0].to_radians();
+                    let ry = rot[1].to_radians();
+                    let (sx, cx) = (rx.sin(), rx.cos());
+                    let (sy, cy) = (ry.sin(), ry.cos());
+                    let dir = [-sy, sx * cy, cx * cy];
+                    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(0.001);
+                    let norm = [dir[0] / len, dir[1] / len, dir[2] / len];
+                    let ldata = light_ent.light.as_ref().cloned().unwrap_or_default();
+                    let col = [
+                        ldata.color[0] * ldata.intensity,
+                        ldata.color[1] * ldata.intensity,
+                        ldata.color[2] * ldata.intensity,
+                    ];
+                    ([norm[0], norm[1], norm[2], 0.25], [col[0], col[1], col[2], 1.0])
+                } else {
+                    ([0.0, 1.0, 0.0, 0.06], [0.0, 0.0, 0.0, 0.0])
+                };
+
+                (vp_g, ld, lc)
+            } else {
+                (None, [0.5, 1.0, 0.7, 0.25], [1.0, 1.0, 1.0, 1.0])
+            };
+
+            (vp_s, vp_g, l_dir, l_col)
         };
 
         #[cfg(not(feature = "editor"))]
-        let (view, proj) = {
-            let v = look_at([3.5, 3.2, 9.5], [3.5, 1.4, 0.0], [0.0, 1.0, 0.0]);
-            let p = perspective_matrix(45.0_f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
-            (v, p)
+        let (vp_scene, vp_game_opt, light_dir, light_color) = {
+            let (vp_g, ld, lc) = if let Ok(scene) = self.scene_state.lock() {
+                let vp_g = if let Some(cam) = scene.active_camera() {
+                    let view_g = camera_view_matrix(cam.transform.position, cam.transform.rotation);
+                    let fov = cam.camera.as_ref().map(|c| c.fov).unwrap_or(60.0);
+                    let near = cam.camera.as_ref().map(|c| c.near_clip).unwrap_or(0.1);
+                    let far = cam.camera.as_ref().map(|c| c.far_clip).unwrap_or(1000.0);
+                    let proj_g = perspective_matrix(fov.to_radians(), 16.0 / 9.0, near, far);
+                    Some(matmul(&proj_g, &view_g))
+                } else {
+                    let v = look_at([3.5, 3.2, 9.5], [3.5, 1.4, 0.0], [0.0, 1.0, 0.0]);
+                    let p = perspective_matrix(45.0_f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
+                    Some(matmul(&p, &v))
+                };
+                let (ld, lc) = if let Some(light_ent) = scene.main_light() {
+                    let rot = light_ent.transform.rotation;
+                    let rx = rot[0].to_radians();
+                    let ry = rot[1].to_radians();
+                    let (sx, cx) = (rx.sin(), rx.cos());
+                    let (sy, cy) = (ry.sin(), ry.cos());
+                    let dir = [-sy, sx * cy, cx * cy];
+                    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(0.001);
+                    let norm = [dir[0] / len, dir[1] / len, dir[2] / len];
+                    let ldata = light_ent.light.as_ref().cloned().unwrap_or_default();
+                    let col = [
+                        ldata.color[0] * ldata.intensity,
+                        ldata.color[1] * ldata.intensity,
+                        ldata.color[2] * ldata.intensity,
+                    ];
+                    ([norm[0], norm[1], norm[2], 0.25], [col[0], col[1], col[2], 1.0])
+                } else {
+                    ([0.0, 1.0, 0.0, 0.06], [0.0, 0.0, 0.0, 0.0])
+                };
+                (vp_g, ld, lc)
+            } else {
+                let v = look_at([3.5, 3.2, 9.5], [3.5, 1.4, 0.0], [0.0, 1.0, 0.0]);
+                let p = perspective_matrix(45.0_f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
+                (Some(matmul(&p, &v)), [0.5, 1.0, 0.7, 0.25], [1.0, 1.0, 1.0, 1.0])
+            };
+            (vp_g.unwrap(), vp_g, ld, lc)
         };
-
-        let vp = matmul(&proj, &view);
 
         let cache = self.asset_cache.read().unwrap();
         if let Some(cube_mesh) = cache.meshes.get("cube") {
-            let mut mesh_batches: Vec<(&glass_renderer::GpuMesh, [f32; 16])> = Vec::new();
+            let mut scene_batches: Vec<(&glass_renderer::GpuMesh, glass_renderer::MeshPushConstants)> = Vec::new();
+            let mut game_batches: Vec<(&glass_renderer::GpuMesh, glass_renderer::MeshPushConstants)> = Vec::new();
 
             if let Ok(scene) = self.scene_state.lock() {
                 for ent in &scene.entities {
@@ -620,20 +735,36 @@ impl GlassEngineApp {
                             ent.transform.scale[2] * 0.5,
                         ];
                         let model = model_matrix_trs_euler(pos, scale, ent.transform.rotation);
-                        let mvp = matmul(&vp, &model);
-                        mesh_batches.push((cube_mesh, mvp));
+                        let mvp_scene = matmul(&vp_scene, &model);
+                        let obj_col = ent.mesh.as_ref().map(|m| [m.color[0], m.color[1], m.color[2], 1.0]).unwrap_or([0.8, 0.8, 0.8, 1.0]);
+
+                        scene_batches.push((cube_mesh, glass_renderer::MeshPushConstants {
+                            mvp: mvp_scene,
+                            light_dir,
+                            light_color,
+                            object_color: obj_col,
+                        }));
+
+                        if let Some(vp_game) = vp_game_opt {
+                            let mvp_game = matmul(&vp_game, &model);
+                            game_batches.push((cube_mesh, glass_renderer::MeshPushConstants {
+                                mvp: mvp_game,
+                                light_dir,
+                                light_color,
+                                object_color: obj_col,
+                            }));
+                        }
                     }
                 }
             }
 
-            if !mesh_batches.is_empty() {
-                renderer.render_offscreen_scene(vk_ctx.graphics_queue, &mesh_batches)?;
+            let game_meshes_arg = if vp_game_opt.is_some() {
+                Some(game_batches.as_slice())
             } else {
-                let elapsed = self.start_time.elapsed().as_secs_f32();
-                let model = model_matrix([0.0, 0.0, -3.5], elapsed * 0.8);
-                let mvp = matmul(&proj, &model);
-                renderer.render_offscreen_mesh(vk_ctx.graphics_queue, Some((cube_mesh, mvp)))?;
-            }
+                None
+            };
+
+            renderer.render_views(vk_ctx.graphics_queue, &scene_batches, game_meshes_arg)?;
         } else {
             renderer.render_offscreen(vk_ctx.graphics_queue)?;
         }
@@ -686,12 +817,11 @@ impl GlassEngineApp {
         // Modo Editor: Renderizar interfaz de usuario egui sobre el RenderPass del Swapchain
         #[cfg(feature = "editor")]
         {
-            let (egui_winit, egui_renderer, texture_id) = match (
+            let (egui_winit, egui_renderer) = match (
                 &mut self.egui_winit,
                 &mut self.egui_renderer,
-                self.viewport_texture_id,
             ) {
-                (Some(ew), Some(er), Some(tid)) => (ew, er, tid),
+                (Some(ew), Some(er)) => (ew, er),
                 _ => return Ok(()),
             };
 
@@ -699,8 +829,10 @@ impl GlassEngineApp {
             let raw_input = egui_winit.take_egui_input(&window.inner);
             let editor_layout = &mut self.editor_layout;
             let scene_state = &self.scene_state;
+            let scene_tid = self.viewport_texture_id;
+            let game_tid = self.game_viewport_texture_id;
             let mut full_output = self.egui_ctx.run_ui(raw_input, |ui| {
-                editor_layout.render(ui, Some(texture_id), scene_state);
+                editor_layout.render(ui, scene_tid, game_tid, scene_state);
             });
             egui_winit.handle_platform_output(&window.inner, full_output.platform_output);
 
@@ -863,7 +995,7 @@ impl ApplicationHandler for GlassEngineApp {
 
         // 2. Inicializar egui en Modo Editor (si no es standalone)
         #[cfg(feature = "editor")]
-        let (egui_winit, egui_renderer, layout, pool, viewport_texture_id) = if !self.is_standalone {
+        let (egui_winit, egui_renderer, layout, pool, viewport_texture_id, game_layout, game_pool, game_viewport_texture_id) = if !self.is_standalone {
             let ew = EguiWinitState::new(
                 self.egui_ctx.clone(),
                 egui::ViewportId::ROOT,
@@ -901,13 +1033,23 @@ impl ApplicationHandler for GlassEngineApp {
                 }
             };
 
+            let (g_lay, g_pl, g_set) = match renderer.create_game_offscreen_descriptor_set() {
+                Ok(res) => res,
+                Err(e) => {
+                    log::error!("Fallo al crear descriptor set para game viewport: {}", e);
+                    event_loop.exit();
+                    return;
+                }
+            };
+
             let mut er = er;
             let tid = er.add_user_texture(set);
-            log::info!("Textura Offscreen vinculada exitosamente con egui::TextureId: {:?}", tid);
-            (Some(ew), Some(er), Some(lay), Some(pl), Some(tid))
+            let g_tid = er.add_user_texture(g_set);
+            log::info!("Texturas Offscreen vinculadas exitosamente con egui::TextureId: Scene {:?}, Game {:?}", tid, g_tid);
+            (Some(ew), Some(er), Some(lay), Some(pl), Some(tid), Some(g_lay), Some(g_pl), Some(g_tid))
         } else {
             log::info!("Iniciando en Modo Standalone (sin egui, sin servidor MCP)...");
-            (None, None, None, None, None)
+            (None, None, None, None, None, None, None, None)
         };
 
         // 5. Cargar modelo 3D inicial (cube.glb convertido desde Blender) a VRAM
@@ -986,6 +1128,9 @@ impl ApplicationHandler for GlassEngineApp {
             self.desc_layout = layout;
             self.desc_pool = pool;
             self.viewport_texture_id = viewport_texture_id;
+            self.game_desc_layout = game_layout;
+            self.game_desc_pool = game_pool;
+            self.game_viewport_texture_id = game_viewport_texture_id;
         }
 
         // Conectar el bridge de scripting con el SceneState

@@ -24,6 +24,10 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
 | **Hito 14**| Raycasting 3D Picking en Viewport & Transform Gizmo 3D Unity | **Completado** | 100% | DeepSeek 4.1 Flash + Kimi K3 (Mirai) |
 | **Hito 15**| Bounding Box 3D de Selección & Navegación Libre con Clic Izquierdo | **Completado** | 100% | DeepSeek 4.1 Flash + Kimi K3 (Mirai) |
 | **Hito 16**| Bounding Box Adaptativo, Pan Directo con Mano [Q] & Ventana Responsiva | **Completado** | 100% | DeepSeek 4.1 Flash + Kimi K3 (Mirai) |
+| **Hito 17**| Rotación 3D en GPU/Gizmo, Picking Superficies & Swapchain Opaque Seguro | **Completado** | 100% | DeepSeek 4.1 Flash + Kimi K3 (Mirai) |
+| **Hito 18**| Menú Contextual Jerarquía, Iconos Unity & Docking Dinámico (egui_dock) | **Completado** | 100% | DeepSeek 4 Pro + Kimi K3 (Mirai) |
+| **Hito 19**| Selección en Play Mode, Aspect Ratios Unity & Desacoplamiento Scene/Game | **Completado** | 100% | DeepSeek 4 Pro + Kimi K3 (Mirai) |
+| **Hito 20**| Render Targets Offscreen Duales, Verificación Cámara Activa & Luz Dinámica | **Completado** | 100% | DeepSeek 4 Pro + Kimi K3 (Mirai) |
 
 ---
 
@@ -490,11 +494,35 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
     * **Kimi K3:** Aprobó la unificación de raycasting en Edit/Play sin interferencia de input del jugador y la modularización de `render_scene_tab` y `render_game_tab`.
     * **DeepSeek-v4-Pro:** Validó la formulación matemática de letterboxing centrado y el principio de invariantes independientes para render targets en `egui_dock`.
 
+### Hito 20: Render Targets Offscreen Duales, Verificación de Cámara Activa & Iluminación Dinámica
+* **Fecha:** 2026-11-01
+* **Acciones:**
+  * **Render Targets Offscreen Desacoplados en VRAM (`renderer.rs`):**
+    * Se amplió `GlassRenderer` con `pub game_offscreen: OffscreenTarget`, permitiendo framebuffers independientes de 1280x720 para Scene View y Game View.
+    * Se implementó `create_game_offscreen_descriptor_set(&self)` registrando dos descriptores de textura egui independientes (`scene_texture_id` y `game_texture_id`).
+    * Implementación de `render_views(&mut self, ...)` que ejecuta en un único submission a la cola de gráficos dos render passes Vulkan independientes: Pass 1 hacia `offscreen` (cámara de edición) y Pass 2 hacia `game_offscreen` (cámara de juego).
+  * **Verificación de Cámara Activa & Overlay Estilo Unity (`viewport.rs`, `scene.rs`, `main.rs`):**
+    * Se integró `CameraData` (`fov`, `near_clip`, `far_clip`, `is_main`) en `EntityData` y método `active_camera(&self)` en `SceneState`.
+    * Cálculo de la matriz View del juego mediante `camera_view_matrix` a partir del `Transform` de la entidad cámara (`position` y rotación Euler).
+    * Si no existe ninguna cámara activa en la escena, Game View muestra el cartel canónico de Unity:
+      `⚠️ No cameras rendering`
+      `There are no cameras rendering to this display`
+      con un botón interactivo `[ ➕ Crear Main Camera ]` para spawnear de inmediato la cámara principal.
+  * **Verificación de Iluminación Dinámica & Shading PushConstants (`mesh.vert`, `mesh.frag`, `renderer.rs`):**
+    * Se integró `LightData` (`light_type`, `color`, `intensity`, `range`) en `EntityData` y método `main_light(&self)` en `SceneState`.
+    * Se amplió el push constant range a 112 bytes (`MeshPushConstants`: `mvp`, `light_dir`, `light_color`, `object_color`) visible para Vertex y Fragment stages.
+    * Si existe una `Directional Light`, su dirección se calcula a partir de su rotación Euler y se multiplica su color e intensidad, permitiendo sombras difusas y luz solar dinámica. Si se elimina o apaga, la escena se atenúa a silueta ambiental oscura (`0.06`), verificando fielmente la existencia de la luz.
+  * **Inspector Estilo Unity para Cámara y Luz (`inspector.rs`):**
+    * Sección interactiva para componente `Camera` (Slider FOV 10°-120°, Clipping Planes Near/Far, toggle Is Main, botón quitar).
+    * Sección interactiva para componente `Light` (Selector Directional/Point/Spot, Color Picker RGB, slider de Intensidad y Rango).
+    * Menú "➕ Añadir Componente" ampliado con opciones de Cámara y Luz.
+* **Resultado:** Desacoplamiento total verificado: mover la cámara en la ventana de edición Scene View ya no altera en absoluto la cámara de juego Game View, y el motor verifica en tiempo real la existencia y parámetros de la cámara e iluminación en la escena.
+
 ---
 
-## Certificación Final de Arquitectura: GlassEngine 1.9
+## Certificación Final de Arquitectura: GlassEngine 2.0
 
-Los 19 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
+Los 20 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
 
 1. **Hito 1 — Workspace Cargo & Contratos Base:** 100% Verificado.
 2. **Hito 2 — Contexto Vulkan Multi-GPU Universal (NVIDIA, AMD, Intel, Integradas y Dedicadas):** 100% Verificado.
@@ -515,3 +543,4 @@ Los 19 hitos arquitectónicos, de edición y de gameplay del motor han sido comp
 17. **Hito 17 — Rotación 3D en GPU/Gizmo, Picking de Superficies, Menú de Creación Unity y Swapchain Opaque Seguro:** 100% Verificado.
 18. **Hito 18 — Menú Contextual Total en Jerarquía, Toolbar de Iconos Unity & Docking Dinámico Adaptable (egui_dock):** 100% Verificado.
 19. **Hito 19 — Selección en Play Mode, Aspect Ratios Unity con Letterbox Centrado y Desacoplamiento Scene/Game:** 100% Verificado.
+20. **Hito 20 — Render Targets Offscreen Duales, Verificación de Cámara Activa & Iluminación Dinámica:** 100% Verificado.

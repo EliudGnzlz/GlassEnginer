@@ -6,7 +6,7 @@ pub mod types;
 pub mod window;
 
 pub use events::EngineEvent;
-pub use scene::{AudioSourceData, EntityData, MeshData, PhysicsData, SceneState, ScriptComponentData, TransformData};
+pub use scene::{AudioSourceData, CameraData, EntityData, LightData, MeshData, PhysicsData, SceneState, ScriptComponentData, TransformData};
 pub use types::TransformFfi;
 pub use window::{GlassWindow, WindowConfig};
 

@@ -1,5 +1,5 @@
 use egui::{Color32, DragValue, RichText, Slider, Ui};
-use glass_core::{AudioSourceData, MeshData, PhysicsData, SceneState, ScriptComponentData};
+use glass_core::{AudioSourceData, CameraData, LightData, MeshData, PhysicsData, SceneState, ScriptComponentData};
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
@@ -187,6 +187,78 @@ impl InspectorPanel {
                 }
 
                 // ==========================================
+                // 3.5. COMPONENTE CÁMARA (CAMERA ESTILO UNITY)
+                // ==========================================
+                let mut remove_camera = false;
+                if let Some(ref mut cam) = entity.camera {
+                    ui.collapsing("🎥 Cámara (Camera)", |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Field of View:");
+                            ui.add(Slider::new(&mut cam.fov, 10.0..=120.0).suffix("°"));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Clipping Planes:");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("  Near:");
+                            ui.add(DragValue::new(&mut cam.near_clip).speed(0.01).range(0.01..=10.0));
+                            ui.label("  Far:");
+                            ui.add(DragValue::new(&mut cam.far_clip).speed(1.0).range(1.0..=10000.0));
+                        });
+                        ui.checkbox(&mut cam.is_main, "Cámara Principal (Main Camera)");
+                        if ui.small_button("🗑 Quitar Cámara").clicked() {
+                            remove_camera = true;
+                        }
+                    });
+                    ui.separator();
+                }
+                if remove_camera {
+                    entity.camera = None;
+                    entity.components.retain(|c| c != "Camera");
+                }
+
+                // ==========================================
+                // 3.6. COMPONENTE LUZ (LIGHT ESTILO UNITY)
+                // ==========================================
+                let mut remove_light = false;
+                if let Some(ref mut light) = entity.light {
+                    ui.collapsing("💡 Luz (Light)", |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Tipo de Luz:");
+                            egui::ComboBox::from_id_salt(format!("light_type_{}", entity.id))
+                                .selected_text(&light.light_type)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut light.light_type, "Directional".into(), "💡 Directional (Sol / Luz infinita)");
+                                    ui.selectable_value(&mut light.light_type, "Point".into(), "🔆 Point (Luz omnidireccional)");
+                                    ui.selectable_value(&mut light.light_type, "Spot".into(), "🔦 Spot (Foco cónico)");
+                                });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Color:");
+                            ui.color_edit_button_rgb(&mut light.color);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Intensidad:");
+                            ui.add(DragValue::new(&mut light.intensity).speed(0.05).range(0.0..=10.0));
+                        });
+                        if light.light_type != "Directional" {
+                            ui.horizontal(|ui| {
+                                ui.label("Rango:");
+                                ui.add(DragValue::new(&mut light.range).speed(0.2).range(0.1..=100.0).suffix(" m"));
+                            });
+                        }
+                        if ui.small_button("🗑 Quitar Luz").clicked() {
+                            remove_light = true;
+                        }
+                    });
+                    ui.separator();
+                }
+                if remove_light {
+                    entity.light = None;
+                    entity.components.retain(|c| c != "Light");
+                }
+
+                // ==========================================
                 // 4. COMPONENTE RIGIDBODY & COLLIDER (RAPIER3D)
                 // ==========================================
                 let mut remove_physics = false;
@@ -371,6 +443,18 @@ impl InspectorPanel {
                         if entity.audio.is_none() && ui.button("🔊 AudioSource").clicked() {
                             entity.audio = Some(AudioSourceData::default());
                             entity.components.push("AudioSource".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if entity.camera.is_none() && ui.button("🎥 Cámara (Camera)").clicked() {
+                            entity.camera = Some(CameraData::default());
+                            entity.components.push("Camera".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if entity.light.is_none() && ui.button("💡 Luz (Light)").clicked() {
+                            entity.light = Some(LightData::default());
+                            entity.components.push("Light".into());
                             self.show_add_component_menu = false;
                         }
                     });

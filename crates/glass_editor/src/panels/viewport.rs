@@ -464,7 +464,7 @@ impl ViewportPanel {
         &mut self,
         ui: &mut Ui,
         texture_id: Option<TextureId>,
-        _scene_state: &Arc<Mutex<SceneState>>,
+        scene_state: &Arc<Mutex<SceneState>>,
     ) {
         self.active_tab = ViewportTab::GameView;
 
@@ -517,23 +517,76 @@ impl ViewportPanel {
             (container_size, vec2(0.0, 0.0))
         };
 
+        let has_camera = scene_state
+            .lock()
+            .ok()
+            .and_then(|s| s.active_camera().cloned())
+            .is_some();
+
         Frame::canvas(ui.style()).show(ui, |ui| {
             let (rect, _response) = ui.allocate_exact_size(container_size, egui::Sense::hover());
-            let painter = ui.painter();
 
             // Fondo para las barras negras de letterbox
-            painter.rect_filled(rect, 0.0, Color32::from_rgb(12, 12, 15));
+            ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(12, 12, 15));
 
             // Rectángulo centrado para el juego
             let game_rect = egui::Rect::from_min_size(rect.min + offset, draw_size);
 
-            if let Some(id) = texture_id {
-                let sized_tex = SizedTexture::new(id, draw_size);
-                Image::from_texture(sized_tex).paint_at(ui, game_rect);
+            if has_camera {
+                if let Some(id) = texture_id {
+                    let sized_tex = SizedTexture::new(id, draw_size);
+                    Image::from_texture(sized_tex).paint_at(ui, game_rect);
+                }
+            } else {
+                // Fondo oscuro cuando no hay cámara activa (Estilo Unity)
+                ui.painter().rect_filled(game_rect, 0.0, Color32::from_rgb(20, 20, 26));
+
+                // Cartel de advertencia centrado estilo Unity: "No cameras rendering"
+                ui.painter().text(
+                    game_rect.center() - vec2(0.0, 40.0),
+                    egui::Align2::CENTER_CENTER,
+                    "⚠️",
+                    egui::FontId::proportional(34.0),
+                    Color32::from_rgb(255, 195, 40),
+                );
+                ui.painter().text(
+                    game_rect.center() - vec2(0.0, 8.0),
+                    egui::Align2::CENTER_CENTER,
+                    "No cameras rendering",
+                    egui::FontId::proportional(18.0),
+                    Color32::WHITE,
+                );
+                ui.painter().text(
+                    game_rect.center() + vec2(0.0, 16.0),
+                    egui::Align2::CENTER_CENTER,
+                    "There are no cameras rendering to this display",
+                    egui::FontId::proportional(12.0),
+                    Color32::from_rgb(160, 160, 175),
+                );
+
+                // Botón interactivo para añadir una cámara principal de inmediato
+                let btn_rect = egui::Rect::from_center_size(game_rect.center() + vec2(0.0, 52.0), vec2(210.0, 28.0));
+                let resp = ui.put(
+                    btn_rect,
+                    egui::Button::new(RichText::new("➕ Crear Main Camera").strong().color(Color32::from_rgb(80, 220, 140))),
+                );
+                if resp.clicked() {
+                    if let Ok(mut state) = scene_state.lock() {
+                        let id = state.create_entity(
+                            "Main Camera".into(),
+                            vec!["Transform".into(), "Camera".into()],
+                        );
+                        if let Some(cam) = state.get_entity_mut(id) {
+                            cam.transform.position = [3.5, 3.2, 9.5];
+                            cam.transform.rotation = [10.0, 0.0, 0.0];
+                        }
+                    }
+                    ui.ctx().request_repaint();
+                }
             }
 
             // Borde fino del viewport del juego
-            painter.rect_stroke(game_rect, 0.0, egui::Stroke::new(1.0, Color32::from_rgb(45, 45, 55)), egui::StrokeKind::Outside);
+            ui.painter().rect_stroke(game_rect, 0.0, egui::Stroke::new(1.0, Color32::from_rgb(45, 45, 55)), egui::StrokeKind::Outside);
         });
     }
 

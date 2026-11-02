@@ -29,6 +29,40 @@ pub enum RendererError {
     Descriptor(String),
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct MeshPushConstants {
+    pub mvp: [f32; 16],
+    pub light_dir: [f32; 4],
+    pub light_color: [f32; 4],
+    pub object_color: [f32; 4],
+}
+
+impl Default for MeshPushConstants {
+    fn default() -> Self {
+        Self {
+            mvp: [
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ],
+            light_dir: [0.5, 1.0, 0.7, 0.25],
+            light_color: [1.0, 1.0, 1.0, 1.0],
+            object_color: [0.18, 0.55, 0.92, 1.0],
+        }
+    }
+}
+
+impl MeshPushConstants {
+    pub fn new(mvp: [f32; 16]) -> Self {
+        Self {
+            mvp,
+            ..Default::default()
+        }
+    }
+}
+
 pub struct GlassRenderer {
     pub device: Arc<ash::Device>,
     pub allocator: Arc<Mutex<Allocator>>,
@@ -36,6 +70,7 @@ pub struct GlassRenderer {
     pub swapchain_render_pass: vk::RenderPass,
     pub swapchain_framebuffers: Vec<vk::Framebuffer>,
     pub offscreen: OffscreenTarget,
+    pub game_offscreen: OffscreenTarget,
     pub pipeline: GraphicsPipeline,
     pub mesh_pipeline: GraphicsPipeline,
     pub command_pool: vk::CommandPool,
@@ -141,8 +176,14 @@ impl GlassRenderer {
             swapchain.extent,
         )?;
 
-        // 4. Inicializar Viewport Offscreen desacoplado (1280x720)
+        // 4. Inicializar Viewports Offscreen desacoplados (1280x720) para Scene View y Game View
         let offscreen = OffscreenTarget::new(
+            device.clone(),
+            &mut *allocator.lock().unwrap(),
+            1280,
+            720,
+        )?;
+        let game_offscreen = OffscreenTarget::new(
             device.clone(),
             &mut *allocator.lock().unwrap(),
             1280,
@@ -173,7 +214,7 @@ impl GlassRenderer {
         let image_available_semaphore = unsafe { device.create_semaphore(&semaphore_info, None)? };
         let render_finished_semaphore = unsafe { device.create_semaphore(&semaphore_info, None)? };
 
-        log::info!("GlassRenderer inicializado con éxito con soporte de Swapchain y Viewport Offscreen.");
+        log::info!("GlassRenderer inicializado con éxito con soporte de Swapchain y Viewports Offscreen independientes (Scene & Game).");
 
         Ok(Self {
             device,
@@ -182,6 +223,7 @@ impl GlassRenderer {
             swapchain_render_pass,
             swapchain_framebuffers,
             offscreen,
+            game_offscreen,
             pipeline,
             mesh_pipeline,
             command_pool,
@@ -233,7 +275,7 @@ impl GlassRenderer {
         Ok(())
     }
 
-    /// Crea un DescriptorSet para la textura offscreen compatible con egui_ash_renderer.
+    /// Crea un DescriptorSet para la textura offscreen compatible con egui_ash_renderer (Scene View).
     pub fn create_offscreen_descriptor_set(
         &self,
     ) -> Result<(vk::DescriptorSetLayout, vk::DescriptorPool, vk::DescriptorSet), RendererError> {
@@ -253,11 +295,32 @@ impl GlassRenderer {
         Ok((layout, pool, set))
     }
 
-    /// Renderiza múltiples mallas 3D a la textura offscreen desacoplada
-    pub fn render_offscreen_scene(
+    /// Crea un DescriptorSet para la textura de juego compatible con egui_ash_renderer (Game View).
+    pub fn create_game_offscreen_descriptor_set(
+        &self,
+    ) -> Result<(vk::DescriptorSetLayout, vk::DescriptorPool, vk::DescriptorSet), RendererError> {
+        let layout = egui_ash_renderer::vulkan::create_vulkan_descriptor_set_layout(&self.device)
+            .map_err(|e| RendererError::Descriptor(e.to_string()))?;
+        let pool = egui_ash_renderer::vulkan::create_vulkan_descriptor_pool(&self.device, 16)
+            .map_err(|e| RendererError::Descriptor(e.to_string()))?;
+        let set = egui_ash_renderer::vulkan::create_vulkan_descriptor_set(
+            &self.device,
+            layout,
+            pool,
+            self.game_offscreen.color_view,
+            self.game_offscreen.sampler,
+        )
+        .map_err(|e| RendererError::Descriptor(e.to_string()))?;
+
+        Ok((layout, pool, set))
+    }
+
+    /// Renderiza ambas vistas (Scene View y Game View) de manera desacoplada e independiente en un solo comando de GPU.
+    pub fn render_views(
         &mut self,
         queue: vk::Queue,
-        meshes: &[(&GpuMesh, [f32; 16])],
+        scene_meshes: &[(&GpuMesh, MeshPushConstants)],
+        game_meshes: Option<&[(&GpuMesh, MeshPushConstants)]>,
     ) -> Result<(), RendererError> {
         unsafe {
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
@@ -268,85 +331,168 @@ impl GlassRenderer {
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
             self.device.begin_command_buffer(cmd, &begin_info)?;
 
-            let clear_values = [
-                vk::ClearValue {
-                    color: vk::ClearColorValue {
-                        float32: [0.05, 0.08, 0.15, 1.0],
+            // --------------------------------------------------------------------
+            // 1. Pass para Scene View (Cámara libre de Edición con Gizmos)
+            // --------------------------------------------------------------------
+            {
+                let clear_values = [
+                    vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            float32: [0.06, 0.09, 0.14, 1.0],
+                        },
                     },
-                },
-                vk::ClearValue {
-                    depth_stencil: vk::ClearDepthStencilValue {
-                        depth: 1.0,
-                        stencil: 0,
+                    vk::ClearValue {
+                        depth_stencil: vk::ClearDepthStencilValue {
+                            depth: 1.0,
+                            stencil: 0,
+                        },
                     },
-                },
-            ];
+                ];
 
-            let render_pass_begin_info = vk::RenderPassBeginInfo::default()
-                .render_pass(self.offscreen.render_pass)
-                .framebuffer(self.offscreen.framebuffer)
-                .render_area(vk::Rect2D {
-                    offset: vk::Offset2D { x: 0, y: 0 },
-                    extent: self.offscreen.extent,
-                })
-                .clear_values(&clear_values);
+                let render_pass_begin_info = vk::RenderPassBeginInfo::default()
+                    .render_pass(self.offscreen.render_pass)
+                    .framebuffer(self.offscreen.framebuffer)
+                    .render_area(vk::Rect2D {
+                        offset: vk::Offset2D { x: 0, y: 0 },
+                        extent: self.offscreen.extent,
+                    })
+                    .clear_values(&clear_values);
 
-            self.device.cmd_begin_render_pass(
-                cmd,
-                &render_pass_begin_info,
-                vk::SubpassContents::INLINE,
-            );
-
-            let viewport = [vk::Viewport {
-                x: 0.0,
-                y: 0.0,
-                width: self.offscreen.extent.width as f32,
-                height: self.offscreen.extent.height as f32,
-                min_depth: 0.0,
-                max_depth: 1.0,
-            }];
-            self.device.cmd_set_viewport(cmd, 0, &viewport);
-
-            let scissor = [vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 },
-                extent: self.offscreen.extent,
-            }];
-            self.device.cmd_set_scissor(cmd, 0, &scissor);
-
-            if !meshes.is_empty() {
-                // Dibujar mallas 3D indexadas con pipeline de mallas
-                self.device.cmd_bind_pipeline(
+                self.device.cmd_begin_render_pass(
                     cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    self.mesh_pipeline.pipeline,
+                    &render_pass_begin_info,
+                    vk::SubpassContents::INLINE,
                 );
 
-                for (mesh, mvp) in meshes {
-                    let push_constants_bytes = bytemuck::cast_slice(mvp);
-                    self.device.cmd_push_constants(
+                let viewport = [vk::Viewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: self.offscreen.extent.width as f32,
+                    height: self.offscreen.extent.height as f32,
+                    min_depth: 0.0,
+                    max_depth: 1.0,
+                }];
+                self.device.cmd_set_viewport(cmd, 0, &viewport);
+
+                let scissor = [vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent: self.offscreen.extent,
+                }];
+                self.device.cmd_set_scissor(cmd, 0, &scissor);
+
+                if !scene_meshes.is_empty() {
+                    self.device.cmd_bind_pipeline(
                         cmd,
-                        self.mesh_pipeline.layout,
-                        vk::ShaderStageFlags::VERTEX,
-                        0,
-                        push_constants_bytes,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.mesh_pipeline.pipeline,
                     );
 
-                    self.device
-                        .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
-                    self.device
-                        .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
+                    for (mesh, push_consts) in scene_meshes {
+                        let push_bytes = bytemuck::bytes_of(push_consts);
+                        self.device.cmd_push_constants(
+                            cmd,
+                            self.mesh_pipeline.layout,
+                            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                            0,
+                            push_bytes,
+                        );
 
+                        self.device
+                            .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
+                        self.device
+                            .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
+                        self.device
+                            .cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                    }
+                } else {
                     self.device
-                        .cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                        .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline.pipeline);
+                    self.device.cmd_draw(cmd, 3, 1, 0, 0);
                 }
-            } else {
-                // Fallback al triángulo procedural por defecto
-                self.device
-                    .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline.pipeline);
-                self.device.cmd_draw(cmd, 3, 1, 0, 0);
+
+                self.device.cmd_end_render_pass(cmd);
             }
 
-            self.device.cmd_end_render_pass(cmd);
+            // --------------------------------------------------------------------
+            // 2. Pass para Game View (Cámara activa Main Camera del juego)
+            // --------------------------------------------------------------------
+            {
+                let clear_values = [
+                    vk::ClearValue {
+                        color: vk::ClearColorValue {
+                            float32: [0.02, 0.02, 0.03, 1.0],
+                        },
+                    },
+                    vk::ClearValue {
+                        depth_stencil: vk::ClearDepthStencilValue {
+                            depth: 1.0,
+                            stencil: 0,
+                        },
+                    },
+                ];
+
+                let render_pass_begin_info = vk::RenderPassBeginInfo::default()
+                    .render_pass(self.game_offscreen.render_pass)
+                    .framebuffer(self.game_offscreen.framebuffer)
+                    .render_area(vk::Rect2D {
+                        offset: vk::Offset2D { x: 0, y: 0 },
+                        extent: self.game_offscreen.extent,
+                    })
+                    .clear_values(&clear_values);
+
+                self.device.cmd_begin_render_pass(
+                    cmd,
+                    &render_pass_begin_info,
+                    vk::SubpassContents::INLINE,
+                );
+
+                let viewport = [vk::Viewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: self.game_offscreen.extent.width as f32,
+                    height: self.game_offscreen.extent.height as f32,
+                    min_depth: 0.0,
+                    max_depth: 1.0,
+                }];
+                self.device.cmd_set_viewport(cmd, 0, &viewport);
+
+                let scissor = [vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent: self.game_offscreen.extent,
+                }];
+                self.device.cmd_set_scissor(cmd, 0, &scissor);
+
+                if let Some(meshes) = game_meshes {
+                    if !meshes.is_empty() {
+                        self.device.cmd_bind_pipeline(
+                            cmd,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            self.mesh_pipeline.pipeline,
+                        );
+
+                        for (mesh, push_consts) in meshes {
+                            let push_bytes = bytemuck::bytes_of(push_consts);
+                            self.device.cmd_push_constants(
+                                cmd,
+                                self.mesh_pipeline.layout,
+                                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                                0,
+                                push_bytes,
+                            );
+
+                            self.device
+                                .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
+                            self.device
+                                .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
+                            self.device
+                                .cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                        }
+                    }
+                }
+
+                self.device.cmd_end_render_pass(cmd);
+            }
+
             self.device.end_command_buffer(cmd)?;
 
             let command_buffers = [cmd];
@@ -356,6 +502,19 @@ impl GlassRenderer {
         }
 
         Ok(())
+    }
+
+    /// Renderiza múltiples mallas 3D a la textura offscreen desacoplada (Scene View)
+    pub fn render_offscreen_scene(
+        &mut self,
+        queue: vk::Queue,
+        meshes: &[(&GpuMesh, [f32; 16])],
+    ) -> Result<(), RendererError> {
+        let pc_list: Vec<(&GpuMesh, MeshPushConstants)> = meshes
+            .iter()
+            .map(|(m, mvp)| (*m, MeshPushConstants::new(*mvp)))
+            .collect();
+        self.render_views(queue, &pc_list, None)
     }
 
     /// Renderiza la escena 3D a la textura offscreen desacoplada (con soporte opcional de malla 3D indexada)
@@ -557,6 +716,8 @@ impl Drop for GlassRenderer {
             self.device.destroy_command_pool(self.command_pool, None);
         }
         self.offscreen
+            .destroy(&mut *self.allocator.lock().unwrap());
+        self.game_offscreen
             .destroy(&mut *self.allocator.lock().unwrap());
     }
 }

@@ -120,7 +120,8 @@ impl EditorDockingLayout {
     pub fn render(
         &mut self,
         ui: &mut egui::Ui,
-        viewport_texture_id: Option<egui::TextureId>,
+        scene_texture_id: Option<egui::TextureId>,
+        game_texture_id: Option<egui::TextureId>,
         scene_state: &Arc<Mutex<SceneState>>,
     ) {
         let mut selected_id = self.hierarchy.selected_entity;
@@ -253,7 +254,8 @@ impl EditorDockingLayout {
             viewport: &mut self.viewport,
             inspector: &mut self.inspector,
             console: &mut self.console,
-            texture_id: viewport_texture_id,
+            scene_texture_id,
+            game_texture_id,
             selected_entity_id: &mut selected_id,
             scene_state,
         };
@@ -274,7 +276,8 @@ struct EditorTabViewer<'a> {
     viewport: &'a mut ViewportPanel,
     inspector: &'a mut InspectorPanel,
     console: &'a mut ConsolePanel,
-    texture_id: Option<egui::TextureId>,
+    scene_texture_id: Option<egui::TextureId>,
+    game_texture_id: Option<egui::TextureId>,
     selected_entity_id: &'a mut Option<u64>,
     scene_state: &'a Arc<Mutex<SceneState>>,
 }
@@ -303,10 +306,10 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 self.hierarchy.render(ui, self.scene_state);
             }
             EditorTab::SceneView => {
-                self.viewport.render_scene_tab(ui, self.texture_id, self.selected_entity_id, self.scene_state);
+                self.viewport.render_scene_tab(ui, self.scene_texture_id, self.selected_entity_id, self.scene_state);
             }
             EditorTab::GameView => {
-                self.viewport.render_game_tab(ui, self.texture_id, self.scene_state);
+                self.viewport.render_game_tab(ui, self.game_texture_id, self.scene_state);
             }
             EditorTab::Inspector => {
                 self.inspector.render(ui, *self.selected_entity_id, self.scene_state);
