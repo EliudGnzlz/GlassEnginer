@@ -2,3 +2,6 @@
 **/*.spv
 Cargo.lock
 .DS_Store
+
+**/bin/
+**/obj/

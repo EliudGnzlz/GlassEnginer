@@ -128,6 +128,208 @@ impl EditorDockingLayout {
     ) {
         let mut selected_id = self.hierarchy.selected_entity;
 
+        // --- 0. BARRA DE MENÚS PRINCIPAL ESTILO UNITY / UNREAL ---
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.menu_button("File", |ui| {
+                if ui.button("📁 New Scene\tCtrl+N").clicked() {
+                    if let Ok(mut sc) = scene_state.lock() {
+                        sc.entities.clear();
+                        sc.next_entity_id = 1;
+                    }
+                    ui.close();
+                }
+                if ui.button("💾 Save Scene\tCtrl+S").clicked() {
+                    if let Ok(sc) = scene_state.lock() {
+                        let _ = sc.save_to_json("assets/scenes/scene.json");
+                    }
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("🏠 Project Hub / Launcher").clicked() {
+                    self.request_launcher = true;
+                    ui.close();
+                }
+            });
+
+            ui.menu_button("Edit", |ui| {
+                if ui.button("📋 Duplicate\tCtrl+D").clicked() {
+                    if let Some(id) = self.hierarchy.selected_entity {
+                        if let Ok(mut sc) = scene_state.lock() {
+                            if let Some(orig) = sc.get_entity(id).cloned() {
+                                let new_id = sc.create_entity(format!("{} (Clone)", orig.name), orig.components.clone());
+                                if let Some(new_ent) = sc.get_entity_mut(new_id) {
+                                    new_ent.transform = orig.transform.clone();
+                                    new_ent.transform.position[0] += 1.0;
+                                    new_ent.mesh = orig.mesh.clone();
+                                    new_ent.physics = orig.physics.clone();
+                                    new_ent.audio = orig.audio.clone();
+                                    new_ent.camera = orig.camera.clone();
+                                    new_ent.light = orig.light.clone();
+                                    new_ent.canvas = orig.canvas.clone();
+                                    new_ent.rect_transform = orig.rect_transform.clone();
+                                    new_ent.ui_text = orig.ui_text.clone();
+                                    new_ent.ui_button = orig.ui_button.clone();
+                                }
+                                self.hierarchy.selected_entity = Some(new_id);
+                            }
+                        }
+                    }
+                    ui.close();
+                }
+                if ui.button("🗑 Delete\tDel").clicked() {
+                    if let Some(id) = self.hierarchy.selected_entity {
+                        if let Ok(mut sc) = scene_state.lock() {
+                            sc.delete_entity(id);
+                        }
+                        self.hierarchy.selected_entity = None;
+                    }
+                    ui.close();
+                }
+            });
+
+            ui.menu_button("Assets", |ui| {
+                if ui.button("📁 New Folder").clicked() { ui.close(); }
+                if ui.button("📜 C# Script").clicked() { ui.close(); }
+                if ui.button("🎨 Material (PBR)").clicked() { ui.close(); }
+                ui.separator();
+                if ui.button("🔄 Refresh Assets").clicked() { ui.close(); }
+            });
+
+            ui.menu_button("GameObject", |ui| {
+                if ui.button("📦 Create Empty").clicked() {
+                    if let Ok(mut sc) = scene_state.lock() {
+                        let id = sc.create_entity("GameObject".into(), vec!["Transform".into()]);
+                        self.hierarchy.selected_entity = Some(id);
+                    }
+                    ui.close();
+                }
+                ui.menu_button("⬡ 3D Object", |ui| {
+                    if ui.button("■ Cube").clicked() {
+                        if let Ok(mut sc) = scene_state.lock() {
+                            let id = sc.create_entity("Cube".into(), vec!["Transform".into(), "MeshRenderer".into(), "RigidBody".into(), "Collider".into()]);
+                            self.hierarchy.selected_entity = Some(id);
+                        }
+                        ui.close();
+                    }
+                    if ui.button("● Sphere").clicked() {
+                        if let Ok(mut sc) = scene_state.lock() {
+                            let id = sc.create_entity("Sphere".into(), vec!["Transform".into(), "MeshRenderer".into(), "RigidBody".into(), "Collider".into()]);
+                            self.hierarchy.selected_entity = Some(id);
+                        }
+                        ui.close();
+                    }
+                    if ui.button("▬ Plane").clicked() {
+                        if let Ok(mut sc) = scene_state.lock() {
+                            let id = sc.create_entity("Plane".into(), vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()]);
+                            self.hierarchy.selected_entity = Some(id);
+                        }
+                        ui.close();
+                    }
+                });
+                ui.menu_button("☼ Light", |ui| {
+                    if ui.button("☼ Directional Light").clicked() {
+                        if let Ok(mut sc) = scene_state.lock() {
+                            let id = sc.create_entity("Directional Light".into(), vec!["Transform".into(), "Light".into()]);
+                            self.hierarchy.selected_entity = Some(id);
+                        }
+                        ui.close();
+                    }
+                    if ui.button("✦ Point Light").clicked() {
+                        if let Ok(mut sc) = scene_state.lock() {
+                            let id = sc.create_entity("Point Light".into(), vec!["Transform".into(), "Light".into()]);
+                            self.hierarchy.selected_entity = Some(id);
+                        }
+                        ui.close();
+                    }
+                });
+                if ui.button("🎥 Camera").clicked() {
+                    if let Ok(mut sc) = scene_state.lock() {
+                        let id = sc.create_entity("Camera".into(), vec!["Transform".into(), "Camera".into()]);
+                        self.hierarchy.selected_entity = Some(id);
+                    }
+                    ui.close();
+                }
+                ui.menu_button("🖼 UI", |ui| {
+                    if ui.button("🖼 Canvas").clicked() {
+                        if let Ok(mut sc) = scene_state.lock() {
+                            let id = sc.create_entity("Canvas".into(), vec!["Transform".into(), "RectTransform".into(), "Canvas".into()]);
+                            self.hierarchy.selected_entity = Some(id);
+                        }
+                        ui.close();
+                    }
+                    if ui.button("🔤 Text (TMP)").clicked() {
+                        if let Ok(mut sc) = scene_state.lock() {
+                            let id = sc.create_entity("Text (TMP)".into(), vec!["Transform".into(), "RectTransform".into(), "Text".into()]);
+                            self.hierarchy.selected_entity = Some(id);
+                        }
+                        ui.close();
+                    }
+                    if ui.button("🔘 Button").clicked() {
+                        if let Ok(mut sc) = scene_state.lock() {
+                            let id = sc.create_entity("Button".into(), vec!["Transform".into(), "RectTransform".into(), "Button".into(), "Text".into()]);
+                            if let Some(ent) = sc.get_entity_mut(id) {
+                                if let Some(txt) = &mut ent.ui_text {
+                                    txt.text = "Button".into();
+                                }
+                            }
+                            self.hierarchy.selected_entity = Some(id);
+                        }
+                        ui.close();
+                    }
+                });
+            });
+
+            ui.menu_button("Component", |ui| {
+                if let Some(id) = self.hierarchy.selected_entity {
+                    ui.menu_button("Physics", |ui| {
+                        if ui.button("Rigidbody").clicked() {
+                            if let Ok(mut sc) = scene_state.lock() {
+                                if let Some(ent) = sc.get_entity_mut(id) {
+                                    if !ent.components.iter().any(|c| c == "RigidBody") {
+                                        ent.components.push("RigidBody".into());
+                                        ent.physics = Some(glass_core::PhysicsData::default());
+                                    }
+                                }
+                            }
+                            ui.close();
+                        }
+                    });
+                    ui.menu_button("Audio", |ui| {
+                        if ui.button("Audio Source").clicked() {
+                            if let Ok(mut sc) = scene_state.lock() {
+                                if let Some(ent) = sc.get_entity_mut(id) {
+                                    if !ent.components.iter().any(|c| c == "AudioSource") {
+                                        ent.components.push("AudioSource".into());
+                                        ent.audio = Some(glass_core::AudioSourceData::default());
+                                    }
+                                }
+                            }
+                            ui.close();
+                        }
+                    });
+                } else {
+                    ui.label("Seleccione un GameObject primero");
+                }
+            });
+
+            ui.menu_button("Window", |ui| {
+                ui.menu_button("Layouts", |ui| {
+                    if ui.button("Default").clicked() { self.apply_preset(LayoutPreset::Default); ui.close(); }
+                    if ui.button("2 by 3").clicked() { self.apply_preset(LayoutPreset::TwoByThree); ui.close(); }
+                    if ui.button("4 Split").clicked() { self.apply_preset(LayoutPreset::FourSplit); ui.close(); }
+                    if ui.button("Wide").clicked() { self.apply_preset(LayoutPreset::Wide); ui.close(); }
+                });
+            });
+
+            ui.menu_button("Help", |ui| {
+                if ui.button("📖 GlassEngine Documentation").clicked() { ui.close(); }
+                if ui.button("ℹ About GlassEngine Beta").clicked() { ui.close(); }
+            });
+        });
+
+        ui.separator();
+
         // --- BARRA SUPERIOR DE HERRAMIENTAS PRINCIPALES ESTILO UNITY ---
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -318,7 +520,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 self.hierarchy.render(ui, self.scene_state);
             }
             EditorTab::SceneView => {
-                self.viewport.render_scene_tab(ui, self.scene_texture_id, self.selected_entity_id, self.scene_state);
+                self.viewport.render_scene_tab(ui, self.scene_texture_id, self.game_texture_id, self.selected_entity_id, self.scene_state);
             }
             EditorTab::GameView => {
                 self.viewport.render_game_tab(ui, self.game_texture_id, self.scene_state);

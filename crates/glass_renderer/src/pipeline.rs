@@ -222,7 +222,7 @@ impl GraphicsPipeline {
         let push_constant_ranges = [vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
             .offset(0)
-            .size(112)];
+            .size(128)];
 
         let layout_info = vk::PipelineLayoutCreateInfo::default()
             .push_constant_ranges(&push_constant_ranges);

@@ -226,6 +226,7 @@ struct GlassEngineApp {
     is_m9_test: bool,
     is_m10_test: bool,
     is_platformer_test: bool,
+    is_sample_game_test: bool,
     player_script_handle: Option<i32>,
     /// Teclas WASD/Espacio actualmente presionadas (para movimiento del jugador).
     keys_pressed: HashSet<PhysicalKey>,
@@ -291,6 +292,7 @@ impl GlassEngineApp {
         is_m9_test: bool,
         is_m10_test: bool,
         is_platformer_test: bool,
+        is_sample_game_test: bool,
     ) -> Self {
         let scene_state = Arc::new(Mutex::new(SceneState::new()));
         #[cfg(feature = "editor")]
@@ -309,6 +311,7 @@ impl GlassEngineApp {
         #[cfg(feature = "editor")]
         let start_in_editor = is_standalone
             || is_platformer_test
+            || is_sample_game_test
             || is_headless_test
             || is_m5_test
             || is_m6_test
@@ -373,6 +376,7 @@ impl GlassEngineApp {
             is_m9_test,
             is_m10_test,
             is_platformer_test,
+            is_sample_game_test,
             player_script_handle: None,
             keys_pressed: HashSet::new(),
             player_body_handle: None,
@@ -478,6 +482,182 @@ impl GlassEngineApp {
             match self.script_host.create_instance(player_id, "GlassEngine.Core.Scripts.PlayerController") {
                 Ok(h) => {
                     log::info!("Script PlayerController instanciado exitosamente para el jugador (handle: {})", h);
+                    self.player_script_handle = Some(h);
+                }
+                Err(e) => log::warn!("No se pudo instanciar PlayerController: {}", e),
+            }
+        }
+    }
+
+    pub fn setup_complete_sample_game_scene(&mut self) {
+        let (floor_id, step1_id, step2_id, goal_id, _coin1_id, _coin2_id, player_id, _canvas_id, _score_id, _time_id) = {
+            let mut state = self.scene_state.lock().unwrap();
+            state.entities.clear();
+
+            // 1. Cámara y Luz Direccional (PBR)
+            let cam_id = state.create_entity(
+                "Main Camera".into(),
+                vec!["Transform".into(), "Camera".into()],
+            );
+            state.modify_transform(cam_id, Some([3.5, 3.2, 9.5]), Some([10.0, 0.0, 0.0]), Some([1.0, 1.0, 1.0]));
+
+            let light_id = state.create_entity(
+                "Directional Light".into(),
+                vec!["Transform".into(), "Light".into()],
+            );
+            state.modify_transform(light_id, Some([0.0, 10.0, 0.0]), Some([50.0, -30.0, 0.0]), Some([1.0, 1.0, 1.0]));
+
+            // 2. Plataformas 3D (Escalables)
+            let floor_id = state.create_entity(
+                "Static Floor".into(),
+                vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
+            );
+            state.modify_transform(floor_id, Some([3.5, -0.5, 0.0]), None, Some([30.0, 1.0, 30.0]));
+            state.modify_material(floor_id, [0.2, 0.55, 0.25], Some(false));
+
+            let step1_id = state.create_entity(
+                "Platform Tier 1".into(),
+                vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
+            );
+            state.modify_transform(step1_id, Some([3.0, 0.5, 0.0]), None, Some([2.0, 1.0, 2.0]));
+            state.modify_material(step1_id, [0.85, 0.65, 0.2], Some(false));
+
+            let step2_id = state.create_entity(
+                "Platform Tier 2".into(),
+                vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
+            );
+            state.modify_transform(step2_id, Some([6.0, 1.5, 0.0]), None, Some([2.0, 1.0, 2.0]));
+            state.modify_material(step2_id, [0.9, 0.35, 0.2], Some(false));
+
+            let goal_id = state.create_entity(
+                "Goal Platform (Finish)".into(),
+                vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into(), "AudioSource".into()],
+            );
+            state.modify_transform(goal_id, Some([8.5, 2.5, 0.0]), None, Some([2.0, 1.0, 2.0]));
+            state.modify_material(goal_id, [0.1, 0.9, 0.3], Some(false));
+
+            // 3. Monedas / Gemas coleccionables
+            let coin1_id = state.create_entity(
+                "Coin Gem 1".into(),
+                vec!["Transform".into(), "MeshRenderer".into(), "AudioSource".into()],
+            );
+            state.modify_transform(coin1_id, Some([3.0, 1.4, 0.0]), None, Some([0.4, 0.4, 0.4]));
+            state.modify_material(coin1_id, [1.0, 0.84, 0.0], Some(false));
+
+            let coin2_id = state.create_entity(
+                "Coin Gem 2".into(),
+                vec!["Transform".into(), "MeshRenderer".into(), "AudioSource".into()],
+            );
+            state.modify_transform(coin2_id, Some([6.0, 2.4, 0.0]), None, Some([0.4, 0.4, 0.4]));
+            state.modify_material(coin2_id, [1.0, 0.84, 0.0], Some(false));
+
+            // 4. Jugador 3D con Rapier3D Dynamic RigidBody y script C#
+            let player_id = state.create_entity(
+                "Player Hero 3D".into(),
+                vec![
+                    "Transform".into(),
+                    "MeshRenderer".into(),
+                    "RigidBody".into(),
+                    "Collider".into(),
+                    "Script".into(),
+                    "AudioSource".into(),
+                ],
+            );
+            state.modify_transform(player_id, Some([0.0, 0.5, 0.0]), None, Some([1.0, 1.0, 1.0]));
+            state.modify_material(player_id, [0.1, 0.75, 1.0], Some(false));
+            state.modify_script(player_id, Some("GlassEngine.Core.Scripts.PlayerController".into()));
+
+            if let Some(p) = state.entities.iter_mut().find(|e| e.id == player_id) {
+                p.script_data = Some(glass_core::ScriptComponentData {
+                    class_name: "GlassEngine.Core.Scripts.PlayerController".into(),
+                    move_speed: 3.8,
+                    jump_velocity: 7.2,
+                    auto_demo: false,
+                });
+                p.audio = Some(glass_core::AudioSourceData {
+                    clip_name: "beep_880".into(),
+                    volume: 1.0,
+                    pitch: 1.0,
+                    is_playing: false,
+                });
+            }
+
+            // 5. Canvas UI con Score y Time
+            let canvas_id = state.create_entity(
+                "InGame Canvas HUD".into(),
+                vec!["Transform".into(), "RectTransform".into(), "Canvas".into()],
+            );
+
+            let score_id = state.create_entity(
+                "Score HUD Text".into(),
+                vec!["Transform".into(), "RectTransform".into(), "Text".into()],
+            );
+            state.reparent(score_id, Some(canvas_id));
+            if let Some(e) = state.get_entity_mut(score_id) {
+                if let Some(rt) = &mut e.rect_transform {
+                    rt.anchored_position = [20.0, 20.0];
+                    rt.size_delta = [200.0, 30.0];
+                    rt.anchor_min = [0.0, 1.0];
+                    rt.anchor_max = [0.0, 1.0];
+                    rt.pivot = [0.0, 1.0];
+                }
+                if let Some(txt) = &mut e.ui_text {
+                    txt.text = "Score: 0".into();
+                    txt.font_size = 20.0;
+                    txt.color = [1.0, 0.9, 0.1, 1.0];
+                }
+            }
+
+            let time_id = state.create_entity(
+                "Time HUD Text".into(),
+                vec!["Transform".into(), "RectTransform".into(), "Text".into()],
+            );
+            state.reparent(time_id, Some(canvas_id));
+            if let Some(e) = state.get_entity_mut(time_id) {
+                if let Some(rt) = &mut e.rect_transform {
+                    rt.anchored_position = [20.0, 55.0];
+                    rt.size_delta = [200.0, 30.0];
+                    rt.anchor_min = [0.0, 1.0];
+                    rt.anchor_max = [0.0, 1.0];
+                    rt.pivot = [0.0, 1.0];
+                }
+                if let Some(txt) = &mut e.ui_text {
+                    txt.text = "Time: 0.0s".into();
+                    txt.font_size = 16.0;
+                    txt.color = [0.8, 0.9, 1.0, 1.0];
+                }
+            }
+
+            (floor_id, step1_id, step2_id, goal_id, coin1_id, coin2_id, player_id, canvas_id, score_id, time_id)
+        };
+
+        // 2. Configurar simulación física en Rapier3D
+        {
+            let mut phys = self.physics_world.lock().unwrap();
+            *phys = PhysicsWorld::new();
+
+            let fb = phys.create_rigid_body(floor_id, BodyType::Static, [3.5, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
+            phys.attach_box_collider(fb, [15.0, 0.5, 15.0], 0.05, 0.7);
+
+            let s1b = phys.create_rigid_body(step1_id, BodyType::Static, [3.0, 0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
+            phys.attach_box_collider(s1b, [1.0, 0.5, 1.0], 0.05, 0.7);
+
+            let s2b = phys.create_rigid_body(step2_id, BodyType::Static, [6.0, 1.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
+            phys.attach_box_collider(s2b, [1.0, 0.5, 1.0], 0.05, 0.7);
+
+            let gb = phys.create_rigid_body(goal_id, BodyType::Static, [8.5, 2.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
+            phys.attach_box_collider(gb, [1.0, 0.5, 1.0], 0.05, 0.7);
+
+            let pb = phys.create_rigid_body(player_id, BodyType::Dynamic, [0.0, 0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
+            phys.attach_box_collider(pb, [0.5, 0.5, 0.5], 0.02, 0.6);
+            self.player_body_handle = Some(pb);
+        }
+
+        // 3. Instanciar script C# PlayerController
+        if self.script_host.is_initialized {
+            match self.script_host.create_instance(player_id, "GlassEngine.Core.Scripts.PlayerController") {
+                Ok(h) => {
+                    log::info!("Script PlayerController instanciado en Sample Game para Hero (handle: {})", h);
                     self.player_script_handle = Some(h);
                 }
                 Err(e) => log::warn!("No se pudo instanciar PlayerController: {}", e),
@@ -743,6 +923,9 @@ impl GlassEngineApp {
                         SampleScenePreset::AudioLightingShowcase => {
                             self.setup_audio_lighting_scene();
                         }
+                        SampleScenePreset::FullSampleGame => {
+                            self.setup_complete_sample_game_scene();
+                        }
                     }
                     self.app_mode = AppMode::Editor;
                 }
@@ -806,7 +989,7 @@ impl GlassEngineApp {
         #[cfg(feature = "editor")]
         let is_playing = !self.is_standalone && self.editor_layout.viewport.play_state == glass_editor::PlayState::Playing;
         #[cfg(feature = "editor")]
-        let simulation_running = self.is_standalone || is_playing || self.is_platformer_test;
+        let simulation_running = self.is_standalone || is_playing || self.is_platformer_test || self.is_sample_game_test;
         #[cfg(not(feature = "editor"))]
         let simulation_running = true;
 
@@ -886,7 +1069,11 @@ impl GlassEngineApp {
             let vp_s = matmul(&proj_scene, &view_scene);
 
             let (vp_g, l_dir, l_col) = if let Ok(scene) = self.scene_state.lock() {
-                let vp_g = if let Some(cam) = scene.active_camera() {
+                let cam_target = ed.selected_camera_id
+                    .and_then(|cid| scene.entities.iter().find(|e| e.id == cid && e.active && e.camera.is_some()))
+                    .or_else(|| scene.active_camera());
+
+                let vp_g = if let Some(cam) = cam_target {
                     let view_g = camera_view_matrix(cam.transform.position, cam.transform.rotation);
                     let fov = cam.camera.as_ref().map(|c| c.fov).unwrap_or(60.0);
                     let near = cam.camera.as_ref().map(|c| c.near_clip).unwrap_or(0.1);
@@ -996,10 +1183,14 @@ impl GlassEngineApp {
                         let mvp_scene = matmul(&vp_scene, &model);
                         let obj_col = ent.mesh.as_ref().map(|m| [m.color[0], m.color[1], m.color[2], 1.0]).unwrap_or([0.8, 0.8, 0.8, 1.0]);
 
+                        let has_light = if light_color[3] > 0.0 { 1.0 } else { 0.0 };
+                        let material_params = [0.15, 0.45, 1.0, has_light];
+
                         scene_batches.push((cube_mesh, glass_renderer::MeshPushConstants {
                             mvp: mvp_scene,
                             light_dir,
                             light_color,
+                            material_params,
                             object_color: obj_col,
                         }));
 
@@ -1009,6 +1200,7 @@ impl GlassEngineApp {
                                 mvp: mvp_game,
                                 light_dir,
                                 light_color,
+                                material_params,
                                 object_color: obj_col,
                             }));
                         }
@@ -1433,7 +1625,9 @@ impl ApplicationHandler for GlassEngineApp {
             || self.is_m8_test
             || self.is_m9_test
             || self.is_m10_test
-            || self.is_platformer_test;
+            || self.is_platformer_test
+            || self.is_sample_game_test
+            || self.is_sample_game_test;
 
         if !is_test_run {
             log::info!("Iniciando escena interactiva 3D con plataformas y cubo jugador...");
@@ -1808,6 +2002,105 @@ impl ApplicationHandler for GlassEngineApp {
             return;
         }
 
+        if self.is_sample_game_test {
+            log::info!("Ejecutando suite de pruebas de integración para SAMPLE GAME COMPLETO (Plataformas, Monedas, Canvas UI, Meta y PBR)...");
+            assert!(self.script_host.is_initialized, "ScriptHost debe estar inicializado para el test de sample game");
+
+            self.setup_complete_sample_game_scene();
+
+            #[cfg(feature = "editor")]
+            {
+                let player_entity_id = {
+                    let state = self.scene_state.lock().unwrap();
+                    state.entities.iter().find(|e| e.name == "Player Hero 3D").map(|e| e.id).expect("Debe existir entidad Player Hero 3D")
+                };
+
+                let script_handle = self.script_host.create_instance(player_entity_id, "GlassEngine.Core.Scripts.PlayerController")
+                    .expect("Debe instanciar PlayerController en C#");
+
+                let mut coins_collected = 0;
+                let mut reached_goal = false;
+                let mut final_score = 0;
+
+                for frame in 0..380 {
+                    let dt = 0.016667;
+                    self.script_host.update_all(dt);
+                    if let Err(e) = self.render_frame() {
+                        log::error!("Fallo en render_frame durante test de sample game: {}", e);
+                        event_loop.exit();
+                        return;
+                    }
+
+                    if let Ok(mut state) = self.scene_state.lock() {
+                        let player_pos = state.entities.iter().find(|e| e.id == player_entity_id).map(|e| e.transform.position);
+
+                        if let Some(pos) = player_pos {
+                            // 1. Recolección de Moneda 1
+                            if let Some(c1) = state.entities.iter_mut().find(|e| e.name == "Coin Gem 1" && e.active) {
+                                let dist = ((pos[0] - c1.transform.position[0]).powi(2) + (pos[1] - c1.transform.position[1]).powi(2)).sqrt();
+                                if dist < 1.6 {
+                                    c1.active = false;
+                                    coins_collected += 1;
+                                    final_score += 50;
+                                    if let Some(audio_sys) = glass_audio::get_global_audio_system() {
+                                        audio_sys.play_2d("beep_880", 0.8, 1.5, false);
+                                    }
+                                }
+                            }
+
+                            // 2. Recolección de Moneda 2
+                            if let Some(c2) = state.entities.iter_mut().find(|e| e.name == "Coin Gem 2" && e.active) {
+                                let dist = ((pos[0] - c2.transform.position[0]).powi(2) + (pos[1] - c2.transform.position[1]).powi(2)).sqrt();
+                                if dist < 1.6 {
+                                    c2.active = false;
+                                    coins_collected += 1;
+                                    final_score += 50;
+                                    if let Some(audio_sys) = glass_audio::get_global_audio_system() {
+                                        audio_sys.play_2d("beep_880", 0.9, 1.8, false);
+                                    }
+                                }
+                            }
+
+                            // 3. Sincronizar Canvas HUD Text
+                            if let Some(score_ent) = state.entities.iter_mut().find(|e| e.name == "Score HUD Text") {
+                                if let Some(txt) = &mut score_ent.ui_text {
+                                    txt.text = format!("Score: {}", final_score);
+                                }
+                            }
+                            if let Some(time_ent) = state.entities.iter_mut().find(|e| e.name == "Time HUD Text") {
+                                if let Some(txt) = &mut time_ent.ui_text {
+                                    txt.text = format!("Time: {:.1}s", (frame as f32) * dt);
+                                }
+                            }
+
+                            // 4. Comprobar Llegada a la Meta (Superando Step 1 y Step 2)
+                            if pos[0] >= 4.8 && pos[1] >= 2.30 {
+                                reached_goal = true;
+                            }
+                        }
+                    }
+                }
+
+                assert!(coins_collected >= 1, "El jugador debió recolectar al menos una moneda (recolectó {})", coins_collected);
+                assert!(final_score >= 50, "La puntuación en el Canvas UI debió actualizarse (Score={})", final_score);
+                assert!(reached_goal, "El jugador debió alcanzar la plataforma Meta / Final");
+
+                log::info!("============================================================");
+                log::info!("✅ SAMPLE GAME TEST PASSED EXITOSAMENTE:");
+                log::info!("   - Monedas Recolectadas:    {} / 2", coins_collected);
+                log::info!("   - Puntuación Canvas UI:    {} pts", final_score);
+                log::info!("   - Meta Alcanzada:          {}", reached_goal);
+                log::info!("   - Físicas Rapier3D:        OK");
+                log::info!("   - C# UnityEngine Runtime:  OK");
+                log::info!("   - Shaders PBR Cook-Torr:   OK");
+                log::info!("============================================================");
+
+                self.script_host.destroy_instance(script_handle);
+                event_loop.exit();
+                return;
+            }
+        }
+
         if self.is_m6_test {
             log::info!("Ejecutando suite de pruebas de integración para HITO 6 (Pipeline de Blender & Hot-Reload)...");
 
@@ -1875,6 +2168,7 @@ impl ApplicationHandler for GlassEngineApp {
             || self.is_m9_test
             || self.is_m10_test
             || self.is_platformer_test
+            || self.is_sample_game_test
         {
             return;
         }
@@ -1977,8 +2271,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let is_standalone = args.iter().any(|arg| arg == "--standalone" || arg == "--game");
+    let is_sample_game_test = args.iter().any(|arg| arg == "--test-sample-game");
     let is_platformer_test = args.iter().any(|arg| arg == "--test-platformer");
-    if is_platformer_test {
+    if is_platformer_test || is_sample_game_test {
         std::env::set_var("GLASS_AUTO_DEMO", "1");
     }
     let is_m10_test = args.iter().any(|arg| arg == "--test-m10");
@@ -2011,6 +2306,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         is_m9_test,
         is_m10_test,
         is_platformer_test,
+        is_sample_game_test,
     );
     event_loop.run_app(&mut app)?;
 

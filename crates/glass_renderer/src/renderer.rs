@@ -12,6 +12,8 @@ const VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/triangle.vert.sp
 const FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/triangle.frag.spv");
 const MESH_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/mesh.vert.spv");
 const MESH_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/mesh.frag.spv");
+const PBR_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/pbr.vert.spv");
+const PBR_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/pbr.frag.spv");
 
 #[derive(Error, Debug)]
 pub enum RendererError {
@@ -35,6 +37,7 @@ pub struct MeshPushConstants {
     pub mvp: [f32; 16],
     pub light_dir: [f32; 4],
     pub light_color: [f32; 4],
+    pub material_params: [f32; 4], // x=metallic, y=roughness, z=ao, w=has_light
     pub object_color: [f32; 4],
 }
 
@@ -47,8 +50,9 @@ impl Default for MeshPushConstants {
                 0.0, 0.0, 1.0, 0.0,
                 0.0, 0.0, 0.0, 1.0,
             ],
-            light_dir: [0.5, 1.0, 0.7, 0.25],
-            light_color: [1.0, 1.0, 1.0, 1.0],
+            light_dir: [0.5, 1.0, 0.7, 1.0],
+            light_color: [1.0, 1.0, 1.0, 0.2],
+            material_params: [0.2, 0.5, 1.0, 1.0],
             object_color: [0.18, 0.55, 0.92, 1.0],
         }
     }
@@ -73,6 +77,7 @@ pub struct GlassRenderer {
     pub game_offscreen: OffscreenTarget,
     pub pipeline: GraphicsPipeline,
     pub mesh_pipeline: GraphicsPipeline,
+    pub pbr_pipeline: GraphicsPipeline,
     pub command_pool: vk::CommandPool,
     pub command_buffer: vk::CommandBuffer,
     pub fence: vk::Fence,
@@ -190,9 +195,10 @@ impl GlassRenderer {
             720,
         )?;
 
-        // 5. Inicializar Pipelines Gráficos (Triángulo por defecto + Mallas 3D)
+        // 5. Inicializar Pipelines Gráficos (Triángulo por defecto + Mallas 3D + Cook-Torrance PBR)
         let pipeline = GraphicsPipeline::new(device.clone(), offscreen.render_pass, VERT_SPV, FRAG_SPV)?;
         let mesh_pipeline = GraphicsPipeline::new_mesh_pipeline(device.clone(), offscreen.render_pass, MESH_VERT_SPV, MESH_FRAG_SPV)?;
+        let pbr_pipeline = GraphicsPipeline::new_mesh_pipeline(device.clone(), offscreen.render_pass, PBR_VERT_SPV, PBR_FRAG_SPV)?;
 
         // 6. Command Pool y Buffers
         let pool_info = vk::CommandPoolCreateInfo::default()
@@ -214,7 +220,7 @@ impl GlassRenderer {
         let image_available_semaphore = unsafe { device.create_semaphore(&semaphore_info, None)? };
         let render_finished_semaphore = unsafe { device.create_semaphore(&semaphore_info, None)? };
 
-        log::info!("GlassRenderer inicializado con éxito con soporte de Swapchain y Viewports Offscreen independientes (Scene & Game).");
+        log::info!("GlassRenderer inicializado con éxito con soporte de Swapchain, PBR y Viewports Offscreen independientes (Scene & Game).");
 
         Ok(Self {
             device,
@@ -226,6 +232,7 @@ impl GlassRenderer {
             game_offscreen,
             pipeline,
             mesh_pipeline,
+            pbr_pipeline,
             command_pool,
             command_buffer,
             fence,
@@ -384,14 +391,14 @@ impl GlassRenderer {
                     self.device.cmd_bind_pipeline(
                         cmd,
                         vk::PipelineBindPoint::GRAPHICS,
-                        self.mesh_pipeline.pipeline,
+                        self.pbr_pipeline.pipeline,
                     );
 
                     for (mesh, push_consts) in scene_meshes {
                         let push_bytes = bytemuck::bytes_of(push_consts);
                         self.device.cmd_push_constants(
                             cmd,
-                            self.mesh_pipeline.layout,
+                            self.pbr_pipeline.layout,
                             vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                             0,
                             push_bytes,
@@ -467,14 +474,14 @@ impl GlassRenderer {
                         self.device.cmd_bind_pipeline(
                             cmd,
                             vk::PipelineBindPoint::GRAPHICS,
-                            self.mesh_pipeline.pipeline,
+                            self.pbr_pipeline.pipeline,
                         );
 
                         for (mesh, push_consts) in meshes {
                             let push_bytes = bytemuck::bytes_of(push_consts);
                             self.device.cmd_push_constants(
                                 cmd,
-                                self.mesh_pipeline.layout,
+                                self.pbr_pipeline.layout,
                                 vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                                 0,
                                 push_bytes,

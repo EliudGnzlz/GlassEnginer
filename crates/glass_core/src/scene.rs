@@ -134,6 +134,78 @@ impl Default for LightData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanvasData {
+    pub render_mode: String, // "ScreenSpaceOverlay", "ScreenSpaceCamera", "WorldSpace"
+    pub reference_resolution: [f32; 2],
+    pub match_width_or_height: f32,
+}
+
+impl Default for CanvasData {
+    fn default() -> Self {
+        Self {
+            render_mode: "ScreenSpaceOverlay".into(),
+            reference_resolution: [1920.0, 1080.0],
+            match_width_or_height: 0.5,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RectTransformData {
+    pub anchored_position: [f32; 2],
+    pub size_delta: [f32; 2],
+    pub anchor_min: [f32; 2],
+    pub anchor_max: [f32; 2],
+    pub pivot: [f32; 2],
+}
+
+impl Default for RectTransformData {
+    fn default() -> Self {
+        Self {
+            anchored_position: [0.0, 0.0],
+            size_delta: [160.0, 40.0],
+            anchor_min: [0.5, 0.5],
+            anchor_max: [0.5, 0.5],
+            pivot: [0.5, 0.5],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UITextData {
+    pub text: String,
+    pub font_size: f32,
+    pub color: [f32; 4],
+}
+
+impl Default for UITextData {
+    fn default() -> Self {
+        Self {
+            text: "Texto UI".into(),
+            font_size: 18.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UIButtonData {
+    pub interactable: bool,
+    pub target_graphic_color: [f32; 4],
+    pub on_click_action: String,
+}
+
+impl Default for UIButtonData {
+    fn default() -> Self {
+        Self {
+            interactable: true,
+            target_graphic_color: [0.25, 0.55, 0.85, 1.0],
+            on_click_action: "".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityData {
     pub id: u64,
     pub active: bool,
@@ -150,6 +222,10 @@ pub struct EntityData {
     pub audio: Option<AudioSourceData>,
     pub camera: Option<CameraData>,
     pub light: Option<LightData>,
+    pub canvas: Option<CanvasData>,
+    pub rect_transform: Option<RectTransformData>,
+    pub ui_text: Option<UITextData>,
+    pub ui_button: Option<UIButtonData>,
     pub parent: Option<u64>,
     pub children: Vec<u64>,
 }
@@ -200,6 +276,26 @@ impl EntityData {
         } else {
             None
         };
+        let canvas = if components.iter().any(|c| c == "Canvas") {
+            Some(CanvasData::default())
+        } else {
+            None
+        };
+        let rect_transform = if components.iter().any(|c| c == "RectTransform" || c == "Canvas" || c == "Text" || c == "Button") {
+            Some(RectTransformData::default())
+        } else {
+            None
+        };
+        let ui_text = if components.iter().any(|c| c == "Text") {
+            Some(UITextData::default())
+        } else {
+            None
+        };
+        let ui_button = if components.iter().any(|c| c == "Button") {
+            Some(UIButtonData::default())
+        } else {
+            None
+        };
         let tag = if name.contains("Player") {
             "Player".into()
         } else if name.contains("Camera") {
@@ -224,6 +320,10 @@ impl EntityData {
             audio,
             camera,
             light,
+            canvas,
+            rect_transform,
+            ui_text,
+            ui_button,
             parent: None,
             children: Vec::new(),
         }
@@ -548,6 +648,26 @@ impl SceneState {
     pub fn main_light(&self) -> Option<&EntityData> {
         self.entities.iter().find(|e| e.active && e.light.is_some())
     }
+
+    /// Guarda el estado de la escena en un archivo JSON en disco
+    pub fn save_to_json(&self, path: &str) -> std::io::Result<()> {
+        let json = serde_json::to_string_pretty(&self.entities)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, json)
+    }
+
+    /// Carga entidades desde un archivo JSON reemplazando la escena actual
+    pub fn load_from_json(&mut self, path: &str) -> std::io::Result<()> {
+        let json = std::fs::read_to_string(path)?;
+        let entities: Vec<EntityData> = serde_json::from_str(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        self.entities = entities;
+        self.next_entity_id = self.entities.iter().map(|e| e.id).max().unwrap_or(0) + 1;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -687,5 +807,38 @@ mod tests {
 
         // Prevención de ciclo: no se puede insertar un padre dentro de su hijo
         assert!(!scene.insert_relative(p, c1, true));
+    }
+
+    #[test]
+    fn test_scene_serialization_and_canvas_ui() {
+        let mut scene = SceneState::new();
+        let canvas_id = scene.create_entity(
+            "Main Canvas".into(),
+            vec!["Transform".into(), "RectTransform".into(), "Canvas".into()],
+        );
+        let text_id = scene.create_entity(
+            "Score Text".into(),
+            vec!["Transform".into(), "RectTransform".into(), "Text".into()],
+        );
+        scene.reparent(text_id, Some(canvas_id));
+
+        assert!(scene.get_entity(canvas_id).unwrap().canvas.is_some());
+        assert!(scene.get_entity(text_id).unwrap().ui_text.is_some());
+
+        let temp_path = std::env::temp_dir().join("test_scene.json");
+        let temp_str = temp_path.to_str().unwrap();
+
+        assert!(scene.save_to_json(temp_str).is_ok());
+
+        let mut loaded_scene = SceneState::new();
+        assert!(loaded_scene.load_from_json(temp_str).is_ok());
+
+        assert_eq!(loaded_scene.entities.len(), scene.entities.len());
+        let loaded_text = loaded_scene.get_entity(text_id).unwrap();
+        assert_eq!(loaded_text.name, "Score Text");
+        assert!(loaded_text.ui_text.is_some());
+        assert_eq!(loaded_text.parent, Some(canvas_id));
+
+        let _ = std::fs::remove_file(temp_path);
     }
 }

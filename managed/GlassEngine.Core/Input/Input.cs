@@ -32,6 +32,13 @@ public static class Input
         return 0f;
     }
 
+    public static float GetAxis(string axisName)
+    {
+        if (string.Equals(axisName, "Horizontal", StringComparison.OrdinalIgnoreCase)) return GetAxisHorizontal();
+        if (string.Equals(axisName, "Vertical", StringComparison.OrdinalIgnoreCase)) return GetAxisVertical();
+        return 0f;
+    }
+
     public static bool GetButton(string name)
     {
         if (_getInput == null) return false;
@@ -57,6 +64,24 @@ public static class Input
             "space" => data.Jump != 0,
             "shift" => data.Run != 0,
             _ => false,
+        };
+    }
+
+    public static bool GetKey(UnityEngine.KeyCode key)
+    {
+        return key switch
+        {
+            UnityEngine.KeyCode.W => GetKey("w"),
+            UnityEngine.KeyCode.S => GetKey("s"),
+            UnityEngine.KeyCode.A => GetKey("a"),
+            UnityEngine.KeyCode.D => GetKey("d"),
+            UnityEngine.KeyCode.Space => GetKey("space"),
+            UnityEngine.KeyCode.LeftShift => GetKey("shift"),
+            UnityEngine.KeyCode.UpArrow => GetKey("up"),
+            UnityEngine.KeyCode.DownArrow => GetKey("down"),
+            UnityEngine.KeyCode.LeftArrow => GetKey("left"),
+            UnityEngine.KeyCode.RightArrow => GetKey("right"),
+            _ => false
         };
     }
 }

@@ -1,5 +1,8 @@
 use egui::{Color32, DragValue, RichText, Slider, Ui};
-use glass_core::{AudioSourceData, CameraData, LightData, MeshData, PhysicsData, SceneState, ScriptComponentData};
+use glass_core::{
+    AudioSourceData, CameraData, CanvasData, LightData, MeshData, PhysicsData,
+    RectTransformData, SceneState, ScriptComponentData, UIButtonData, UITextData,
+};
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
@@ -406,6 +409,116 @@ impl InspectorPanel {
                 }
 
                 // ==========================================
+                // 6.5. COMPONENTES DE UI (CANVAS, RECTTRANSFORM, TEXT, BUTTON)
+                // ==========================================
+                let mut remove_canvas = false;
+                if let Some(ref mut canvas) = entity.canvas {
+                    ui.collapsing("🖼 Canvas (Sistema UI)", |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Modo de Render:");
+                            egui::ComboBox::from_id_salt(format!("canvas_render_mode_{}", entity.id))
+                                .selected_text(&canvas.render_mode)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut canvas.render_mode, "ScreenSpaceOverlay".into(), "Screen Space - Overlay");
+                                    ui.selectable_value(&mut canvas.render_mode, "ScreenSpaceCamera".into(), "Screen Space - Camera");
+                                    ui.selectable_value(&mut canvas.render_mode, "WorldSpace".into(), "World Space");
+                                });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Resolución Ref:");
+                            ui.add(DragValue::new(&mut canvas.reference_resolution[0]).prefix("W: "));
+                            ui.add(DragValue::new(&mut canvas.reference_resolution[1]).prefix("H: "));
+                        });
+                        if ui.small_button("🗑 Quitar Canvas").clicked() {
+                            remove_canvas = true;
+                        }
+                    });
+                    ui.separator();
+                }
+                if remove_canvas {
+                    entity.canvas = None;
+                    entity.components.retain(|c| c != "Canvas");
+                }
+
+                let mut remove_rect = false;
+                if let Some(ref mut rt) = entity.rect_transform {
+                    ui.collapsing("⊡ RectTransform (Geometría UI 2D)", |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Posición Anclada:");
+                            ui.add(DragValue::new(&mut rt.anchored_position[0]).speed(1.0).prefix("X: "));
+                            ui.add(DragValue::new(&mut rt.anchored_position[1]).speed(1.0).prefix("Y: "));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Tamaño Delta:");
+                            ui.add(DragValue::new(&mut rt.size_delta[0]).speed(1.0).prefix("W: "));
+                            ui.add(DragValue::new(&mut rt.size_delta[1]).speed(1.0).prefix("H: "));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Pivote:");
+                            ui.add(DragValue::new(&mut rt.pivot[0]).speed(0.05).range(0.0..=1.0).prefix("X: "));
+                            ui.add(DragValue::new(&mut rt.pivot[1]).speed(0.05).range(0.0..=1.0).prefix("Y: "));
+                        });
+                        if ui.small_button("🗑 Quitar RectTransform").clicked() {
+                            remove_rect = true;
+                        }
+                    });
+                    ui.separator();
+                }
+                if remove_rect {
+                    entity.rect_transform = None;
+                    entity.components.retain(|c| c != "RectTransform");
+                }
+
+                let mut remove_text = false;
+                if let Some(ref mut txt) = entity.ui_text {
+                    ui.collapsing("🔤 Text (TMP / UI Text)", |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Texto:");
+                            ui.text_edit_singleline(&mut txt.text);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Tamaño:");
+                            ui.add(DragValue::new(&mut txt.font_size).speed(0.5).range(8.0..=120.0).suffix(" px"));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Color:");
+                            ui.color_edit_button_rgba_unmultiplied(&mut txt.color);
+                        });
+                        if ui.small_button("🗑 Quitar Text").clicked() {
+                            remove_text = true;
+                        }
+                    });
+                    ui.separator();
+                }
+                if remove_text {
+                    entity.ui_text = None;
+                    entity.components.retain(|c| c != "Text");
+                }
+
+                let mut remove_btn = false;
+                if let Some(ref mut btn) = entity.ui_button {
+                    ui.collapsing("🔘 Button (Interactable)", |ui| {
+                        ui.checkbox(&mut btn.interactable, "Interactable (Habilitado)");
+                        ui.horizontal(|ui| {
+                            ui.label("Color Botón:");
+                            ui.color_edit_button_rgba_unmultiplied(&mut btn.target_graphic_color);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("On Click Event:");
+                            ui.text_edit_singleline(&mut btn.on_click_action);
+                        });
+                        if ui.small_button("🗑 Quitar Button").clicked() {
+                            remove_btn = true;
+                        }
+                    });
+                    ui.separator();
+                }
+                if remove_btn {
+                    entity.ui_button = None;
+                    entity.components.retain(|c| c != "Button");
+                }
+
+                // ==========================================
                 // 7. BOTÓN "AÑADIR COMPONENTE" ESTILO UNITY
                 // ==========================================
                 ui.add_space(8.0);
@@ -455,6 +568,30 @@ impl InspectorPanel {
                         if entity.light.is_none() && ui.button("☼ Luz (Light)").clicked() {
                             entity.light = Some(LightData::default());
                             entity.components.push("Light".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if entity.canvas.is_none() && ui.button("🖼 Canvas").clicked() {
+                            entity.canvas = Some(CanvasData::default());
+                            entity.components.push("Canvas".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if entity.rect_transform.is_none() && ui.button("⊡ RectTransform").clicked() {
+                            entity.rect_transform = Some(RectTransformData::default());
+                            entity.components.push("RectTransform".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if entity.ui_text.is_none() && ui.button("🔤 Text (TMP)").clicked() {
+                            entity.ui_text = Some(UITextData::default());
+                            entity.components.push("Text".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if entity.ui_button.is_none() && ui.button("🔘 Button").clicked() {
+                            entity.ui_button = Some(UIButtonData::default());
+                            entity.components.push("Button".into());
                             self.show_add_component_menu = false;
                         }
                     });

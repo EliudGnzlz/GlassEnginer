@@ -9,6 +9,7 @@ layout(push_constant) uniform PushConstants {
     mat4 mvp;
     vec4 light_dir;
     vec4 light_color;
+    vec4 material_params;
     vec4 object_color;
 } u_push;
 

@@ -29,6 +29,7 @@ pub enum SampleScenePreset {
     PlatformerDemo,
     PhysicsPlayground,
     AudioLightingShowcase,
+    FullSampleGame,
 }
 
 #[derive(Debug, Clone)]
@@ -196,6 +197,20 @@ impl LauncherPanel {
             Color32::from_rgb(220, 200, 40),
             || {
                 *action = Some(LauncherAction::LoadSampleScene(SampleScenePreset::AudioLightingShowcase));
+            },
+        );
+
+        ui.add_space(14.0);
+
+        // Tarjeta 4: Full Game Showcase (Plataformas, Monedas, Canvas UI, Meta)
+        Self::render_card(
+            ui,
+            "🏆 Complete 3D Game Showcase (Juego Completo)",
+            "Juego 3D completo de inicio a fin: jugador físico Rapier3D, cámara orbital suave, plataformas multi-nivel, gemas/monedas recolectables con audio 3D, HUD Canvas en pantalla (Score & Timer) y meta final.",
+            "▶ Cargar Juego Completo",
+            Color32::from_rgb(140, 230, 80),
+            || {
+                *action = Some(LauncherAction::LoadSampleScene(SampleScenePreset::FullSampleGame));
             },
         );
     }

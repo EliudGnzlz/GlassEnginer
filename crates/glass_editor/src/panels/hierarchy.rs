@@ -17,6 +17,9 @@ pub enum EntityPreset {
     PointLight,
     AudioSource,
     Camera,
+    Canvas,
+    UIText,
+    UIButton,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,6 +170,20 @@ impl HierarchyPanel {
             *pending_action = Some(HierarchyAction::Create(EntityPreset::Camera));
             ui.close();
         }
+        ui.menu_button("🖼 UI", |ui| {
+            if ui.button("🖼 Canvas").clicked() {
+                *pending_action = Some(HierarchyAction::Create(EntityPreset::Canvas));
+                ui.close();
+            }
+            if ui.button("🔤 Texto (TMP / Text)").clicked() {
+                *pending_action = Some(HierarchyAction::Create(EntityPreset::UIText));
+                ui.close();
+            }
+            if ui.button("🔘 Botón (Button)").clicked() {
+                *pending_action = Some(HierarchyAction::Create(EntityPreset::UIButton));
+                ui.close();
+            }
+        });
     }
 
     pub fn render(&mut self, ui: &mut Ui, scene_state: &Arc<Mutex<SceneState>>) {
@@ -717,6 +734,30 @@ impl HierarchyPanel {
                 );
                 if let Some(ent) = scene.get_entity_mut(id) {
                     ent.transform.position = [0.0, 2.0, -5.0];
+                }
+                id
+            }
+            EntityPreset::Canvas => {
+                scene.create_entity(
+                    "Canvas".into(),
+                    vec!["Transform".into(), "RectTransform".into(), "Canvas".into()],
+                )
+            }
+            EntityPreset::UIText => {
+                scene.create_entity(
+                    "Text (TMP)".into(),
+                    vec!["Transform".into(), "RectTransform".into(), "Text".into()],
+                )
+            }
+            EntityPreset::UIButton => {
+                let id = scene.create_entity(
+                    "Button".into(),
+                    vec!["Transform".into(), "RectTransform".into(), "Button".into(), "Text".into()],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    if let Some(txt) = &mut ent.ui_text {
+                        txt.text = "Button".into();
+                    }
                 }
                 id
             }

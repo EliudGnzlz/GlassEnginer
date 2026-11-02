@@ -98,6 +98,8 @@ pub struct ViewportPanel {
     pub editor_cam_pitch: f32,
     pub editor_cam_dist: f32,
     pub editor_cam_center: [f32; 3],
+    // Cámara activa seleccionada para Game View (multi-cámara)
+    pub selected_camera_id: Option<u64>,
     // Eje activo actualmente arrastrado en el Gizmo 3D
     pub active_drag_axis: GizmoAxis,
 }
@@ -122,6 +124,7 @@ impl Default for ViewportPanel {
             editor_cam_pitch: 0.25,
             editor_cam_dist: 10.0,
             editor_cam_center: [3.5, 1.5, 0.0],
+            selected_camera_id: None,
             active_drag_axis: GizmoAxis::None,
         }
     }
@@ -132,11 +135,12 @@ impl ViewportPanel {
         self.play_state == PlayState::Playing
     }
 
-    /// Renderiza la pestaña de Scene View (Edición 3D, Gizmos y Picking en Edit y Play)
+    /// Renderiza la pestaña de Scene View (Edición 3D, Gizmos, PiP Preview y Picking en Edit y Play)
     pub fn render_scene_tab(
         &mut self,
         ui: &mut Ui,
         texture_id: Option<TextureId>,
+        game_texture_id: Option<TextureId>,
         selected_entity_id: &mut Option<u64>,
         scene_state: &Arc<Mutex<SceneState>>,
     ) {
@@ -474,6 +478,44 @@ impl ViewportPanel {
                 egui::FontId::proportional(12.0),
                 hint_color,
             );
+
+            // PiP Preview flotante en la esquina inferior derecha si el GameObject seleccionado tiene Camera (estilo Unity Camera Preview)
+            if let Some(sel_id) = *selected_entity_id {
+                let cam_opt = scene_state.lock().ok().and_then(|s| {
+                    s.entities.iter().find(|e| e.id == sel_id && e.camera.is_some()).cloned()
+                });
+                if let Some(cam_ent) = cam_opt {
+                    let pip_size = vec2(220.0, 130.0);
+                    let pip_pos = rect.right_bottom() - pip_size - vec2(14.0, 48.0);
+                    let pip_rect = egui::Rect::from_min_size(pip_pos, pip_size);
+
+                    painter.rect_filled(pip_rect.expand(2.0), 4.0, Color32::from_black_alpha(220));
+                    painter.rect_stroke(
+                        pip_rect.expand(2.0),
+                        4.0,
+                        egui::Stroke::new(1.5, Color32::from_rgb(80, 210, 255)),
+                        egui::StrokeKind::Outside,
+                    );
+
+                    if let Some(gid) = game_texture_id {
+                        let sized_tex = SizedTexture::new(gid, pip_size);
+                        Image::from_texture(sized_tex).paint_at(ui, pip_rect);
+                    }
+
+                    // Encabezado de la previsualización PiP estilo Unity
+                    let hdr_rect = egui::Rect::from_min_size(pip_rect.left_top(), vec2(pip_size.x, 22.0));
+                    painter.rect_filled(hdr_rect, 3.0, Color32::from_rgba_unmultiplied(20, 25, 35, 230));
+                    let cam_fov = cam_ent.camera.as_ref().map(|c| c.fov).unwrap_or(60.0);
+                    let hdr_text = format!("🎥 Camera Preview: {} ({:.0}°)", cam_ent.name, cam_fov);
+                    painter.text(
+                        hdr_rect.left_top() + vec2(6.0, 3.0),
+                        egui::Align2::LEFT_TOP,
+                        hdr_text,
+                        egui::FontId::proportional(11.0),
+                        Color32::from_rgb(180, 230, 255),
+                    );
+                }
+            }
         });
     }
 
@@ -506,6 +548,28 @@ impl ViewportPanel {
                     }
                 }
             });
+
+            // Selector de Cámara Activa en Game View (soporte de múltiples cámaras)
+            if let Ok(state) = scene_state.lock() {
+                let cameras: Vec<(u64, String)> = state.entities.iter()
+                    .filter(|e| e.active && e.camera.is_some())
+                    .map(|e| (e.id, e.name.clone()))
+                    .collect();
+                if cameras.len() > 1 {
+                    ui.separator();
+                    let current_label = self.selected_camera_id
+                        .and_then(|id| cameras.iter().find(|(cid, _)| *cid == id).map(|(_, n)| format!("🎥 {}", n)))
+                        .unwrap_or_else(|| "🎥 (Principal)".into());
+                    ui.menu_button(current_label, |ui| {
+                        for (cid, cname) in &cameras {
+                            if ui.selectable_label(self.selected_camera_id == Some(*cid), format!("🎥 {}", cname)).clicked() {
+                                self.selected_camera_id = Some(*cid);
+                                ui.close();
+                            }
+                        }
+                    });
+                }
+            }
 
             ui.separator();
 
@@ -555,6 +619,8 @@ impl ViewportPanel {
                     let sized_tex = SizedTexture::new(id, draw_size);
                     Image::from_texture(sized_tex).paint_at(ui, game_rect);
                 }
+                // Renderizar Canvas UI sobre la pantalla de juego (Textos, Botones, etc.)
+                Self::render_in_game_canvas_ui(ui, game_rect, scene_state);
             } else {
                 // Fondo oscuro cuando no hay cámara activa (Estilo Unity)
                 ui.painter().rect_filled(game_rect, 0.0, Color32::from_rgb(20, 20, 26));
@@ -617,8 +683,55 @@ impl ViewportPanel {
         scene_state: &Arc<Mutex<SceneState>>,
     ) {
         match self.active_tab {
-            ViewportTab::SceneView => self.render_scene_tab(ui, texture_id, selected_entity_id, scene_state),
+            ViewportTab::SceneView => self.render_scene_tab(ui, texture_id, None, selected_entity_id, scene_state),
             ViewportTab::GameView => self.render_game_tab(ui, texture_id, scene_state),
+        }
+    }
+
+    /// Renderiza elementos de Canvas UI superpuestos en la vista de juego (Screen Space Overlay)
+    fn render_in_game_canvas_ui(ui: &mut Ui, game_rect: egui::Rect, scene_state: &Arc<Mutex<SceneState>>) {
+        if let Ok(scene) = scene_state.lock() {
+            for ent in &scene.entities {
+                if !ent.active { continue; }
+                if let Some(rt) = &ent.rect_transform {
+                    let anchor_x = game_rect.left() + game_rect.width() * rt.anchor_min[0];
+                    let anchor_y = game_rect.top() + game_rect.height() * (1.0 - rt.anchor_min[1]);
+                    let pos_x = anchor_x + rt.anchored_position[0] - rt.size_delta[0] * rt.pivot[0];
+                    let pos_y = anchor_y - rt.anchored_position[1] - rt.size_delta[1] * (1.0 - rt.pivot[1]);
+                    let elem_rect = egui::Rect::from_min_size(
+                        egui::pos2(pos_x, pos_y),
+                        egui::vec2(rt.size_delta[0].max(10.0), rt.size_delta[1].max(10.0)),
+                    );
+
+                    if let Some(btn) = &ent.ui_button {
+                        let col = Color32::from_rgba_unmultiplied(
+                            (btn.target_graphic_color[0] * 255.0) as u8,
+                            (btn.target_graphic_color[1] * 255.0) as u8,
+                            (btn.target_graphic_color[2] * 255.0) as u8,
+                            (btn.target_graphic_color[3] * 255.0) as u8,
+                        );
+                        let label = ent.ui_text.as_ref().map(|t| t.text.as_str()).unwrap_or("Button");
+                        let b = egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(col);
+                        if ui.put(elem_rect, b).clicked() {
+                            log::info!("[Canvas UI] Botón '{}' clickeado en GameView!", ent.name);
+                        }
+                    } else if let Some(txt) = &ent.ui_text {
+                        let col = Color32::from_rgba_unmultiplied(
+                            (txt.color[0] * 255.0) as u8,
+                            (txt.color[1] * 255.0) as u8,
+                            (txt.color[2] * 255.0) as u8,
+                            (txt.color[3] * 255.0) as u8,
+                        );
+                        ui.painter().text(
+                            elem_rect.min,
+                            egui::Align2::LEFT_TOP,
+                            &txt.text,
+                            egui::FontId::proportional(txt.font_size.max(10.0)),
+                            col,
+                        );
+                    }
+                }
+            }
         }
     }
 }
