@@ -405,11 +405,41 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
     * **DeepSeek 4.1 Flash:** Validó el cálculo de aristas con matriz TRS, el escalado de pan dependiente de la distancia al target, el clamp de pitch y el redimensionamiento del Swapchain asegurando viewport y scissor equivalentes.
     * **Kimi K3:** Aprobó la formulación matemática de `obb_corners`, el pan proporcional a `dist * 0.0015` en el plano de la cámara, y el ajuste de `pixels_per_point` y `screen_rect` para egui.
 
+### Hito 17: Rotación 3D en GPU/Gizmo, Picking de Superficies, Menú de Creación Unity y Swapchain Opaque Seguro
+* **Fecha:** 2026-11-01
+* **Acciones:**
+  * **Rotación 3D en Shaders y GPU (`main.rs`):**
+    * Se corrigió la función de matriz de modelo TRS para soportar rotaciones de Euler tridimensionales completas (`model_matrix_trs_euler` con rotación combinada $R_z \cdot R_y \cdot R_x$).
+    * Las entidades ahora rotan visualmente en tiempo real en la pasada de renderizado de Vulkan tanto al editar los ángulos en el Inspector como al utilizar el Gizmo 3D.
+  * **Hit-Testing Circular en Gizmo de Rotación (`gizmo_3d.rs`):**
+    * Se añadieron radios de hit-testing circulares para los anillos de rotación (anillo X ~38px, anillo Y ~45px, anillo Z ~52px) en el modo `GizmoMode::Rotate` (`[E]`).
+    * Al pasar el ratón cerca de los anillos, se resaltan en amarillo brillante (`#FFFF00`) y permiten rotar de forma continua con arrastre de clic izquierdo.
+  * **Picking de Superficies Amplias y Suelos (`pick_entity_at_screen` en `gizmo_3d.rs`):**
+    * Se rediseñó el algoritmo de selección en pantalla: proyecta los 8 vértices del Bounding Box del objeto al espacio de pantalla de egui y calcula su rectángulo envolvente 2D.
+    * Si el clic del ratón cae dentro de la proyección 2D del objeto, se evalúa la distancia de profundidad a la cámara (`depth_sq`), seleccionando el objeto visible más cercano al usuario.
+    * Esto permite seleccionar con un simple clic tanto suelos estáticos gigantes (`30x1x30`) como pequeños objetos sobre él.
+  * **Swapchain Vulkan Seguro y Libre de Transparencias (`swapchain.rs`, `renderer.rs`, `main.rs`):**
+    * Se eliminó el bucle de redimensionamiento descontrolado por frame en `render_frame()` que provocaba hasta 35 recreaciones por segundo del Swapchain, congelando el servidor X11.
+    * Se implementó el traspaso seguro de `old_swapchain: Option<vk::SwapchainKHR>`, respetando `capabilities.current_extent` según el estándar de Vulkan.
+    * Se forzó `composite_alpha = vk::CompositeAlphaFlagsKHR::OPAQUE` (priorizado sobre flags transparentes) para evitar que la ventana se torne transparente al redimensionarse.
+  * **Menú de Creación de GameObjects Estilo Unity (`hierarchy.rs`):**
+    * Se reemplazó el botón simple por un menú desplegable completo `➕ Crear ▾` y menú contextual de clic derecho:
+      * `📦 Crear Vacío (Create Empty)`: Instancia un GameObject básico con Transform.
+      * `🧊 Objeto 3D`: Presets listos para Cubo (`Cube`), Esfera (`Sphere`), Cápsula (`Capsule`), Cilindro (`Cylinder`) y Plano (`Plane`) con componentes de Malla, Físicas y Colisionadores.
+      * `💡 Luces`: Luz Direccional y Luz Puntual con orientaciones y posiciones preconfiguradas.
+      * `🔊 Audio`: Audio Source.
+      * `🎥 Cámara`: Cámara con offset predeterminado.
+      * `📋 Duplicar`: Clona completamente cualquier objeto existente con desplazamiento visible.
+      * Barra de búsqueda rápida `🔍` integrada en la Jerarquía.
+  * **Auditoría Técnica Externa Multi-IA (Mirai MCP - DeepSeek 4.1 Flash & Kimi K3):**
+    * **DeepSeek 4.1 Flash:** Certificó la matriz TRS de Euler ($R_z \cdot R_y \cdot R_x$), la eliminación del thrashing de swapchain en el bucle principal y el algoritmo de ray-box picking.
+    * **Kimi K3:** Validó la bandera `OPAQUE` para prevenir ventanas translúcidas en el compositor X11/XWayland, el hit-testing circular de anillos y el diseño desacoplado del menú contextual de egui.
+
 ---
 
-## Certificación Final de Arquitectura: GlassEngine 1.6
+## Certificación Final de Arquitectura: GlassEngine 1.7
 
-Los 16 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
+Los 17 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
 
 1. **Hito 1 — Workspace Cargo & Contratos Base:** 100% Verificado.
 2. **Hito 2 — Contexto Vulkan Multi-GPU Universal (NVIDIA, AMD, Intel, Integradas y Dedicadas):** 100% Verificado.
@@ -427,3 +457,4 @@ Los 16 hitos arquitectónicos, de edición y de gameplay del motor han sido comp
 14. **Hito 14 — Raycasting 3D Picking en Viewport & Transform Gizmo 3D Unity:** 100% Verificado.
 15. **Hito 15 — Bounding Box 3D de Selección & Navegación Libre con Clic Izquierdo:** 100% Verificado.
 16. **Hito 16 — Bounding Box Adaptativo, Pan Directo con Mano [Q] & Ventana Responsiva:** 100% Verificado.
+17. **Hito 17 — Rotación 3D en GPU/Gizmo, Picking de Superficies, Menú de Creación Unity y Swapchain Opaque Seguro:** 100% Verificado.

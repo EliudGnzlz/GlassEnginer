@@ -129,6 +129,7 @@ impl GlassRenderer {
             context.physical_device,
             width,
             height,
+            None,
         )?;
 
         // 3. Crear RenderPass y Framebuffers para Swapchain
@@ -207,6 +208,7 @@ impl GlassRenderer {
                 self.device.destroy_framebuffer(fb, None);
             }
         }
+        let old_swapchain = self.swapchain.swapchain;
         self.swapchain = SwapchainContext::new(
             &context.instance,
             self.device.clone(),
@@ -215,6 +217,7 @@ impl GlassRenderer {
             context.physical_device,
             width,
             height,
+            Some(old_swapchain),
         )?;
         self.swapchain_framebuffers = create_swapchain_framebuffers(
             &self.device,

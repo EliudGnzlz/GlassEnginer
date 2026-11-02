@@ -79,14 +79,32 @@ fn model_matrix(pos: [f32; 3], rot_y: f32) -> [f32; 16] {
     ]
 }
 
-fn model_matrix_trs(pos: [f32; 3], scale: [f32; 3], rot_y: f32) -> [f32; 16] {
-    let cos = rot_y.cos();
-    let sin = rot_y.sin();
+fn model_matrix_trs_euler(pos: [f32; 3], scale: [f32; 3], rot_deg: [f32; 3]) -> [f32; 16] {
+    let rx = rot_deg[0].to_radians();
+    let ry = rot_deg[1].to_radians();
+    let rz = rot_deg[2].to_radians();
+
+    let (sx, cx) = (rx.sin(), rx.cos());
+    let (sy, cy) = (ry.sin(), ry.cos());
+    let (sz, cz) = (rz.sin(), rz.cos());
+
+    let r00 = cy * cz;
+    let r01 = sx * sy * cz - cx * sz;
+    let r02 = cx * sy * cz + sx * sz;
+
+    let r10 = cy * sz;
+    let r11 = sx * sy * sz + cx * cz;
+    let r12 = cx * sy * sz - sx * cz;
+
+    let r20 = -sy;
+    let r21 = sx * cy;
+    let r22 = cx * cy;
+
     [
-        cos * scale[0], 0.0, -sin * scale[0], 0.0,
-        0.0, scale[1], 0.0, 0.0,
-        sin * scale[2], 0.0, cos * scale[2], 0.0,
-        pos[0], pos[1], pos[2], 1.0,
+        r00 * scale[0], r10 * scale[0], r20 * scale[0], 0.0,
+        r01 * scale[1], r11 * scale[1], r21 * scale[1], 0.0,
+        r02 * scale[2], r12 * scale[2], r22 * scale[2], 0.0,
+        pos[0],         pos[1],         pos[2],         1.0,
     ]
 }
 
@@ -448,16 +466,6 @@ impl GlassEngineApp {
             _ => return Ok(()),
         };
 
-        // Redimensionamiento responsivo inmediato del Swapchain si la ventana cambió de tamaño
-        let win_size = window.inner.inner_size();
-        if win_size.width > 0
-            && win_size.height > 0
-            && (win_size.width != renderer.swapchain.extent.width
-                || win_size.height != renderer.swapchain.extent.height)
-        {
-            let _ = renderer.resize(vk_ctx, win_size.width, win_size.height);
-        }
-
         // 0. Sincronizar estado de inputs (teclado W, A, S, D, Flechas, Espacio)
         let mut move_x = 0.0_f32;
         let mut move_z = 0.0_f32;
@@ -608,7 +616,7 @@ impl GlassEngineApp {
                             ent.transform.scale[1] * 0.5,
                             ent.transform.scale[2] * 0.5,
                         ];
-                        let model = model_matrix_trs(pos, scale, 0.0);
+                        let model = model_matrix_trs_euler(pos, scale, ent.transform.rotation);
                         let mvp = matmul(&vp, &model);
                         mesh_batches.push((cube_mesh, mvp));
                     }

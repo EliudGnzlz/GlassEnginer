@@ -162,19 +162,42 @@ pub fn render_3d_transform_gizmo(
         if active_drag_axis != GizmoAxis::None {
             hovered_axis = active_drag_axis;
         } else {
-            let dist_center = (mouse - center_2d).length();
-            let dist_x = point_to_segment_distance(mouse, center_2d, tip_x);
-            let dist_y = point_to_segment_distance(mouse, center_2d, tip_y);
-            let dist_z = point_to_segment_distance(mouse, center_2d, tip_z);
+            match mode {
+                crate::panels::viewport::GizmoMode::Rotate => {
+                    let dist = (mouse - center_2d).length();
+                    // Anillo X (radio ~38px), Anillo Y (radio ~45px), Anillo Z (radio ~52px)
+                    if (dist - 38.0).abs() < 5.0 {
+                        hovered_axis = GizmoAxis::X;
+                    } else if (dist - 45.0).abs() < 5.0 {
+                        hovered_axis = GizmoAxis::Y;
+                    } else if (dist - 52.0).abs() < 5.0 {
+                        hovered_axis = GizmoAxis::Z;
+                    } else if dist >= 32.0 && dist <= 58.0 {
+                        if dist < 41.5 {
+                            hovered_axis = GizmoAxis::X;
+                        } else if dist < 48.5 {
+                            hovered_axis = GizmoAxis::Y;
+                        } else {
+                            hovered_axis = GizmoAxis::Z;
+                        }
+                    }
+                }
+                _ => {
+                    let dist_center = (mouse - center_2d).length();
+                    let dist_x = point_to_segment_distance(mouse, center_2d, tip_x);
+                    let dist_y = point_to_segment_distance(mouse, center_2d, tip_y);
+                    let dist_z = point_to_segment_distance(mouse, center_2d, tip_z);
 
-            if dist_center < 10.0 {
-                hovered_axis = GizmoAxis::Center;
-            } else if dist_x < 12.0 && dist_x <= dist_y && dist_x <= dist_z {
-                hovered_axis = GizmoAxis::X;
-            } else if dist_y < 12.0 && dist_y <= dist_x && dist_y <= dist_z {
-                hovered_axis = GizmoAxis::Y;
-            } else if dist_z < 12.0 {
-                hovered_axis = GizmoAxis::Z;
+                    if dist_center < 10.0 {
+                        hovered_axis = GizmoAxis::Center;
+                    } else if dist_x < 12.0 && dist_x <= dist_y && dist_x <= dist_z {
+                        hovered_axis = GizmoAxis::X;
+                    } else if dist_y < 12.0 && dist_y <= dist_x && dist_y <= dist_z {
+                        hovered_axis = GizmoAxis::Y;
+                    } else if dist_z < 12.0 {
+                        hovered_axis = GizmoAxis::Z;
+                    }
+                }
             }
         }
     }
@@ -218,11 +241,26 @@ pub fn render_3d_transform_gizmo(
             let is_y = hovered_axis == GizmoAxis::Y;
             let is_z = hovered_axis == GizmoAxis::Z;
 
-            painter.circle_stroke(center_2d, r, Stroke::new(if is_y { 3.5 } else { 2.0 }, if is_y { col_yellow } else { col_green }));
-            painter.circle_stroke(center_2d, r * 0.85, Stroke::new(if is_x { 3.5 } else { 2.0 }, if is_x { col_yellow } else { col_red }));
-            painter.circle_stroke(center_2d, r * 1.15, Stroke::new(if is_z { 3.5 } else { 2.0 }, if is_z { col_yellow } else { col_blue }));
+            // Anillo X (Rojo / Amarillo al hover)
+            painter.circle_stroke(center_2d, r * 0.85, Stroke::new(if is_x { 4.0 } else { 2.0 }, if is_x { col_yellow } else { col_red }));
+            // Anillo Y (Verde / Amarillo al hover)
+            painter.circle_stroke(center_2d, r, Stroke::new(if is_y { 4.0 } else { 2.0 }, if is_y { col_yellow } else { col_green }));
+            // Anillo Z (Azul / Amarillo al hover)
+            painter.circle_stroke(center_2d, r * 1.15, Stroke::new(if is_z { 4.0 } else { 2.0 }, if is_z { col_yellow } else { col_blue }));
 
-            painter.text(center_2d + vec2(r + 6.0, 0.0), egui::Align2::LEFT_CENTER, "⟳ Rotar", egui::FontId::proportional(11.0), col_yellow);
+            let label = match hovered_axis {
+                GizmoAxis::X => "⟳ Rotar X (Pitch)",
+                GizmoAxis::Y => "⟳ Rotar Y (Yaw)",
+                GizmoAxis::Z => "⟳ Rotar Z (Roll)",
+                _ => "⟳ Rotar [E]",
+            };
+            painter.text(
+                center_2d + vec2(r * 1.15 + 8.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                label,
+                egui::FontId::proportional(12.0),
+                if hovered_axis != GizmoAxis::None { col_yellow } else { Color32::from_rgb(220, 220, 230) },
+            );
         }
 
         GizmoMode::Scale => {
@@ -266,27 +304,80 @@ pub fn pick_entity_at_screen(
             continue;
         }
 
-        if let Some(center_2d) = world_to_screen(ent.transform.position, vp, rect) {
-            let dist_2d = (click_pos - center_2d).length();
+        let pos = ent.transform.position;
+        let rot = ent.transform.rotation;
+        let scale = ent.transform.scale;
 
-            // Calcular distancia 3D a la cámara
-            let dx = ent.transform.position[0] - cam_pos[0];
-            let dy = ent.transform.position[1] - cam_pos[1];
-            let dz = ent.transform.position[2] - cam_pos[2];
-            let dist_cam = (dx * dx + dy * dy + dz * dz).sqrt().max(0.1);
+        // Distancia euclídea del centro a la cámara
+        let dx = pos[0] - cam_pos[0];
+        let dy = pos[1] - cam_pos[1];
+        let dz = pos[2] - cam_pos[2];
+        let dist_cam = (dx * dx + dy * dy + dz * dz).sqrt().max(0.1);
 
-            // Radio de clic en pantalla proporcional a la escala del objeto y distancia
-            let max_scale = ent.transform.scale[0]
-                .max(ent.transform.scale[1])
-                .max(ent.transform.scale[2]);
-            let hit_radius = (max_scale * 55.0 / (dist_cam * 0.08)).clamp(18.0, 90.0);
+        // Medias extensiones para el Bounding Box de picking
+        let hx = (scale[0].abs() * 0.5).max(0.2);
+        let hy = (scale[1].abs() * 0.5).max(0.2);
+        let hz = (scale[2].abs() * 0.5).max(0.2);
 
-            if dist_2d <= hit_radius {
-                if dist_cam < min_dist_to_cam {
-                    min_dist_to_cam = dist_cam;
-                    best_id = Some(ent.id);
-                }
+        let corners_local = [
+            [-hx, -hy, -hz],
+            [ hx, -hy, -hz],
+            [ hx,  hy, -hz],
+            [-hx,  hy, -hz],
+            [-hx, -hy,  hz],
+            [ hx, -hy,  hz],
+            [ hx,  hy,  hz],
+            [-hx,  hy,  hz],
+        ];
+
+        let rx = rot[0].to_radians();
+        let ry = rot[1].to_radians();
+        let rz = rot[2].to_radians();
+
+        let (sx, cx) = (rx.sin(), rx.cos());
+        let (sy, cy) = (ry.sin(), ry.cos());
+        let (sz, cz) = (rz.sin(), rz.cos());
+
+        let mut min_sx = f32::MAX;
+        let mut max_sx = f32::MIN;
+        let mut min_sy = f32::MAX;
+        let mut max_sy = f32::MIN;
+        let mut valid_corners = 0;
+
+        for c in &corners_local {
+            let (x, y, z) = (c[0], c[1], c[2]);
+            let y1 = y * cx - z * sx;
+            let z1 = y * sx + z * cx;
+            let x2 = x * cy + z1 * sy;
+            let z2 = -x * sy + z1 * cy;
+            let x3 = x2 * cz - y1 * sz;
+            let y3 = x2 * sz + y1 * cz;
+
+            let wpos = [pos[0] + x3, pos[1] + y3, pos[2] + z2];
+            if let Some(spt) = world_to_screen(wpos, vp, rect) {
+                valid_corners += 1;
+                min_sx = min_sx.min(spt.x);
+                max_sx = max_sx.max(spt.x);
+                min_sy = min_sy.min(spt.y);
+                max_sy = max_sy.max(spt.y);
             }
+        }
+
+        let pad = 6.0_f32;
+        let is_hit = if valid_corners >= 2 {
+            click_pos.x >= (min_sx - pad)
+                && click_pos.x <= (max_sx + pad)
+                && click_pos.y >= (min_sy - pad)
+                && click_pos.y <= (max_sy + pad)
+        } else if let Some(center_2d) = world_to_screen(pos, vp, rect) {
+            (click_pos - center_2d).length() <= 35.0
+        } else {
+            false
+        };
+
+        if is_hit && dist_cam < min_dist_to_cam {
+            min_dist_to_cam = dist_cam;
+            best_id = Some(ent.id);
         }
     }
 

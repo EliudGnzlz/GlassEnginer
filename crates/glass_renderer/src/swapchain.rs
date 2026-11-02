@@ -29,21 +29,27 @@ impl SwapchainContext {
         physical_device: vk::PhysicalDevice,
         width: u32,
         height: u32,
+        old_swapchain: Option<vk::SwapchainKHR>,
     ) -> Result<Self, SwapchainError> {
         let capabilities = unsafe {
             surface_loader.get_physical_device_surface_capabilities(physical_device, surface)?
         };
 
-        // 1. Elegir Extent (adaptación responsiva estricta al tamaño de la ventana)
-        let extent = vk::Extent2D {
-            width: width.clamp(
-                capabilities.min_image_extent.width,
-                capabilities.max_image_extent.width,
-            ),
-            height: height.clamp(
-                capabilities.min_image_extent.height,
-                capabilities.max_image_extent.height,
-            ),
+        // 1. Elegir Extent: según la especificación Vulkan, si capabilities.current_extent.width != u32::MAX,
+        // imageExtent DEBE coincidir con current_extent de la superficie nativa del sistema.
+        let extent = if capabilities.current_extent.width != u32::MAX && capabilities.current_extent.width > 0 {
+            capabilities.current_extent
+        } else {
+            vk::Extent2D {
+                width: width.clamp(
+                    capabilities.min_image_extent.width,
+                    capabilities.max_image_extent.width,
+                ),
+                height: height.clamp(
+                    capabilities.min_image_extent.height,
+                    capabilities.max_image_extent.height,
+                ),
+            }
         };
 
         // 2. Elegir Formato
@@ -75,9 +81,24 @@ impl SwapchainContext {
             image_count = capabilities.max_image_count;
         }
 
+        // Composite Alpha: evitar problemas de ventana transparente seleccionando OPAQUE si está soportado
+        let composite_alpha = if capabilities
+            .supported_composite_alpha
+            .contains(vk::CompositeAlphaFlagsKHR::OPAQUE)
+        {
+            vk::CompositeAlphaFlagsKHR::OPAQUE
+        } else if capabilities
+            .supported_composite_alpha
+            .contains(vk::CompositeAlphaFlagsKHR::INHERIT)
+        {
+            vk::CompositeAlphaFlagsKHR::INHERIT
+        } else {
+            vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED
+        };
+
         let swapchain_loader = ash::khr::swapchain::Device::new(instance, &device);
 
-        let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
+        let mut swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
             .surface(surface)
             .min_image_count(image_count)
             .image_format(surface_format.format)
@@ -87,9 +108,13 @@ impl SwapchainContext {
             .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST)
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .pre_transform(capabilities.current_transform)
-            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+            .composite_alpha(composite_alpha)
             .present_mode(present_mode)
             .clipped(true);
+
+        if let Some(old) = old_swapchain {
+            swapchain_create_info = swapchain_create_info.old_swapchain(old);
+        }
 
         log::info!(
             "Creando Swapchain: {}x{} | Formato: {:?} | Modo: {:?}",
