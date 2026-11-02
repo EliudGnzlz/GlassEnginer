@@ -18,3 +18,4 @@ egui-winit.workspace = true
 egui-ash-renderer.workspace = true
 log.workspace = true
 serde.workspace = true
+egui_dock = "0.21.1"

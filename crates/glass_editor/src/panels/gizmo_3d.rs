@@ -282,6 +282,31 @@ pub fn render_3d_transform_gizmo(
             painter.rect_filled(Rect::from_center_size(center_2d, vec2(8.0, 8.0)), 1.0, c_center);
         }
 
+        GizmoMode::Rect => {
+            let is_x = hovered_axis == GizmoAxis::X;
+            let is_y = hovered_axis == GizmoAxis::Y;
+            let c_x = if is_x { col_yellow } else { col_red };
+            let c_y = if is_y { col_yellow } else { col_green };
+            draw_arrow(painter, center_2d, tip_x, c_x, if is_x { 3.5 } else { 2.0 });
+            draw_arrow(painter, center_2d, tip_y, c_y, if is_y { 3.5 } else { 2.0 });
+            let rect_box = Rect::from_min_max(center_2d, tip_x + (tip_y - center_2d));
+            painter.rect_stroke(rect_box, 1.0, Stroke::new(1.0, Color32::from_rgb(200, 200, 255)), egui::StrokeKind::Outside);
+        }
+
+        GizmoMode::Transform => {
+            let is_x = hovered_axis == GizmoAxis::X;
+            let is_y = hovered_axis == GizmoAxis::Y;
+            let is_z = hovered_axis == GizmoAxis::Z;
+            let c_x = if is_x { col_yellow } else { col_red };
+            let c_y = if is_y { col_yellow } else { col_green };
+            let c_z = if is_z { col_yellow } else { col_blue };
+
+            draw_arrow(painter, center_2d, tip_x, c_x, if is_x { 4.0 } else { 2.5 });
+            draw_arrow(painter, center_2d, tip_y, c_y, if is_y { 4.0 } else { 2.5 });
+            draw_arrow(painter, center_2d, tip_z, c_z, if is_z { 4.0 } else { 2.5 });
+            painter.circle_stroke(center_2d, 35.0, Stroke::new(1.5, Color32::from_rgb(255, 255, 100)));
+        }
+
         GizmoMode::View => {}
     }
 

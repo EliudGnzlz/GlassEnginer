@@ -11,6 +11,20 @@ pub enum GizmoMode {
     Translate, // [W] Mover traslación (La cruz de Unity)
     Rotate,    // [E] Rotar (Anillos de rotación de Unity)
     Scale,     // [R] Escalar (Ejes con cubos de Unity)
+    Rect,      // [T] Rect Tool
+    Transform, // [Y] Universal Transform Tool
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PivotMode {
+    Pivot,
+    Center,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoordSpace {
+    Global,
+    Local,
 }
 
 /// Estado formal de ejecución del editor (Unity-style Play/Pause/Stop)
@@ -33,6 +47,8 @@ pub struct ViewportPanel {
     pub height: f32,
     pub play_state: PlayState,
     pub gizmo_mode: GizmoMode,
+    pub pivot_mode: PivotMode,
+    pub coord_space: CoordSpace,
     pub active_tab: ViewportTab,
     pub request_reset_to_spawn: bool,
     // Cámara de editor
@@ -51,6 +67,8 @@ impl Default for ViewportPanel {
             height: 720.0,
             play_state: PlayState::Edit,
             gizmo_mode: GizmoMode::Translate,
+            pivot_mode: PivotMode::Pivot,
+            coord_space: CoordSpace::Global,
             active_tab: ViewportTab::SceneView,
             request_reset_to_spawn: false,
             editor_cam_yaw: 0.0,
@@ -74,7 +92,7 @@ impl ViewportPanel {
         selected_entity_id: &mut Option<u64>,
         scene_state: &Arc<Mutex<SceneState>>,
     ) {
-        // --- 0. Captura de Atajos Q, W, E, R estilo Unity (solo en SceneView y Edit) ---
+        // --- 0. Captura de Atajos Q, W, E, R, T, Y estilo Unity ---
         if self.active_tab == ViewportTab::SceneView && self.play_state == PlayState::Edit {
             if !ui.memory(|m| m.focused().is_some()) {
                 ui.input(|i| {
@@ -89,6 +107,12 @@ impl ViewportPanel {
                     }
                     if i.key_pressed(egui::Key::R) {
                         self.gizmo_mode = GizmoMode::Scale;
+                    }
+                    if i.key_pressed(egui::Key::T) {
+                        self.gizmo_mode = GizmoMode::Rect;
+                    }
+                    if i.key_pressed(egui::Key::Y) {
+                        self.gizmo_mode = GizmoMode::Transform;
                     }
                 });
             }
@@ -113,7 +137,6 @@ impl ViewportPanel {
             let is_paused = self.play_state == PlayState::Paused;
             let is_edit = self.play_state == PlayState::Edit;
 
-            // Botón PLAY
             let play_text = if is_playing {
                 RichText::new("▶ JUGANDO").color(Color32::from_rgb(20, 240, 100)).strong()
             } else {
@@ -124,7 +147,6 @@ impl ViewportPanel {
                 self.active_tab = ViewportTab::GameView;
             }
 
-            // Botón PAUSE
             let pause_text = if is_paused {
                 RichText::new("⏸ PAUSADO").color(Color32::from_rgb(255, 200, 40)).strong()
             } else {
@@ -138,7 +160,6 @@ impl ViewportPanel {
                 }
             }
 
-            // Botón STOP
             let stop_text = if is_edit {
                 RichText::new("⏹ Detenido").color(Color32::GRAY)
             } else {
@@ -151,14 +172,30 @@ impl ViewportPanel {
 
             ui.separator();
 
-            // --- 3. Herramientas contextuales según la pestaña activa ---
+            // --- 3. Herramientas contextuales en iconos estilo Unity ---
             match self.active_tab {
                 ViewportTab::SceneView => {
-                    ui.label("Herramientas:");
-                    ui.selectable_value(&mut self.gizmo_mode, GizmoMode::View, "✋ [Q] Mano");
-                    ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Translate, "✛ [W] Mover");
-                    ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Rotate, "⟳ [E] Rotar");
-                    ui.selectable_value(&mut self.gizmo_mode, GizmoMode::Scale, "⤢ [R] Escalar");
+                    let btn_size = vec2(28.0, 22.0);
+                    let mut tool_btn = |ui: &mut Ui, mode: GizmoMode, icon: &str, tip: &str| {
+                        let selected = self.gizmo_mode == mode;
+                        let resp = ui.add_sized(
+                            btn_size,
+                            egui::Button::new(RichText::new(icon).size(14.0)).selected(selected),
+                        );
+                        if resp.clicked() {
+                            self.gizmo_mode = mode;
+                        }
+                        resp.on_hover_text(tip);
+                    };
+
+                    tool_btn(ui, GizmoMode::View, "✋", "Herramienta Mano [Q] - Pan de cámara");
+                    tool_btn(ui, GizmoMode::Translate, "✥", "Herramienta Mover [W] - Trasladar");
+                    tool_btn(ui, GizmoMode::Rotate, "🔄", "Herramienta Rotar [E] - Rotar");
+                    tool_btn(ui, GizmoMode::Scale, "⤢", "Herramienta Escalar [R] - Escalar");
+                    tool_btn(ui, GizmoMode::Rect, "⊡", "Herramienta Rect [T] - Rectángulo 2D/UI");
+                    tool_btn(ui, GizmoMode::Transform, "✦", "Herramienta Transform [Y] - Universal");
+
+                    ui.separator();
 
                     if ui.button("⌖ Centrar Vista").clicked() {
                         self.editor_cam_center = [3.5, 1.5, 0.0];
@@ -218,35 +255,35 @@ impl ViewportPanel {
 
             // Dibujar la textura Vulkan offscreen adaptada al 100% del área del Viewport
             if let Some(id) = texture_id {
-                let sized = SizedTexture::new(id, vec2(self.width, self.height));
-                Image::new(sized).paint_at(ui, rect);
+                let sized_tex = SizedTexture::new(id, vec2(self.width, self.height));
+                Image::from_texture(sized_tex).paint_at(ui, rect);
             }
 
-            let painter = ui.painter_at(rect);
+            let painter = ui.painter();
 
-            // ==============================================================
-            // DIBUJAR LÍNEA DE SELECCIÓN / CAJA DELIMITADORA 3D ESTILO UNITY
-            // ==============================================================
+            // En modo Edición y Scene View: Dibujar Bounding Box 3D del objeto seleccionado
             if self.active_tab == ViewportTab::SceneView && self.play_state == PlayState::Edit {
                 if let Some(target_id) = *selected_entity_id {
-                    if let Ok(scene) = scene_state.lock() {
-                        if let Some(ent) = scene.entities.iter().find(|e| e.id == target_id) {
-                            gizmo_3d::draw_selection_bounding_box(&painter, ent, &view_proj, rect);
+                    if let Ok(state) = scene_state.lock() {
+                        if let Some(ent) = state.entities.iter().find(|e| e.id == target_id) {
+                            gizmo_3d::draw_selection_bounding_box(
+                                painter,
+                                ent,
+                                &view_proj,
+                                rect,
+                            );
                         }
                     }
                 }
             }
 
-            // ==========================================
-            // DIBUJAR GIZMO 3D ESTILO UNITY (LA CRUZ 3D)
-            // ==========================================
+            // En modo Edición y Scene View: Dibujar Gizmo 3D interactivo si hay un objeto seleccionado
             let mut hovered_gizmo_axis = GizmoAxis::None;
-
             if self.active_tab == ViewportTab::SceneView && self.play_state == PlayState::Edit && self.gizmo_mode != GizmoMode::View {
-                if let Some(pos_3d) = selected_pos {
+                if let Some(pos) = selected_pos {
                     hovered_gizmo_axis = gizmo_3d::render_3d_transform_gizmo(
-                        &painter,
-                        pos_3d,
+                        painter,
+                        pos,
                         &view_proj,
                         rect,
                         mouse_pos,
@@ -256,246 +293,201 @@ impl ViewportPanel {
                 }
             }
 
-            // Actualizar icono del cursor según herramienta y estado
-            if response.hovered() && self.active_tab == ViewportTab::SceneView && self.play_state == PlayState::Edit {
+            // Gestión reactiva del cursor del ratón según la herramienta activa
+            if response.hovered() {
                 if self.gizmo_mode == GizmoMode::View {
-                    if response.dragged() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    ui.ctx().set_cursor_icon(if response.dragged() {
+                        egui::CursorIcon::Grabbing
                     } else {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-                    }
+                        egui::CursorIcon::Grab
+                    });
                 } else if hovered_gizmo_axis != GizmoAxis::None || self.active_drag_axis != GizmoAxis::None {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
             }
 
-            // ==========================================
-            // GESTIÓN DE EVENTOS DE RATÓN Y SELECCIÓN 3D
-            // ==========================================
-            if self.active_tab == ViewportTab::SceneView {
-                // 1. Zoom fluido con la rueda del ratón
-                if response.hovered() {
-                    let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
-                    if scroll_delta.abs() > 0.0 {
-                        self.editor_cam_dist = (self.editor_cam_dist - scroll_delta * 0.01).clamp(2.0, 50.0);
-                        ui.ctx().request_repaint();
-                    }
-                }
-
-                // Factor de velocidad para paneo libre dependiente de la distancia
-                let pan_speed = (self.editor_cam_dist * 0.0015).clamp(0.003, 0.08);
-
-                // 2. Paneo con botón central del ratón
-                if response.dragged_by(egui::PointerButton::Middle) {
-                    let delta = response.drag_delta();
-                    self.editor_cam_center[0] -= (cam_right[0] * delta.x - cam_up[0] * delta.y) * pan_speed;
-                    self.editor_cam_center[1] -= (cam_right[1] * delta.x - cam_up[1] * delta.y) * pan_speed;
-                    self.editor_cam_center[2] -= (cam_right[2] * delta.x - cam_up[2] * delta.y) * pan_speed;
+            // Zoom con rueda del ratón en Scene View
+            if response.hovered() && self.active_tab == ViewportTab::SceneView {
+                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                if scroll.abs() > 0.0 {
+                    self.editor_cam_dist = (self.editor_cam_dist - scroll * 0.05).clamp(2.0, 50.0);
                     ui.ctx().request_repaint();
                 }
+            }
 
-                // 3. Órbita / Navegación con botón secundario (derecho)
-                if response.dragged_by(egui::PointerButton::Secondary) {
-                    let delta = response.drag_delta();
-                    self.editor_cam_yaw += delta.x * 0.005;
-                    self.editor_cam_pitch = (self.editor_cam_pitch + delta.y * 0.005).clamp(-1.45, 1.45);
-                    ui.ctx().request_repaint();
+            // Arrastre e interactividad
+            if response.drag_started() {
+                if self.gizmo_mode != GizmoMode::View && hovered_gizmo_axis != GizmoAxis::None {
+                    self.active_drag_axis = hovered_gizmo_axis;
                 }
+            }
 
-                // 4. Clic primario: Seleccionar eje del Gizmo o Raycasting Picking sobre la escena 3D
-                if response.drag_started_by(egui::PointerButton::Primary) {
-                    if self.gizmo_mode != GizmoMode::View && hovered_gizmo_axis != GizmoAxis::None {
-                        self.active_drag_axis = hovered_gizmo_axis;
-                    } else {
-                        self.active_drag_axis = GizmoAxis::None;
-                    }
-                }
+            if response.drag_stopped() {
+                self.active_drag_axis = GizmoAxis::None;
+            }
 
-                if response.clicked() && hovered_gizmo_axis == GizmoAxis::None && self.gizmo_mode != GizmoMode::View {
-                    // Clic sobre la escena 3D: Raycasting picking para seleccionar el objeto bajo el cursor
-                    if let Some(click_pos) = response.interact_pointer_pos() {
-                        if let Ok(scene) = scene_state.lock() {
-                            if let Some(picked_id) = gizmo_3d::pick_entity_at_screen(
-                                click_pos,
-                                &scene.entities,
-                                &view_proj,
-                                rect,
-                                eye,
-                            ) {
-                                *selected_entity_id = Some(picked_id);
-                                log::info!("Objeto seleccionado en Scene View por Raycasting: #{}", picked_id);
-                            }
+            if response.clicked() && hovered_gizmo_axis == GizmoAxis::None && self.gizmo_mode != GizmoMode::View {
+                if let Some(pos) = mouse_pos {
+                    if let Ok(state) = scene_state.lock() {
+                        if let Some(hit_id) = gizmo_3d::pick_entity_at_screen(pos, &state.entities, &view_proj, rect, eye) {
+                            *selected_entity_id = Some(hit_id);
+                            log::info!("Objeto seleccionado en Scene View por Raycasting: #{}", hit_id);
+                            ui.ctx().request_repaint();
                         }
                     }
                 }
+            }
 
-                // 5. Arrastre primario (Clic izquierdo):
-                // Manipulación con Gizmo si hay eje agarrado, O NAVEGACIÓN LIBRE SI ESTÁ LA MANO [Q] O SE ARRASTRA EL ESPACIO LIBRE
-                if response.dragged_by(egui::PointerButton::Primary) {
-                    let delta = response.drag_delta();
-                    let is_shift = ui.input(|i| i.modifiers.shift);
+            if response.dragged() {
+                let delta = response.drag_delta();
+                let is_shift = ui.input(|i| i.modifiers.shift);
+                let primary_down = ui.input(|i| i.pointer.primary_down());
+                let secondary_down = ui.input(|i| i.pointer.secondary_down());
+                let middle_down = ui.input(|i| i.pointer.middle_down());
 
-                    if self.active_drag_axis != GizmoAxis::None {
-                        if let Some(target_id) = *selected_entity_id {
-                            if let Ok(mut scene) = scene_state.lock() {
-                                if let Some(ent) = scene.entities.iter_mut().find(|e| e.id == target_id) {
-                                    match self.gizmo_mode {
-                                        GizmoMode::Translate => {
-                                            match self.active_drag_axis {
-                                                GizmoAxis::X => ent.transform.position[0] += delta.x * 0.02,
-                                                GizmoAxis::Y => ent.transform.position[1] -= delta.y * 0.02,
-                                                GizmoAxis::Z => ent.transform.position[2] += (delta.x + delta.y) * 0.02,
-                                                GizmoAxis::Center => {
-                                                    if is_shift {
-                                                        ent.transform.position[2] += delta.y * 0.02;
-                                                    } else {
-                                                        ent.transform.position[0] += delta.x * 0.02;
-                                                        ent.transform.position[1] -= delta.y * 0.02;
-                                                    }
-                                                }
-                                                GizmoAxis::None => {}
-                                            }
-                                        }
-                                        GizmoMode::Rotate => {
-                                            match self.active_drag_axis {
-                                                GizmoAxis::X => ent.transform.rotation[0] += delta.y * 0.6,
-                                                GizmoAxis::Y => ent.transform.rotation[1] += delta.x * 0.6,
-                                                GizmoAxis::Z => ent.transform.rotation[2] += (delta.x - delta.y) * 0.6,
-                                                _ => ent.transform.rotation[1] += delta.x * 0.5,
-                                            }
-                                        }
-                                        GizmoMode::Scale => {
-                                            let factor = 1.0 + (delta.x - delta.y) * 0.01;
-                                            match self.active_drag_axis {
-                                                GizmoAxis::X => ent.transform.scale[0] = (ent.transform.scale[0] * (1.0 + delta.x * 0.01)).max(0.05),
-                                                GizmoAxis::Y => ent.transform.scale[1] = (ent.transform.scale[1] * (1.0 - delta.y * 0.01)).max(0.05),
-                                                GizmoAxis::Z => ent.transform.scale[2] = (ent.transform.scale[2] * (1.0 + delta.x * 0.01)).max(0.05),
-                                                _ => {
-                                                    ent.transform.scale[0] = (ent.transform.scale[0] * factor).max(0.05);
-                                                    ent.transform.scale[1] = (ent.transform.scale[1] * factor).max(0.05);
-                                                    ent.transform.scale[2] = (ent.transform.scale[2] * factor).max(0.05);
+                if self.active_drag_axis != GizmoAxis::None {
+                    // Manipulación del Transform según el Gizmo activo
+                    if let Some(target_id) = *selected_entity_id {
+                        if let Ok(mut state) = scene_state.lock() {
+                            if let Some(ent) = state.entities.iter_mut().find(|e| e.id == target_id) {
+                                match self.gizmo_mode {
+                                    GizmoMode::Translate => {
+                                        match self.active_drag_axis {
+                                            GizmoAxis::X => ent.transform.position[0] += delta.x * 0.02,
+                                            GizmoAxis::Y => ent.transform.position[1] -= delta.y * 0.02,
+                                            GizmoAxis::Z => ent.transform.position[2] += (delta.x + delta.y) * 0.02,
+                                            GizmoAxis::Center => {
+                                                if is_shift {
+                                                    ent.transform.position[2] += delta.y * 0.02;
+                                                } else {
+                                                    ent.transform.position[0] += delta.x * 0.02;
+                                                    ent.transform.position[1] -= delta.y * 0.02;
                                                 }
                                             }
+                                            GizmoAxis::None => {}
                                         }
-                                        GizmoMode::View => {}
                                     }
+                                    GizmoMode::Rotate => {
+                                        match self.active_drag_axis {
+                                            GizmoAxis::X => ent.transform.rotation[0] += delta.y * 0.6,
+                                            GizmoAxis::Y => ent.transform.rotation[1] += delta.x * 0.6,
+                                            GizmoAxis::Z => ent.transform.rotation[2] += (delta.x - delta.y) * 0.6,
+                                            _ => ent.transform.rotation[1] += delta.x * 0.5,
+                                        }
+                                    }
+                                    GizmoMode::Scale => {
+                                        match self.active_drag_axis {
+                                            GizmoAxis::X => ent.transform.scale[0] = (ent.transform.scale[0] + delta.x * 0.02).max(0.1),
+                                            GizmoAxis::Y => ent.transform.scale[1] = (ent.transform.scale[1] - delta.y * 0.02).max(0.1),
+                                            GizmoAxis::Z => ent.transform.scale[2] = (ent.transform.scale[2] + delta.x * 0.02).max(0.1),
+                                            GizmoAxis::Center => {
+                                                let factor = (delta.x - delta.y) * 0.02;
+                                                ent.transform.scale[0] = (ent.transform.scale[0] + factor).max(0.1);
+                                                ent.transform.scale[1] = (ent.transform.scale[1] + factor).max(0.1);
+                                                ent.transform.scale[2] = (ent.transform.scale[2] + factor).max(0.1);
+                                            }
+                                            GizmoAxis::None => {}
+                                        }
+                                    }
+                                    GizmoMode::Rect => {
+                                        match self.active_drag_axis {
+                                            GizmoAxis::X => ent.transform.scale[0] = (ent.transform.scale[0] + delta.x * 0.02).max(0.1),
+                                            GizmoAxis::Y => ent.transform.scale[1] = (ent.transform.scale[1] - delta.y * 0.02).max(0.1),
+                                            _ => {}
+                                        }
+                                    }
+                                    GizmoMode::Transform => {
+                                        match self.active_drag_axis {
+                                            GizmoAxis::X => ent.transform.position[0] += delta.x * 0.02,
+                                            GizmoAxis::Y => ent.transform.position[1] -= delta.y * 0.02,
+                                            GizmoAxis::Z => ent.transform.position[2] += (delta.x + delta.y) * 0.02,
+                                            _ => ent.transform.rotation[1] += delta.x * 0.5,
+                                        }
+                                    }
+                                    GizmoMode::View => {}
                                 }
                             }
                         }
-                    } else {
-                        // Navegación libre con Clic Izquierdo (Mano [Q] o arrastre en espacio libre)
-                        if self.gizmo_mode == GizmoMode::View {
-                            // En modo Mano [Q]: Clic izquierdo desplaza y mueve libremente la escena (Pan 3D proporcional a la distancia)
+                    }
+                    ui.ctx().request_repaint();
+                } else if self.active_tab == ViewportTab::SceneView {
+                    if self.gizmo_mode == GizmoMode::View {
+                        if primary_down {
+                            let pan_speed = self.editor_cam_dist * 0.0015;
                             self.editor_cam_center[0] -= (cam_right[0] * delta.x - cam_up[0] * delta.y) * pan_speed;
                             self.editor_cam_center[1] -= (cam_right[1] * delta.x - cam_up[1] * delta.y) * pan_speed;
                             self.editor_cam_center[2] -= (cam_right[2] * delta.x - cam_up[2] * delta.y) * pan_speed;
-                        } else {
-                            // En modos W, E, R (arrastre sobre el fondo vacío sin tocar gizmo):
-                            // ¡El comportamiento del clic derecho trasladado al clic izquierdo para orbitar libremente!
+                            ui.ctx().request_repaint();
+                        } else if secondary_down {
                             self.editor_cam_yaw += delta.x * 0.005;
-                            self.editor_cam_pitch = (self.editor_cam_pitch + delta.y * 0.005).clamp(-1.45, 1.45);
+                            self.editor_cam_pitch = (self.editor_cam_pitch - delta.y * 0.005).clamp(-1.4, 1.4);
+                            ui.ctx().request_repaint();
+                        }
+                    } else {
+                        if (primary_down && !is_shift) || secondary_down {
+                            self.editor_cam_yaw += delta.x * 0.005;
+                            self.editor_cam_pitch = (self.editor_cam_pitch - delta.y * 0.005).clamp(-1.4, 1.4);
+                            ui.ctx().request_repaint();
+                        } else if (primary_down && is_shift) || middle_down {
+                            let pan_speed = self.editor_cam_dist * 0.0015;
+                            self.editor_cam_center[0] -= (cam_right[0] * delta.x - cam_up[0] * delta.y) * pan_speed;
+                            self.editor_cam_center[1] -= (cam_right[1] * delta.x - cam_up[1] * delta.y) * pan_speed;
+                            self.editor_cam_center[2] -= (cam_right[2] * delta.x - cam_up[2] * delta.y) * pan_speed;
+                            ui.ctx().request_repaint();
                         }
                     }
-                    ui.ctx().request_repaint();
-                }
-
-                // Al soltar el botón primario, liberar el eje del gizmo
-                if !response.dragged() {
-                    self.active_drag_axis = GizmoAxis::None;
                 }
             }
 
-            // ==========================================
-            // OVERLAYS Y BADGES INFORMATIVOS EN PANTALLA
-            // ==========================================
-            match self.active_tab {
-                ViewportTab::SceneView => {
-                    let tag_text = "🌐 VISTA DE ESCENA (MODO EDICIÓN - RAYCASTING & GIZMOS ACTIVOS)";
-                    painter.rect_filled(
-                        egui::Rect::from_min_size(rect.min + vec2(12.0, 12.0), vec2(460.0, 24.0)),
-                        4.0,
-                        Color32::from_black_alpha(190),
-                    );
-                    painter.text(
-                        rect.min + vec2(20.0, 16.0),
-                        egui::Align2::LEFT_TOP,
-                        tag_text,
-                        egui::FontId::proportional(13.0),
-                        Color32::from_rgb(180, 220, 255),
-                    );
+            // En Scene View: Mostrar banner de ayuda sobre la herramienta activa
+            if self.active_tab == ViewportTab::SceneView && self.play_state == PlayState::Edit {
+                let ent_name = selected_entity_id
+                    .and_then(|id| {
+                        scene_state.lock().ok().and_then(|s| {
+                            s.entities.iter().find(|e| e.id == id).map(|e| e.name.clone())
+                        })
+                    })
+                    .unwrap_or_else(|| "Ninguno".into());
 
-                    // Banner inferior contextual
-                    if let Some(ent_id) = *selected_entity_id {
-                        let ent_name = scene_state.lock().ok()
-                            .and_then(|s| s.entities.iter().find(|e| e.id == ent_id).map(|e| e.name.clone()))
-                            .unwrap_or_else(|| format!("#{ent_id}"));
+                let (hint_text, hint_color) = match self.gizmo_mode {
+                    GizmoMode::Translate => (
+                        format!("✥ [W] Mover: Arrastra la cruz 3D sobre '{}' (Ejes: X Rojo, Y Verde, Z Azul)", ent_name),
+                        Color32::from_rgb(255, 110, 110),
+                    ),
+                    GizmoMode::Rotate => (
+                        format!("🔄 [E] Rotar: Arrastra los anillos de rotación sobre '{}'", ent_name),
+                        Color32::from_rgb(110, 240, 130),
+                    ),
+                    GizmoMode::Scale => (
+                        format!("⤢ [R] Escalar: Arrastra los cubos de escala sobre '{}'", ent_name),
+                        Color32::from_rgb(110, 190, 255),
+                    ),
+                    GizmoMode::Rect => (
+                        format!("⊡ [T] Rect: Modifica dimensiones 2D/UI sobre '{}'", ent_name),
+                        Color32::from_rgb(255, 180, 100),
+                    ),
+                    GizmoMode::Transform => (
+                        format!("✦ [Y] Transform: Mover, rotar y escalar sobre '{}'", ent_name),
+                        Color32::from_rgb(200, 130, 255),
+                    ),
+                    GizmoMode::View => (
+                        format!("✋ [Q] Mano: Clic Izquierdo arrastra la vista libremente (Pan) | Clic Derecho para orbitar"),
+                        Color32::from_rgb(240, 220, 110),
+                    ),
+                };
 
-                        let (hint_text, hint_color) = match self.gizmo_mode {
-                            GizmoMode::Translate => (
-                                format!("✛ [W] Mover Activo: Arrastra la cruz 3D sobre '{}' (Ejes: X Rojo, Y Verde, Z Azul)", ent_name),
-                                Color32::from_rgb(255, 110, 110),
-                            ),
-                            GizmoMode::Rotate => (
-                                format!("⟳ [E] Rotar Activo: Arrastra los anillos de rotación sobre '{}'", ent_name),
-                                Color32::from_rgb(110, 240, 130),
-                            ),
-                            GizmoMode::Scale => (
-                                format!("⤢ [R] Escalar Activo: Arrastra los cubos de escala sobre '{}'", ent_name),
-                                Color32::from_rgb(110, 190, 255),
-                            ),
-                            GizmoMode::View => (
-                                format!("✋ [Q] Mano: Clic Izquierdo arrastra y mueve la vista libremente (Pan) | Clic Derecho para orbitar (360°)"),
-                                Color32::from_rgb(240, 220, 110),
-                            ),
-                        };
-
-                        let banner_rect = egui::Rect::from_min_size(
-                            rect.left_bottom() + vec2(12.0, -36.0),
-                            vec2(720.0, 24.0),
-                        );
-                        painter.rect_filled(banner_rect, 4.0, Color32::from_black_alpha(200));
-                        painter.text(
-                            banner_rect.min + vec2(8.0, 4.0),
-                            egui::Align2::LEFT_TOP,
-                            hint_text,
-                            egui::FontId::proportional(12.5),
-                            hint_color,
-                        );
-                    } else {
-                        let hint_rect = egui::Rect::from_min_size(
-                            rect.left_bottom() + vec2(12.0, -36.0),
-                            vec2(680.0, 24.0),
-                        );
-                        painter.rect_filled(hint_rect, 4.0, Color32::from_black_alpha(190));
-                        painter.text(
-                            hint_rect.min + vec2(8.0, 4.0),
-                            egui::Align2::LEFT_TOP,
-                            "💡 Clic izquierdo sobre objetos para seleccionar | En [Q] Mano: Clic izquierdo para moverte libremente | En W/E/R: Clic en fondo para orbitar.",
-                            egui::FontId::proportional(12.0),
-                            Color32::from_rgb(220, 220, 230),
-                        );
-                    }
-                }
-                ViewportTab::GameView => {
-                    let (tag_text, tag_color) = match self.play_state {
-                        PlayState::Playing => ("🎮 VISTA DE JUEGO — EN EJECUCIÓN (WASD + ESPACIO ACTIVO)", Color32::from_rgb(50, 240, 120)),
-                        PlayState::Paused => ("⏸ VISTA DE JUEGO — PAUSADO", Color32::from_rgb(255, 210, 40)),
-                        PlayState::Edit => ("🎮 VISTA DE JUEGO (DETENIDO) — PULSA ▶ JUGAR PARA EMPEZAR", Color32::from_rgb(210, 215, 230)),
-                    };
-
-                    painter.rect_filled(
-                        egui::Rect::from_min_size(rect.min + vec2(12.0, 12.0), vec2(480.0, 24.0)),
-                        4.0,
-                        Color32::from_black_alpha(190),
-                    );
-                    painter.text(
-                        rect.min + vec2(20.0, 16.0),
-                        egui::Align2::LEFT_TOP,
-                        tag_text,
-                        egui::FontId::proportional(13.0),
-                        tag_color,
-                    );
-                }
+                let banner_rect = egui::Rect::from_min_size(
+                    rect.left_bottom() + vec2(12.0, -36.0),
+                    vec2(720.0, 24.0),
+                );
+                painter.rect_filled(banner_rect, 4.0, Color32::from_black_alpha(200));
+                painter.text(
+                    banner_rect.min + vec2(8.0, 4.0),
+                    egui::Align2::LEFT_TOP,
+                    hint_text,
+                    egui::FontId::proportional(12.0),
+                    hint_color,
+                );
             }
         });
     }

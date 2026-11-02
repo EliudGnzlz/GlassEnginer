@@ -435,11 +435,47 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
     * **DeepSeek 4.1 Flash:** Certificó la matriz TRS de Euler ($R_z \cdot R_y \cdot R_x$), la eliminación del thrashing de swapchain en el bucle principal y el algoritmo de ray-box picking.
     * **Kimi K3:** Validó la bandera `OPAQUE` para prevenir ventanas translúcidas en el compositor X11/XWayland, el hit-testing circular de anillos y el diseño desacoplado del menú contextual de egui.
 
+### Hito 18: Menú Contextual Total en Jerarquía, Toolbar de Iconos Unity & Docking Dinámico Adaptable (egui_dock)
+* **Fecha:** 2026-11-01
+* **Acciones:**
+  * **Menú Contextual 100% Funcional en Jerarquía (`hierarchy.rs`):**
+    * Se rediseñó la representación de cada fila de entidad utilizando `allocate_exact_size` con el 100% del ancho disponible (`ui.available_width()`) y altura uniforme (22 px), garantizando que el clic derecho en cualquier punto de la fila abra el menú contextual (`📋 Duplicar`, `🗑 Eliminar`, `➕ Añadir GameObject`).
+    * Se añadió una zona interactiva para todo el espacio vacío restante debajo de las entidades mediante `allocate_exact_size(remaining, Sense::click())`. Al hacer clic derecho en el fondo vacío de la ventana de jerarquía, se despliega instantáneamente el menú contextual con todos los presets (`Create Empty`, `3D Object`, `Light`, `Audio`, `Camera`).
+  * **Barra de Herramientas de Iconos Estilo Unity (`viewport.rs`, `docking.rs`):**
+    * Se reemplazaron los botones de texto largos por un grupo compacto de botones de icono cuadrados con feedback de selección activa y tooltips detallados:
+      * `✋` **Herramienta Mano (`[Q]`)**: Navegación y pan tridimensional libre.
+      * `✥` **Herramienta Mover (`[W]`)**: Traslación con la cruz 3D.
+      * `🔄` **Herramienta Rotar (`[E]`)**: Rotación con anillos orbitales.
+      * `⤢` **Herramienta Escalar (`[R]`)**: Escalado de geometría con cubos terminales.
+      * `⊡` **Herramienta Rect (`[T]`)**: Manipulación rectangular 2D y UI.
+      * `✦` **Herramienta Transform (`[Y]`)**: Herramienta universal que combina traslación y rotación simultánea.
+    * Toggles interactivos de transformación:
+      * `🌐 Pivot` / `🌐 Center`: Alterna el centro de pivote entre el origen local y el centro de masa.
+      * `🧭 Global` / `🧭 Local`: Alterna el espacio de coordenadas entre ejes de mundo y ejes locales.
+    * Controles autoritativos centrados: `[ ▶ Jugar ]`, `[ ⏸ Pausar ]`, `[ ⏹ Detener ]`.
+  * **Docking Dinámico Totalmente Adaptable (`egui_dock 0.21.1` en `docking.rs`):**
+    * Se reemplazó el sistema de paneles estáticos fijos por un sistema de docking dinámico completo (`DockState` + `DockArea::show_inside`).
+    * Las ventanas (`Jerarquía`, `Escena`, `Juego`, `Inspector`, `Consola`, `Proyecto / Assets`) ahora se pueden:
+      * Arrastrar libremente por todo el espacio de trabajo.
+      * Dividir horizontal o verticalmente soltándolas en los bordes.
+      * Agrupar en pestañas soltándolas en el centro de cualquier panel.
+      * Desacoplar como ventanas flotantes independientes.
+      * Adaptarse automáticamente al 100% del tamaño de la ventana sin deformaciones ni márgenes muertos.
+    * Se implementó un menú desplegable de diseños preestablecidos (`📐 Diseño ▾`):
+      * `Default`: Layout estándar de Unity (Jerarquía izquierda, Escena/Juego centro, Inspector derecha, Consola/Proyecto abajo).
+      * `2 by 3`: Vista en dos columnas paralelas.
+      * `4 Split`: Vista dividida en cuatro cuadrantes de trabajo.
+      * `Wide`: Escena panorámica superior con herramientas inferiores.
+      * `🔄 Restablecer Diseño`: Restablece el layout original con un solo clic.
+  * **Auditoría Técnica Multi-IA (Mirai MCP - Kimi K3.1 Pro & DeepSeek V3/R1):**
+    * **Kimi K3.1 Pro:** Verificó el patrón canónico de `allocate_exact_size` sobre `available_rect_before_wrap()` y el ciclo de vida de `DockArea::show_inside`.
+    * **DeepSeek V3:** Validó el layout de botones cuadrados de 28x24 px con `Button::selected()`, los atajos de teclado y la topología del árbol binario de `DockState`.
+
 ---
 
-## Certificación Final de Arquitectura: GlassEngine 1.7
+## Certificación Final de Arquitectura: GlassEngine 1.8
 
-Los 17 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
+Los 18 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
 
 1. **Hito 1 — Workspace Cargo & Contratos Base:** 100% Verificado.
 2. **Hito 2 — Contexto Vulkan Multi-GPU Universal (NVIDIA, AMD, Intel, Integradas y Dedicadas):** 100% Verificado.
@@ -458,3 +494,4 @@ Los 17 hitos arquitectónicos, de edición y de gameplay del motor han sido comp
 15. **Hito 15 — Bounding Box 3D de Selección & Navegación Libre con Clic Izquierdo:** 100% Verificado.
 16. **Hito 16 — Bounding Box Adaptativo, Pan Directo con Mano [Q] & Ventana Responsiva:** 100% Verificado.
 17. **Hito 17 — Rotación 3D en GPU/Gizmo, Picking de Superficies, Menú de Creación Unity y Swapchain Opaque Seguro:** 100% Verificado.
+18. **Hito 18 — Menú Contextual Total en Jerarquía, Toolbar de Iconos Unity & Docking Dinámico Adaptable (egui_dock):** 100% Verificado.

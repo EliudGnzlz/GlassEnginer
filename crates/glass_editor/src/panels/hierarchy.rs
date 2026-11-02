@@ -146,34 +146,96 @@ impl HierarchyPanel {
 
                     let label_text = format!("{} #{} {}", icon, entity.id, entity.name);
 
-                    ui.horizontal(|ui| {
-                        let label_resp = ui.selectable_label(is_selected, &label_text);
-                        if label_resp.clicked() {
-                            pending_action = Some(HierarchyAction::Select(entity.id));
-                        }
+                    // Reservar fila completa interactiva de ancho total
+                    let row_height = 22.0;
+                    let full_width = ui.available_width();
+                    let (row_rect, row_resp) = ui.allocate_exact_size(
+                        egui::vec2(full_width, row_height),
+                        egui::Sense::click(),
+                    );
 
-                        // Menú contextual al hacer clic derecho en cualquier entidad (estilo Unity)
-                        label_resp.context_menu(|ui| {
-                            ui.label(format!("Objeto: {}", entity.name));
-                            ui.separator();
-                            if ui.button("📋 Duplicar (Duplicate)").clicked() {
-                                pending_action = Some(HierarchyAction::Duplicate(entity.id));
-                                ui.close();
-                            }
-                            if ui.button("🗑 Eliminar (Delete)").clicked() {
-                                pending_action = Some(HierarchyAction::Delete(entity.id));
-                                ui.close();
-                            }
-                            ui.separator();
-                            ui.label("Crear nuevo:");
-                            Self::render_creation_menu(ui, &mut pending_action);
-                        });
+                    if ui.is_rect_visible(row_rect) {
+                        let bg = if is_selected {
+                            ui.visuals().selection.bg_fill
+                        } else if row_resp.hovered() {
+                            ui.visuals().widgets.hovered.bg_fill
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        ui.painter().rect_filled(row_rect, 3.0, bg);
 
+                        let text_color = if is_selected {
+                            ui.visuals().selection.stroke.color
+                        } else {
+                            ui.visuals().text_color()
+                        };
+
+                        let text_pos = row_rect.left_center() + egui::vec2(8.0, 0.0);
+                        ui.painter().text(
+                            text_pos,
+                            egui::Align2::LEFT_CENTER,
+                            &label_text,
+                            egui::FontId::proportional(13.0),
+                            text_color,
+                        );
+
+                        // Botón de eliminar en extremo derecho si está seleccionado
                         if is_selected {
-                            if ui.small_button("🗑").clicked() {
+                            let del_rect = egui::Rect::from_min_size(
+                                egui::pos2(row_rect.right() - 24.0, row_rect.top() + 2.0),
+                                egui::vec2(20.0, 18.0),
+                            );
+                            let del_resp = ui.interact(del_rect, ui.id().with(entity.id).with("del"), egui::Sense::click());
+                            if del_resp.hovered() {
+                                ui.painter().rect_filled(del_rect, 2.0, egui::Color32::from_rgb(180, 50, 50));
+                            }
+                            ui.painter().text(
+                                del_rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                "🗑",
+                                egui::FontId::proportional(11.0),
+                                egui::Color32::WHITE,
+                            );
+                            if del_resp.clicked() {
                                 pending_action = Some(HierarchyAction::Delete(entity.id));
                             }
                         }
+                    }
+
+                    // Clic izquierdo en la fila selecciona el objeto
+                    if row_resp.clicked() {
+                        pending_action = Some(HierarchyAction::Select(entity.id));
+                    }
+
+                    // Clic derecho en CUALQUIER punto de la fila abre el menú contextual
+                    row_resp.context_menu(|ui| {
+                        ui.label(format!("Objeto: {}", entity.name));
+                        ui.separator();
+                        if ui.button("📋 Duplicar (Duplicate)").clicked() {
+                            pending_action = Some(HierarchyAction::Duplicate(entity.id));
+                            ui.close();
+                        }
+                        if ui.button("🗑 Eliminar (Delete)").clicked() {
+                            pending_action = Some(HierarchyAction::Delete(entity.id));
+                            ui.close();
+                        }
+                        ui.separator();
+                        ui.label("➕ Añadir GameObject:");
+                        Self::render_creation_menu(ui, &mut pending_action);
+                    });
+                }
+
+                // Espacio vacío restante del ScrollArea: clic derecho aquí abre el menú de creación
+                let remaining = ui.available_size();
+                if remaining.y > 10.0 {
+                    let (_empty_rect, bg_resp) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), remaining.y),
+                        egui::Sense::click(),
+                    );
+                    bg_resp.context_menu(|ui| {
+                        ui.label("➕ Crear GameObject");
+                        ui.separator();
+                        Self::render_creation_menu(ui, &mut pending_action);
                     });
                 }
             });

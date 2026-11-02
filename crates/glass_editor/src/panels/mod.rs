@@ -8,4 +8,4 @@ pub use console::ConsolePanel;
 pub use gizmo_3d::GizmoAxis;
 pub use hierarchy::HierarchyPanel;
 pub use inspector::InspectorPanel;
-pub use viewport::{GizmoMode, PlayState, ViewportPanel, ViewportTab};
+pub use viewport::{CoordSpace, GizmoMode, PivotMode, PlayState, ViewportPanel, ViewportTab};
