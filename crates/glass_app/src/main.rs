@@ -21,6 +21,7 @@ use std::ffi::CStr;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
+use std::collections::HashSet;
 use winit::application::ApplicationHandler;
 
 struct EngineSceneBridge {
@@ -54,7 +55,7 @@ impl SceneBridge for EngineSceneBridge {
 }
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::WindowId;
 
 fn perspective_matrix(fov_rad: f32, aspect: f32, near: f32, far: f32) -> [f32; 16] {
@@ -177,6 +178,10 @@ struct GlassEngineApp {
     is_m10_test: bool,
     is_platformer_test: bool,
     player_script_handle: Option<i32>,
+    /// Teclas WASD/Espacio actualmente presionadas (para movimiento del jugador).
+    keys_pressed: HashSet<PhysicalKey>,
+    /// Handle del RigidBody del jugador en Rapier3D (para aplicar fuerzas/impulsos).
+    player_body_handle: Option<glass_physics::BodyHandle>,
 }
 
 impl Drop for GlassEngineApp {
@@ -282,6 +287,8 @@ impl GlassEngineApp {
             is_m10_test,
             is_platformer_test,
             player_script_handle: None,
+            keys_pressed: HashSet::new(),
+            player_body_handle: None,
         }
     }
 
@@ -348,6 +355,7 @@ impl GlassEngineApp {
 
             let pb = phys.create_rigid_body(player_id, BodyType::Dynamic, [0.0, initial_y, 0.0], [0.0, 0.0, 0.0, 1.0]);
             phys.attach_box_collider(pb, [0.5, 0.5, 0.5], 0.02, 0.6);
+            self.player_body_handle = Some(pb);
         }
 
         // 3. Instanciar script C# PlayerController
@@ -425,30 +433,120 @@ impl GlassEngineApp {
             _ => return Ok(()),
         };
 
-        // 0. Ejecutar paso de C# Scripting (.NET CoreCLR)
-        if self.script_host.is_initialized {
+        // 0. Sincronizar estado de inputs (teclado W, A, S, D, Flechas, Espacio)
+        let mut move_x = 0.0_f32;
+        let mut move_z = 0.0_f32;
+        let mut jump_val = 0_u8;
+
+        for key in &self.keys_pressed {
+            if let PhysicalKey::Code(code) = key {
+                match code {
+                    KeyCode::KeyW | KeyCode::ArrowUp => move_z += 1.0,
+                    KeyCode::KeyS | KeyCode::ArrowDown => move_z -= 1.0,
+                    KeyCode::KeyD | KeyCode::ArrowRight => move_x += 1.0,
+                    KeyCode::KeyA | KeyCode::ArrowLeft => move_x -= 1.0,
+                    KeyCode::Space => jump_val = 1,
+                    _ => {}
+                }
+            }
+        }
+
+        #[cfg(feature = "editor")]
+        {
+            self.egui_ctx.input(|i| {
+                if i.key_down(egui::Key::W) || i.key_down(egui::Key::ArrowUp) { move_z += 1.0; }
+                if i.key_down(egui::Key::S) || i.key_down(egui::Key::ArrowDown) { move_z -= 1.0; }
+                if i.key_down(egui::Key::D) || i.key_down(egui::Key::ArrowRight) { move_x += 1.0; }
+                if i.key_down(egui::Key::A) || i.key_down(egui::Key::ArrowLeft) { move_x -= 1.0; }
+                if i.key_down(egui::Key::Space) { jump_val = 1; }
+            });
+        }
+
+        glass_scripting::set_input_state(glass_scripting::InputDataFfi {
+            move_x: move_x.clamp(-1.0, 1.0),
+            move_z: move_z.clamp(-1.0, 1.0),
+            jump: jump_val,
+            run: 0,
+        });
+
+        // 1. Manejo de estado de ejecución (Play / Pause / Stop)
+        #[cfg(feature = "editor")]
+        let is_playing = !self.is_standalone && self.editor_layout.viewport.play_state == glass_editor::PlayState::Playing;
+        #[cfg(feature = "editor")]
+        let simulation_running = self.is_standalone || is_playing || self.is_platformer_test;
+        #[cfg(not(feature = "editor"))]
+        let simulation_running = true;
+
+        // Comprobar si se solicitó STOP (reinicio a spawn)
+        #[cfg(feature = "editor")]
+        if self.editor_layout.viewport.request_reset_to_spawn {
+            self.editor_layout.viewport.request_reset_to_spawn = false;
+            if let Some(player_handle) = self.player_body_handle {
+                if let Ok(mut physics) = self.physics_world.lock() {
+                    physics.set_transform(player_handle, [0.0, 0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
+                    physics.set_linear_velocity(player_handle, [0.0, 0.0, 0.0]);
+                }
+            }
+            if let Ok(mut scene) = self.scene_state.lock() {
+                if let Some(ent) = scene.entities.iter_mut().find(|e| e.name.contains("Player")) {
+                    ent.transform.position = [0.0, 0.5, 0.0];
+                }
+            }
+            self.audio_system.stop_all();
+            log::info!("Simulación detenida (Stop): Jugador y física restablecidos a posición de spawn.");
+        }
+
+        // 2. Ejecutar paso de C# Scripting (.NET CoreCLR) — solo si simulación activa
+        if simulation_running && self.script_host.is_initialized {
             self.script_host.update_all(0.016667);
         }
 
-        // 1. Simular paso de física con Rapier3D y sincronizar transforms dinámicos a SceneState
-        if let Ok(mut physics) = self.physics_world.lock() {
-            physics.step(0.016667);
-            let sync_transforms = physics.sync_all_transforms();
-            if !sync_transforms.is_empty() {
-                if let Ok(mut scene) = self.scene_state.lock() {
-                    for (entity_id, tf) in sync_transforms {
-                        if let Some(ent) = scene.entities.iter_mut().find(|e| e.id == entity_id) {
-                            ent.transform.position = tf.position;
-                            ent.transform.scale = tf.scale;
+        // 3. Simular paso de física Rapier3D — solo si simulación activa
+        if simulation_running {
+            if let Ok(mut physics) = self.physics_world.lock() {
+                physics.step(0.016667);
+                let sync_transforms = physics.sync_all_transforms();
+                if !sync_transforms.is_empty() {
+                    if let Ok(mut scene) = self.scene_state.lock() {
+                        for (entity_id, tf) in sync_transforms {
+                            if let Some(ent) = scene.entities.iter_mut().find(|e| e.id == entity_id) {
+                                ent.transform.position = tf.position;
+                                ent.transform.scale = tf.scale;
+                            }
                         }
                     }
                 }
             }
         }
 
-        // 2. Renderizar geometría 3D a la textura offscreen en VRAM
-        let proj = perspective_matrix(45.0_f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
-        let view = look_at([3.5, 3.2, 9.5], [3.5, 1.4, 0.0], [0.0, 1.0, 0.0]);
+        // 4. Renderizar geometría 3D a la textura offscreen en VRAM con la cámara correspondiente
+        #[cfg(feature = "editor")]
+        let (view, proj) = match self.editor_layout.viewport.active_tab {
+            glass_editor::ViewportTab::SceneView => {
+                let ed = &self.editor_layout.viewport;
+                let eye = [
+                    ed.editor_cam_center[0] + ed.editor_cam_dist * ed.editor_cam_pitch.cos() * ed.editor_cam_yaw.sin(),
+                    ed.editor_cam_center[1] + ed.editor_cam_dist * ed.editor_cam_pitch.sin(),
+                    ed.editor_cam_center[2] + ed.editor_cam_dist * ed.editor_cam_pitch.cos() * ed.editor_cam_yaw.cos(),
+                ];
+                let v = look_at(eye, ed.editor_cam_center, [0.0, 1.0, 0.0]);
+                let p = perspective_matrix(45.0_f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
+                (v, p)
+            }
+            glass_editor::ViewportTab::GameView => {
+                let v = look_at([3.5, 3.2, 9.5], [3.5, 1.4, 0.0], [0.0, 1.0, 0.0]);
+                let p = perspective_matrix(45.0_f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
+                (v, p)
+            }
+        };
+
+        #[cfg(not(feature = "editor"))]
+        let (view, proj) = {
+            let v = look_at([3.5, 3.2, 9.5], [3.5, 1.4, 0.0], [0.0, 1.0, 0.0]);
+            let p = perspective_matrix(45.0_f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
+            (v, p)
+        };
+
         let vp = matmul(&proj, &view);
 
         let cache = self.asset_cache.read().unwrap();
@@ -1285,10 +1383,22 @@ impl ApplicationHandler for GlassEngineApp {
         if !self.is_standalone {
             if let Some(window) = &self.window {
                 if let Some(egui_winit) = &mut self.egui_winit {
-                    let res = egui_winit.on_window_event(&window.inner, &event);
-                    if res.consumed {
-                        return;
+                    // Capturar WASD/Space ANTES de egui para que nunca sean bloqueadas
+                    if let WindowEvent::KeyboardInput { event: ref key_ev, .. } = event {
+                        if let PhysicalKey::Code(code) = key_ev.physical_key {
+                            match code {
+                                KeyCode::KeyW | KeyCode::KeyS | KeyCode::KeyA | KeyCode::KeyD | KeyCode::Space => {
+                                    match key_ev.state {
+                                        ElementState::Pressed => { self.keys_pressed.insert(key_ev.physical_key); }
+                                        ElementState::Released => { self.keys_pressed.remove(&key_ev.physical_key); }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
                     }
+                    // Pasar evento completo a egui (sin bloquear con consumed)
+                    let _ = egui_winit.on_window_event(&window.inner, &event);
                 }
             }
         }
@@ -1309,6 +1419,24 @@ impl ApplicationHandler for GlassEngineApp {
             } => {
                 log::info!("Tecla Escape presionada. Saliendo.");
                 event_loop.exit();
+            }
+            // Captura de input WASD / Espacio para el jugador
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    match code {
+                        KeyCode::KeyW | KeyCode::KeyS | KeyCode::KeyA | KeyCode::KeyD | KeyCode::Space => {
+                            match event.state {
+                                ElementState::Pressed => {
+                                    self.keys_pressed.insert(event.physical_key);
+                                }
+                                ElementState::Released => {
+                                    self.keys_pressed.remove(&event.physical_key);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
             WindowEvent::Resized(physical_size) => {
                 if let (Some(renderer), Some(vk_ctx)) = (&mut self.renderer, &self.vulkan_context) {
@@ -1350,6 +1478,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let is_standalone = args.iter().any(|arg| arg == "--standalone" || arg == "--game");
     let is_platformer_test = args.iter().any(|arg| arg == "--test-platformer");
+    if is_platformer_test {
+        std::env::set_var("GLASS_AUTO_DEMO", "1");
+    }
     let is_m10_test = args.iter().any(|arg| arg == "--test-m10");
     let is_m9_test = args.iter().any(|arg| arg == "--test-m9");
     let is_m8_test = args.iter().any(|arg| arg == "--test-m8");

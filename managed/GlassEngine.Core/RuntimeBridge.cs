@@ -142,6 +142,17 @@ public static class RuntimeBridge
         Log(2, "GlassEngine.Core PhysicsBridge inicializado exitosamente desde Rust.");
     }
 
+    [UnmanagedCallersOnly(EntryPoint = "InitInputBridge")]
+    public static void InitInputBridge(IntPtr getInputFn)
+    {
+        if (getInputFn != IntPtr.Zero)
+        {
+            var del = Marshal.GetDelegateForFunctionPointer<GetInputDelegate>(getInputFn);
+            Input.Initialize(del);
+        }
+        Log(2, "GlassEngine.Core InputBridge inicializado exitosamente desde Rust.");
+    }
+
     public static ulong CreateRigidBody(ulong entityId, int bodyType, Vector3 position, Quaternion rotation)
     {
         if (_createRigidBody is null) return 0;

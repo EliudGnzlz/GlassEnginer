@@ -48,6 +48,7 @@ struct PhysicsBridgeCallbacks {
 }
 
 type InitPhysicsBridgeFn = unsafe extern "system" fn(*const PhysicsBridgeCallbacks);
+type InitInputBridgeFn = unsafe extern "system" fn(*const c_void);
 type CreateScriptInstanceFn = unsafe extern "system" fn(u64, *const c_char) -> i32;
 type UpdateScriptInstanceFn = unsafe extern "system" fn(i32, f32);
 type DestroyScriptInstanceFn = unsafe extern "system" fn(i32);
@@ -169,6 +170,16 @@ impl ScriptHost {
             };
             unsafe {
                 init_physics_fn(&callbacks as *const PhysicsBridgeCallbacks);
+            }
+        }
+
+        if let Ok(init_input_fn) = loader.get_function_with_unmanaged_callers_only::<InitInputBridgeFn>(
+            bridge_type,
+            pdcstr!("InitInputBridge"),
+        ) {
+            log::info!("Vinculando callbacks Rust <-> C# Input FFI...");
+            unsafe {
+                init_input_fn(crate::bindings::get_input as *const c_void);
             }
         }
 

@@ -54,3 +54,39 @@ pub unsafe extern "C" fn log_message(level: i32, msg: *const c_char) {
         _ => log::error!("[C#] {}", text),
     }
 }
+
+use std::sync::Mutex;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InputDataFfi {
+    pub move_x: f32, // -1.0 (A) .. +1.0 (D)
+    pub move_z: f32, // -1.0 (S) .. +1.0 (W)
+    pub jump: u8,
+    pub run: u8,
+}
+
+static GLOBAL_INPUT: Mutex<InputDataFfi> = Mutex::new(InputDataFfi {
+    move_x: 0.0,
+    move_z: 0.0,
+    jump: 0,
+    run: 0,
+});
+
+pub fn set_input_state(input: InputDataFfi) {
+    if let Ok(mut g) = GLOBAL_INPUT.lock() {
+        *g = input;
+    }
+}
+
+pub fn get_input_state() -> InputDataFfi {
+    GLOBAL_INPUT.lock().map(|g| *g).unwrap_or_default()
+}
+
+pub unsafe extern "C" fn get_input(out: *mut InputDataFfi) -> i32 {
+    if out.is_null() {
+        return BRIDGE_ERR_NULL_PTR;
+    }
+    unsafe { *out = get_input_state() };
+    BRIDGE_OK
+}

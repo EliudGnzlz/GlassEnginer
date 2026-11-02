@@ -19,6 +19,7 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
 | **Hito 9** | Simulación Física 3D (Rapier3D) | **Completado** | 100% | DeepSeek + Kimi (Mirai) |
 | **Hito 10**| Compilación Dual (Editor vs Standalone) | **Completado** | 100% | Gemini + DeepSeek + Kimi |
 | **Hito 11**| Escena 3D & Automatización MCP con Audio | **Completado** | 100% | Kimi (Mirai) + DeepSeek |
+| **Hito 12**| Viewports Duales Scene/Game, Play/Pause/Stop & Controles WASD | **Completado** | 100% | Kimi K3 + DeepSeek 4 Pro (Mirai) |
 
 ---
 
@@ -232,9 +233,55 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
 
 ---
 
-## Certificación Final de Arquitectura: GlassEngine 1.1
+### Hito 12: Arquitectura de Play/Pause/Stop, Separación de Viewports Scene/Game y Controles WASD FFI
+* **Fecha:** 2026-11-01
+* **Requerimientos del Usuario:**
+  * Separar las ventanas/pestañas de edición (Scene View) y de juego (Game View) al estilo Unity Engine.
+  * Implementar máquina de estados Play/Pause/Stop para que pausar o detener congele y reinicie realmente la simulación en lugar de continuar corriendo de fondo.
+  * Permitir el control interactivo manual del cubo 3D mediante teclado (teclas W, A, S, D para desplazarse y [Espacio] para saltar sobre las plataformas).
+  * Auditar el diseño y la implementación con IAs avanzadas a través del servidor MCP `mirai` usando Kimi K3 y DeepSeek 4 Pro (`deepseek-v4-pro`).
+* **Acciones Implementadas:**
+  * **Auditoría Cruzada vía Mirai MCP:**
+    * Consulta y dictamen de **Kimi K3.1 Pro** (`kimi-k3`): Diagnóstico de acoplamiento en un único viewport; recomendación de separación estricta de cámaras/proyecciones, compuerta formal de simulación `PlayState`, y puente de eventos de teclado hacia C# para desacoplar la lógica de scripting.
+    * Consulta y dictamen de **DeepSeek 4 Pro** (`deepseek-v4-pro`): Aprobación de la máquina de estados de tres fases (`Edit`, `Playing`, `Paused`), preservación de snapshots para reinicio a spawn en `Stop`, y cámara orbital para Scene View vs perspectiva fija 16:9 en Game View.
+  * **Subsistema de Entrada C# (.NET 8 CoreCLR) & Puente FFI Rust:**
+    * Definición del contrato nativo `InputData` y delegado `GetInputDelegate` en [`managed/GlassEngine.Core/Interop/InputDelegates.cs`](file:///home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/Interop/InputDelegates.cs).
+    * API amigable estilo Unity en C#: [`managed/GlassEngine.Core/Input/Input.cs`](file:///home/d3/Documentos/GlassEnginer/managed/GlassEngine.Core/Input/Input.cs) con métodos estáticos `GetKey(name)`, `GetButton(name)`, `GetAxisHorizontal()`, `GetAxisVertical()`.
+    * Vinculación FFI de arranque mediante `InitInputBridge` en `RuntimeBridge.cs` y almacenamiento atómico seguro de estados de entrada en [`crates/glass_scripting/src/bindings.rs`](file:///home/d3/Documentos/GlassEnginer/crates/glass_scripting/src/bindings.rs).
+  * **Controlador Interactivo de Jugador (`PlayerController.cs`):**
+    * Control en tiempo real del cubo mediante teclado:
+      * W / Arriba: Desplazamiento hacia el fondo ($+Z$).
+      * S / Abajo: Desplazamiento hacia el frente ($-Z$).
+      * D / Derecha: Desplazamiento hacia la derecha ($+X$).
+      * A / Izquierda: Desplazamiento hacia la izquierda ($-X$).
+      * Espacio: Salto vertical parabólico con velocidad de impulso calibrada ($7.2$ m/s), cooldown anti-rebote ($0.35$s) y comprobación multi-superficie de suelo (suelo $Y \approx 0.5$, Step 1 $Y \approx 1.5$, Step 2 $Y \approx 2.5$).
+    * Audio reactivo 3D sincronizado: disparo de `beep_880` en cada despegue y `beep_440` en cada aterrizaje.
+    * Protección de caída al vacío con respawn automático si $Y < -5.0$m.
+    * Convivencia limpia con el modo de test automatizado (`--test-platformer`) a través de detección de entorno (`GLASS_AUTO_DEMO`).
+  * **Separación de Viewports Scene View vs Game View en el Editor:**
+    * Nuevos enums `ViewportTab` (`SceneView`, `GameView`) y `PlayState` (`Edit`, `Playing`, `Paused`) en [`crates/glass_editor/src/panels/viewport.rs`](file:///home/d3/Documentos/GlassEnginer/crates/glass_editor/src/panels/viewport.rs).
+    * **Pestaña 🌐 Escena (Scene View):**
+      * Modo edición seguro: simulación física y scripts C# estrictamente detenidos.
+      * Cámara orbital 3D interactiva: rotación libre arrastrando con botón derecho o Shift+izquierdo, paneo con botón central, y zoom continuo con la rueda del ratón.
+      * Barra de herramientas con gizmos de transformación (`✛ Mover`, `⟳ Rotar`, `⤢ Escalar`, `⌖ Centrar`).
+    * **Pestaña 🎮 Juego (Game View):**
+      * Cámara de juego en perspectiva enfocada a la pista de obstáculos ($Z=9.5$).
+      * Conmutación automática a Game View al presionar `▶ Jugar`.
+      * Botones de control de ejecución:
+        * `▶ Jugar`: arranca física y scripts.
+        * `⏸ Pausar`: congela el tiempo ($dt=0$) manteniendo el cubo en suspensión.
+        * `⏹ Detener`: resetea la posición del jugador al spawn `[0.0, 0.5, 0.0]`, anula velocidades y regresa a modo edición.
+      * Leyenda visual de mandos y badge de estado de ejecución en pantalla.
+  * **Verificación de Calidad y Tests:**
+    * 100% de tests unitarios, de integración e introspección MCP aprobados (`cargo test --workspace`).
+    * Validación física end-to-end completada con éxito en GPU (`cargo run --bin glass_app -- --test-platformer`).
+    * Binarios optimizados generados en [`target/release/glass_app`](file:///home/d3/Documentos/GlassEnginer/target/release/glass_app) y gestionados por el script [`glass_engine.sh`](file:///home/d3/Documentos/GlassEnginer/glass_engine.sh).
 
-Los 11 hitos arquitectónicos y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
+---
+
+## Certificación Final de Arquitectura: GlassEngine 1.2
+
+Los 12 hitos arquitectónicos y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
 
 1. **Hito 1 — Workspace Cargo & Contratos Base:** 100% Verificado.
 2. **Hito 2 — Contexto Vulkan Multi-GPU Universal (NVIDIA, AMD, Intel, Integradas y Dedicadas):** 100% Verificado.
@@ -247,3 +294,4 @@ Los 11 hitos arquitectónicos y de gameplay del motor han sido completados, veri
 9. **Hito 9 — Simulación Física 3D Determinista (Rapier3D):** 100% Verificado.
 10. **Hito 10 — Compilación Dual (Editor vs Standalone Game Runtime):** 100% Verificado.
 11. **Hito 11 — Escena 3D & Automatización MCP de Gameplay con Audio Reactivo:** 100% Verificado.
+12. **Hito 12 — Viewports Duales Scene/Game, Play/Pause/Stop & Controles WASD:** 100% Verificado.
