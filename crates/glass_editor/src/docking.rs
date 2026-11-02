@@ -1,6 +1,6 @@
 use crate::panels::{
     ConsolePanel, CoordSpace, GizmoMode, HierarchyPanel, InspectorPanel, PivotMode, PlayState,
-    ViewportPanel, ViewportTab,
+    ViewportPanel,
 };
 use egui_dock::{DockArea, DockState, NodeIndex, TabViewer};
 use glass_mcp::SceneState;
@@ -189,7 +189,6 @@ impl EditorDockingLayout {
             };
             if ui.selectable_label(is_playing, play_text).on_hover_text("Iniciar simulación del juego").clicked() {
                 self.viewport.play_state = PlayState::Playing;
-                self.viewport.active_tab = ViewportTab::GameView;
             }
 
             let pause_text = if is_paused {
@@ -304,12 +303,10 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 self.hierarchy.render(ui, self.scene_state);
             }
             EditorTab::SceneView => {
-                self.viewport.active_tab = ViewportTab::SceneView;
-                self.viewport.render(ui, self.texture_id, self.selected_entity_id, self.scene_state);
+                self.viewport.render_scene_tab(ui, self.texture_id, self.selected_entity_id, self.scene_state);
             }
             EditorTab::GameView => {
-                self.viewport.active_tab = ViewportTab::GameView;
-                self.viewport.render(ui, self.texture_id, self.selected_entity_id, self.scene_state);
+                self.viewport.render_game_tab(ui, self.texture_id, self.scene_state);
             }
             EditorTab::Inspector => {
                 self.inspector.render(ui, *self.selected_entity_id, self.scene_state);

@@ -4,4 +4,4 @@ pub mod docking;
 pub mod panels;
 
 pub use docking::EditorDockingLayout;
-pub use panels::{PlayState, ViewportTab};
+pub use panels::{GameResolution, PlayState, ViewportTab};

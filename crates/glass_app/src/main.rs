@@ -582,13 +582,16 @@ impl GlassEngineApp {
                     ed.editor_cam_center[2] + ed.editor_cam_dist * ed.editor_cam_pitch.cos() * ed.editor_cam_yaw.cos(),
                 ];
                 let v = look_at(eye, ed.editor_cam_center, [0.0, 1.0, 0.0]);
-                let aspect = (ed.width / ed.height).max(0.1);
+                let aspect = (ed.scene_width / ed.scene_height).max(0.1);
                 let p = perspective_matrix(45.0_f32.to_radians(), aspect, 0.1, 100.0);
                 (v, p)
             }
             glass_editor::ViewportTab::GameView => {
                 let v = look_at([3.5, 3.2, 9.5], [3.5, 1.4, 0.0], [0.0, 1.0, 0.0]);
-                let p = perspective_matrix(45.0_f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
+                let aspect = self.editor_layout.viewport.game_resolution.aspect_ratio()
+                    .unwrap_or(self.editor_layout.viewport.game_width / self.editor_layout.viewport.game_height)
+                    .max(0.1);
+                let p = perspective_matrix(45.0_f32.to_radians(), aspect, 0.1, 100.0);
                 (v, p)
             }
         };

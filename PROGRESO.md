@@ -471,11 +471,30 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
     * **Kimi K3.1 Pro:** Verificó el patrón canónico de `allocate_exact_size` sobre `available_rect_before_wrap()` y el ciclo de vida de `DockArea::show_inside`.
     * **DeepSeek V3:** Validó el layout de botones cuadrados de 28x24 px con `Button::selected()`, los atajos de teclado y la topología del árbol binario de `DockState`.
 
+### Hito 19: Selección en Play Mode, Aspect Ratios Unity con Letterbox Centrado y Desacoplamiento Scene/Game
+* **Fecha:** 2026-11-01
+* **Acciones:**
+  * **Selección y Manipulación en Scene View durante Play Mode (`viewport.rs`):**
+    * Se eliminaron las restricciones que limitaban el raycasting 3D (`pick_entity_at_screen`), el dibujo de Bounding Box y los Gizmos únicamente a `PlayState::Edit`.
+    * En Scene View, el usuario ahora puede seleccionar cualquier GameObject mientras el juego está corriendo, inspeccionar en tiempo real su física, velocidad y variables en el Inspector, y visualizar su Bounding Box orientada en pleno movimiento (idéntico al comportamiento en vivo de Unity).
+  * **Selector de Aspect Ratios & Resoluciones Estilo Unity (`viewport.rs`, `main.rs`):**
+    * Se implementó el enum `GameResolution` accesible desde un menú desplegable en la barra superior de la pestaña Game:
+      * `Free Aspect (Adaptable)`: Se ajusta dinámicamente al 100% del área disponible sin márgenes.
+      * `16:9 Aspect`, `16:10 Aspect`, `4:3 Aspect`: Relaciones de aspecto canónicas con letterboxing/pillarboxing.
+      * Resoluciones fijas: `1280x720 (720p)`, `1920x1080 (1080p)`, `2560x1440 (2K)`, `3840x2160 (4K)`.
+    * **Fórmula de Letterbox Centrado:** Cálculo exacto del rectángulo visible $s = \min(W_c / W_t, H_c / H_t)$ y offset centrado, pintando barras oscuras de letterbox/pillarbox en los bordes para garantizar que al arrastrar la pestaña a cualquier esquina o tamaño reducido la vista de juego nunca se deforme ni quede desfasada.
+  * **Desacoplamiento Estricto de Dimensiones Scene View vs Game View:**
+    * Se separaron `scene_width`/`scene_height` y `game_width`/`game_height` dentro de `ViewportPanel`.
+    * En `main.rs`, la matriz de proyección calcula el aspect ratio de cada cámara de forma independiente (`scene_width / scene_height` para Scene View y `game_resolution.aspect_ratio()` para Game View), eliminando cualquier sobreescritura cruzada de dimensiones en layouts multi-pestaña o splits.
+  * **Auditoría Técnica Multi-IA (Mirai MCP - Kimi K3 & DeepSeek-v4-Pro):**
+    * **Kimi K3:** Aprobó la unificación de raycasting en Edit/Play sin interferencia de input del jugador y la modularización de `render_scene_tab` y `render_game_tab`.
+    * **DeepSeek-v4-Pro:** Validó la formulación matemática de letterboxing centrado y el principio de invariantes independientes para render targets en `egui_dock`.
+
 ---
 
-## Certificación Final de Arquitectura: GlassEngine 1.8
+## Certificación Final de Arquitectura: GlassEngine 1.9
 
-Los 18 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
+Los 19 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
 
 1. **Hito 1 — Workspace Cargo & Contratos Base:** 100% Verificado.
 2. **Hito 2 — Contexto Vulkan Multi-GPU Universal (NVIDIA, AMD, Intel, Integradas y Dedicadas):** 100% Verificado.
@@ -495,3 +514,4 @@ Los 18 hitos arquitectónicos, de edición y de gameplay del motor han sido comp
 16. **Hito 16 — Bounding Box Adaptativo, Pan Directo con Mano [Q] & Ventana Responsiva:** 100% Verificado.
 17. **Hito 17 — Rotación 3D en GPU/Gizmo, Picking de Superficies, Menú de Creación Unity y Swapchain Opaque Seguro:** 100% Verificado.
 18. **Hito 18 — Menú Contextual Total en Jerarquía, Toolbar de Iconos Unity & Docking Dinámico Adaptable (egui_dock):** 100% Verificado.
+19. **Hito 19 — Selección en Play Mode, Aspect Ratios Unity con Letterbox Centrado y Desacoplamiento Scene/Game:** 100% Verificado.
