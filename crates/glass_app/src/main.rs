@@ -336,6 +336,21 @@ impl GlassEngineApp {
             state.modify_material(player_id, [0.1, 0.8, 1.0], Some(false));
             state.modify_script(player_id, Some("GlassEngine.Core.Scripts.PlayerController".into()));
 
+            if let Some(p) = state.entities.iter_mut().find(|e| e.id == player_id) {
+                p.script_data = Some(glass_core::ScriptComponentData {
+                    class_name: "GlassEngine.Core.Scripts.PlayerController".into(),
+                    move_speed: 3.8,
+                    jump_velocity: 7.2,
+                    auto_demo: false,
+                });
+                p.audio = Some(glass_core::AudioSourceData {
+                    clip_name: "beep_880".into(),
+                    volume: 1.0,
+                    pitch: 1.0,
+                    is_playing: false,
+                });
+            }
+
             (floor_id, step1_id, step2_id, player_id)
         };
 
@@ -501,19 +516,38 @@ impl GlassEngineApp {
             self.script_host.update_all(0.016667);
         }
 
-        // 3. Simular paso de física Rapier3D — solo si simulación activa
+        // 3. Simular paso de física Rapier3D o sincronizar transform en modo edición
         if simulation_running {
             if let Ok(mut physics) = self.physics_world.lock() {
                 physics.step(0.016667);
                 let sync_transforms = physics.sync_all_transforms();
-                if !sync_transforms.is_empty() {
-                    if let Ok(mut scene) = self.scene_state.lock() {
-                        for (entity_id, tf) in sync_transforms {
-                            if let Some(ent) = scene.entities.iter_mut().find(|e| e.id == entity_id) {
-                                ent.transform.position = tf.position;
-                                ent.transform.scale = tf.scale;
+                if let Ok(mut scene) = self.scene_state.lock() {
+                    for (entity_id, tf) in sync_transforms {
+                        if let Some(ent) = scene.entities.iter_mut().find(|e| e.id == entity_id) {
+                            ent.transform.position = tf.position;
+                            ent.transform.scale = tf.scale;
+                        }
+                    }
+                    // Actualizar telemetría de velocidad lineal en entity.physics
+                    for ent in scene.entities.iter_mut() {
+                        if let Some(ref mut phys) = ent.physics {
+                            if let Some(bh) = physics.get_body_by_entity(ent.id) {
+                                if let Some(vel) = physics.get_linear_velocity(bh) {
+                                    phys.linear_velocity = vel;
+                                }
                             }
                         }
+                    }
+                }
+            }
+        } else {
+            // En modo Edición / Pausa:
+            // Sincronizar de inmediato transforms editados en Inspector o mediante gizmos hacia Rapier3D
+            if let (Ok(scene), Ok(mut physics)) = (self.scene_state.lock(), self.physics_world.lock()) {
+                for ent in &scene.entities {
+                    if let Some(bh) = physics.get_body_by_entity(ent.id) {
+                        physics.set_transform(bh, ent.transform.position, [0.0, 0.0, 0.0, 1.0]);
+                        physics.set_linear_velocity(bh, [0.0, 0.0, 0.0]);
                     }
                 }
             }

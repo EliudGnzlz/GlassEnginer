@@ -62,7 +62,7 @@ impl EditorDockingLayout {
             });
 
         egui::CentralPanel::default().show(ui, |ui| {
-            self.viewport.render(ui, viewport_texture_id);
+            self.viewport.render(ui, viewport_texture_id, selected_id, scene_state);
         });
     }
 }

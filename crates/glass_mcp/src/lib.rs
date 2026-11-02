@@ -5,7 +5,7 @@ pub mod scene;
 pub mod server;
 
 pub use protocol::{McpError, McpRequest, McpResponse};
-pub use scene::{EntityData, MeshData, SceneState, TransformData};
+pub use scene::{AudioSourceData, EntityData, MeshData, PhysicsData, SceneState, ScriptComponentData, TransformData};
 pub use server::McpServer;
 
 #[cfg(test)]

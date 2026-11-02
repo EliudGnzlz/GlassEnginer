@@ -508,6 +508,21 @@ impl McpServer {
                 scene.modify_material(player_id, [0.1, 0.8, 1.0], Some(false));
                 scene.modify_script(player_id, Some("GlassEngine.Core.Scripts.PlayerController".into()));
 
+                if let Some(p) = scene.entities.iter_mut().find(|e| e.id == player_id) {
+                    p.script_data = Some(glass_core::ScriptComponentData {
+                        class_name: "GlassEngine.Core.Scripts.PlayerController".into(),
+                        move_speed: 3.8,
+                        jump_velocity: 7.2,
+                        auto_demo: false,
+                    });
+                    p.audio = Some(glass_core::AudioSourceData {
+                        clip_name: "beep_880".into(),
+                        volume: 1.0,
+                        pitch: 1.0,
+                        is_playing: false,
+                    });
+                }
+
                 // 2. Configurar simulación física en Rapier3D
                 let phys_arc = self.get_physics();
                 let player_handle;

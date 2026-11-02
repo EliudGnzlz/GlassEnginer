@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("GlassEngine.Core")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+11291d06e6d89e5fb0a95166ed4ee364d2492874")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+5fe799215dd5c129522fe2d5bf1b45991b6aa8d7")]
 [assembly: System.Reflection.AssemblyProductAttribute("GlassEngine.Core")]
 [assembly: System.Reflection.AssemblyTitleAttribute("GlassEngine.Core")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

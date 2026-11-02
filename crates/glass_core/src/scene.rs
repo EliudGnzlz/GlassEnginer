@@ -35,13 +35,143 @@ impl Default for MeshData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PhysicsData {
+    pub body_type: String, // "Dynamic", "Static", "Kinematic"
+    pub mass: f32,
+    pub friction: f32,
+    pub restitution: f32,
+    pub box_extents: [f32; 3],
+    pub linear_velocity: [f32; 3],
+}
+
+impl Default for PhysicsData {
+    fn default() -> Self {
+        Self {
+            body_type: "Dynamic".into(),
+            mass: 1.0,
+            friction: 0.7,
+            restitution: 0.05,
+            box_extents: [0.5, 0.5, 0.5],
+            linear_velocity: [0.0, 0.0, 0.0],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptComponentData {
+    pub class_name: String,
+    pub move_speed: f32,
+    pub jump_velocity: f32,
+    pub auto_demo: bool,
+}
+
+impl Default for ScriptComponentData {
+    fn default() -> Self {
+        Self {
+            class_name: "GlassEngine.Core.Scripts.PlayerController".into(),
+            move_speed: 3.8,
+            jump_velocity: 7.2,
+            auto_demo: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioSourceData {
+    pub clip_name: String,
+    pub volume: f32,
+    pub pitch: f32,
+    pub is_playing: bool,
+}
+
+impl Default for AudioSourceData {
+    fn default() -> Self {
+        Self {
+            clip_name: "beep_440".into(),
+            volume: 1.0,
+            pitch: 1.0,
+            is_playing: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityData {
     pub id: u64,
+    pub active: bool,
     pub name: String,
+    pub tag: String,
+    pub layer: String,
+    pub is_static: bool,
     pub components: Vec<String>,
     pub transform: TransformData,
     pub mesh: Option<MeshData>,
     pub script: Option<String>,
+    pub script_data: Option<ScriptComponentData>,
+    pub physics: Option<PhysicsData>,
+    pub audio: Option<AudioSourceData>,
+}
+
+impl EntityData {
+    pub fn new(id: u64, name: String, components: Vec<String>) -> Self {
+        let is_static = components.iter().any(|c| c == "StaticCollider");
+        let mesh = if components.iter().any(|c| c == "MeshRenderer") {
+            Some(MeshData::default())
+        } else {
+            None
+        };
+        let script = if components.iter().any(|c| c == "Script") {
+            Some("GlassEngine.Core.Scripts.PlayerController".into())
+        } else {
+            None
+        };
+        let script_data = if script.is_some() {
+            Some(ScriptComponentData::default())
+        } else {
+            None
+        };
+        let physics = if components.iter().any(|c| c == "RigidBody" || c == "Collider" || c == "StaticCollider") {
+            let body_type = if is_static { "Static".into() } else { "Dynamic".into() };
+            Some(PhysicsData {
+                body_type,
+                mass: 1.0,
+                friction: 0.7,
+                restitution: 0.05,
+                box_extents: [0.5, 0.5, 0.5],
+                linear_velocity: [0.0, 0.0, 0.0],
+            })
+        } else {
+            None
+        };
+        let audio = if components.iter().any(|c| c == "AudioSource") {
+            Some(AudioSourceData::default())
+        } else {
+            None
+        };
+        let tag = if name.contains("Player") {
+            "Player".into()
+        } else if name.contains("Camera") {
+            "MainCamera".into()
+        } else {
+            "Untagged".into()
+        };
+
+        Self {
+            id,
+            active: true,
+            name,
+            tag,
+            layer: "Default".into(),
+            is_static,
+            components,
+            transform: TransformData::default(),
+            mesh,
+            script,
+            script_data,
+            physics,
+            audio,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -56,54 +186,10 @@ impl Default for SceneState {
     fn default() -> Self {
         Self {
             entities: vec![
-                EntityData {
-                    id: 1,
-                    name: "Main Camera".into(),
-                    components: vec!["Transform".into(), "Camera".into()],
-                    transform: TransformData {
-                        position: [0.0, 1.5, -5.0],
-                        rotation: [0.0, 0.0, 0.0],
-                        scale: [1.0, 1.0, 1.0],
-                    },
-                    mesh: None,
-                    script: None,
-                },
-                EntityData {
-                    id: 2,
-                    name: "Directional Light".into(),
-                    components: vec!["Transform".into(), "Light".into()],
-                    transform: TransformData {
-                        position: [2.0, 10.0, 5.0],
-                        rotation: [-45.0, 30.0, 0.0],
-                        scale: [1.0, 1.0, 1.0],
-                    },
-                    mesh: None,
-                    script: None,
-                },
-                EntityData {
-                    id: 3,
-                    name: "Vulkan Viewport Triangle".into(),
-                    components: vec!["Transform".into(), "MeshRenderer".into(), "Material".into()],
-                    transform: TransformData {
-                        position: [0.0, 0.0, 0.0],
-                        rotation: [0.0, 0.0, 0.0],
-                        scale: [1.0, 1.0, 1.0],
-                    },
-                    mesh: Some(MeshData::default()),
-                    script: None,
-                },
-                EntityData {
-                    id: 4,
-                    name: "Player Entity".into(),
-                    components: vec!["Transform".into(), "Script".into()],
-                    transform: TransformData {
-                        position: [0.0, 0.0, 2.0],
-                        rotation: [0.0, 0.0, 0.0],
-                        scale: [1.0, 1.0, 1.0],
-                    },
-                    mesh: None,
-                    script: Some("PlayerMovement.cs".into()),
-                },
+                EntityData::new(1, "Main Camera".into(), vec!["Transform".into(), "Camera".into()]),
+                EntityData::new(2, "Directional Light".into(), vec!["Transform".into(), "Light".into()]),
+                EntityData::new(3, "Vulkan Viewport Triangle".into(), vec!["Transform".into(), "MeshRenderer".into(), "Material".into()]),
+                EntityData::new(4, "Player Entity".into(), vec!["Transform".into(), "Script".into()]),
             ],
             next_entity_id: 5,
             viewport_snapshot_png: None,
@@ -120,14 +206,7 @@ impl SceneState {
     pub fn create_entity(&mut self, name: String, components: Vec<String>) -> u64 {
         let id = self.next_entity_id;
         self.next_entity_id += 1;
-        self.entities.push(EntityData {
-            id,
-            name,
-            components,
-            transform: TransformData::default(),
-            mesh: None,
-            script: None,
-        });
+        self.entities.push(EntityData::new(id, name, components));
         id
     }
 

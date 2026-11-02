@@ -54,6 +54,21 @@ public sealed class PlayerController : GlassBehaviour
         _timer += deltaTime;
         if (_jumpCooldown > 0f) _jumpCooldown -= deltaTime;
 
+        // 0. Sincronizar parámetros expuestos del script en tiempo real desde el Inspector
+        if (RuntimeBridge.GetScriptParamsNative != null)
+        {
+            unsafe
+            {
+                ScriptParamsData p;
+                if (RuntimeBridge.GetScriptParamsNative(&p) == 0)
+                {
+                    if (p.MoveSpeed > 0.1f) MoveSpeed = p.MoveSpeed;
+                    if (p.JumpVelocity > 0.1f) JumpVelocity = p.JumpVelocity;
+                    AutoDemo = p.AutoDemo != 0;
+                }
+            }
+        }
+
         // 1. Sincronizar posición y rotación desde Rapier3D
         if (!_rigidBody.GetTransform(out var physPos, out var physRot))
         {

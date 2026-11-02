@@ -90,3 +90,39 @@ pub unsafe extern "C" fn get_input(out: *mut InputDataFfi) -> i32 {
     unsafe { *out = get_input_state() };
     BRIDGE_OK
 }
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ScriptParamsFfi {
+    pub move_speed: f32,
+    pub jump_velocity: f32,
+    pub auto_demo: u8,
+}
+
+static GLOBAL_SCRIPT_PARAMS: Mutex<ScriptParamsFfi> = Mutex::new(ScriptParamsFfi {
+    move_speed: 3.8,
+    jump_velocity: 7.2,
+    auto_demo: 0,
+});
+
+pub fn set_script_params(params: ScriptParamsFfi) {
+    if let Ok(mut g) = GLOBAL_SCRIPT_PARAMS.lock() {
+        *g = params;
+    }
+}
+
+pub fn get_script_params() -> ScriptParamsFfi {
+    GLOBAL_SCRIPT_PARAMS.lock().map(|g| *g).unwrap_or(ScriptParamsFfi {
+        move_speed: 3.8,
+        jump_velocity: 7.2,
+        auto_demo: 0,
+    })
+}
+
+pub unsafe extern "C" fn get_script_params_ffi(out: *mut ScriptParamsFfi) -> i32 {
+    if out.is_null() {
+        return BRIDGE_ERR_NULL_PTR;
+    }
+    unsafe { *out = get_script_params() };
+    BRIDGE_OK
+}

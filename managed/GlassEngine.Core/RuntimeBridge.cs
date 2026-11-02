@@ -153,6 +153,18 @@ public static class RuntimeBridge
         Log(2, "GlassEngine.Core InputBridge inicializado exitosamente desde Rust.");
     }
 
+    public static unsafe GetScriptParamsDelegate? GetScriptParamsNative;
+
+    [UnmanagedCallersOnly(EntryPoint = "InitScriptParamsBridge")]
+    public static unsafe void InitScriptParamsBridge(IntPtr getParamsFn)
+    {
+        if (getParamsFn != IntPtr.Zero)
+        {
+            GetScriptParamsNative = Marshal.GetDelegateForFunctionPointer<GetScriptParamsDelegate>(getParamsFn);
+        }
+        Log(2, "GlassEngine.Core ScriptParamsBridge inicializado exitosamente desde Rust.");
+    }
+
     public static ulong CreateRigidBody(ulong entityId, int bodyType, Vector3 position, Quaternion rotation)
     {
         if (_createRigidBody is null) return 0;
