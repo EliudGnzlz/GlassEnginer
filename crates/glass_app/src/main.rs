@@ -629,7 +629,13 @@ impl GlassEngineApp {
                 .acquire_next_image(renderer.image_available_semaphore)
             {
                 Ok(idx) => idx,
-                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) | Err(vk::Result::SUBOPTIMAL_KHR) => {
+                    let size = window.inner.inner_size();
+                    let _ = renderer.resize(vk_ctx, size.width, size.height);
+                    return Ok(());
+                }
+                Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
+                    log::warn!("Surface lost KHR detectado, recreando swapchain...");
                     let size = window.inner.inner_size();
                     let _ = renderer.resize(vk_ctx, size.width, size.height);
                     return Ok(());
@@ -693,7 +699,13 @@ impl GlassEngineApp {
                 .acquire_next_image(renderer.image_available_semaphore)
             {
                 Ok(idx) => idx,
-                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) | Err(vk::Result::SUBOPTIMAL_KHR) => {
+                    let size = window.inner.inner_size();
+                    let _ = renderer.resize(vk_ctx, size.width, size.height);
+                    return Ok(());
+                }
+                Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
+                    log::warn!("Surface lost KHR detectado, recreando swapchain...");
                     let size = window.inner.inner_size();
                     let _ = renderer.resize(vk_ctx, size.width, size.height);
                     return Ok(());
@@ -772,7 +784,14 @@ impl GlassEngineApp {
                     .swapchains(&swapchains)
                     .image_indices(&image_indices);
 
-                let _ = renderer.swapchain.loader.queue_present(vk_ctx.present_queue, &present_info);
+                match renderer.swapchain.loader.queue_present(vk_ctx.present_queue, &present_info) {
+                    Ok(_) => {}
+                    Err(vk::Result::ERROR_OUT_OF_DATE_KHR) | Err(vk::Result::SUBOPTIMAL_KHR) => {
+                        let size = window.inner.inner_size();
+                        let _ = renderer.resize(vk_ctx, size.width, size.height);
+                    }
+                    Err(e) => log::warn!("Aviso durante queue_present: {:?}", e),
+                }
             }
         }
 
@@ -1525,7 +1544,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .any(|arg| arg == "--test-init" || arg == "--check-vulkan" || arg == "--test-m3" || arg == "--test-m4");
 
-    let event_loop = EventLoop::new()?;
+    let mut builder = EventLoop::builder();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        if std::env::var("WINIT_UNIX_BACKEND").as_deref() == Ok("x11") || std::env::var("DISPLAY").is_ok() {
+            log::info!("Forzando backend X11/XWayland en Winit para máxima compatibilidad con Vulkan y NVIDIA...");
+            builder.with_x11();
+        }
+    }
+    let event_loop = builder.build()?;
     let mut app = GlassEngineApp::new(
         is_standalone,
         is_headless_test,
