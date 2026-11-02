@@ -185,7 +185,7 @@ impl ViewportPanel {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(format!("🎬 {:.0}x{:.0}", self.scene_width, self.scene_height));
+                ui.label(format!("⎚ {:.0}x{:.0}", self.scene_width, self.scene_height));
             });
         });
 
@@ -514,7 +514,7 @@ impl ViewportPanel {
             ui.label(controls_hint);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(format!("🎮 {:.0}x{:.0}", self.game_width, self.game_height));
+                ui.label(format!("▶ {:.0}x{:.0}", self.game_width, self.game_height));
             });
         });
 

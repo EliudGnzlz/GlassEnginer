@@ -55,11 +55,11 @@ impl InspectorPanel {
                     let icon = if entity.components.iter().any(|c| c == "Camera") {
                         "🎥"
                     } else if entity.components.iter().any(|c| c == "Light") {
-                        "💡"
+                        "☼"
                     } else if entity.components.iter().any(|c| c == "MeshRenderer") {
-                        "📐"
+                        "⬡"
                     } else {
-                        "📦"
+                        "▣"
                     };
                     ui.label(icon);
                     ui.add_sized([130.0, 20.0], egui::TextEdit::singleline(&mut entity.name));
@@ -166,7 +166,7 @@ impl InspectorPanel {
                 // ==========================================
                 let mut remove_mesh = false;
                 if let Some(ref mut mesh) = entity.mesh {
-                    ui.collapsing("🎨 Mesh Renderer & Material", |ui| {
+                    ui.collapsing("◈ Mesh Renderer & Material", |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Color Albedo:");
                             ui.color_edit_button_rgb(&mut mesh.color);
@@ -222,15 +222,15 @@ impl InspectorPanel {
                 // ==========================================
                 let mut remove_light = false;
                 if let Some(ref mut light) = entity.light {
-                    ui.collapsing("💡 Luz (Light)", |ui| {
+                    ui.collapsing("☼ Luz (Light)", |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Tipo de Luz:");
                             egui::ComboBox::from_id_salt(format!("light_type_{}", entity.id))
                                 .selected_text(&light.light_type)
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut light.light_type, "Directional".into(), "💡 Directional (Sol / Luz infinita)");
-                                    ui.selectable_value(&mut light.light_type, "Point".into(), "🔆 Point (Luz omnidireccional)");
-                                    ui.selectable_value(&mut light.light_type, "Spot".into(), "🔦 Spot (Foco cónico)");
+                                    ui.selectable_value(&mut light.light_type, "Directional".into(), "☼ Directional (Sol / Luz infinita)");
+                                    ui.selectable_value(&mut light.light_type, "Point".into(), "✦ Point (Luz omnidireccional)");
+                                    ui.selectable_value(&mut light.light_type, "Spot".into(), "⎚ Spot (Foco cónico)");
                                 });
                         });
                         ui.horizontal(|ui| {
@@ -314,7 +314,7 @@ impl InspectorPanel {
                 // ==========================================
                 let mut remove_script = false;
                 if let Some(ref mut script_name) = entity.script {
-                    ui.collapsing("📜 Script C# (.NET CoreCLR)", |ui| {
+                    ui.collapsing("§ Script C# (.NET CoreCLR)", |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Script:");
                             ui.text_edit_singleline(script_name);
@@ -373,7 +373,7 @@ impl InspectorPanel {
                 // ==========================================
                 let mut remove_audio = false;
                 if let Some(ref mut audio) = entity.audio {
-                    ui.collapsing("🔊 AudioSource (Kira CPAL)", |ui| {
+                    ui.collapsing("♫ AudioSource (Kira CPAL)", |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Audio Clip:");
                             egui::ComboBox::from_id_salt(format!("audio_clip_{}", entity.id))
@@ -440,7 +440,7 @@ impl InspectorPanel {
                             self.show_add_component_menu = false;
                         }
 
-                        if entity.audio.is_none() && ui.button("🔊 AudioSource").clicked() {
+                        if entity.audio.is_none() && ui.button("♫ AudioSource").clicked() {
                             entity.audio = Some(AudioSourceData::default());
                             entity.components.push("AudioSource".into());
                             self.show_add_component_menu = false;
@@ -452,7 +452,7 @@ impl InspectorPanel {
                             self.show_add_component_menu = false;
                         }
 
-                        if entity.light.is_none() && ui.button("💡 Luz (Light)").clicked() {
+                        if entity.light.is_none() && ui.button("☼ Luz (Light)").clicked() {
                             entity.light = Some(LightData::default());
                             entity.components.push("Light".into());
                             self.show_add_component_menu = false;

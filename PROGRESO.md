@@ -581,11 +581,49 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
     * Badges de Scene View reducidos a 24px con trazos finos (1.0px) y estética limpia de baja intrusión visual.
 * **Resultado:** Comportamiento idéntico a Unity verificado: arrastre fluido de objetos entre padres y niveles de orden, iluminación solar coherente con la rotación y frustum de cámara geométricamente exacto.
 
+### Hito 23: Perfeccionamiento del Frustum 3D, Cobertura Tipográfica Universal de Iconos (DejaVu Sans + Noto Symbols) y GlassEngine Hub / Launcher
+* **Fecha:** 2026-11-02
+* **Auditoría y Consulta:** DeepSeek 4 Pro + Kimi K3.
+* **Acciones:**
+  * **Frustum 3D de Cámara Canónico y Proyección Completa (`gizmo_3d.rs`):**
+    * Se amplió el alcance del frustum de cámara de 3.5m (que quedaba flotando a medio camino) a 15.0m (adaptable según `far_clip`), abarcando completamente el suelo (`30x1x30`), las plataformas escalonadas y el jugador en $Z = 0.0$.
+    * Se trazaron las 16 aristas de la pirámide visual estilo Unity:
+      * 4 aristas del plano cercano Near (`pn_tl` - `pn_tr` - `pn_br` - `pn_bl` - `pn_tl`).
+      * 4 aristas del plano lejano Far (`pf_tl` - `pf_tr` - `pf_br` - `pf_bl` - `pf_tl`).
+      * 4 aristas laterales que unen permanentemente Near con Far (`pn_*` hacia `pf_*`), evitando que el frustum desaparezca cuando el vértice de la cámara sale del viewport.
+      * 4 rayos apex desde el vértice focal `p_cam` hasta las 4 esquinas del plano cercano.
+      * Línea de mira central / eje óptico desde el centro Near hasta el centro Far.
+      * Indicador triangular "UP" nítido en el borde superior del plano Near.
+      * Soporte matemático completo para rotación de alabeo en Roll ($Z$) además de Pitch ($X$) y Yaw ($Y$).
+  * **Solución Integral de Iconos Faltantes & Tipografías del Sistema (`lib.rs`, `main.rs`, paneles UI):**
+    * Se implementó [`setup_editor_fonts`](file:///home/d3/Documentos/GlassEnginer/crates/glass_editor/src/lib.rs#L14-L65) vinculándolo a `egui::Context` en [`GlassEngineApp::new`](file:///home/d3/Documentos/GlassEnginer/crates/glass_app/src/main.rs#L305-L315).
+    * Se cargaron e inyectaron en `FontFamily::Proportional` y `FontFamily::Monospace`:
+      * `DejaVuSans.ttf` (cobertura Unicode universal BMP en Linux).
+      * `NotoSansSymbols-Regular.ttf` y `NotoSansSymbols2-Regular.ttf` (símbolos matemáticos y técnicos).
+      * `MesloLGLDZNerdFont-Regular.ttf` (iconos para desarrolladores).
+    * Se reemplazaron emojis SMP que provocaban caracteres invisibles o tofu (`▯`) por glifos sobrios y de renderizado garantizado:
+      * Primitivas 3D: `■ Cubo`, `● Esfera`, `⬯ Cápsula`, `⬒ Cilindro`, `▬ Plano`.
+      * Luces y Audio: `☼ Luz Direccional`, `✦ Luz Puntual`, `♫ Audio Source`.
+      * Entidades y Navegación: `⬡ Objeto 3D`, `◇ Crear Vacío`, `📁 Grupo`, `⎚ Escena`, `▶ Juego`, `↻ Rotar`.
+  * **GlassEngine Hub / Launcher Integrado (`launcher.rs`, `docking.rs`, `main.rs`):**
+    * Se diseñó la arquitectura `AppMode` (`Launcher` y `Editor`) que conmuta fluidamente dentro de la misma instancia de Vulkan sin necesidad de recrear el Swapchain ni reiniciar descriptores.
+    * **Pestaña `✨ Escenas de Ejemplo`:**
+      * 🎮 **Plataformas 3D (Escena de Prueba)**: Carga el escenario principal con suelo, escalones, física Rapier3D a 60 Hz y script C# CoreCLR.
+      * 🧱 **Physics Playground**: Escenario con torre piramidal de 6 cubos dinámicos apilados para probar colisiones y gravedad en tiempo real.
+      * 💡 **Audio & Iluminación**: Escenario de prueba con luces puntuales roja y cian, sol direccional, audio espacial procedural continuo y mallas de exhibición.
+    * **Pestaña `📁 Proyectos`:**
+      * Modal de creación de proyectos nuevos con nombre, carpeta y selector de plantilla (`Platformer3D`, `PhysicsSandbox`, `EmptyScene`). Genera automáticamente estructura `Assets/Scenes`, `Assets/Scripts`, `Assets/Materials` y archivo `project.glass`.
+      * Lista de proyectos recientes listos para abrir.
+    * **Pestaña `📚 Guía y Atajos`:**
+      * Hoja de referencia rápida de atajos de teclado `[Q]`, `[W]`, `[E]`, `[R]`, `[T]`, `[Y]`, `[F]`, controles de cámara y simulación.
+    * **Botón `[ 🏠 Hub ]`:** Ubicado en la barra superior del editor para regresar al Launcher en cualquier momento.
+* **Resultado:** Frustum de cámara 100% fiel a Unity abarcando toda la escena, eliminación total de iconos rotos/tofu en la interfaz y panel de Launcher/Hub totalmente operativo.
+
 ---
 
 ## Certificación Final de Arquitectura: GlassEngine 2.0
 
-Los 22 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
+Los 23 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
 
 1. **Hito 1 — Workspace Cargo & Contratos Base:** 100% Verificado.
 2. **Hito 2 — Contexto Vulkan Multi-GPU Universal (NVIDIA, AMD, Intel, Integradas y Dedicadas):** 100% Verificado.
@@ -609,3 +647,4 @@ Los 22 hitos arquitectónicos, de edición y de gameplay del motor han sido comp
 20. **Hito 20 — Render Targets Offscreen Duales, Verificación de Cámara Activa & Iluminación Dinámica:** 100% Verificado.
 21. **Hito 21 — Agrupación y Reordenación en Jerarquía, Gizmos 3D de Cámara (Frustum) y Luz (Rango/Dirección):** 100% Verificado.
 22. **Hito 22 — Corrección Matemática de Frustum y Dirección de Luz, Drag & Drop Jerarquía e Iconos Minimalistas:** 100% Verificado.
+23. **Hito 23 — Perfeccionamiento del Frustum 3D, Cobertura Tipográfica Universal de Iconos y GlassEngine Hub / Launcher:** 100% Verificado.

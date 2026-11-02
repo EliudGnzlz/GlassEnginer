@@ -558,21 +558,39 @@ pub fn draw_camera_gizmo(
 
     let rx = rot[0].to_radians();
     let ry = rot[1].to_radians();
+    let rz = rot[2].to_radians();
 
     let (sx, cx) = (rx.sin(), rx.cos());
     let (sy, cy) = (ry.sin(), ry.cos());
 
-    // Vector forward hacia el contenido de la escena (-Z base con rotación Euler)
+    // Vector forward hacia el contenido de la escena (-Z base con rotación Pitch y Yaw)
     let fwd = [sy * cx, -sx, -cy * cx];
-    let right = [cy, 0.0, sy];
-    let up = [sy * sx, cx, -cy * sx];
+    let mut right = [cy, 0.0, sy];
+    let mut up = [sy * sx, cx, -cy * sx];
+
+    // Aplicar Roll (rotación en Z) sobre los ejes right y up si es diferente de cero
+    if rz.abs() > 0.0001 {
+        let (sz, cz) = (rz.sin(), rz.cos());
+        let r_rolled = [
+            right[0] * cz + up[0] * sz,
+            right[1] * cz + up[1] * sz,
+            right[2] * cz + up[2] * sz,
+        ];
+        let u_rolled = [
+            -right[0] * sz + up[0] * cz,
+            -right[1] * sz + up[1] * cz,
+            -right[2] * sz + up[2] * cz,
+        ];
+        right = r_rolled;
+        up = u_rolled;
+    }
 
     let fov_rad = cam_entity.camera.as_ref().map(|c| c.fov).unwrap_or(60.0).to_radians();
     let aspect = 16.0 / 9.0;
 
     // Dimensiones del frustum para representación visual en el editor
     let d_near = 0.5;
-    let d_far = 3.5;
+    let d_far = cam_entity.camera.as_ref().map(|c| c.far_clip).unwrap_or(15.0).clamp(10.0, 25.0);
     let h_near = d_near * (fov_rad * 0.5).tan();
     let w_near = h_near * aspect;
     let h_far = d_far * (fov_rad * 0.5).tan();
@@ -590,6 +608,10 @@ pub fn draw_camera_gizmo(
     let f_br = [pos[0] + fwd[0]*d_far + right[0]*w_far - up[0]*h_far, pos[1] + fwd[1]*d_far + right[0]*w_far - up[0]*h_far, pos[2] + fwd[2]*d_far + right[2]*w_far - up[2]*h_far];
     let f_bl = [pos[0] + fwd[0]*d_far - right[0]*w_far - up[0]*h_far, pos[1] + fwd[1]*d_far - right[1]*w_far - up[1]*h_far, pos[2] + fwd[2]*d_far - right[2]*w_far - up[2]*h_far];
 
+    // Centros de los planos para la línea de mira central (Eje óptico)
+    let c_near = [pos[0] + fwd[0]*d_near, pos[1] + fwd[1]*d_near, pos[2] + fwd[2]*d_near];
+    let c_far = [pos[0] + fwd[0]*d_far, pos[1] + fwd[1]*d_far, pos[2] + fwd[2]*d_far];
+
     // Proyecciones a pantalla
     let p_cam = world_to_screen(pos, vp, rect);
     let pn_tl = world_to_screen(n_tl, vp, rect);
@@ -602,54 +624,74 @@ pub fn draw_camera_gizmo(
     let pf_br = world_to_screen(f_br, vp, rect);
     let pf_bl = world_to_screen(f_bl, vp, rect);
 
-    // Si está seleccionada, dibujar frustum completo brillante
+    let p_cn = world_to_screen(c_near, vp, rect);
+    let p_cf = world_to_screen(c_far, vp, rect);
+
+    // Dibujar Frustum wireframe estilo Unity
     let stroke_frustum = if is_selected {
-        Stroke::new(2.0, Color32::from_rgb(80, 220, 255))
+        Stroke::new(1.8, Color32::from_rgb(80, 220, 255))
     } else {
-        Stroke::new(1.0, Color32::from_rgba_unmultiplied(80, 220, 255, 90))
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(80, 220, 255, 70))
     };
 
     if is_selected {
-        // Líneas desde la cámara hacia las 4 esquinas lejanas
+        // 1. Rayos desde el vértice de la cámara (Apex) hacia las 4 esquinas del plano cercano
+        let stroke_apex = Stroke::new(1.2, Color32::from_rgba_unmultiplied(80, 220, 255, 170));
         if let Some(pc) = p_cam {
-            if let Some(p) = pf_tl { painter.line_segment([pc, p], stroke_frustum); }
-            if let Some(p) = pf_tr { painter.line_segment([pc, p], stroke_frustum); }
-            if let Some(p) = pf_br { painter.line_segment([pc, p], stroke_frustum); }
-            if let Some(p) = pf_bl { painter.line_segment([pc, p], stroke_frustum); }
+            if let Some(p) = pn_tl { painter.line_segment([pc, p], stroke_apex); }
+            if let Some(p) = pn_tr { painter.line_segment([pc, p], stroke_apex); }
+            if let Some(p) = pn_br { painter.line_segment([pc, p], stroke_apex); }
+            if let Some(p) = pn_bl { painter.line_segment([pc, p], stroke_apex); }
         }
 
-        // Rectángulo plano cercano
+        // 2. Rectángulo del plano cercano (Near Plane)
         if let (Some(a), Some(b)) = (pn_tl, pn_tr) { painter.line_segment([a, b], stroke_frustum); }
         if let (Some(a), Some(b)) = (pn_tr, pn_br) { painter.line_segment([a, b], stroke_frustum); }
         if let (Some(a), Some(b)) = (pn_br, pn_bl) { painter.line_segment([a, b], stroke_frustum); }
         if let (Some(a), Some(b)) = (pn_bl, pn_tl) { painter.line_segment([a, b], stroke_frustum); }
 
-        // Rectángulo plano lejano
+        // 3. Aristas laterales de unión del Frustum (Near -> Far)
+        if let (Some(a), Some(b)) = (pn_tl, pf_tl) { painter.line_segment([a, b], stroke_frustum); }
+        if let (Some(a), Some(b)) = (pn_tr, pf_tr) { painter.line_segment([a, b], stroke_frustum); }
+        if let (Some(a), Some(b)) = (pn_br, pf_br) { painter.line_segment([a, b], stroke_frustum); }
+        if let (Some(a), Some(b)) = (pn_bl, pf_bl) { painter.line_segment([a, b], stroke_frustum); }
+
+        // 4. Rectángulo del plano lejano (Far Plane)
         if let (Some(a), Some(b)) = (pf_tl, pf_tr) { painter.line_segment([a, b], stroke_frustum); }
         if let (Some(a), Some(b)) = (pf_tr, pf_br) { painter.line_segment([a, b], stroke_frustum); }
         if let (Some(a), Some(b)) = (pf_br, pf_bl) { painter.line_segment([a, b], stroke_frustum); }
         if let (Some(a), Some(b)) = (pf_bl, pf_tl) { painter.line_segment([a, b], stroke_frustum); }
 
-        // Triángulo indicador "UP" limpio en la parte superior del marco lejano
-        let top_apex = [
-            (f_tl[0] + f_tr[0]) * 0.5 + up[0] * 0.35,
-            (f_tl[1] + f_tr[1]) * 0.5 + up[1] * 0.35,
-            (f_tl[2] + f_tr[2]) * 0.5 + up[2] * 0.35,
+        // 5. Línea central de mira / eje óptico
+        if let (Some(cn), Some(cf)) = (p_cn, p_cf) {
+            let stroke_sight = Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 220, 100, 140));
+            painter.line_segment([cn, cf], stroke_sight);
+        }
+
+        // 6. Triángulo indicador "UP" en el borde superior del plano cercano
+        let up_apex = [
+            c_near[0] + up[0] * (h_near * 1.35),
+            c_near[1] + up[1] * (h_near * 1.35),
+            c_near[2] + up[2] * (h_near * 1.35),
         ];
-        let base_left = [
-            (f_tl[0] + f_tr[0]) * 0.5 - right[0] * 0.25,
-            (f_tl[1] + f_tr[1]) * 0.5 - right[1] * 0.25,
-            (f_tl[2] + f_tr[2]) * 0.5 - right[2] * 0.25,
+        let up_bl = [
+            c_near[0] + up[0] * h_near - right[0] * (w_near * 0.2),
+            c_near[1] + up[1] * h_near - right[1] * (w_near * 0.2),
+            c_near[2] + up[2] * h_near - right[2] * (w_near * 0.2),
         ];
-        let base_right = [
-            (f_tl[0] + f_tr[0]) * 0.5 + right[0] * 0.25,
-            (f_tl[1] + f_tr[1]) * 0.5 + right[1] * 0.25,
-            (f_tl[2] + f_tr[2]) * 0.5 + right[2] * 0.25,
+        let up_br = [
+            c_near[0] + up[0] * h_near + right[0] * (w_near * 0.2),
+            c_near[1] + up[1] * h_near + right[1] * (w_near * 0.2),
+            c_near[2] + up[2] * h_near + right[2] * (w_near * 0.2),
         ];
-        if let (Some(p_apex), Some(p_bl), Some(p_br)) = (world_to_screen(top_apex, vp, rect), world_to_screen(base_left, vp, rect), world_to_screen(base_right, vp, rect)) {
-            let up_stroke = Stroke::new(1.6, Color32::from_rgb(255, 215, 0));
-            painter.line_segment([p_bl, p_apex], up_stroke);
-            painter.line_segment([p_apex, p_br], up_stroke);
+        if let (Some(p_apex), Some(p_l), Some(p_r)) = (
+            world_to_screen(up_apex, vp, rect),
+            world_to_screen(up_bl, vp, rect),
+            world_to_screen(up_br, vp, rect),
+        ) {
+            let up_stroke = Stroke::new(1.8, Color32::from_rgb(255, 215, 0));
+            painter.line_segment([p_l, p_apex], up_stroke);
+            painter.line_segment([p_apex, p_r], up_stroke);
         }
     }
 

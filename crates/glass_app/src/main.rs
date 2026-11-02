@@ -9,7 +9,9 @@ use glass_audio::{register_global_audio_system, AudioSystem};
 use glass_physics::{register_global_physics_world, BodyType, PhysicsWorld};
 use glass_core::{GlassWindow, SceneState, WindowConfig};
 #[cfg(feature = "editor")]
-use glass_editor::EditorDockingLayout;
+use glass_editor::{
+    AppMode, EditorDockingLayout, LauncherAction, LauncherPanel, ProjectTemplate, SampleScenePreset,
+};
 #[cfg(feature = "editor")]
 use glass_mcp::McpServer;
 use glass_renderer::{
@@ -198,6 +200,12 @@ struct GlassEngineApp {
     game_viewport_texture_id: Option<egui::TextureId>,
     #[cfg(feature = "editor")]
     editor_layout: EditorDockingLayout,
+    #[cfg(feature = "editor")]
+    pub app_mode: AppMode,
+    #[cfg(feature = "editor")]
+    pub launcher: LauncherPanel,
+    #[cfg(feature = "editor")]
+    pub pending_launcher_action: Option<LauncherAction>,
     pub scene_state: Arc<Mutex<SceneState>>,
     #[cfg(feature = "editor")]
     #[allow(dead_code)]
@@ -293,6 +301,28 @@ impl GlassEngineApp {
         let physics_world = Arc::new(Mutex::new(PhysicsWorld::new()));
         register_global_physics_world(physics_world.clone());
 
+        #[cfg(feature = "editor")]
+        let egui_ctx = egui::Context::default();
+        #[cfg(feature = "editor")]
+        glass_editor::setup_editor_fonts(&egui_ctx);
+
+        #[cfg(feature = "editor")]
+        let start_in_editor = is_standalone
+            || is_platformer_test
+            || is_headless_test
+            || is_m5_test
+            || is_m6_test
+            || is_m7_test
+            || is_m8_test
+            || is_m9_test
+            || is_m10_test;
+        #[cfg(feature = "editor")]
+        let app_mode = if start_in_editor {
+            AppMode::Editor
+        } else {
+            AppMode::Launcher
+        };
+
         Self {
             window_config: WindowConfig::default(),
             vulkan_config: VulkanConfig::default(),
@@ -300,7 +330,7 @@ impl GlassEngineApp {
             vulkan_context: None,
             renderer: None,
             #[cfg(feature = "editor")]
-            egui_ctx: egui::Context::default(),
+            egui_ctx,
             #[cfg(feature = "editor")]
             egui_winit: None,
             #[cfg(feature = "editor")]
@@ -319,6 +349,12 @@ impl GlassEngineApp {
             game_viewport_texture_id: None,
             #[cfg(feature = "editor")]
             editor_layout: EditorDockingLayout::new(),
+            #[cfg(feature = "editor")]
+            app_mode,
+            #[cfg(feature = "editor")]
+            launcher: LauncherPanel::new(),
+            #[cfg(feature = "editor")]
+            pending_launcher_action: None,
             scene_state,
             #[cfg(feature = "editor")]
             mcp_server,
@@ -449,6 +485,193 @@ impl GlassEngineApp {
         }
     }
 
+    pub fn setup_physics_playground_scene(&mut self) {
+        let (floor_id, dynamic_ids) = {
+            let mut state = self.scene_state.lock().unwrap();
+            state.entities.clear();
+
+            let cam_id = state.create_entity(
+                "Main Camera".into(),
+                vec!["Transform".into(), "Camera".into()],
+            );
+            state.modify_transform(cam_id, Some([0.0, 4.5, 12.0]), Some([12.0, 0.0, 0.0]), Some([1.0, 1.0, 1.0]));
+
+            let light_id = state.create_entity(
+                "Directional Light".into(),
+                vec!["Transform".into(), "Light".into()],
+            );
+            state.modify_transform(light_id, Some([0.0, 10.0, 0.0]), Some([45.0, -35.0, 0.0]), Some([1.0, 1.0, 1.0]));
+
+            let floor_id = state.create_entity(
+                "Static Floor".into(),
+                vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
+            );
+            state.modify_transform(floor_id, Some([0.0, -0.5, 0.0]), None, Some([30.0, 1.0, 30.0]));
+            state.modify_material(floor_id, [0.25, 0.55, 0.35], Some(false));
+
+            let mut dynamic_ids = Vec::new();
+            let colors = [
+                [0.9, 0.3, 0.2],
+                [0.2, 0.7, 0.9],
+                [0.9, 0.8, 0.2],
+                [0.7, 0.3, 0.9],
+                [0.2, 0.9, 0.4],
+                [0.95, 0.5, 0.1],
+            ];
+
+            // Apilamiento de 6 cubos físicos en pirámide
+            let positions = [
+                [-1.2, 0.5, 0.0],
+                [ 1.2, 0.5, 0.0],
+                [ 0.0, 0.5, 0.0],
+                [-0.6, 1.6, 0.0],
+                [ 0.6, 1.6, 0.0],
+                [ 0.0, 2.7, 0.0],
+            ];
+
+            for (i, pos) in positions.iter().enumerate() {
+                let id = state.create_entity(
+                    format!("Physics Cube #{}", i + 1),
+                    vec!["Transform".into(), "MeshRenderer".into(), "RigidBody".into(), "Collider".into()],
+                );
+                state.modify_transform(id, Some(*pos), None, Some([1.0, 1.0, 1.0]));
+                state.modify_material(id, colors[i % colors.len()], Some(false));
+                dynamic_ids.push((id, *pos));
+            }
+
+            (floor_id, dynamic_ids)
+        };
+
+        // Configurar simulación en Rapier3D
+        {
+            let mut phys = self.physics_world.lock().unwrap();
+            *phys = PhysicsWorld::new();
+
+            let fb = phys.create_rigid_body(floor_id, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
+            phys.attach_box_collider(fb, [15.0, 0.5, 15.0], 0.05, 0.7);
+
+            for (ent_id, pos) in dynamic_ids {
+                let b = phys.create_rigid_body(ent_id, BodyType::Dynamic, pos, [0.0, 0.0, 0.0, 1.0]);
+                phys.attach_box_collider(b, [0.5, 0.5, 0.5], 0.05, 0.6);
+            }
+        }
+        self.player_body_handle = None;
+        self.player_script_handle = None;
+    }
+
+    pub fn setup_audio_lighting_scene(&mut self) {
+        let floor_id = {
+            let mut state = self.scene_state.lock().unwrap();
+            state.entities.clear();
+
+            let cam_id = state.create_entity(
+                "Main Camera".into(),
+                vec!["Transform".into(), "Camera".into()],
+            );
+            state.modify_transform(cam_id, Some([0.0, 3.5, 9.0]), Some([14.0, 0.0, 0.0]), Some([1.0, 1.0, 1.0]));
+
+            let sun_id = state.create_entity(
+                "Sun (Directional Light)".into(),
+                vec!["Transform".into(), "Light".into()],
+            );
+            state.modify_transform(sun_id, Some([0.0, 8.0, 0.0]), Some([55.0, -40.0, 0.0]), Some([1.0, 1.0, 1.0]));
+
+            let red_light = state.create_entity(
+                "Point Light (Red)".into(),
+                vec!["Transform".into(), "Light".into()],
+            );
+            state.modify_transform(red_light, Some([-3.0, 2.0, 0.0]), None, Some([1.0, 1.0, 1.0]));
+            if let Some(e) = state.entities.iter_mut().find(|e| e.id == red_light) {
+                if let Some(ref mut l) = e.light {
+                    l.light_type = "Point".into();
+                    l.color = [1.0, 0.2, 0.2];
+                    l.intensity = 2.0;
+                    l.range = 8.0;
+                }
+            }
+
+            let blue_light = state.create_entity(
+                "Point Light (Cyan)".into(),
+                vec!["Transform".into(), "Light".into()],
+            );
+            state.modify_transform(blue_light, Some([3.0, 2.0, 0.0]), None, Some([1.0, 1.0, 1.0]));
+            if let Some(e) = state.entities.iter_mut().find(|e| e.id == blue_light) {
+                if let Some(ref mut l) = e.light {
+                    l.light_type = "Point".into();
+                    l.color = [0.2, 0.8, 1.0];
+                    l.intensity = 2.0;
+                    l.range = 8.0;
+                }
+            }
+
+            let audio_src = state.create_entity(
+                "Ambient Audio Source".into(),
+                vec!["Transform".into(), "AudioSource".into()],
+            );
+            state.modify_transform(audio_src, Some([0.0, 1.0, 0.0]), None, Some([1.0, 1.0, 1.0]));
+            if let Some(e) = state.entities.iter_mut().find(|e| e.id == audio_src) {
+                e.audio = Some(glass_core::AudioSourceData {
+                    clip_name: "beep_440".into(),
+                    volume: 0.8,
+                    pitch: 1.0,
+                    is_playing: true,
+                });
+            }
+
+            let floor_id = state.create_entity(
+                "Static Floor".into(),
+                vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
+            );
+            state.modify_transform(floor_id, Some([0.0, -0.5, 0.0]), None, Some([24.0, 1.0, 24.0]));
+            state.modify_material(floor_id, [0.3, 0.3, 0.35], Some(false));
+
+            let cube_center = state.create_entity(
+                "Central Showcase Mesh".into(),
+                vec!["Transform".into(), "MeshRenderer".into()],
+            );
+            state.modify_transform(cube_center, Some([0.0, 0.5, 0.0]), None, Some([1.5, 1.5, 1.5]));
+            state.modify_material(cube_center, [0.95, 0.95, 0.95], Some(false));
+
+            floor_id
+        };
+
+        {
+            let mut phys = self.physics_world.lock().unwrap();
+            *phys = PhysicsWorld::new();
+            let fb = phys.create_rigid_body(floor_id, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
+            phys.attach_box_collider(fb, [12.0, 0.5, 12.0], 0.05, 0.7);
+        }
+        self.player_body_handle = None;
+        self.player_script_handle = None;
+    }
+
+    #[cfg(feature = "editor")]
+    pub fn create_project_and_open(&mut self, name: &str, path: &Path, template: ProjectTemplate) {
+        let project_dir = path.join(name);
+        let _ = std::fs::create_dir_all(project_dir.join("Assets/Scenes"));
+        let _ = std::fs::create_dir_all(project_dir.join("Assets/Scripts"));
+        let _ = std::fs::create_dir_all(project_dir.join("Assets/Materials"));
+
+        let meta = format!(
+            "{{\n  \"name\": \"{}\",\n  \"version\": \"1.0.0\",\n  \"engine\": \"GlassEngine 0.1.0\",\n  \"template\": \"{:?}\"\n}}\n",
+            name, template
+        );
+        let _ = std::fs::write(project_dir.join("project.glass"), meta);
+
+        match template {
+            ProjectTemplate::Platformer3D => {
+                self.setup_interactive_platformer_scene();
+            }
+            ProjectTemplate::PhysicsSandbox => {
+                self.setup_physics_playground_scene();
+            }
+            ProjectTemplate::EmptyScene => {
+                self.setup_physics_playground_scene();
+            }
+        }
+        log::info!("Proyecto '{}' creado y cargado en el editor: {:?}", name, project_dir);
+    }
+
     fn check_asset_reloads(&mut self) {
         let events: Vec<AssetReloadEvent> = if let Some(watcher) = &self.asset_watcher {
             watcher.receiver.try_iter().collect()
@@ -502,6 +725,37 @@ impl GlassEngineApp {
 
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         self.check_asset_reloads();
+
+        #[cfg(feature = "editor")]
+        if let Some(action) = self.pending_launcher_action.take() {
+            match action {
+                LauncherAction::OpenDefaultScene => {
+                    self.app_mode = AppMode::Editor;
+                }
+                LauncherAction::LoadSampleScene(preset) => {
+                    match preset {
+                        SampleScenePreset::PlatformerDemo => {
+                            self.setup_interactive_platformer_scene();
+                        }
+                        SampleScenePreset::PhysicsPlayground => {
+                            self.setup_physics_playground_scene();
+                        }
+                        SampleScenePreset::AudioLightingShowcase => {
+                            self.setup_audio_lighting_scene();
+                        }
+                    }
+                    self.app_mode = AppMode::Editor;
+                }
+                LauncherAction::CreateProject { name, path, template } => {
+                    self.create_project_and_open(&name, &path, template);
+                    self.app_mode = AppMode::Editor;
+                }
+                LauncherAction::OpenProject(_path) => {
+                    self.setup_interactive_platformer_scene();
+                    self.app_mode = AppMode::Editor;
+                }
+            }
+        }
 
         let (window, vk_ctx, renderer) = match (
             &self.window,
@@ -829,16 +1083,38 @@ impl GlassEngineApp {
                 _ => return Ok(()),
             };
 
-            // 2. Ejecutar lógica y UI de egui (Docking estilo Unity sincronizado con SceneState)
+            // 2. Ejecutar lógica y UI de egui (Docking estilo Unity sincronizado con SceneState o Hub / Lanzador)
             let raw_input = egui_winit.take_egui_input(&window.inner);
             let editor_layout = &mut self.editor_layout;
+            let launcher = &mut self.launcher;
+            let app_mode = self.app_mode;
             let scene_state = &self.scene_state;
             let scene_tid = self.viewport_texture_id;
             let game_tid = self.game_viewport_texture_id;
+
+            let mut launcher_action = None;
             let mut full_output = self.egui_ctx.run_ui(raw_input, |ui| {
-                editor_layout.render(ui, scene_tid, game_tid, scene_state);
+                match app_mode {
+                    AppMode::Launcher => {
+                        launcher_action = launcher.render(ui);
+                    }
+                    AppMode::Editor => {
+                        editor_layout.render(ui, scene_tid, game_tid, scene_state);
+                    }
+                }
             });
             egui_winit.handle_platform_output(&window.inner, full_output.platform_output);
+
+            if let Some(action) = launcher_action {
+                self.pending_launcher_action = Some(action);
+                self.egui_ctx.request_repaint();
+            }
+
+            if editor_layout.request_launcher {
+                editor_layout.request_launcher = false;
+                self.app_mode = AppMode::Launcher;
+                self.egui_ctx.request_repaint();
+            }
 
             // 3. Sincronizar texturas internas de egui hacia la GPU y limpiar deltas inmediatamente
             for (id, deltas) in full_output.textures_delta.set.drain() {

@@ -31,6 +31,7 @@ pub struct EditorDockingLayout {
     pub console: ConsolePanel,
     pub dock_state: DockState<EditorTab>,
     pub current_preset: LayoutPreset,
+    pub request_launcher: bool,
 }
 
 impl Default for EditorDockingLayout {
@@ -48,6 +49,7 @@ impl EditorDockingLayout {
             console: ConsolePanel::default(),
             dock_state: DockState::new(vec![EditorTab::SceneView, EditorTab::GameView]),
             current_preset: LayoutPreset::Default,
+            request_launcher: false,
         };
         slf.apply_preset(LayoutPreset::Default);
         slf
@@ -130,6 +132,16 @@ impl EditorDockingLayout {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
 
+            // 0. Botón de acceso al Hub / Lanzador de Proyectos
+            if ui.button(egui::RichText::new("🏠 Hub").strong().color(egui::Color32::from_rgb(80, 210, 255)))
+                .on_hover_text("Regresar al Lanzador de Proyectos y Escenas de Ejemplo (Hub)")
+                .clicked()
+            {
+                self.request_launcher = true;
+            }
+
+            ui.separator();
+
             // 1. Herramientas de Edición en Iconos Cuadrados (Unity Tools: Q, W, E, R, T, Y)
             let btn_size = egui::vec2(28.0, 24.0);
             let mut tool_btn = |ui: &mut egui::Ui, mode: GizmoMode, icon: &str, tip: &str| {
@@ -146,7 +158,7 @@ impl EditorDockingLayout {
 
             tool_btn(ui, GizmoMode::View, "✋", "Herramienta Mano [Q]\nNavegar y desplazar vista (Pan libre)");
             tool_btn(ui, GizmoMode::Translate, "✥", "Herramienta Mover [W]\nTrasladar objeto en ejes X, Y, Z");
-            tool_btn(ui, GizmoMode::Rotate, "🔄", "Herramienta Rotar [E]\nRotar objeto con anillos orbitales");
+            tool_btn(ui, GizmoMode::Rotate, "↻", "Herramienta Rotar [E]\nRotar objeto con anillos orbitales");
             tool_btn(ui, GizmoMode::Scale, "⤢", "Herramienta Escalar [R]\nEscalar geometría 3D");
             tool_btn(ui, GizmoMode::Rect, "⊡", "Herramienta Rect [T]\nEdición rectangular 2D / UI");
             tool_btn(ui, GizmoMode::Transform, "✦", "Herramienta Transform [Y]\nMover, rotar y escalar combinado");

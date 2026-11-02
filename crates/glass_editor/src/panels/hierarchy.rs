@@ -125,40 +125,40 @@ impl HierarchyPanel {
             ui.close();
         }
         ui.separator();
-        ui.menu_button("🧊 Objeto 3D (3D Object)", |ui| {
-            if ui.button("🧊 Cubo (Cube)").clicked() {
+        ui.menu_button("⬡ Objeto 3D (3D Object)", |ui| {
+            if ui.button("■ Cubo (Cube)").clicked() {
                 *pending_action = Some(HierarchyAction::Create(EntityPreset::Cube));
                 ui.close();
             }
-            if ui.button("⚽ Esfera (Sphere)").clicked() {
+            if ui.button("● Esfera (Sphere)").clicked() {
                 *pending_action = Some(HierarchyAction::Create(EntityPreset::Sphere));
                 ui.close();
             }
-            if ui.button("💊 Cápsula (Capsule)").clicked() {
+            if ui.button("⬯ Cápsula (Capsule)").clicked() {
                 *pending_action = Some(HierarchyAction::Create(EntityPreset::Capsule));
                 ui.close();
             }
-            if ui.button("🛢 Cilindro (Cylinder)").clicked() {
+            if ui.button("⬒ Cilindro (Cylinder)").clicked() {
                 *pending_action = Some(HierarchyAction::Create(EntityPreset::Cylinder));
                 ui.close();
             }
-            if ui.button("🟫 Plano / Suelo (Plane)").clicked() {
+            if ui.button("▬ Plano / Suelo (Plane)").clicked() {
                 *pending_action = Some(HierarchyAction::Create(EntityPreset::Plane));
                 ui.close();
             }
         });
-        ui.menu_button("💡 Luces (Light)", |ui| {
-            if ui.button("💡 Luz Direccional (Directional Light)").clicked() {
+        ui.menu_button("☼ Luces (Light)", |ui| {
+            if ui.button("☼ Luz Direccional (Directional Light)").clicked() {
                 *pending_action = Some(HierarchyAction::Create(EntityPreset::DirectionalLight));
                 ui.close();
             }
-            if ui.button("🔆 Luz Puntual (Point Light)").clicked() {
+            if ui.button("✦ Luz Puntual (Point Light)").clicked() {
                 *pending_action = Some(HierarchyAction::Create(EntityPreset::PointLight));
                 ui.close();
             }
         });
-        ui.menu_button("🔊 Audio", |ui| {
-            if ui.button("🔊 Audio Source").clicked() {
+        ui.menu_button("♫ Audio", |ui| {
+            if ui.button("♫ Audio Source").clicked() {
                 *pending_action = Some(HierarchyAction::Create(EntityPreset::AudioSource));
                 ui.close();
             }
@@ -480,7 +480,7 @@ impl HierarchyPanel {
             if let Some(drag_id) = self.dragging_entity {
                 if let Some(mp) = mouse_pos {
                     if let Some(drag_ent) = scene.entities.iter().find(|e| e.id == drag_id) {
-                        let drag_text = format!("📄 {}", drag_ent.name);
+                        let drag_text = format!("▣ {}", drag_ent.name);
                         let ghost_pos = mp + egui::vec2(14.0, 10.0);
                         let font_id = egui::FontId::proportional(11.0);
                         let galley = ui.painter().layout_no_wrap(drag_text, font_id, Color32::WHITE);
