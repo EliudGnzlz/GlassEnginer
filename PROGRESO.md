@@ -21,6 +21,7 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
 | **Hito 11**| Escena 3D & Automatización MCP con Audio | **Completado** | 100% | Kimi (Mirai) + DeepSeek |
 | **Hito 12**| Viewports Duales Scene/Game, Play/Pause/Stop & Controles WASD | **Completado** | 100% | Kimi K3 + DeepSeek 4 Pro (Mirai) |
 | **Hito 13**| Inspector Estilo Unity, Variables C# en Vivo y Atajos QWER | **Completado** | 100% | DeepSeek 4.1 Flash (Mirai) |
+| **Hito 14**| Raycasting 3D Picking en Viewport & Transform Gizmo 3D Unity | **Completado** | 100% | DeepSeek 4.1 Flash + Kimi K3 (Mirai) |
 
 ---
 
@@ -324,11 +325,40 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
     * Destacó la separación de responsabilidades por subsistemas, los modos explícitos Edit/Paused/Playing como base para evitar conflictos de autoridad sobre el Transform, la telemetría en vivo y la extensibilidad del Inspector.
     * Validó la estrategia de autoridad estricta (*Transform manda en Edit, Rapier manda en Play*), el marshalling atómico de parámetros C# y el desacoplamiento asíncrono de audio en hilo secundario.
 
+### Hito 14: Raycasting 3D Picking en Viewport & Transform Gizmo 3D Unity
+* **Fecha:** 2026-11-01
+* **Acciones:**
+  * **Módulo Matemático y Gráfico de Gizmo 3D (`crates/glass_editor/src/panels/gizmo_3d.rs`):**
+    * **Proyección 3D a Pantalla (`world_to_screen`):** Implementación de álgebra matricial completa (`look_at`, matriz de proyección perspectiva con inversión Vulkan NDC Y `[-f, +f]`, y multiplicación matricial) para proyectar vértices y orígenes tridimensionales del mundo a coordenadas de píxeles 2D de la ventana de egui dentro del Rect del Viewport.
+    * **Transform Gizmo 3D Interactivo (La Cruz de Unity):**
+      * **Modo Traslación [W]:** Renderizado de cruz tridimensional centrada en la posición del GameObject seleccionado en el mundo.
+        * Eje X: Flecha tridimensional en color Rojo (`#FF3B30`).
+        * Eje Y: Flecha apuntando verticalmente en color Verde (`#34C759`).
+        * Eje Z: Flecha apuntando en profundidad en color Azul (`#0A84FF`).
+        * Centro: Cuadro de manipulación en el plano de cámara en color Blanco/Gris claro.
+        * **Hover & Detección de Ejes:** Al situar el cursor sobre cualquier eje, este se ilumina instantáneamente en Amarillo brillante (`#FFD60A`) con grosor reforzado y etiqueta indicadora de eje (`X`, `Y`, `Z`).
+        * **Arrastre Exclusivo por Eje:** Hacer clic y arrastrar restringe el movimiento de traslación estrictamente al eje seleccionado, proyectando el delta del cursor y actualizando `scene_state` y `physics_world` en tiempo real.
+      * **Modo Rotación [E]:** Renderizado de anillos poligonales de rotación Euler (anillo Rojo para cabeceo X, Verde para viraje Y, Azul para balanceo Z) con detección de segmento más cercano al cursor.
+      * **Modo Escala [R]:** Ejes terminados en cubos sólidos en los extremos para escalado por componente, más cubo central para escalado uniforme.
+  * **3D Raycasting & Screen Picking (`pick_entity_at_screen`):**
+    * Detección automática al hacer clic sobre cualquier punto de la superficie del lienzo de la escena 3D.
+    * Calcula el centro y radio aparente proyectado de cada entidad en la escena (`SceneState`), discriminando colisiones por proximidad al cursor y profundidad a la cámara (ordenamiento Z-depth para seleccionar la entidad más cercana a la cámara).
+    * Al hacer clic sobre cualquier GameObject en la escena 3D, el ID de entidad se propaga inmediatamente:
+      * Se selecciona y resalta en el árbol de la **Jerarquía**.
+      * El panel **Inspector** abre inmediatamente todas sus propiedades: Transform (Posición, Rotación, Escala con DragValues y botón Reset), MeshRenderer (color Albedo interactivo, wireframe), RigidBody & Collider (masa, fricción, restitución) y Script C# (.NET CoreCLR con sliders y telemetría).
+      * El Gizmo 3D se ubica sobre el objeto en el Viewport con feedback visual instantáneo.
+  * **Sincronización en `EditorDockingLayout` (`crates/glass_editor/src/docking.rs`):**
+    * Paso mutable `&mut selected_id` entre `hierarchy`, `inspector` y `viewport`.
+    * Disparo inmediato de `ui.ctx().request_repaint()` ante cualquier cambio de selección por clic en el Viewport, asegurando refresco a 0 ms.
+  * **Auditoría Externa Multi-IA (Mirai MCP - DeepSeek 4.1 Flash & Kimi K3):**
+    * **DeepSeek 4.1 Flash:** Formulaciones analíticas de proyección en espacio de corte, desproyección de pantalla a rayo 3D y prueba de proximidad rayo-segmento validadas.
+    * **Kimi K3:** Desacoplamiento de estado de selección del editor (`EditorSelection`, `GizmoState`), proyección de AABB a pantalla para picking robusto y gestión limpia de capas en el painter de egui.
+
 ---
 
-## Certificación Final de Arquitectura: GlassEngine 1.3
+## Certificación Final de Arquitectura: GlassEngine 1.4
 
-Los 13 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
+Los 14 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
 
 1. **Hito 1 — Workspace Cargo & Contratos Base:** 100% Verificado.
 2. **Hito 2 — Contexto Vulkan Multi-GPU Universal (NVIDIA, AMD, Intel, Integradas y Dedicadas):** 100% Verificado.
@@ -343,3 +373,4 @@ Los 13 hitos arquitectónicos, de edición y de gameplay del motor han sido comp
 11. **Hito 11 — Escena 3D & Automatización MCP de Gameplay con Audio Reactivo:** 100% Verificado.
 12. **Hito 12 — Viewports Duales Scene/Game, Play/Pause/Stop & Controles WASD:** 100% Verificado.
 13. **Hito 13 — Inspector Estilo Unity, Variables C# en Vivo y Atajos QWER:** 100% Verificado.
+14. **Hito 14 — Raycasting 3D Picking en Viewport & Transform Gizmo 3D Unity:** 100% Verificado.

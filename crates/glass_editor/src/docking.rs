@@ -41,7 +41,7 @@ impl EditorDockingLayout {
                 self.hierarchy.render(ui, scene_state);
             });
 
-        let selected_id = self.hierarchy.selected_entity;
+        let mut selected_id = self.hierarchy.selected_entity;
 
         Panel::right("inspector_panel")
             .resizable(true)
@@ -62,7 +62,13 @@ impl EditorDockingLayout {
             });
 
         egui::CentralPanel::default().show(ui, |ui| {
-            self.viewport.render(ui, viewport_texture_id, selected_id, scene_state);
+            self.viewport.render(ui, viewport_texture_id, &mut selected_id, scene_state);
         });
+
+        // Sincronizar selección del viewport (3D raycasting click) de vuelta a la jerarquía
+        if selected_id != self.hierarchy.selected_entity {
+            self.hierarchy.selected_entity = selected_id;
+            ui.ctx().request_repaint();
+        }
     }
 }

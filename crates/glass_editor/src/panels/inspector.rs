@@ -39,7 +39,7 @@ impl InspectorPanel {
             Some(e) => e,
             None => {
                 ui.centered_and_justified(|ui| {
-                    ui.label(RichText::new("Ningún GameObject seleccionado.\nSelecciona uno en la Jerarquía.").color(Color32::GRAY));
+                    ui.label(RichText::new("Ningún GameObject seleccionado.\nSelecciona uno en la Escena 3D o en la Jerarquía.").color(Color32::GRAY));
                 });
                 return;
             }
