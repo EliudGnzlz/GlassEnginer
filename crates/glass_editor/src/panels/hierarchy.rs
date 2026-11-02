@@ -19,6 +19,13 @@ pub enum EntityPreset {
     Camera,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DropPosition {
+    Before,
+    Inside,
+    After,
+}
+
 enum HierarchyAction {
     Select(u64),
     Delete(u64),
@@ -28,6 +35,7 @@ enum HierarchyAction {
     MoveUp(u64),
     MoveDown(u64),
     Reparent(u64, Option<u64>),
+    InsertRelative(u64, u64, bool),
     Group(Vec<u64>),
 }
 
@@ -35,6 +43,8 @@ pub struct HierarchyPanel {
     pub selected_entity: Option<u64>,
     pub search_filter: String,
     pub collapsed_nodes: HashSet<u64>,
+    pub dragging_entity: Option<u64>,
+    pub hovered_drop: Option<(u64, DropPosition)>,
 }
 
 impl Default for HierarchyPanel {
@@ -43,6 +53,8 @@ impl Default for HierarchyPanel {
             selected_entity: Some(3), // Por defecto el objeto principal
             search_filter: String::new(),
             collapsed_nodes: HashSet::new(),
+            dragging_entity: None,
+            hovered_drop: None,
         }
     }
 }
@@ -164,17 +176,26 @@ impl HierarchyPanel {
         };
 
         let mut pending_action: Option<HierarchyAction> = None;
+        let mouse_pos = ui.input(|i| i.pointer.hover_pos());
+        let is_pointer_released = ui.input(|i| i.pointer.any_released());
 
-        // Barra superior de la Jerarquía estilo Unity
+        // Atajo teclado: tecla Delete borra el objeto seleccionado
+        if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
+            if let Some(sel_id) = self.selected_entity {
+                pending_action = Some(HierarchyAction::Delete(sel_id));
+            }
+        }
+
+        // Barra superior estilo Unity
         ui.horizontal(|ui| {
-            ui.heading("🌿 Jerarquía");
+            ui.heading("Hierarchy");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.menu_button("➕ Crear ▾", |ui| {
+                ui.menu_button("+ Create ▾", |ui| {
                     Self::render_creation_menu(ui, &mut pending_action);
                 });
 
                 if let Some(sel_id) = self.selected_entity {
-                    if ui.button("📁 Agrupar").on_hover_text("Agrupar el objeto seleccionado bajo un nuevo GameObject padre").clicked() {
+                    if ui.button("📁 Group").on_hover_text("Agrupar objeto seleccionado en un nuevo padre").clicked() {
                         pending_action = Some(HierarchyAction::Group(vec![sel_id]));
                     }
                 }
@@ -193,6 +214,7 @@ impl HierarchyPanel {
         ui.separator();
 
         let search_term = self.search_filter.trim().to_lowercase();
+        let mut current_frame_drop: Option<(u64, DropPosition)> = None;
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -208,37 +230,101 @@ impl HierarchyPanel {
                     let is_selected = self.selected_entity == Some(entity.id);
                     let is_collapsed = self.collapsed_nodes.contains(&entity.id);
 
+                    // Iconos simples y minimalistas estilo Unity
                     let icon = if !entity.children.is_empty() && entity.mesh.is_none() {
                         "📁"
                     } else if entity.components.iter().any(|c| c == "Camera") {
                         "🎥"
                     } else if entity.components.iter().any(|c| c == "Light") {
-                        "💡"
+                        "☼"
                     } else if entity.components.iter().any(|c| c == "MeshRenderer") {
-                        "📐"
+                        "⬡"
                     } else if entity.components.iter().any(|c| c == "AudioSource") {
-                        "🔊"
+                        "♫"
                     } else {
-                        "📦"
+                        "▣"
                     };
 
-                    // Reservar fila completa interactiva de ancho total
+                    // Fila completa interactiva con soporte para clic y arrastre (Drag & Drop)
                     let row_height = 22.0;
                     let full_width = ui.available_width();
                     let (row_rect, row_resp) = ui.allocate_exact_size(
                         egui::vec2(full_width, row_height),
-                        egui::Sense::click(),
+                        egui::Sense::click_and_drag(),
                     );
+
+                    // Inicio del arrastre de la fila
+                    if row_resp.drag_started() {
+                        self.dragging_entity = Some(entity.id);
+                    }
+
+                    // Detección de zona de soltado (Drop Target) cuando se arrastra sobre esta fila
+                    if let Some(drag_id) = self.dragging_entity {
+                        if drag_id != entity.id && row_resp.hovered() {
+                            if let Some(mp) = mouse_pos {
+                                let rel_y = (mp.y - row_rect.top()) / row_rect.height();
+                                let drop_pos = if rel_y < 0.28 {
+                                    DropPosition::Before
+                                } else if rel_y > 0.72 {
+                                    DropPosition::After
+                                } else {
+                                    DropPosition::Inside
+                                };
+                                current_frame_drop = Some((entity.id, drop_pos));
+                            }
+                        }
+                    }
 
                     if ui.is_rect_visible(row_rect) {
                         let bg = if is_selected {
                             ui.visuals().selection.bg_fill
-                        } else if row_resp.hovered() {
+                        } else if row_resp.hovered() && self.dragging_entity.is_none() {
                             ui.visuals().widgets.hovered.bg_fill
                         } else {
                             egui::Color32::TRANSPARENT
                         };
-                        ui.painter().rect_filled(row_rect, 3.0, bg);
+                        ui.painter().rect_filled(row_rect, 2.0, bg);
+
+                        // Si esta fila es el objetivo activo de Drag & Drop, renderizar feedback visual estilo Unity
+                        if let Some((target_id, dpos)) = current_frame_drop {
+                            if target_id == entity.id {
+                                match dpos {
+                                    DropPosition::Before => {
+                                        let y = row_rect.top();
+                                        ui.painter().line_segment(
+                                            [egui::pos2(row_rect.left(), y), egui::pos2(row_rect.right(), y)],
+                                            egui::Stroke::new(2.5, Color32::from_rgb(0, 160, 255)),
+                                        );
+                                        ui.painter().circle_filled(
+                                            egui::pos2(row_rect.left() + 4.0, y),
+                                            3.5,
+                                            Color32::from_rgb(0, 160, 255),
+                                        );
+                                    }
+                                    DropPosition::After => {
+                                        let y = row_rect.bottom();
+                                        ui.painter().line_segment(
+                                            [egui::pos2(row_rect.left(), y), egui::pos2(row_rect.right(), y)],
+                                            egui::Stroke::new(2.5, Color32::from_rgb(0, 160, 255)),
+                                        );
+                                        ui.painter().circle_filled(
+                                            egui::pos2(row_rect.left() + 4.0, y),
+                                            3.5,
+                                            Color32::from_rgb(0, 160, 255),
+                                        );
+                                    }
+                                    DropPosition::Inside => {
+                                        ui.painter().rect(
+                                            row_rect,
+                                            2.0,
+                                            Color32::from_rgba_unmultiplied(0, 140, 255, 35),
+                                            egui::Stroke::new(1.5, Color32::from_rgb(0, 160, 255)),
+                                            egui::StrokeKind::Inside,
+                                        );
+                                    }
+                                }
+                            }
+                        }
 
                         let text_color = if is_selected {
                             ui.visuals().selection.stroke.color
@@ -246,10 +332,10 @@ impl HierarchyPanel {
                             ui.visuals().text_color()
                         };
 
-                        // Indentación según profundidad en la jerarquía (árbol padre/hijo)
+                        // Indentación según profundidad en la jerarquía
                         let indent_x = (depth as f32) * 16.0;
 
-                        // Triángulo expandir / colapsar si tiene hijos
+                        // Triángulo desplegar/colapsar
                         let mut content_x = row_rect.left() + 6.0 + indent_x;
                         if has_children {
                             let arrow_rect = egui::Rect::from_min_size(
@@ -266,7 +352,7 @@ impl HierarchyPanel {
                                 arrow_rect.center(),
                                 egui::Align2::CENTER_CENTER,
                                 arrow_text,
-                                egui::FontId::proportional(11.0),
+                                egui::FontId::proportional(10.0),
                                 if arrow_resp.hovered() { Color32::WHITE } else { Color32::GRAY },
                             );
                             if arrow_resp.clicked() {
@@ -278,11 +364,11 @@ impl HierarchyPanel {
                             }
                             content_x += 16.0;
                         } else {
-                            content_x += 16.0; // Espaciador consistente
+                            content_x += 16.0;
                         }
 
-                        // Etiqueta del GameObject
-                        let label_text = format!("{} #{} {}", icon, entity.id, entity.name);
+                        // Etiqueta simple y limpia: icono y nombre del GameObject
+                        let label_text = format!("{} {}", icon, entity.name);
                         let text_pos = egui::pos2(content_x, row_rect.center().y);
                         ui.painter().text(
                             text_pos,
@@ -291,66 +377,16 @@ impl HierarchyPanel {
                             egui::FontId::proportional(13.0),
                             text_color,
                         );
-
-                        // Botones de acción en el extremo derecho de la fila
-                        let mut right_cursor = row_rect.right() - 4.0;
-
-                        // Botón Eliminar [🗑] (si está seleccionado)
-                        if is_selected {
-                            right_cursor -= 18.0;
-                            let del_rect = egui::Rect::from_min_size(
-                                egui::pos2(right_cursor, row_rect.top() + 2.0),
-                                egui::vec2(16.0, 18.0),
-                            );
-                            let del_resp = ui.interact(del_rect, ui.id().with(entity.id).with("del"), egui::Sense::click());
-                            if del_resp.hovered() {
-                                ui.painter().rect_filled(del_rect, 2.0, egui::Color32::from_rgb(180, 50, 50));
-                            }
-                            ui.painter().text(del_rect.center(), egui::Align2::CENTER_CENTER, "🗑", egui::FontId::proportional(10.0), egui::Color32::WHITE);
-                            if del_resp.clicked() {
-                                pending_action = Some(HierarchyAction::Delete(entity.id));
-                            }
-                        }
-
-                        // Botón Mover Abajo [▼]
-                        right_cursor -= 18.0;
-                        let down_rect = egui::Rect::from_min_size(
-                            egui::pos2(right_cursor, row_rect.top() + 2.0),
-                            egui::vec2(16.0, 18.0),
-                        );
-                        let down_resp = ui.interact(down_rect, ui.id().with(entity.id).with("down"), egui::Sense::click()).on_hover_text("Mover abajo en la jerarquía");
-                        if down_resp.hovered() {
-                            ui.painter().rect_filled(down_rect, 2.0, egui::Color32::from_rgb(60, 60, 75));
-                        }
-                        ui.painter().text(down_rect.center(), egui::Align2::CENTER_CENTER, "▼", egui::FontId::proportional(9.0), egui::Color32::LIGHT_GRAY);
-                        if down_resp.clicked() {
-                            pending_action = Some(HierarchyAction::MoveDown(entity.id));
-                        }
-
-                        // Botón Mover Arriba [▲]
-                        right_cursor -= 18.0;
-                        let up_rect = egui::Rect::from_min_size(
-                            egui::pos2(right_cursor, row_rect.top() + 2.0),
-                            egui::vec2(16.0, 18.0),
-                        );
-                        let up_resp = ui.interact(up_rect, ui.id().with(entity.id).with("up"), egui::Sense::click()).on_hover_text("Mover arriba en la jerarquía");
-                        if up_resp.hovered() {
-                            ui.painter().rect_filled(up_rect, 2.0, egui::Color32::from_rgb(60, 60, 75));
-                        }
-                        ui.painter().text(up_rect.center(), egui::Align2::CENTER_CENTER, "▲", egui::FontId::proportional(9.0), egui::Color32::LIGHT_GRAY);
-                        if up_resp.clicked() {
-                            pending_action = Some(HierarchyAction::MoveUp(entity.id));
-                        }
                     }
 
-                    // Clic izquierdo en la fila selecciona el objeto
+                    // Clic en la fila selecciona el objeto
                     if row_resp.clicked() {
                         pending_action = Some(HierarchyAction::Select(entity.id));
                     }
 
-                    // Clic derecho en CUALQUIER punto de la fila abre el menú contextual
+                    // Clic derecho abre el menú contextual
                     row_resp.context_menu(|ui| {
-                        ui.label(egui::RichText::new(format!("Objeto: {}", entity.name)).strong());
+                        ui.label(egui::RichText::new(&entity.name).strong());
                         ui.separator();
 
                         if ui.button("▲ Mover Arriba").clicked() {
@@ -363,7 +399,7 @@ impl HierarchyPanel {
                         }
                         ui.separator();
 
-                        if ui.button("📁 Agrupar en Nuevo Padre").clicked() {
+                        if ui.button("📁 Agrupar Selección").clicked() {
                             pending_action = Some(HierarchyAction::Group(vec![entity.id]));
                             ui.close();
                         }
@@ -390,7 +426,7 @@ impl HierarchyPanel {
                         if !candidate_parents.is_empty() {
                             ui.menu_button("🔗 Emparentar con... ▾", |ui| {
                                 for (pid, pname) in candidate_parents {
-                                    if ui.button(format!("#{pid} {pname}")).clicked() {
+                                    if ui.button(format!("{pname}")).clicked() {
                                         pending_action = Some(HierarchyAction::Reparent(entity.id, Some(pid)));
                                         ui.close();
                                     }
@@ -399,27 +435,35 @@ impl HierarchyPanel {
                         }
 
                         ui.separator();
-                        if ui.button("📋 Duplicar (Duplicate)").clicked() {
+                        if ui.button("📋 Duplicar").clicked() {
                             pending_action = Some(HierarchyAction::Duplicate(entity.id));
                             ui.close();
                         }
-                        if ui.button("🗑 Eliminar (Delete)").clicked() {
+                        if ui.button("🗑 Eliminar").clicked() {
                             pending_action = Some(HierarchyAction::Delete(entity.id));
                             ui.close();
                         }
                         ui.separator();
-                        ui.label("➕ Añadir GameObject:");
+                        ui.label("➕ Añadir:");
                         Self::render_creation_menu(ui, &mut pending_action);
                     });
                 }
 
-                // Espacio vacío restante del ScrollArea: clic derecho aquí abre el menú de creación
+                // Espacio vacío restante del ScrollArea: arrastrar aquí desemparenta a la raíz
                 let remaining = ui.available_size();
                 if remaining.y > 10.0 {
                     let (_empty_rect, bg_resp) = ui.allocate_exact_size(
                         egui::vec2(ui.available_width(), remaining.y),
-                        egui::Sense::click(),
+                        egui::Sense::click_and_drag(),
                     );
+
+                    // Si soltamos el arrastre en el fondo vacío, desemparentar el objeto a la raíz
+                    if is_pointer_released && bg_resp.hovered() {
+                        if let Some(drag_id) = self.dragging_entity.take() {
+                            pending_action = Some(HierarchyAction::Reparent(drag_id, None));
+                        }
+                    }
+
                     bg_resp.context_menu(|ui| {
                         ui.label("➕ Crear GameObject");
                         ui.separator();
@@ -427,6 +471,46 @@ impl HierarchyPanel {
                     });
                 }
             });
+
+        // Si se estaba arrastrando un objeto, gestionar el cursor y soltado
+        if self.dragging_entity.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+
+            // Dibujar preview flotante del objeto que se arrastra junto al ratón
+            if let Some(drag_id) = self.dragging_entity {
+                if let Some(mp) = mouse_pos {
+                    if let Some(drag_ent) = scene.entities.iter().find(|e| e.id == drag_id) {
+                        let drag_text = format!("📄 {}", drag_ent.name);
+                        let ghost_pos = mp + egui::vec2(14.0, 10.0);
+                        let font_id = egui::FontId::proportional(11.0);
+                        let galley = ui.painter().layout_no_wrap(drag_text, font_id, Color32::WHITE);
+                        let pill_rect = egui::Rect::from_min_size(ghost_pos, galley.size() + egui::vec2(12.0, 6.0));
+                        ui.painter().rect_filled(pill_rect, 3.0, Color32::from_rgba_unmultiplied(25, 30, 45, 230));
+                        ui.painter().rect_stroke(pill_rect, 3.0, egui::Stroke::new(1.0, Color32::from_rgb(0, 160, 255)), egui::StrokeKind::Inside);
+                        ui.painter().galley(ghost_pos + egui::vec2(6.0, 3.0), galley, Color32::WHITE);
+                    }
+                }
+            }
+
+            // Al soltar el botón del ratón, aplicar la acción de Drag & Drop
+            if is_pointer_released {
+                if let Some(drag_id) = self.dragging_entity.take() {
+                    if let Some((target_id, dpos)) = current_frame_drop {
+                        match dpos {
+                            DropPosition::Inside => {
+                                pending_action = Some(HierarchyAction::Reparent(drag_id, Some(target_id)));
+                            }
+                            DropPosition::Before => {
+                                pending_action = Some(HierarchyAction::InsertRelative(drag_id, target_id, true));
+                            }
+                            DropPosition::After => {
+                                pending_action = Some(HierarchyAction::InsertRelative(drag_id, target_id, false));
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // Ejecución limpia de acciones sin colisiones de préstamos mutables
         if let Some(action) = pending_action {
@@ -439,6 +523,9 @@ impl HierarchyPanel {
                 }
                 HierarchyAction::MoveDown(id) => {
                     scene.move_entity_down(id);
+                }
+                HierarchyAction::InsertRelative(source_id, target_id, before) => {
+                    scene.insert_relative(source_id, target_id, before);
                 }
                 HierarchyAction::Reparent(child_id, new_parent) => {
                     scene.reparent(child_id, new_parent);

@@ -389,6 +389,63 @@ impl SceneState {
         false
     }
 
+    /// Inserta una entidad inmediatamente antes o después de otra (Drag & Drop en la jerarquía)
+    pub fn insert_relative(&mut self, source_id: u64, target_id: u64, before: bool) -> bool {
+        if source_id == target_id {
+            return false;
+        }
+        // Prevenir ciclos: target_id no puede ser descendiente de source_id
+        if self.is_descendant_of(target_id, source_id) {
+            return false;
+        }
+
+        let target_parent = self.get_entity(target_id).and_then(|e| e.parent);
+        let source_parent = self.get_entity(source_id).and_then(|e| e.parent);
+
+        // Si los padres difieren, desenlazar de su padre anterior
+        if source_parent != target_parent {
+            if let Some(old_pid) = source_parent {
+                if let Some(old_p) = self.get_entity_mut(old_pid) {
+                    old_p.children.retain(|&c| c != source_id);
+                }
+            }
+            if let Some(s) = self.get_entity_mut(source_id) {
+                s.parent = target_parent;
+            }
+        }
+
+        if let Some(pid) = target_parent {
+            // Reordenar dentro de la lista de hijos del padre
+            if let Some(p) = self.get_entity_mut(pid) {
+                p.children.retain(|&c| c != source_id);
+                if let Some(t_idx) = p.children.iter().position(|&c| c == target_id) {
+                    let insert_idx = if before { t_idx } else { t_idx + 1 };
+                    let clamped = insert_idx.min(p.children.len());
+                    p.children.insert(clamped, source_id);
+                    return true;
+                } else {
+                    p.children.push(source_id);
+                    return true;
+                }
+            }
+        } else {
+            // Ambas son entidades raíz en self.entities
+            if let Some(s_idx) = self.entities.iter().position(|e| e.id == source_id) {
+                let ent = self.entities.remove(s_idx);
+                if let Some(t_idx) = self.entities.iter().position(|e| e.id == target_id) {
+                    let insert_idx = if before { t_idx } else { t_idx + 1 };
+                    let clamped = insert_idx.min(self.entities.len());
+                    self.entities.insert(clamped, ent);
+                    return true;
+                } else {
+                    self.entities.push(ent);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Agrupa una o más entidades bajo un nuevo GameObject padre
     pub fn group_entities(&mut self, entity_ids: &[u64], group_name: &str) -> u64 {
         let group_id = self.create_entity(group_name.into(), vec!["Transform".into()]);
@@ -605,5 +662,30 @@ mod tests {
 
         let world_pos = scene.get_world_position(c);
         assert_eq!(world_pos, [12.0, 6.0, 0.0]);
+    }
+
+    #[test]
+    fn test_insert_relative_drag_and_drop() {
+        let mut scene = SceneState::new();
+        let p = scene.create_entity("Parent".into(), vec!["Transform".into()]);
+        let c1 = scene.create_entity("C1".into(), vec!["Transform".into()]);
+        let c2 = scene.create_entity("C2".into(), vec!["Transform".into()]);
+        let c3 = scene.create_entity("C3".into(), vec!["Transform".into()]);
+        scene.reparent(c1, Some(p));
+        scene.reparent(c2, Some(p));
+        scene.reparent(c3, Some(p));
+
+        assert_eq!(scene.get_entity(p).unwrap().children, vec![c1, c2, c3]);
+
+        // Insertar c3 antes de c1 (subirlo al inicio de la lista de hermanos)
+        assert!(scene.insert_relative(c3, c1, true));
+        assert_eq!(scene.get_entity(p).unwrap().children, vec![c3, c1, c2]);
+
+        // Insertar c3 después de c1 (bajarlo después de c1)
+        assert!(scene.insert_relative(c3, c1, false));
+        assert_eq!(scene.get_entity(p).unwrap().children, vec![c1, c3, c2]);
+
+        // Prevención de ciclo: no se puede insertar un padre dentro de su hijo
+        assert!(!scene.insert_relative(p, c1, true));
     }
 }

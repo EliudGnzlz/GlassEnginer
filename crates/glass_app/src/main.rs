@@ -146,18 +146,16 @@ fn look_at(eye: [f32; 3], target: [f32; 3], up: [f32; 3]) -> [f32; 16] {
 fn camera_view_matrix(pos: [f32; 3], rot_deg: [f32; 3]) -> [f32; 16] {
     let rx = rot_deg[0].to_radians();
     let ry = rot_deg[1].to_radians();
-    let rz = rot_deg[2].to_radians();
 
     let (sx, cx) = (rx.sin(), rx.cos());
     let (sy, cy) = (ry.sin(), ry.cos());
-    let (sz, cz) = (rz.sin(), rz.cos());
 
-    // Vector forward hacia -Z local con rotación Euler
-    let fwd = [sy, -sx * cy, -cx * cy];
-    let up = [cy * sz, sx * sy * sz + cx * cz, cx * sy * sz - sx * cz];
+    // Vector forward hacia la escena (-Z base con rotación Euler)
+    let fwd = [sy * cx, -sx, -cy * cx];
+    let up = [sy * sx, cx, -cy * sx];
 
     let target = [pos[0] + fwd[0], pos[1] + fwd[1], pos[2] + fwd[2]];
-    look_at(pos, target, [up[0], up[1], up[2]])
+    look_at(pos, target, up)
 }
 
 fn matmul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
@@ -654,9 +652,12 @@ impl GlassEngineApp {
                     let ry = rot[1].to_radians();
                     let (sx, cx) = (rx.sin(), rx.cos());
                     let (sy, cy) = (ry.sin(), ry.cos());
-                    let dir = [-sy, sx * cy, cx * cy];
-                    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(0.001);
-                    let norm = [dir[0] / len, dir[1] / len, dir[2] / len];
+                    // L es el vector hacia la fuente de luz en el cielo
+                    // Rayos de sol viajan en [sy * cx, -sx, -cy * cx] (hacia el suelo cuando rx > 0)
+                    // Por tanto, L hacia el sol es [-sy * cx, sx, cy * cx]
+                    let l_dir_vec = [-sy * cx, sx, cy * cx];
+                    let len = (l_dir_vec[0] * l_dir_vec[0] + l_dir_vec[1] * l_dir_vec[1] + l_dir_vec[2] * l_dir_vec[2]).sqrt().max(0.001);
+                    let norm = [l_dir_vec[0] / len, l_dir_vec[1] / len, l_dir_vec[2] / len];
                     let ldata = light_ent.light.as_ref().cloned().unwrap_or_default();
                     let col = [
                         ldata.color[0] * ldata.intensity,
@@ -697,9 +698,12 @@ impl GlassEngineApp {
                     let ry = rot[1].to_radians();
                     let (sx, cx) = (rx.sin(), rx.cos());
                     let (sy, cy) = (ry.sin(), ry.cos());
-                    let dir = [-sy, sx * cy, cx * cy];
-                    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(0.001);
-                    let norm = [dir[0] / len, dir[1] / len, dir[2] / len];
+                    // L es el vector hacia la fuente de luz en el cielo
+                    // Rayos de sol viajan en [sy * cx, -sx, -cy * cx] (hacia el suelo cuando rx > 0)
+                    // Por tanto, L hacia el sol es [-sy * cx, sx, cy * cx]
+                    let l_dir_vec = [-sy * cx, sx, cy * cx];
+                    let len = (l_dir_vec[0] * l_dir_vec[0] + l_dir_vec[1] * l_dir_vec[1] + l_dir_vec[2] * l_dir_vec[2]).sqrt().max(0.001);
+                    let norm = [l_dir_vec[0] / len, l_dir_vec[1] / len, l_dir_vec[2] / len];
                     let ldata = light_ent.light.as_ref().cloned().unwrap_or_default();
                     let col = [
                         ldata.color[0] * ldata.intensity,

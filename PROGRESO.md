@@ -29,6 +29,7 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
 | **Hito 19**| Selección en Play Mode, Aspect Ratios Unity & Desacoplamiento Scene/Game | **Completado** | 100% | DeepSeek 4 Pro + Kimi K3 (Mirai) |
 | **Hito 20**| Render Targets Offscreen Duales, Verificación Cámara Activa & Luz Dinámica | **Completado** | 100% | DeepSeek 4 Pro + Kimi K3 (Mirai) |
 | **Hito 21**| Agrupación y Reordenación en Jerarquía, Gizmos 3D de Cámara (Frustum) y Luz (Rango/Dirección) | **Completado** | 100% | DeepSeek 4 Pro + Kimi K3 (Mirai) |
+| **Hito 22**| Corrección Matemática de Frustum y Dirección de Luz, Drag & Drop Jerarquía e Iconos Minimalistas | **Completado** | 100% | DeepSeek + Kimi K3 |
 
 ---
 
@@ -552,11 +553,39 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
     * Picking directo con máxima prioridad sobre los iconos de luz.
 * **Resultado:** Soporte completo de jerarquías complejas y agrupamiento de GameObjects, reordenación interactiva arriba/abajo, y visualización clara en Scene View de orientación de cámaras e influencia de luces.
 
+### Hito 22: Corrección Matemática de Frustum y Dirección de Luz, Drag & Drop Jerarquía e Iconos Minimalistas
+* **Fecha:** 2026-11-01
+* **Auditoría y Consulta:** DeepSeek Chat + Kimi K3.
+* **Acciones:**
+  * **Corrección Matemática de Líneas de Proyección de Cámara (Frustum):**
+    * Se corrigieron los vectores de base ortonormal de rotación Euler en [`camera_view_matrix`](file:///home/d3/Documentos/GlassEnginer/crates/glass_app/src/main.rs#L146-L158) y [`draw_camera_gizmo`](file:///home/d3/Documentos/GlassEnginer/crates/glass_editor/src/panels/gizmo_3d.rs#L559-L573).
+    * `fwd = [sy * cx, -sx, -cy * cx]`, `right = [cy, 0.0, sy]`, `up = [sy * sx, cx, -cy * sx]`.
+    * Las 4 líneas de proyección conectan ahora con precisión el origen de la cámara con los planos Near (0.5m) y Far (3.5m) en dirección exacta a la escena, sincronizando 1:1 la visión en Scene View con Game View.
+    * Indicador triangular "UP" perfeccionado en la cúspide del plano Far.
+  * **Corrección de Dirección de Luz Solar e Intensidad Shading:**
+    * Se sincronizó la orientación física de los rayos de sol en [`draw_light_gizmo`](file:///home/d3/Documentos/GlassEnginer/crates/glass_editor/src/panels/gizmo_3d.rs#L707-L720) con el vector $L$ hacia la fuente de luz en el shader `mesh.frag`.
+    * Cuando el sol apunta hacia abajo (`rx > 0`), los rayos viajan hacia el suelo y el vector hacia la fuente de luz $L$ tiene $Y > 0$, iluminando la superficie superior del suelo y objetos con máxima intensidad difusa.
+    * Cuando apunta hacia arriba (`rx < 0`), los rayos viajan al cielo y la superficie queda en sombra ambiental.
+  * **Drag & Drop Completo en Jerarquía estilo Unity (`hierarchy.rs`, `scene.rs`):**
+    * Eliminación total de los botones en fila `[▲]`, `[▼]` y `[🗑]`, limpiando visualmente cada GameObject.
+    * Soporte nativo para arrastrar y soltar:
+      * Arrastrar al centro de otra fila: anida el GameObject dentro del objetivo (`DropPosition::Inside`, emparentado).
+      * Arrastrar a la parte superior (borde 28%): reordena antes del objetivo (`DropPosition::Before`) con línea azul e indicador visual.
+      * Arrastrar a la parte inferior (borde 28%): reordena después del objetivo (`DropPosition::After`) con línea azul e indicador visual.
+      * Arrastrar al espacio vacío inferior: desemparenta a la raíz (`Reparent(None)`).
+    * Previsualización flotante tipo ghost (`📄 Nombre`) que sigue al cursor durante el arrastre.
+    * Implementación de [`SceneState::insert_relative`](file:///home/d3/Documentos/GlassEnginer/crates/glass_core/src/scene.rs#L392-L448) con validación estricta de ciclos y test unitario.
+    * Atajo de teclado `Delete` para eliminar la entidad seleccionada.
+  * **Iconos Simples y Minimalistas:**
+    * Sustitución de emojis pesados por glifos sobrios estilo Unity: `🎥` (Cámara), `☼` (Luz), `⬡` (Malla), `♫` (Audio), `📁` (Grupo) y `▣` (GameObject).
+    * Badges de Scene View reducidos a 24px con trazos finos (1.0px) y estética limpia de baja intrusión visual.
+* **Resultado:** Comportamiento idéntico a Unity verificado: arrastre fluido de objetos entre padres y niveles de orden, iluminación solar coherente con la rotación y frustum de cámara geométricamente exacto.
+
 ---
 
 ## Certificación Final de Arquitectura: GlassEngine 2.0
 
-Los 21 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
+Los 22 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
 
 1. **Hito 1 — Workspace Cargo & Contratos Base:** 100% Verificado.
 2. **Hito 2 — Contexto Vulkan Multi-GPU Universal (NVIDIA, AMD, Intel, Integradas y Dedicadas):** 100% Verificado.
@@ -579,3 +608,4 @@ Los 21 hitos arquitectónicos, de edición y de gameplay del motor han sido comp
 19. **Hito 19 — Selección en Play Mode, Aspect Ratios Unity con Letterbox Centrado y Desacoplamiento Scene/Game:** 100% Verificado.
 20. **Hito 20 — Render Targets Offscreen Duales, Verificación de Cámara Activa & Iluminación Dinámica:** 100% Verificado.
 21. **Hito 21 — Agrupación y Reordenación en Jerarquía, Gizmos 3D de Cámara (Frustum) y Luz (Rango/Dirección):** 100% Verificado.
+22. **Hito 22 — Corrección Matemática de Frustum y Dirección de Luz, Drag & Drop Jerarquía e Iconos Minimalistas:** 100% Verificado.
