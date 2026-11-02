@@ -225,16 +225,34 @@ impl ViewportPanel {
 
             let painter = ui.painter();
 
-            // Dibujar Bounding Box 3D del objeto seleccionado (funciona tanto en Edit como en Play)
-            if let Some(target_id) = *selected_entity_id {
-                if let Ok(state) = scene_state.lock() {
+            // Dibujar Gizmos de Cámaras y Luces de la escena (estilo Unity Scene View)
+            if let Ok(state) = scene_state.lock() {
+                for ent in &state.entities {
+                    if !ent.active {
+                        continue;
+                    }
+                    let is_sel = *selected_entity_id == Some(ent.id);
+
+                    if ent.camera.is_some() {
+                        gizmo_3d::draw_camera_gizmo(painter, ent, &view_proj, rect, is_sel);
+                    }
+                    if ent.light.is_some() {
+                        gizmo_3d::draw_light_gizmo(painter, ent, &view_proj, rect, is_sel);
+                    }
+                }
+
+                // Dibujar Bounding Box 3D del objeto seleccionado (funciona tanto en Edit como en Play)
+                if let Some(target_id) = *selected_entity_id {
                     if let Some(ent) = state.entities.iter().find(|e| e.id == target_id) {
-                        gizmo_3d::draw_selection_bounding_box(
-                            painter,
-                            ent,
-                            &view_proj,
-                            rect,
-                        );
+                        let is_pure_cam_or_light = (ent.camera.is_some() || ent.light.is_some()) && ent.mesh.is_none();
+                        if !is_pure_cam_or_light {
+                            gizmo_3d::draw_selection_bounding_box(
+                                painter,
+                                ent,
+                                &view_proj,
+                                rect,
+                            );
+                        }
                     }
                 }
             }

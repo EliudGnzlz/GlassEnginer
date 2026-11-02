@@ -1,9 +1,12 @@
-use egui::Ui;
+use egui::{Color32, Ui};
+use glass_core::EntityData;
 use glass_mcp::SceneState;
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Copy)]
 pub enum EntityPreset {
+    Group,
     Empty,
     Cube,
     Sphere,
@@ -21,11 +24,17 @@ enum HierarchyAction {
     Delete(u64),
     Duplicate(u64),
     Create(EntityPreset),
+    CreateChild(u64, EntityPreset),
+    MoveUp(u64),
+    MoveDown(u64),
+    Reparent(u64, Option<u64>),
+    Group(Vec<u64>),
 }
 
 pub struct HierarchyPanel {
     pub selected_entity: Option<u64>,
     pub search_filter: String,
+    pub collapsed_nodes: HashSet<u64>,
 }
 
 impl Default for HierarchyPanel {
@@ -33,6 +42,7 @@ impl Default for HierarchyPanel {
         Self {
             selected_entity: Some(3), // Por defecto el objeto principal
             search_filter: String::new(),
+            collapsed_nodes: HashSet::new(),
         }
     }
 }
@@ -42,7 +52,62 @@ impl HierarchyPanel {
         Self::default()
     }
 
+    /// Aplana el árbol jerárquico respetando raíces, hijos y estado colapsado
+    fn flatten_tree(
+        entities: &[EntityData],
+        collapsed: &HashSet<u64>,
+        filter: &str,
+    ) -> Vec<(u64, usize, bool)> {
+        let mut out = Vec::new();
+        if !filter.is_empty() {
+            for e in entities {
+                if e.name.to_lowercase().contains(filter) {
+                    out.push((e.id, 0, !e.children.is_empty()));
+                }
+            }
+            return out;
+        }
+
+        // Obtener todas las entidades raíz (parent == None o padre no existente)
+        let root_ids: Vec<u64> = entities
+            .iter()
+            .filter(|e| e.parent.is_none() || !entities.iter().any(|p| Some(p.id) == e.parent))
+            .map(|e| e.id)
+            .collect();
+
+        fn recurse(
+            id: u64,
+            depth: usize,
+            entities: &[EntityData],
+            collapsed: &HashSet<u64>,
+            out: &mut Vec<(u64, usize, bool)>,
+        ) {
+            let ent = match entities.iter().find(|e| e.id == id) {
+                Some(e) => e,
+                None => return,
+            };
+            let has_children = !ent.children.is_empty();
+            out.push((id, depth, has_children));
+
+            if has_children && !collapsed.contains(&id) {
+                for &child_id in &ent.children {
+                    recurse(child_id, depth + 1, entities, collapsed, out);
+                }
+            }
+        }
+
+        for r in root_ids {
+            recurse(r, 0, entities, collapsed, &mut out);
+        }
+
+        out
+    }
+
     fn render_creation_menu(ui: &mut Ui, pending_action: &mut Option<HierarchyAction>) {
+        if ui.button("📁 Crear Grupo Vacío (Create Group)").clicked() {
+            *pending_action = Some(HierarchyAction::Create(EntityPreset::Group));
+            ui.close();
+        }
         if ui.button("📦 Crear Vacío (Create Empty)").clicked() {
             *pending_action = Some(HierarchyAction::Create(EntityPreset::Empty));
             ui.close();
@@ -107,6 +172,12 @@ impl HierarchyPanel {
                 ui.menu_button("➕ Crear ▾", |ui| {
                     Self::render_creation_menu(ui, &mut pending_action);
                 });
+
+                if let Some(sel_id) = self.selected_entity {
+                    if ui.button("📁 Agrupar").on_hover_text("Agrupar el objeto seleccionado bajo un nuevo GameObject padre").clicked() {
+                        pending_action = Some(HierarchyAction::Group(vec![sel_id]));
+                    }
+                }
             });
         });
 
@@ -126,13 +197,20 @@ impl HierarchyPanel {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for entity in &scene.entities {
-                    if !search_term.is_empty() && !entity.name.to_lowercase().contains(&search_term) {
-                        continue;
-                    }
+                let flat_tree = Self::flatten_tree(&scene.entities, &self.collapsed_nodes, &search_term);
+
+                for (entity_id, depth, has_children) in flat_tree {
+                    let entity = match scene.entities.iter().find(|e| e.id == entity_id) {
+                        Some(e) => e,
+                        None => continue,
+                    };
 
                     let is_selected = self.selected_entity == Some(entity.id);
-                    let icon = if entity.components.iter().any(|c| c == "Camera") {
+                    let is_collapsed = self.collapsed_nodes.contains(&entity.id);
+
+                    let icon = if !entity.children.is_empty() && entity.mesh.is_none() {
+                        "📁"
+                    } else if entity.components.iter().any(|c| c == "Camera") {
                         "🎥"
                     } else if entity.components.iter().any(|c| c == "Light") {
                         "💡"
@@ -143,8 +221,6 @@ impl HierarchyPanel {
                     } else {
                         "📦"
                     };
-
-                    let label_text = format!("{} #{} {}", icon, entity.id, entity.name);
 
                     // Reservar fila completa interactiva de ancho total
                     let row_height = 22.0;
@@ -170,7 +246,44 @@ impl HierarchyPanel {
                             ui.visuals().text_color()
                         };
 
-                        let text_pos = row_rect.left_center() + egui::vec2(8.0, 0.0);
+                        // Indentación según profundidad en la jerarquía (árbol padre/hijo)
+                        let indent_x = (depth as f32) * 16.0;
+
+                        // Triángulo expandir / colapsar si tiene hijos
+                        let mut content_x = row_rect.left() + 6.0 + indent_x;
+                        if has_children {
+                            let arrow_rect = egui::Rect::from_min_size(
+                                egui::pos2(content_x, row_rect.top() + 2.0),
+                                egui::vec2(14.0, 18.0),
+                            );
+                            let arrow_resp = ui.interact(
+                                arrow_rect,
+                                ui.id().with(entity.id).with("arrow"),
+                                egui::Sense::click(),
+                            );
+                            let arrow_text = if is_collapsed { "▶" } else { "▼" };
+                            ui.painter().text(
+                                arrow_rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                arrow_text,
+                                egui::FontId::proportional(11.0),
+                                if arrow_resp.hovered() { Color32::WHITE } else { Color32::GRAY },
+                            );
+                            if arrow_resp.clicked() {
+                                if is_collapsed {
+                                    self.collapsed_nodes.remove(&entity.id);
+                                } else {
+                                    self.collapsed_nodes.insert(entity.id);
+                                }
+                            }
+                            content_x += 16.0;
+                        } else {
+                            content_x += 16.0; // Espaciador consistente
+                        }
+
+                        // Etiqueta del GameObject
+                        let label_text = format!("{} #{} {}", icon, entity.id, entity.name);
+                        let text_pos = egui::pos2(content_x, row_rect.center().y);
                         ui.painter().text(
                             text_pos,
                             egui::Align2::LEFT_CENTER,
@@ -179,26 +292,54 @@ impl HierarchyPanel {
                             text_color,
                         );
 
-                        // Botón de eliminar en extremo derecho si está seleccionado
+                        // Botones de acción en el extremo derecho de la fila
+                        let mut right_cursor = row_rect.right() - 4.0;
+
+                        // Botón Eliminar [🗑] (si está seleccionado)
                         if is_selected {
+                            right_cursor -= 18.0;
                             let del_rect = egui::Rect::from_min_size(
-                                egui::pos2(row_rect.right() - 24.0, row_rect.top() + 2.0),
-                                egui::vec2(20.0, 18.0),
+                                egui::pos2(right_cursor, row_rect.top() + 2.0),
+                                egui::vec2(16.0, 18.0),
                             );
                             let del_resp = ui.interact(del_rect, ui.id().with(entity.id).with("del"), egui::Sense::click());
                             if del_resp.hovered() {
                                 ui.painter().rect_filled(del_rect, 2.0, egui::Color32::from_rgb(180, 50, 50));
                             }
-                            ui.painter().text(
-                                del_rect.center(),
-                                egui::Align2::CENTER_CENTER,
-                                "🗑",
-                                egui::FontId::proportional(11.0),
-                                egui::Color32::WHITE,
-                            );
+                            ui.painter().text(del_rect.center(), egui::Align2::CENTER_CENTER, "🗑", egui::FontId::proportional(10.0), egui::Color32::WHITE);
                             if del_resp.clicked() {
                                 pending_action = Some(HierarchyAction::Delete(entity.id));
                             }
+                        }
+
+                        // Botón Mover Abajo [▼]
+                        right_cursor -= 18.0;
+                        let down_rect = egui::Rect::from_min_size(
+                            egui::pos2(right_cursor, row_rect.top() + 2.0),
+                            egui::vec2(16.0, 18.0),
+                        );
+                        let down_resp = ui.interact(down_rect, ui.id().with(entity.id).with("down"), egui::Sense::click()).on_hover_text("Mover abajo en la jerarquía");
+                        if down_resp.hovered() {
+                            ui.painter().rect_filled(down_rect, 2.0, egui::Color32::from_rgb(60, 60, 75));
+                        }
+                        ui.painter().text(down_rect.center(), egui::Align2::CENTER_CENTER, "▼", egui::FontId::proportional(9.0), egui::Color32::LIGHT_GRAY);
+                        if down_resp.clicked() {
+                            pending_action = Some(HierarchyAction::MoveDown(entity.id));
+                        }
+
+                        // Botón Mover Arriba [▲]
+                        right_cursor -= 18.0;
+                        let up_rect = egui::Rect::from_min_size(
+                            egui::pos2(right_cursor, row_rect.top() + 2.0),
+                            egui::vec2(16.0, 18.0),
+                        );
+                        let up_resp = ui.interact(up_rect, ui.id().with(entity.id).with("up"), egui::Sense::click()).on_hover_text("Mover arriba en la jerarquía");
+                        if up_resp.hovered() {
+                            ui.painter().rect_filled(up_rect, 2.0, egui::Color32::from_rgb(60, 60, 75));
+                        }
+                        ui.painter().text(up_rect.center(), egui::Align2::CENTER_CENTER, "▲", egui::FontId::proportional(9.0), egui::Color32::LIGHT_GRAY);
+                        if up_resp.clicked() {
+                            pending_action = Some(HierarchyAction::MoveUp(entity.id));
                         }
                     }
 
@@ -209,7 +350,54 @@ impl HierarchyPanel {
 
                     // Clic derecho en CUALQUIER punto de la fila abre el menú contextual
                     row_resp.context_menu(|ui| {
-                        ui.label(format!("Objeto: {}", entity.name));
+                        ui.label(egui::RichText::new(format!("Objeto: {}", entity.name)).strong());
+                        ui.separator();
+
+                        if ui.button("▲ Mover Arriba").clicked() {
+                            pending_action = Some(HierarchyAction::MoveUp(entity.id));
+                            ui.close();
+                        }
+                        if ui.button("▼ Mover Abajo").clicked() {
+                            pending_action = Some(HierarchyAction::MoveDown(entity.id));
+                            ui.close();
+                        }
+                        ui.separator();
+
+                        if ui.button("📁 Agrupar en Nuevo Padre").clicked() {
+                            pending_action = Some(HierarchyAction::Group(vec![entity.id]));
+                            ui.close();
+                        }
+
+                        if ui.button("➕ Crear Hijo Vacío").clicked() {
+                            pending_action = Some(HierarchyAction::CreateChild(entity.id, EntityPreset::Empty));
+                            ui.close();
+                        }
+
+                        if entity.parent.is_some() {
+                            if ui.button("⛓ Desemparentar (Mover a Raíz)").clicked() {
+                                pending_action = Some(HierarchyAction::Reparent(entity.id, None));
+                                ui.close();
+                            }
+                        }
+
+                        // Submenú para emparentar con otro objeto
+                        let candidate_parents: Vec<(u64, String)> = scene.entities
+                            .iter()
+                            .filter(|e| e.id != entity.id && !scene.is_descendant_of(e.id, entity.id))
+                            .map(|e| (e.id, e.name.clone()))
+                            .collect();
+
+                        if !candidate_parents.is_empty() {
+                            ui.menu_button("🔗 Emparentar con... ▾", |ui| {
+                                for (pid, pname) in candidate_parents {
+                                    if ui.button(format!("#{pid} {pname}")).clicked() {
+                                        pending_action = Some(HierarchyAction::Reparent(entity.id, Some(pid)));
+                                        ui.close();
+                                    }
+                                }
+                            });
+                        }
+
                         ui.separator();
                         if ui.button("📋 Duplicar (Duplicate)").clicked() {
                             pending_action = Some(HierarchyAction::Duplicate(entity.id));
@@ -246,6 +434,24 @@ impl HierarchyPanel {
                 HierarchyAction::Select(id) => {
                     self.selected_entity = Some(id);
                 }
+                HierarchyAction::MoveUp(id) => {
+                    scene.move_entity_up(id);
+                }
+                HierarchyAction::MoveDown(id) => {
+                    scene.move_entity_down(id);
+                }
+                HierarchyAction::Reparent(child_id, new_parent) => {
+                    scene.reparent(child_id, new_parent);
+                }
+                HierarchyAction::Group(ids) => {
+                    let gid = scene.group_entities(&ids, "GameObject Group");
+                    self.selected_entity = Some(gid);
+                }
+                HierarchyAction::CreateChild(parent_id, preset) => {
+                    let new_id = Self::instantiate_preset(&mut scene, preset);
+                    scene.reparent(new_id, Some(parent_id));
+                    self.selected_entity = Some(new_id);
+                }
                 HierarchyAction::Delete(id) => {
                     scene.delete_entity(id);
                     if self.selected_entity == Some(id) {
@@ -266,151 +472,166 @@ impl HierarchyPanel {
                             new_ent.script_data = orig.script_data.clone();
                             new_ent.physics = orig.physics.clone();
                             new_ent.audio = orig.audio.clone();
+                            new_ent.camera = orig.camera.clone();
+                            new_ent.light = orig.light.clone();
+                            new_ent.parent = orig.parent;
+                        }
+                        if let Some(pid) = orig.parent {
+                            if let Some(p) = scene.get_entity_mut(pid) {
+                                p.children.push(new_id);
+                            }
                         }
                         self.selected_entity = Some(new_id);
                     }
                 }
                 HierarchyAction::Create(preset) => {
-                    let new_id = match preset {
-                        EntityPreset::Empty => {
-                            scene.create_entity("GameObject".into(), vec!["Transform".into()])
-                        }
-                        EntityPreset::Cube => {
-                            let id = scene.create_entity(
-                                "Cube".into(),
-                                vec![
-                                    "Transform".into(),
-                                    "MeshRenderer".into(),
-                                    "RigidBody".into(),
-                                    "Collider".into(),
-                                ],
-                            );
-                            if let Some(ent) = scene.get_entity_mut(id) {
-                                ent.transform.position = [0.0, 2.0, 0.0];
-                                if let Some(m) = &mut ent.mesh {
-                                    m.color = [0.2, 0.7, 1.0];
-                                }
-                            }
-                            id
-                        }
-                        EntityPreset::Sphere => {
-                            let id = scene.create_entity(
-                                "Sphere".into(),
-                                vec![
-                                    "Transform".into(),
-                                    "MeshRenderer".into(),
-                                    "RigidBody".into(),
-                                    "Collider".into(),
-                                ],
-                            );
-                            if let Some(ent) = scene.get_entity_mut(id) {
-                                ent.transform.position = [0.0, 2.0, 0.0];
-                                if let Some(m) = &mut ent.mesh {
-                                    m.color = [0.9, 0.4, 0.2];
-                                }
-                            }
-                            id
-                        }
-                        EntityPreset::Capsule => {
-                            let id = scene.create_entity(
-                                "Capsule".into(),
-                                vec![
-                                    "Transform".into(),
-                                    "MeshRenderer".into(),
-                                    "RigidBody".into(),
-                                    "Collider".into(),
-                                ],
-                            );
-                            if let Some(ent) = scene.get_entity_mut(id) {
-                                ent.transform.position = [0.0, 2.0, 0.0];
-                                ent.transform.scale = [1.0, 2.0, 1.0];
-                                if let Some(m) = &mut ent.mesh {
-                                    m.color = [0.3, 0.8, 0.4];
-                                }
-                            }
-                            id
-                        }
-                        EntityPreset::Cylinder => {
-                            let id = scene.create_entity(
-                                "Cylinder".into(),
-                                vec![
-                                    "Transform".into(),
-                                    "MeshRenderer".into(),
-                                    "RigidBody".into(),
-                                    "Collider".into(),
-                                ],
-                            );
-                            if let Some(ent) = scene.get_entity_mut(id) {
-                                ent.transform.position = [0.0, 2.0, 0.0];
-                                ent.transform.scale = [1.0, 2.0, 1.0];
-                                if let Some(m) = &mut ent.mesh {
-                                    m.color = [0.8, 0.8, 0.2];
-                                }
-                            }
-                            id
-                        }
-                        EntityPreset::Plane => {
-                            let id = scene.create_entity(
-                                "Plane".into(),
-                                vec![
-                                    "Transform".into(),
-                                    "MeshRenderer".into(),
-                                    "StaticCollider".into(),
-                                ],
-                            );
-                            if let Some(ent) = scene.get_entity_mut(id) {
-                                ent.transform.position = [0.0, 0.0, 0.0];
-                                ent.transform.scale = [10.0, 0.1, 10.0];
-                                if let Some(m) = &mut ent.mesh {
-                                    m.color = [0.5, 0.5, 0.5];
-                                }
-                            }
-                            id
-                        }
-                        EntityPreset::DirectionalLight => {
-                            let id = scene.create_entity(
-                                "Directional Light".into(),
-                                vec!["Transform".into(), "Light".into()],
-                            );
-                            if let Some(ent) = scene.get_entity_mut(id) {
-                                ent.transform.position = [0.0, 10.0, 0.0];
-                                ent.transform.rotation = [45.0, -30.0, 0.0];
-                            }
-                            id
-                        }
-                        EntityPreset::PointLight => {
-                            let id = scene.create_entity(
-                                "Point Light".into(),
-                                vec!["Transform".into(), "Light".into()],
-                            );
-                            if let Some(ent) = scene.get_entity_mut(id) {
-                                ent.transform.position = [0.0, 3.0, 0.0];
-                            }
-                            id
-                        }
-                        EntityPreset::AudioSource => {
-                            let id = scene.create_entity(
-                                "Audio Source".into(),
-                                vec!["Transform".into(), "AudioSource".into()],
-                            );
-                            if let Some(ent) = scene.get_entity_mut(id) {
-                                ent.transform.position = [0.0, 1.0, 0.0];
-                            }
-                            id
-                        }
-                        EntityPreset::Camera => {
-                            let id = scene.create_entity(
-                                "Camera".into(),
-                                vec!["Transform".into(), "Camera".into()],
-                            );
-                            if let Some(ent) = scene.get_entity_mut(id) {
-                                ent.transform.position = [0.0, 2.0, -5.0];
-                            }
-                            id
-                        }
-                    };
+                    let new_id = Self::instantiate_preset(&mut scene, preset);
                     self.selected_entity = Some(new_id);
                 }
+            }
+        }
+    }
+
+    fn instantiate_preset(scene: &mut SceneState, preset: EntityPreset) -> u64 {
+        match preset {
+            EntityPreset::Group => {
+                scene.create_entity("GameObject Group".into(), vec!["Transform".into()])
+            }
+            EntityPreset::Empty => {
+                scene.create_entity("GameObject".into(), vec!["Transform".into()])
+            }
+            EntityPreset::Cube => {
+                let id = scene.create_entity(
+                    "Cube".into(),
+                    vec![
+                        "Transform".into(),
+                        "MeshRenderer".into(),
+                        "RigidBody".into(),
+                        "Collider".into(),
+                    ],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    ent.transform.position = [0.0, 2.0, 0.0];
+                    if let Some(m) = &mut ent.mesh {
+                        m.color = [0.2, 0.7, 1.0];
+                    }
+                }
+                id
+            }
+            EntityPreset::Sphere => {
+                let id = scene.create_entity(
+                    "Sphere".into(),
+                    vec![
+                        "Transform".into(),
+                        "MeshRenderer".into(),
+                        "RigidBody".into(),
+                        "Collider".into(),
+                    ],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    ent.transform.position = [0.0, 2.0, 0.0];
+                    if let Some(m) = &mut ent.mesh {
+                        m.color = [0.9, 0.4, 0.2];
+                    }
+                }
+                id
+            }
+            EntityPreset::Capsule => {
+                let id = scene.create_entity(
+                    "Capsule".into(),
+                    vec![
+                        "Transform".into(),
+                        "MeshRenderer".into(),
+                        "RigidBody".into(),
+                        "Collider".into(),
+                    ],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    ent.transform.position = [0.0, 2.0, 0.0];
+                    ent.transform.scale = [1.0, 2.0, 1.0];
+                    if let Some(m) = &mut ent.mesh {
+                        m.color = [0.3, 0.8, 0.4];
+                    }
+                }
+                id
+            }
+            EntityPreset::Cylinder => {
+                let id = scene.create_entity(
+                    "Cylinder".into(),
+                    vec![
+                        "Transform".into(),
+                        "MeshRenderer".into(),
+                        "RigidBody".into(),
+                        "Collider".into(),
+                    ],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    ent.transform.position = [0.0, 2.0, 0.0];
+                    ent.transform.scale = [1.0, 2.0, 1.0];
+                    if let Some(m) = &mut ent.mesh {
+                        m.color = [0.8, 0.8, 0.2];
+                    }
+                }
+                id
+            }
+            EntityPreset::Plane => {
+                let id = scene.create_entity(
+                    "Plane".into(),
+                    vec![
+                        "Transform".into(),
+                        "MeshRenderer".into(),
+                        "StaticCollider".into(),
+                    ],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    ent.transform.position = [0.0, 0.0, 0.0];
+                    ent.transform.scale = [10.0, 0.1, 10.0];
+                    if let Some(m) = &mut ent.mesh {
+                        m.color = [0.5, 0.5, 0.5];
+                    }
+                }
+                id
+            }
+            EntityPreset::DirectionalLight => {
+                let id = scene.create_entity(
+                    "Directional Light".into(),
+                    vec!["Transform".into(), "Light".into()],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    ent.transform.position = [0.0, 10.0, 0.0];
+                    ent.transform.rotation = [45.0, -30.0, 0.0];
+                }
+                id
+            }
+            EntityPreset::PointLight => {
+                let id = scene.create_entity(
+                    "Point Light".into(),
+                    vec!["Transform".into(), "Light".into()],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    ent.transform.position = [0.0, 3.0, 0.0];
+                }
+                id
+            }
+            EntityPreset::AudioSource => {
+                let id = scene.create_entity(
+                    "Audio Source".into(),
+                    vec!["Transform".into(), "AudioSource".into()],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    ent.transform.position = [0.0, 1.0, 0.0];
+                }
+                id
+            }
+            EntityPreset::Camera => {
+                let id = scene.create_entity(
+                    "Camera".into(),
+                    vec!["Transform".into(), "Camera".into()],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    ent.transform.position = [0.0, 2.0, -5.0];
+                }
+                id
             }
         }
     }

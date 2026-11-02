@@ -388,20 +388,26 @@ pub fn pick_entity_at_screen(
             }
         }
 
+        let center_2d = world_to_screen(pos, vp, rect);
+        let icon_clicked = (ent.camera.is_some() || ent.light.is_some())
+            && center_2d.map_or(false, |c| (click_pos - c).length() <= 24.0);
+
         let pad = 6.0_f32;
-        let is_hit = if valid_corners >= 2 {
+        let is_hit = icon_clicked || if valid_corners >= 2 {
             click_pos.x >= (min_sx - pad)
                 && click_pos.x <= (max_sx + pad)
                 && click_pos.y >= (min_sy - pad)
                 && click_pos.y <= (max_sy + pad)
-        } else if let Some(center_2d) = world_to_screen(pos, vp, rect) {
-            (click_pos - center_2d).length() <= 35.0
+        } else if let Some(c) = center_2d {
+            (click_pos - c).length() <= 35.0
         } else {
             false
         };
 
-        if is_hit && dist_cam < min_dist_to_cam {
-            min_dist_to_cam = dist_cam;
+        // Si se hizo clic directo sobre el icono 2D de cámara o luz, le damos prioridad de picking
+        let effective_dist = if icon_clicked { 0.0 } else { dist_cam };
+        if is_hit && effective_dist < min_dist_to_cam {
+            min_dist_to_cam = effective_dist;
             best_id = Some(ent.id);
         }
     }
@@ -536,5 +542,338 @@ pub fn draw_selection_bounding_box(
             egui::StrokeKind::Inside,
         );
         painter.galley(badge_pos - text_size * 0.5, galley, text_color);
+    }
+}
+
+/// Dibuja el Gizmo 3D de una Cámara: Icono 2D flotante, Frustum piramidal wireframe y vector de visión
+pub fn draw_camera_gizmo(
+    painter: &Painter,
+    cam_entity: &EntityData,
+    vp: &[f32; 16],
+    rect: Rect,
+    is_selected: bool,
+) -> Option<Rect> {
+    let pos = cam_entity.transform.position;
+    let rot = cam_entity.transform.rotation;
+
+    let rx = rot[0].to_radians();
+    let ry = rot[1].to_radians();
+    let rz = rot[2].to_radians();
+
+    let (sx, cx) = (rx.sin(), rx.cos());
+    let (sy, cy) = (ry.sin(), ry.cos());
+    let (sz, cz) = (rz.sin(), rz.cos());
+
+    // Vector de orientación frontal (Forward)
+    let fwd = [sy, -sx * cy, -cx * cy];
+    let up = [cy * sz, sx * sy * sz + cx * cz, cx * sy * sz - sx * cz];
+    let right = [cy * cz, -sx * sy * cz + cx * sz, -cx * sy * cz - sx * sz];
+
+    let fov_rad = cam_entity.camera.as_ref().map(|c| c.fov).unwrap_or(60.0).to_radians();
+    let aspect = 16.0 / 9.0;
+
+    // Dimensiones del frustum para representación visual en el editor
+    let d_near = 0.6;
+    let d_far = 3.2;
+    let h_near = d_near * (fov_rad * 0.5).tan();
+    let w_near = h_near * aspect;
+    let h_far = d_far * (fov_rad * 0.5).tan();
+    let w_far = h_far * aspect;
+
+    // Esquinas del plano cercano
+    let n_tl = [pos[0] + fwd[0]*d_near - right[0]*w_near + up[0]*h_near, pos[1] + fwd[1]*d_near - right[1]*w_near + up[1]*h_near, pos[2] + fwd[2]*d_near - right[2]*w_near + up[2]*h_near];
+    let n_tr = [pos[0] + fwd[0]*d_near + right[0]*w_near + up[0]*h_near, pos[1] + fwd[1]*d_near + right[1]*w_near + up[1]*h_near, pos[2] + fwd[2]*d_near + right[2]*w_near + up[2]*h_near];
+    let n_br = [pos[0] + fwd[0]*d_near + right[0]*w_near - up[0]*h_near, pos[1] + fwd[1]*d_near + right[1]*w_near - up[1]*h_near, pos[2] + fwd[2]*d_near + right[2]*w_near - up[2]*h_near];
+    let n_bl = [pos[0] + fwd[0]*d_near - right[0]*w_near - up[0]*h_near, pos[1] + fwd[1]*d_near - right[1]*w_near - up[1]*h_near, pos[2] + fwd[2]*d_near - right[2]*w_near - up[2]*h_near];
+
+    // Esquinas del plano lejano
+    let f_tl = [pos[0] + fwd[0]*d_far - right[0]*w_far + up[0]*h_far, pos[1] + fwd[1]*d_far - right[1]*w_far + up[1]*h_far, pos[2] + fwd[2]*d_far - right[2]*w_far + up[2]*h_far];
+    let f_tr = [pos[0] + fwd[0]*d_far + right[0]*w_far + up[0]*h_far, pos[1] + fwd[1]*d_far + right[0]*w_far + up[1]*h_far, pos[2] + fwd[2]*d_far + right[2]*w_far + up[2]*h_far];
+    let f_br = [pos[0] + fwd[0]*d_far + right[0]*w_far - up[0]*h_far, pos[1] + fwd[1]*d_far + right[0]*w_far - up[0]*h_far, pos[2] + fwd[2]*d_far + right[2]*w_far - up[2]*h_far];
+    let f_bl = [pos[0] + fwd[0]*d_far - right[0]*w_far - up[0]*h_far, pos[1] + fwd[1]*d_far - right[1]*w_far - up[1]*h_far, pos[2] + fwd[2]*d_far - right[2]*w_far - up[2]*h_far];
+
+    // Proyecciones a pantalla
+    let p_cam = world_to_screen(pos, vp, rect);
+    let pn_tl = world_to_screen(n_tl, vp, rect);
+    let pn_tr = world_to_screen(n_tr, vp, rect);
+    let pn_br = world_to_screen(n_br, vp, rect);
+    let pn_bl = world_to_screen(n_bl, vp, rect);
+
+    let pf_tl = world_to_screen(f_tl, vp, rect);
+    let pf_tr = world_to_screen(f_tr, vp, rect);
+    let pf_br = world_to_screen(f_br, vp, rect);
+    let pf_bl = world_to_screen(f_bl, vp, rect);
+
+    // Si está seleccionada, dibujar frustum completo brillante
+    let stroke_frustum = if is_selected {
+        Stroke::new(2.0, Color32::from_rgb(80, 220, 255))
+    } else {
+        Stroke::new(1.0, Color32::from_rgba_unmultiplied(80, 220, 255, 90))
+    };
+
+    if is_selected {
+        // Líneas desde la cámara hacia las 4 esquinas lejanas
+        if let Some(pc) = p_cam {
+            if let Some(p) = pf_tl { painter.line_segment([pc, p], stroke_frustum); }
+            if let Some(p) = pf_tr { painter.line_segment([pc, p], stroke_frustum); }
+            if let Some(p) = pf_br { painter.line_segment([pc, p], stroke_frustum); }
+            if let Some(p) = pf_bl { painter.line_segment([pc, p], stroke_frustum); }
+        }
+
+        // Rectángulo plano cercano
+        if let (Some(a), Some(b)) = (pn_tl, pn_tr) { painter.line_segment([a, b], stroke_frustum); }
+        if let (Some(a), Some(b)) = (pn_tr, pn_br) { painter.line_segment([a, b], stroke_frustum); }
+        if let (Some(a), Some(b)) = (pn_br, pn_bl) { painter.line_segment([a, b], stroke_frustum); }
+        if let (Some(a), Some(b)) = (pn_bl, pn_tl) { painter.line_segment([a, b], stroke_frustum); }
+
+        // Rectángulo plano lejano
+        if let (Some(a), Some(b)) = (pf_tl, pf_tr) { painter.line_segment([a, b], stroke_frustum); }
+        if let (Some(a), Some(b)) = (pf_tr, pf_br) { painter.line_segment([a, b], stroke_frustum); }
+        if let (Some(a), Some(b)) = (pf_br, pf_bl) { painter.line_segment([a, b], stroke_frustum); }
+        if let (Some(a), Some(b)) = (pf_bl, pf_tl) { painter.line_segment([a, b], stroke_frustum); }
+
+        // Triángulo indicador "UP" en el marco superior del frustum
+        let top_mid = [
+            (f_tl[0] + f_tr[0]) * 0.5 + up[0] * 0.4,
+            (f_tl[1] + f_tr[1]) * 0.5 + up[1] * 0.4,
+            (f_tl[2] + f_tr[2]) * 0.5 + up[2] * 0.4,
+        ];
+        if let (Some(pt), Some(p_left), Some(p_right)) = (world_to_screen(top_mid, vp, rect), pf_tl, pf_tr) {
+            let mid_line = (p_left + p_right.to_vec2()) * 0.5;
+            painter.line_segment([mid_line, pt], Stroke::new(2.5, Color32::from_rgb(255, 220, 60)));
+        }
+    }
+
+    // Dibujar billboard/badge 2D con icono 🎥
+    if let Some(screen_pos) = p_cam {
+        let badge_rect = Rect::from_center_size(screen_pos, vec2(32.0, 32.0));
+        let bg_fill = if is_selected {
+            Color32::from_rgb(0, 90, 160)
+        } else {
+            Color32::from_rgba_unmultiplied(20, 30, 45, 230)
+        };
+        let border_stroke = if is_selected {
+            Stroke::new(2.0, Color32::from_rgb(100, 230, 255))
+        } else {
+            Stroke::new(1.0, Color32::from_rgb(70, 130, 180))
+        };
+
+        painter.circle(screen_pos, 16.0, bg_fill, border_stroke);
+        painter.text(
+            screen_pos,
+            egui::Align2::CENTER_CENTER,
+            "🎥",
+            egui::FontId::proportional(16.0),
+            Color32::WHITE,
+        );
+
+        // Texto descriptivo debajo
+        painter.text(
+            screen_pos + vec2(0.0, 20.0),
+            egui::Align2::CENTER_TOP,
+            &cam_entity.name,
+            egui::FontId::proportional(11.0),
+            if is_selected { Color32::from_rgb(100, 230, 255) } else { Color32::LIGHT_GRAY },
+        );
+
+        Some(badge_rect)
+    } else {
+        None
+    }
+}
+
+/// Dibuja el Gizmo 3D de una Luz: Icono 💡, rayos/orientación de sol (Directional) o esfera de alcance (Point Light)
+pub fn draw_light_gizmo(
+    painter: &Painter,
+    light_entity: &EntityData,
+    vp: &[f32; 16],
+    rect: Rect,
+    is_selected: bool,
+) -> Option<Rect> {
+    let pos = light_entity.transform.position;
+    let rot = light_entity.transform.rotation;
+
+    let rx = rot[0].to_radians();
+    let ry = rot[1].to_radians();
+
+    let (sx, cx) = (rx.sin(), rx.cos());
+    let (sy, cy) = (ry.sin(), ry.cos());
+
+    // Vector de emisión de la luz (hacia donde alumbra)
+    let dir = [-sy, sx * cy, cx * cy];
+    let len = (dir[0]*dir[0] + dir[1]*dir[1] + dir[2]*dir[2]).sqrt().max(0.001);
+    let l_dir = [dir[0] / len, dir[1] / len, dir[2] / len];
+
+    let ltype = light_entity.light.as_ref().map(|l| l.light_type.as_str()).unwrap_or("Directional");
+    let range = light_entity.light.as_ref().map(|l| l.range).unwrap_or(10.0);
+
+    let p_light = world_to_screen(pos, vp, rect);
+
+    if is_selected {
+        if ltype == "Directional" {
+            // Dirección solar: dibujar disco emisor y 5 rayos paralelos que viajan en dirección de la luz
+            let up_approx = if l_dir[1].abs() > 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+            let r_x = l_dir[1]*up_approx[2] - l_dir[2]*up_approx[1];
+            let r_y = l_dir[2]*up_approx[0] - l_dir[0]*up_approx[2];
+            let r_z = l_dir[0]*up_approx[1] - l_dir[1]*up_approx[0];
+            let r_len = (r_x*r_x + r_y*r_y + r_z*r_z).sqrt().max(0.001);
+            let u_vec = [r_x / r_len, r_y / r_len, r_z / r_len];
+            let v_vec = [
+                l_dir[1]*u_vec[2] - l_dir[2]*u_vec[1],
+                l_dir[2]*u_vec[0] - l_dir[0]*u_vec[2],
+                l_dir[0]*u_vec[1] - l_dir[1]*u_vec[0],
+            ];
+
+            let ray_len = 3.5;
+            let disk_rad = 0.8;
+            let ray_color = Color32::from_rgb(255, 230, 60);
+            let ray_stroke = Stroke::new(2.0, ray_color);
+
+            // Anillo/disco emisor en 3D
+            const DISK_STEPS: usize = 16;
+            let mut prev_pt: Option<Pos2> = None;
+            for i in 0..=DISK_STEPS {
+                let theta = (i as f32 / DISK_STEPS as f32) * std::f32::consts::TAU;
+                let (st, ct) = (theta.sin(), theta.cos());
+                let p_disk = [
+                    pos[0] + (u_vec[0]*ct + v_vec[0]*st) * disk_rad,
+                    pos[1] + (u_vec[1]*ct + v_vec[1]*st) * disk_rad,
+                    pos[2] + (u_vec[2]*ct + v_vec[2]*st) * disk_rad,
+                ];
+                if let Some(sc_pt) = world_to_screen(p_disk, vp, rect) {
+                    if let Some(prev) = prev_pt {
+                        painter.line_segment([prev, sc_pt], Stroke::new(1.5, ray_color));
+                    }
+                    prev_pt = Some(sc_pt);
+                }
+            }
+
+            // Rayo central y 4 rayos perimetrales con puntas de flecha
+            let offsets = [
+                [0.0, 0.0],
+                [disk_rad * 0.7, 0.0],
+                [-disk_rad * 0.7, 0.0],
+                [0.0, disk_rad * 0.7],
+                [0.0, -disk_rad * 0.7],
+            ];
+            for off in offsets {
+                let origin = [
+                    pos[0] + u_vec[0]*off[0] + v_vec[0]*off[1],
+                    pos[1] + u_vec[1]*off[0] + v_vec[1]*off[1],
+                    pos[2] + u_vec[2]*off[0] + v_vec[2]*off[1],
+                ];
+                let tip = [
+                    origin[0] + l_dir[0] * ray_len,
+                    origin[1] + l_dir[1] * ray_len,
+                    origin[2] + l_dir[2] * ray_len,
+                ];
+                if let (Some(po), Some(pt)) = (world_to_screen(origin, vp, rect), world_to_screen(tip, vp, rect)) {
+                    painter.line_segment([po, pt], ray_stroke);
+                    let arrow_dir = (pt - po).normalized();
+                    let arrow_side = egui::vec2(-arrow_dir.y, arrow_dir.x);
+                    painter.line_segment([pt, pt - arrow_dir * 8.0 + arrow_side * 4.0], ray_stroke);
+                    painter.line_segment([pt, pt - arrow_dir * 8.0 - arrow_side * 4.0], ray_stroke);
+                }
+            }
+        } else {
+            // Point Light: esfera wireframe 3D proporcional al radio de iluminación (range)
+            let sphere_stroke = Stroke::new(1.8, Color32::from_rgba_unmultiplied(255, 220, 60, 210));
+            const CIRCLE_SEGS: usize = 32;
+
+            // 1. Círculo plano XZ (Ecuador horizontal)
+            let mut prev_pt: Option<Pos2> = None;
+            for i in 0..=CIRCLE_SEGS {
+                let theta = (i as f32 / CIRCLE_SEGS as f32) * std::f32::consts::TAU;
+                let pt3d = [pos[0] + range * theta.cos(), pos[1], pos[2] + range * theta.sin()];
+                if let Some(sc_pt) = world_to_screen(pt3d, vp, rect) {
+                    if let Some(prev) = prev_pt {
+                        painter.line_segment([prev, sc_pt], sphere_stroke);
+                    }
+                    prev_pt = Some(sc_pt);
+                } else {
+                    prev_pt = None;
+                }
+            }
+
+            // 2. Círculo plano XY (Meridiano vertical 1)
+            let mut prev_pt: Option<Pos2> = None;
+            for i in 0..=CIRCLE_SEGS {
+                let theta = (i as f32 / CIRCLE_SEGS as f32) * std::f32::consts::TAU;
+                let pt3d = [pos[0] + range * theta.cos(), pos[1] + range * theta.sin(), pos[2]];
+                if let Some(sc_pt) = world_to_screen(pt3d, vp, rect) {
+                    if let Some(prev) = prev_pt {
+                        painter.line_segment([prev, sc_pt], sphere_stroke);
+                    }
+                    prev_pt = Some(sc_pt);
+                } else {
+                    prev_pt = None;
+                }
+            }
+
+            // 3. Círculo plano YZ (Meridiano vertical 2)
+            let mut prev_pt: Option<Pos2> = None;
+            for i in 0..=CIRCLE_SEGS {
+                let theta = (i as f32 / CIRCLE_SEGS as f32) * std::f32::consts::TAU;
+                let pt3d = [pos[0], pos[1] + range * theta.sin(), pos[2] + range * theta.cos()];
+                if let Some(sc_pt) = world_to_screen(pt3d, vp, rect) {
+                    if let Some(prev) = prev_pt {
+                        painter.line_segment([prev, sc_pt], sphere_stroke);
+                    }
+                    prev_pt = Some(sc_pt);
+                } else {
+                    prev_pt = None;
+                }
+            }
+
+            // Etiqueta indicando la proporción exacta de alcance
+            let label_pos = [pos[0], pos[1] + range + 0.3, pos[2]];
+            if let Some(lp) = world_to_screen(label_pos, vp, rect) {
+                painter.text(
+                    lp,
+                    egui::Align2::CENTER_BOTTOM,
+                    format!("💡 Alcance (Range): {:.1} m", range),
+                    egui::FontId::proportional(12.0),
+                    Color32::from_rgb(255, 230, 80),
+                );
+            }
+        }
+    }
+
+    // Dibujar billboard/badge 2D con icono 💡 o 🔆
+    if let Some(screen_pos) = p_light {
+        let badge_rect = Rect::from_center_size(screen_pos, vec2(32.0, 32.0));
+        let icon_str = if ltype == "Directional" { "💡" } else { "🔆" };
+
+        let bg_fill = if is_selected {
+            Color32::from_rgb(180, 130, 20)
+        } else {
+            Color32::from_rgba_unmultiplied(45, 35, 15, 230)
+        };
+        let border_stroke = if is_selected {
+            Stroke::new(2.0, Color32::from_rgb(255, 220, 60))
+        } else {
+            Stroke::new(1.0, Color32::from_rgb(190, 150, 40))
+        };
+
+        painter.circle(screen_pos, 16.0, bg_fill, border_stroke);
+        painter.text(
+            screen_pos,
+            egui::Align2::CENTER_CENTER,
+            icon_str,
+            egui::FontId::proportional(16.0),
+            Color32::WHITE,
+        );
+
+        painter.text(
+            screen_pos + vec2(0.0, 20.0),
+            egui::Align2::CENTER_TOP,
+            &light_entity.name,
+            egui::FontId::proportional(11.0),
+            if is_selected { Color32::from_rgb(255, 220, 60) } else { Color32::LIGHT_GRAY },
+        );
+
+        Some(badge_rect)
+    } else {
+        None
     }
 }

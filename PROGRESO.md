@@ -28,6 +28,7 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
 | **Hito 18**| Menú Contextual Jerarquía, Iconos Unity & Docking Dinámico (egui_dock) | **Completado** | 100% | DeepSeek 4 Pro + Kimi K3 (Mirai) |
 | **Hito 19**| Selección en Play Mode, Aspect Ratios Unity & Desacoplamiento Scene/Game | **Completado** | 100% | DeepSeek 4 Pro + Kimi K3 (Mirai) |
 | **Hito 20**| Render Targets Offscreen Duales, Verificación Cámara Activa & Luz Dinámica | **Completado** | 100% | DeepSeek 4 Pro + Kimi K3 (Mirai) |
+| **Hito 21**| Agrupación y Reordenación en Jerarquía, Gizmos 3D de Cámara (Frustum) y Luz (Rango/Dirección) | **Completado** | 100% | DeepSeek 4 Pro + Kimi K3 (Mirai) |
 
 ---
 
@@ -518,11 +519,44 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
     * Menú "➕ Añadir Componente" ampliado con opciones de Cámara y Luz.
 * **Resultado:** Desacoplamiento total verificado: mover la cámara en la ventana de edición Scene View ya no altera en absoluto la cámara de juego Game View, y el motor verifica en tiempo real la existencia y parámetros de la cámara e iluminación en la escena.
 
+### Hito 21: Agrupación y Reordenación en Jerarquía, Gizmos 3D de Cámara (Frustum) y Luz (Rango/Dirección)
+* **Fecha:** 2026-11-01
+* **Auditoría y Consulta:** DeepSeek Chat + Kimi K3.
+* **Acciones:**
+  * **Relaciones Padre-Hijo & Agrupación de GameObjects (`scene.rs`):**
+    * Se agregaron los campos `parent: Option<u64>` y `children: Vec<u64>` a `EntityData`.
+    * Implementación de `SceneState::reparent(child_id, new_parent_id)` con detección y prevención estricta de ciclos (`is_descendant_of`).
+    * Implementación de `SceneState::group_entities(entity_ids, group_name)` que crea un nuevo GameObject padre y emparenta los objetos seleccionados.
+    * Implementación de `SceneState::move_entity_up(id)` y `move_entity_down(id)` para reordenar GameObjects tanto en la raíz como entre hermanos.
+    * Limpieza segura en `delete_entity(id)`: al eliminar un padre, sus hijos se desemparentan limpiamente a la raíz sin quedar huérfanos.
+  * **Visualización y Controles en Panel Hierarchy (`hierarchy.rs`):**
+    * Aplanamiento recursivo del árbol de escena con sangría proporcional por nivel (`depth * 16.0 px`).
+    * Botones interactivos de colapso/despliegue (`▶` / `▼`) para nodos con hijos mediante `collapsed_nodes: HashSet<u64>`.
+    * Botones rápidos en fila para mover arriba (`▲`), mover abajo (`▼`) y eliminar (`🗑`).
+    * Menú contextual click-derecho enriquecido:
+      * `▲ Mover Arriba (Move Up)` y `▼ Mover Abajo (Move Down)`.
+      * `📁 Agrupar en Nuevo Padre (Group)`.
+      * `➕ Crear Hijo Vacío (Create Child)`.
+      * `⛓ Desemparentar (Mover a Raíz)`.
+      * Submenú dinámico `🔗 Emparentar con... ▾` listando todos los candidatos válidos (filtrando ciclos y al propio objeto).
+    * Botón de barra superior `📁 Agrupar` para agrupar rápidamente la selección.
+  * **Gizmos 3D de Cámara en Scene View (`gizmo_3d.rs`, `viewport.rs`):**
+    * Badge 2D billboard circular con icono `🎥` y nombre de la cámara en Scene View.
+    * Al seleccionarla: representación visual 3D completa del **Frustum piramidal** con planos Near y Far proporcionales a su FOV y Aspect Ratio, aristas conectadas y triángulo indicador "UP".
+    * Raycasting picking directo: hacer clic sobre el icono de la cámara la selecciona inmediatamente.
+  * **Gizmos 3D de Luz y Proporción de Alcance (`gizmo_3d.rs`, `viewport.rs`):**
+    * Badge 2D billboard circular con icono `💡` (Directional) o `🔆` (Point) en Scene View.
+    * Al seleccionarla:
+      * **Directional Light:** Disco emisor 3D con 5 rayos paralelos y cabezas de flecha indicando la dirección exacta de propagación solar.
+      * **Point Light:** Esfera wireframe 3D compuesta por 3 anillos ortogonales (ecuador XZ, meridiano XY, meridiano YZ) proporcionales a su radio exacto `range`, acompañado de un indicador flotante `💡 Alcance (Range): X.X m`.
+    * Picking directo con máxima prioridad sobre los iconos de luz.
+* **Resultado:** Soporte completo de jerarquías complejas y agrupamiento de GameObjects, reordenación interactiva arriba/abajo, y visualización clara en Scene View de orientación de cámaras e influencia de luces.
+
 ---
 
 ## Certificación Final de Arquitectura: GlassEngine 2.0
 
-Los 20 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
+Los 21 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
 
 1. **Hito 1 — Workspace Cargo & Contratos Base:** 100% Verificado.
 2. **Hito 2 — Contexto Vulkan Multi-GPU Universal (NVIDIA, AMD, Intel, Integradas y Dedicadas):** 100% Verificado.
@@ -544,3 +578,4 @@ Los 20 hitos arquitectónicos, de edición y de gameplay del motor han sido comp
 18. **Hito 18 — Menú Contextual Total en Jerarquía, Toolbar de Iconos Unity & Docking Dinámico Adaptable (egui_dock):** 100% Verificado.
 19. **Hito 19 — Selección en Play Mode, Aspect Ratios Unity con Letterbox Centrado y Desacoplamiento Scene/Game:** 100% Verificado.
 20. **Hito 20 — Render Targets Offscreen Duales, Verificación de Cámara Activa & Iluminación Dinámica:** 100% Verificado.
+21. **Hito 21 — Agrupación y Reordenación en Jerarquía, Gizmos 3D de Cámara (Frustum) y Luz (Rango/Dirección):** 100% Verificado.
