@@ -34,20 +34,16 @@ impl SwapchainContext {
             surface_loader.get_physical_device_surface_capabilities(physical_device, surface)?
         };
 
-        // 1. Elegir Extent
-        let extent = if capabilities.current_extent.width != u32::MAX {
-            capabilities.current_extent
-        } else {
-            vk::Extent2D {
-                width: width.clamp(
-                    capabilities.min_image_extent.width,
-                    capabilities.max_image_extent.width,
-                ),
-                height: height.clamp(
-                    capabilities.min_image_extent.height,
-                    capabilities.max_image_extent.height,
-                ),
-            }
+        // 1. Elegir Extent (adaptación responsiva estricta al tamaño de la ventana)
+        let extent = vk::Extent2D {
+            width: width.clamp(
+                capabilities.min_image_extent.width,
+                capabilities.max_image_extent.width,
+            ),
+            height: height.clamp(
+                capabilities.min_image_extent.height,
+                capabilities.max_image_extent.height,
+            ),
         };
 
         // 2. Elegir Formato

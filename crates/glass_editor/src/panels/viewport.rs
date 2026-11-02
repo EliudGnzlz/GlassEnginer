@@ -216,25 +216,10 @@ impl ViewportPanel {
                 None
             };
 
-            // Dibujar la textura Vulkan offscreen en el centro
+            // Dibujar la textura Vulkan offscreen adaptada al 100% del área del Viewport
             if let Some(id) = texture_id {
-                let aspect = 16.0 / 9.0;
-                let mut display_w = self.width;
-                let mut display_h = self.width / aspect;
-                if display_h > self.height {
-                    display_h = self.height;
-                    display_w = self.height * aspect;
-                }
-                let x_pad = (self.width - display_w).max(0.0) / 2.0;
-                let y_pad = (self.height - display_h).max(0.0) / 2.0;
-
-                let image_rect = egui::Rect::from_min_size(
-                    rect.min + vec2(x_pad, y_pad),
-                    vec2(display_w, display_h),
-                );
-
-                let sized = SizedTexture::new(id, vec2(display_w, display_h));
-                Image::new(sized).paint_at(ui, image_rect);
+                let sized = SizedTexture::new(id, vec2(self.width, self.height));
+                Image::new(sized).paint_at(ui, rect);
             }
 
             let painter = ui.painter_at(rect);
@@ -293,6 +278,7 @@ impl ViewportPanel {
                     let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
                     if scroll_delta.abs() > 0.0 {
                         self.editor_cam_dist = (self.editor_cam_dist - scroll_delta * 0.01).clamp(2.0, 50.0);
+                        ui.ctx().request_repaint();
                     }
                 }
 
@@ -305,20 +291,15 @@ impl ViewportPanel {
                     self.editor_cam_center[0] -= (cam_right[0] * delta.x - cam_up[0] * delta.y) * pan_speed;
                     self.editor_cam_center[1] -= (cam_right[1] * delta.x - cam_up[1] * delta.y) * pan_speed;
                     self.editor_cam_center[2] -= (cam_right[2] * delta.x - cam_up[2] * delta.y) * pan_speed;
+                    ui.ctx().request_repaint();
                 }
 
                 // 3. Órbita / Navegación con botón secundario (derecho)
                 if response.dragged_by(egui::PointerButton::Secondary) {
                     let delta = response.drag_delta();
-                    let is_shift = ui.input(|i| i.modifiers.shift);
-                    if is_shift {
-                        self.editor_cam_center[0] -= (cam_right[0] * delta.x - cam_up[0] * delta.y) * pan_speed;
-                        self.editor_cam_center[1] -= (cam_right[1] * delta.x - cam_up[1] * delta.y) * pan_speed;
-                        self.editor_cam_center[2] -= (cam_right[2] * delta.x - cam_up[2] * delta.y) * pan_speed;
-                    } else {
-                        self.editor_cam_yaw += delta.x * 0.005;
-                        self.editor_cam_pitch = (self.editor_cam_pitch + delta.y * 0.005).clamp(-1.45, 1.45);
-                    }
+                    self.editor_cam_yaw += delta.x * 0.005;
+                    self.editor_cam_pitch = (self.editor_cam_pitch + delta.y * 0.005).clamp(-1.45, 1.45);
+                    ui.ctx().request_repaint();
                 }
 
                 // 4. Clic primario: Seleccionar eje del Gizmo o Raycasting Picking sobre la escena 3D
@@ -403,18 +384,19 @@ impl ViewportPanel {
                         }
                     } else {
                         // Navegación libre con Clic Izquierdo (Mano [Q] o arrastre en espacio libre)
-                        // ¡El comportamiento del clic derecho integrado en el clic izquierdo!
-                        if is_shift {
-                            // Con Shift: Paneo libre de la cámara
+                        if self.gizmo_mode == GizmoMode::View {
+                            // En modo Mano [Q]: Clic izquierdo desplaza y mueve libremente la escena (Pan 3D proporcional a la distancia)
                             self.editor_cam_center[0] -= (cam_right[0] * delta.x - cam_up[0] * delta.y) * pan_speed;
                             self.editor_cam_center[1] -= (cam_right[1] * delta.x - cam_up[1] * delta.y) * pan_speed;
                             self.editor_cam_center[2] -= (cam_right[2] * delta.x - cam_up[2] * delta.y) * pan_speed;
                         } else {
-                            // Clic izquierdo normal: Órbita libre de la cámara (360°)
+                            // En modos W, E, R (arrastre sobre el fondo vacío sin tocar gizmo):
+                            // ¡El comportamiento del clic derecho trasladado al clic izquierdo para orbitar libremente!
                             self.editor_cam_yaw += delta.x * 0.005;
                             self.editor_cam_pitch = (self.editor_cam_pitch + delta.y * 0.005).clamp(-1.45, 1.45);
                         }
                     }
+                    ui.ctx().request_repaint();
                 }
 
                 // Al soltar el botón primario, liberar el eje del gizmo
@@ -462,7 +444,7 @@ impl ViewportPanel {
                                 Color32::from_rgb(110, 190, 255),
                             ),
                             GizmoMode::View => (
-                                format!("✋ [Q] Mano: Clic Izquierdo arrastra y mueve la vista libremente (360°) | Shift + Clic Izquierdo desplaza (Pan)"),
+                                format!("✋ [Q] Mano: Clic Izquierdo arrastra y mueve la vista libremente (Pan) | Clic Derecho para orbitar (360°)"),
                                 Color32::from_rgb(240, 220, 110),
                             ),
                         };
@@ -482,13 +464,13 @@ impl ViewportPanel {
                     } else {
                         let hint_rect = egui::Rect::from_min_size(
                             rect.left_bottom() + vec2(12.0, -36.0),
-                            vec2(600.0, 24.0),
+                            vec2(680.0, 24.0),
                         );
                         painter.rect_filled(hint_rect, 4.0, Color32::from_black_alpha(190));
                         painter.text(
                             hint_rect.min + vec2(8.0, 4.0),
                             egui::Align2::LEFT_TOP,
-                            "💡 Clic izquierdo sobre objetos para seleccionar | Clic izquierdo y arrastrar para mover la vista libremente.",
+                            "💡 Clic izquierdo sobre objetos para seleccionar | En [Q] Mano: Clic izquierdo para moverte libremente | En W/E/R: Clic en fondo para orbitar.",
                             egui::FontId::proportional(12.0),
                             Color32::from_rgb(220, 220, 230),
                         );

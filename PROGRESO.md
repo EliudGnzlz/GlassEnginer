@@ -23,6 +23,7 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
 | **Hito 13**| Inspector Estilo Unity, Variables C# en Vivo y Atajos QWER | **Completado** | 100% | DeepSeek 4.1 Flash (Mirai) |
 | **Hito 14**| Raycasting 3D Picking en Viewport & Transform Gizmo 3D Unity | **Completado** | 100% | DeepSeek 4.1 Flash + Kimi K3 (Mirai) |
 | **Hito 15**| Bounding Box 3D de Selección & Navegación Libre con Clic Izquierdo | **Completado** | 100% | DeepSeek 4.1 Flash + Kimi K3 (Mirai) |
+| **Hito 16**| Bounding Box Adaptativo, Pan Directo con Mano [Q] & Ventana Responsiva | **Completado** | 100% | DeepSeek 4.1 Flash + Kimi K3 (Mirai) |
 
 ---
 
@@ -382,11 +383,33 @@ Este documento registra en tiempo real cada paso, decisión arquitectónica, imp
     * **DeepSeek 4.1 Flash:** Aprobó la formulación OBB de 12 aristas proyectadas con overlay de egui y la máquina de estados de navegación desacoplada.
     * **Kimi K3:** Validó la matriz de transformación para AABB corners, el color naranja `#FF9500` con halo para visibilidad de selección, y el mapeo directo de `drag_delta()` proporcional a `distance` para paneo natural.
 
+### Hito 16: Bounding Box Adaptativo, Pan Directo con Mano [Q] & Ventana Responsiva
+* **Fecha:** 2026-11-01
+* **Acciones:**
+  * **Línea de Selección y Bounding Box Adaptable a la Escala de la Malla (`gizmo_3d.rs`):**
+    * Se desacopló el cálculo de las medias extensiones del colisionador rígido estático (`phys.box_extents`), vinculándolo de forma reactiva y directa a `(scale[0].abs() * 0.5, scale[1].abs() * 0.5, scale[2].abs() * 0.5)`.
+    * Cada objeto ahora proyecta un Bounding Box de tamaño exacto a su geometría visible:
+      * Cubo Jugador (`1x1x1`): Caja de selección de aristas de 1.0 m.
+      * Plataformas Paso 1 y Paso 2 (`2x1x2`): Cajas de selección rectangulares de 2.0 m de ancho y profundidad.
+      * Suelo Estático (`30x1x30`): Caja de selección a gran escala de 30.0 m de superficie.
+      * Al escalar cualquier GameObject en el Inspector o con la herramienta Escala `[R]`, la línea de selección naranja y sus 8 esquinas se redimensionan en tiempo real junto a la malla.
+  * **Navegación del Ratón Mejorada (Pan Directo con Mano `[Q]` y Clic Izquierdo):**
+    * **Herramienta Mano `[Q]`:** El clic izquierdo arrastrando realiza **desplazamiento libre directo (Pan 3D en el plano de cámara)** sin necesidad de mantener presionada ninguna tecla modificadora, siguiendo exactamente el movimiento del cursor (`editor_cam_center -= (right*dx - up*dy) * pan_speed`).
+    * **Modos de Manipulación `[W]`, `[E]`, `[R]`:** Al arrastrar el fondo vacío con clic izquierdo, se orbita libremente en 360° (trasladando el comportamiento del clic derecho al clic izquierdo como se solicitó). El clic derecho y botón central se mantienen como controles secundarios.
+    * Todas las operaciones de arrastre disparan `ui.ctx().request_repaint()`, garantizando movimiento a tasa máxima de cuadros sin latencia.
+  * **Ventana General 100% Responsiva (Eliminación de Bandas Negras):**
+    * **Swapchain Vulkan Dinámico (`swapchain.rs`):** Se ajustó la selección de `extent` para adaptarse a las dimensiones reales solicitadas de la ventana física `width.clamp(min, max)` y `height.clamp(min, max)` en lugar de quedarse congelado en el tamaño inicial reportado por la superficie X11.
+    * **Detección Inmediata por Frame (`main.rs`):** Al inicio de cada llamada a `render_frame()`, se verifica `window.inner.inner_size()` contra `renderer.swapchain.extent`. Si difieren (al maximizar o redimensionar), se redimensiona el Swapchain y sus framebuffers de forma instantánea.
+    * **Viewport 100% Pantalla:** En `viewport.rs`, la textura offscreen de Vulkan se pinta cubriendo el 100% del área del canvas (`paint_at(ui, rect)`), y la matriz de perspectiva calcula la relación de aspecto dinámicamente (`width / height`), eliminando todas las bandas negras internas y externas.
+  * **Auditoría Técnica Externa (Mirai MCP - DeepSeek 4.1 Flash & Kimi K3):**
+    * **DeepSeek 4.1 Flash:** Validó el cálculo de aristas con matriz TRS, el escalado de pan dependiente de la distancia al target, el clamp de pitch y el redimensionamiento del Swapchain asegurando viewport y scissor equivalentes.
+    * **Kimi K3:** Aprobó la formulación matemática de `obb_corners`, el pan proporcional a `dist * 0.0015` en el plano de la cámara, y el ajuste de `pixels_per_point` y `screen_rect` para egui.
+
 ---
 
-## Certificación Final de Arquitectura: GlassEngine 1.5
+## Certificación Final de Arquitectura: GlassEngine 1.6
 
-Los 15 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
+Los 16 hitos arquitectónicos, de edición y de gameplay del motor han sido completados, verificados en hardware y certificados técnicamente mediante auditoría cruzada multi-modelo:
 
 1. **Hito 1 — Workspace Cargo & Contratos Base:** 100% Verificado.
 2. **Hito 2 — Contexto Vulkan Multi-GPU Universal (NVIDIA, AMD, Intel, Integradas y Dedicadas):** 100% Verificado.
@@ -403,3 +426,4 @@ Los 15 hitos arquitectónicos, de edición y de gameplay del motor han sido comp
 13. **Hito 13 — Inspector Estilo Unity, Variables C# en Vivo y Atajos QWER:** 100% Verificado.
 14. **Hito 14 — Raycasting 3D Picking en Viewport & Transform Gizmo 3D Unity:** 100% Verificado.
 15. **Hito 15 — Bounding Box 3D de Selección & Navegación Libre con Clic Izquierdo:** 100% Verificado.
+16. **Hito 16 — Bounding Box Adaptativo, Pan Directo con Mano [Q] & Ventana Responsiva:** 100% Verificado.

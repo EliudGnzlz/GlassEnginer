@@ -448,6 +448,16 @@ impl GlassEngineApp {
             _ => return Ok(()),
         };
 
+        // Redimensionamiento responsivo inmediato del Swapchain si la ventana cambió de tamaño
+        let win_size = window.inner.inner_size();
+        if win_size.width > 0
+            && win_size.height > 0
+            && (win_size.width != renderer.swapchain.extent.width
+                || win_size.height != renderer.swapchain.extent.height)
+        {
+            let _ = renderer.resize(vk_ctx, win_size.width, win_size.height);
+        }
+
         // 0. Sincronizar estado de inputs (teclado W, A, S, D, Flechas, Espacio)
         let mut move_x = 0.0_f32;
         let mut move_z = 0.0_f32;
@@ -564,7 +574,8 @@ impl GlassEngineApp {
                     ed.editor_cam_center[2] + ed.editor_cam_dist * ed.editor_cam_pitch.cos() * ed.editor_cam_yaw.cos(),
                 ];
                 let v = look_at(eye, ed.editor_cam_center, [0.0, 1.0, 0.0]);
-                let p = perspective_matrix(45.0_f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
+                let aspect = (ed.width / ed.height).max(0.1);
+                let p = perspective_matrix(45.0_f32.to_radians(), aspect, 0.1, 100.0);
                 (v, p)
             }
             glass_editor::ViewportTab::GameView => {

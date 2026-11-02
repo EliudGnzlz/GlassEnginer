@@ -305,20 +305,10 @@ pub fn draw_selection_bounding_box(
     let rot = entity.transform.rotation;
     let scale = entity.transform.scale;
 
-    // Determinar las medias extensiones (half-extents) locales
-    let (hx, hy, hz) = if let Some(phys) = &entity.physics {
-        (
-            phys.box_extents[0].max(0.25),
-            phys.box_extents[1].max(0.25),
-            phys.box_extents[2].max(0.25),
-        )
-    } else {
-        (
-            (scale[0].abs() * 0.5).max(0.25),
-            (scale[1].abs() * 0.5).max(0.25),
-            (scale[2].abs() * 0.5).max(0.25),
-        )
-    };
+    // Calcular las medias extensiones (half-extents) locales directamente adaptadas a la malla y escala del GameObject
+    let hx = (scale[0].abs() * 0.5).max(0.05);
+    let hy = (scale[1].abs() * 0.5).max(0.05);
+    let hz = (scale[2].abs() * 0.5).max(0.05);
 
     // 8 esquinas en espacio local
     let corners_local = [
