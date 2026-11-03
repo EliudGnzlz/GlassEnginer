@@ -229,19 +229,37 @@ impl ViewportPanel {
 
             let painter = ui.painter();
 
-            // Dibujar Gizmos de Cámaras y Luces de la escena (estilo Unity Scene View)
+            // Dibujar Gizmos de Cámaras y Luces de la escena (estilo Unity Scene View).
+            // Las matrices de mundo se resuelven una sola vez por frame: los
+            // gizmos, el picking y el bounding box deben coincidir exactamente
+            // con la geometría que el renderer dibuja, incluidos los hijos.
+            let gizmo_world_matrices = scene_state
+                .lock()
+                .map(|s| s.compute_world_matrices())
+                .unwrap_or_default();
+
             if let Ok(state) = scene_state.lock() {
                 for ent in &state.entities {
                     if !ent.active {
                         continue;
                     }
                     let is_sel = *selected_entity_id == Some(ent.id);
+                    let world = gizmo_world_matrices
+                        .get(&ent.id)
+                        .copied()
+                        .unwrap_or_else(|| {
+                            glass_core::mat4_from_trs_euler(
+                                ent.transform.position,
+                                ent.transform.rotation(),
+                                ent.transform.scale,
+                            )
+                        });
 
                     if ent.camera.is_some() {
-                        gizmo_3d::draw_camera_gizmo(painter, ent, &view_proj, rect, is_sel);
+                        gizmo_3d::draw_camera_gizmo(painter, ent, &world, &view_proj, rect, is_sel);
                     }
                     if ent.light.is_some() {
-                        gizmo_3d::draw_light_gizmo(painter, ent, &view_proj, rect, is_sel);
+                        gizmo_3d::draw_light_gizmo(painter, ent, &world, &view_proj, rect, is_sel);
                     }
                 }
 
@@ -250,9 +268,20 @@ impl ViewportPanel {
                     if let Some(ent) = state.entities.iter().find(|e| e.id == target_id) {
                         let is_pure_cam_or_light = (ent.camera.is_some() || ent.light.is_some()) && ent.mesh.is_none();
                         if !is_pure_cam_or_light {
+                            let world = gizmo_world_matrices
+                                .get(&ent.id)
+                                .copied()
+                                .unwrap_or_else(|| {
+                                    glass_core::mat4_from_trs_euler(
+                                        ent.transform.position,
+                                        ent.transform.rotation(),
+                                        ent.transform.scale,
+                                    )
+                                });
                             gizmo_3d::draw_selection_bounding_box(
                                 painter,
                                 ent,
+                                &world,
                                 &view_proj,
                                 rect,
                             );
@@ -265,8 +294,14 @@ impl ViewportPanel {
             let mut hovered_gizmo_axis = GizmoAxis::None;
             if self.gizmo_mode != GizmoMode::View {
                 let selected_pos = if let Some(target_id) = *selected_entity_id {
+                    // El gizmo va donde el objeto está en el mundo; para un hijo,
+                    // su `position` local lo dibujaría descolocado.
                     scene_state.lock().ok().and_then(|s| {
-                        s.entities.iter().find(|e| e.id == target_id).map(|e| e.transform.position)
+                        if let Some(w) = s.compute_world_matrices().get(&target_id) {
+                            Some(glass_core::mat4_translation(*w))
+                        } else {
+                            s.entities.iter().find(|e| e.id == target_id).map(|e| e.transform.position)
+                        }
                     })
                 } else {
                     None
@@ -311,7 +346,8 @@ impl ViewportPanel {
             if response.clicked() && hovered_gizmo_axis == GizmoAxis::None && self.gizmo_mode != GizmoMode::View {
                 if let Some(pos) = mouse_pos {
                     if let Ok(state) = scene_state.lock() {
-                        if let Some(hit_id) = gizmo_3d::pick_entity_at_screen(pos, &state.entities, &view_proj, rect, eye) {
+                        let world_matrices = state.compute_world_matrices();
+                        if let Some(hit_id) = gizmo_3d::pick_entity_at_screen(pos, &state.entities, &world_matrices, &view_proj, rect, eye) {
                             *selected_entity_id = Some(hit_id);
                             log::info!("Objeto seleccionado en Scene View por Raycasting: #{}", hit_id);
                             ui.ctx().request_repaint();
@@ -361,10 +397,10 @@ impl ViewportPanel {
                                     }
                                     GizmoMode::Rotate => {
                                         match self.active_drag_axis {
-                                            GizmoAxis::X => ent.transform.rotation[0] += delta.y * 0.6,
-                                            GizmoAxis::Y => ent.transform.rotation[1] += delta.x * 0.6,
-                                            GizmoAxis::Z => ent.transform.rotation[2] += (delta.x - delta.y) * 0.6,
-                                            _ => ent.transform.rotation[1] += delta.x * 0.5,
+                                            GizmoAxis::X => ent.transform.add_rotation_euler([delta.y * 0.6, 0.0, 0.0]),
+                                            GizmoAxis::Y => ent.transform.add_rotation_euler([0.0, delta.x * 0.6, 0.0]),
+                                            GizmoAxis::Z => ent.transform.add_rotation_euler([0.0, 0.0, (delta.x - delta.y) * 0.6]),
+                                            _ => ent.transform.add_rotation_euler([0.0, delta.x * 0.5, 0.0]),
                                         }
                                     }
                                     GizmoMode::Scale => {
@@ -393,7 +429,7 @@ impl ViewportPanel {
                                             GizmoAxis::X => ent.transform.position[0] += delta.x * 0.02,
                                             GizmoAxis::Y => ent.transform.position[1] -= delta.y * 0.02,
                                             GizmoAxis::Z => ent.transform.position[2] += (delta.x + delta.y) * 0.02,
-                                            _ => ent.transform.rotation[1] += delta.x * 0.5,
+                                            _ => ent.transform.add_rotation_euler([0.0, delta.x * 0.5, 0.0]),
                                         }
                                     }
                                     GizmoMode::View => {}
@@ -429,6 +465,127 @@ impl ViewportPanel {
                         }
                     }
                 }
+            }
+
+            // ── Menú contextual del Scene View (estilo Unity) ──────────────
+            // En Unity, el clic derecho sobre la rejilla abre el menú de
+            // creación y el objeto nace **bajo el cursor**, no en el origen.
+            // Aquí se respeta ese comportamiento cuando el rayo corta el
+            // plano Y=0; si no lo corta (cámara mirando al cielo) se cae al
+            // origen para no perder la acción.
+            let mut spawn_point: Option<[f32; 3]> = None;
+            let mut spawn_request: Option<super::hierarchy::EntityPreset> = None;
+            let mut frame_selected_request = false;
+
+            response.context_menu(|ui| {
+                if let Some(pos) = mouse_pos {
+                    spawn_point = gizmo_3d::screen_to_world_on_plane(pos, &view_proj, rect, 0.0);
+                }
+                if let Some(p) = spawn_point {
+                    ui.label(
+                        egui::RichText::new(format!("⌖ Crear en ({:.2}, {:.2}, {:.2})", p[0], p[1], p[2]))
+                            .small()
+                            .weak(),
+                    );
+                } else {
+                    ui.label(egui::RichText::new("⌖ Crear en el origen").small().weak());
+                }
+                ui.separator();
+
+                ui.menu_button("⬡ Objeto 3D", |ui| {
+                    if ui.button("■ Cubo").clicked() {
+                        spawn_request = Some(super::hierarchy::EntityPreset::Cube);
+                        ui.close();
+                    }
+                    if ui.button("● Esfera").clicked() {
+                        spawn_request = Some(super::hierarchy::EntityPreset::Sphere);
+                        ui.close();
+                    }
+                    if ui.button("⬯ Cápsula").clicked() {
+                        spawn_request = Some(super::hierarchy::EntityPreset::Capsule);
+                        ui.close();
+                    }
+                    if ui.button("▭ Plano").clicked() {
+                        spawn_request = Some(super::hierarchy::EntityPreset::Plane);
+                        ui.close();
+                    }
+                });
+                ui.menu_button("☼ Luz", |ui| {
+                    if ui.button("☀ Direccional").clicked() {
+                        spawn_request = Some(super::hierarchy::EntityPreset::DirectionalLight);
+                        ui.close();
+                    }
+                    if ui.button("💡 Puntual").clicked() {
+                        spawn_request = Some(super::hierarchy::EntityPreset::PointLight);
+                        ui.close();
+                    }
+                });
+                ui.menu_button("🖼 UI", |ui| {
+                    if ui.button("▭ Canvas").clicked() {
+                        spawn_request = Some(super::hierarchy::EntityPreset::Canvas);
+                        ui.close();
+                    }
+                    if ui.button("🅰 Texto").clicked() {
+                        spawn_request = Some(super::hierarchy::EntityPreset::UIText);
+                        ui.close();
+                    }
+                    if ui.button("🔘 Botón").clicked() {
+                        spawn_request = Some(super::hierarchy::EntityPreset::UIButton);
+                        ui.close();
+                    }
+                });
+                if ui.button("📦 Vacío").clicked() {
+                    spawn_request = Some(super::hierarchy::EntityPreset::Empty);
+                    ui.close();
+                }
+
+                ui.separator();
+                if ui.button("🎯 Enfocar seleccionado [F]").clicked() {
+                    frame_selected_request = true;
+                    ui.close();
+                }
+                if ui.button("📷 Crear Main Camera").clicked() {
+                    spawn_request = Some(super::hierarchy::EntityPreset::Camera);
+                    ui.close();
+                }
+            });
+
+            // Ejecutar la creación fuera del cierre del menú para no retener
+            // el préstamo mutable de `scene_state` mientras egui dibuja.
+            if let Some(preset) = spawn_request {
+                if let Ok(mut state) = scene_state.lock() {
+                    let new_id = super::hierarchy::HierarchyPanel::instantiate_preset(&mut state, preset);
+                    if let Some(ent) = state.entities.iter_mut().find(|e| e.id == new_id) {
+                        if let Some(p) = spawn_point {
+                            // El plano se apoya en el suelo; el resto se eleva
+                            // media unidad para no nacer enterrado.
+                            let y = if matches!(preset, super::hierarchy::EntityPreset::Plane) {
+                                p[1]
+                            } else {
+                                p[1] + 0.5
+                            };
+                            ent.transform.position = [p[0], y, p[2]];
+                        }
+                    }
+                    *selected_entity_id = Some(new_id);
+                    log::info!("Creado por menú contextual del Scene View: #{}", new_id);
+                }
+                ui.ctx().request_repaint();
+            }
+
+            if frame_selected_request {
+                if let Ok(state) = scene_state.lock() {
+                    if let Some(id) = *selected_entity_id {
+                        let world = state.compute_world_matrices();
+                        if let Some(w) = world.get(&id) {
+                            let target = glass_core::mat4_translation(*w);
+                            self.editor_cam_center = target;
+                            self.editor_cam_dist = 8.0;
+                            log::info!("Cámara de escena enfocada en #{}", id);
+                        }
+                    }
+                }
+                ui.ctx().request_repaint();
             }
 
             let ent_name = selected_entity_id
@@ -662,7 +819,7 @@ impl ViewportPanel {
                         );
                         if let Some(cam) = state.get_entity_mut(id) {
                             cam.transform.position = [3.5, 3.2, 9.5];
-                            cam.transform.rotation = [10.0, 0.0, 0.0];
+                            cam.transform.set_rotation_euler([10.0, 0.0, 0.0]);
                         }
                     }
                     ui.ctx().request_repaint();

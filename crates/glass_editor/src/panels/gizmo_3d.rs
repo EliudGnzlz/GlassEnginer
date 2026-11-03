@@ -314,9 +314,47 @@ pub fn render_3d_transform_gizmo(
 }
 
 /// Raycasting 3D sobre la escena: Encuentra la entidad más cercana al rayo cuando el usuario hace clic.
+/// Convierte un punto de pantalla en un punto del mundo sobre el plano
+/// horizontal `plane_y` (por defecto el suelo Y=0).
+///
+/// Se usa para el menú contextual del Scene View: en Unity, "Create > Cube"
+/// con el ratón sobre la rejilla coloca el objeto **bajo el cursor**, no en el
+/// origen. Devuelve `None` si el rayo es paralelo al plano o va hacia arriba.
+pub fn screen_to_world_on_plane(
+    pos: Pos2,
+    vp: &[f32; 16],
+    rect: Rect,
+    plane_y: f32,
+) -> Option<[f32; 3]> {
+    let inv = glass_core::mat4_inverse_affine(*vp)?;
+
+    let to_ndc = |p: Pos2, depth: f32| -> [f32; 4] {
+        let nx = ((p.x - rect.min.x) / rect.width()) * 2.0 - 1.0;
+        let ny = 1.0 - ((p.y - rect.min.y) / rect.height()) * 2.0;
+        [nx, ny, depth, 1.0]
+    };
+
+    // Extremos del rayo en NDC (OpenGL: -1 cercano, +1 lejano).
+    let near = to_ndc(pos, -1.0);
+    let far = to_ndc(pos, 1.0);
+    let p0 = glass_core::mat4_transform_point(inv, [near[0], near[1], near[2]]);
+    let p1 = glass_core::mat4_transform_point(inv, [far[0], far[1], far[2]]);
+
+    let dir = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+    if dir[1].abs() < 1.0e-6 {
+        return None;
+    }
+    let t = (plane_y - p0[1]) / dir[1];
+    if t < 0.0 {
+        return None;
+    }
+    Some([p0[0] + dir[0] * t, plane_y, p0[2] + dir[2] * t])
+}
+
 pub fn pick_entity_at_screen(
     click_pos: Pos2,
     entities: &[EntityData],
+    world_matrices: &std::collections::HashMap<u64, [f32; 16]>,
     vp: &[f32; 16],
     rect: Rect,
     cam_pos: [f32; 3],
@@ -329,9 +367,20 @@ pub fn pick_entity_at_screen(
             continue;
         }
 
-        let pos = ent.transform.position;
-        let rot = ent.transform.rotation;
-        let scale = ent.transform.scale;
+        // El picking debe ocurrir donde la geometría se dibuja de verdad:
+        // en espacio de mundo, no en el local de la entidad. Sobre un hijo,
+        // el local ignora el transform del padre y el clic no cae donde el ojo
+        // ve la caja.
+        let world = world_matrices
+            .get(&ent.id)
+            .copied()
+            .unwrap_or_else(|| glass_core::mat4_from_trs_euler(
+                ent.transform.position,
+                ent.transform.rotation(),
+                ent.transform.scale,
+            ));
+        let pos = glass_core::mat4_translation(world);
+        let scale = glass_core::mat4_scale(world);
 
         // Distancia euclídea del centro a la cámara
         let dx = pos[0] - cam_pos[0];
@@ -355,30 +404,16 @@ pub fn pick_entity_at_screen(
             [-hx,  hy,  hz],
         ];
 
-        let rx = rot[0].to_radians();
-        let ry = rot[1].to_radians();
-        let rz = rot[2].to_radians();
-
-        let (sx, cx) = (rx.sin(), rx.cos());
-        let (sy, cy) = (ry.sin(), ry.cos());
-        let (sz, cz) = (rz.sin(), rz.cos());
-
         let mut min_sx = f32::MAX;
         let mut max_sx = f32::MIN;
         let mut min_sy = f32::MAX;
         let mut max_sy = f32::MIN;
         let mut valid_corners = 0;
 
+        // Las esquinas se llevan a mundo con la matriz completa: hereda la
+        // rotación del padre, que la recomposición Euler local ignoraba.
         for c in &corners_local {
-            let (x, y, z) = (c[0], c[1], c[2]);
-            let y1 = y * cx - z * sx;
-            let z1 = y * sx + z * cx;
-            let x2 = x * cy + z1 * sy;
-            let z2 = -x * sy + z1 * cy;
-            let x3 = x2 * cz - y1 * sz;
-            let y3 = x2 * sz + y1 * cz;
-
-            let wpos = [pos[0] + x3, pos[1] + y3, pos[2] + z2];
+            let wpos = glass_core::mat4_transform_point(world, *c);
             if let Some(spt) = world_to_screen(wpos, vp, rect) {
                 valid_corners += 1;
                 min_sx = min_sx.min(spt.x);
@@ -420,12 +455,13 @@ pub fn pick_entity_at_screen(
 pub fn draw_selection_bounding_box(
     painter: &Painter,
     entity: &EntityData,
+    world: &[f32; 16],
     vp: &[f32; 16],
     rect: Rect,
 ) {
-    let pos = entity.transform.position;
-    let rot = entity.transform.rotation;
-    let scale = entity.transform.scale;
+    // La caja vive en espacio de mundo: hereda rotación y escala del padre,
+    // igual que la malla que envuelve.
+    let scale = glass_core::mat4_scale(*world);
 
     // Calcular las medias extensiones (half-extents) locales directamente adaptadas a la malla y escala del GameObject
     let hx = (scale[0].abs() * 0.5).max(0.05);
@@ -444,31 +480,12 @@ pub fn draw_selection_bounding_box(
         [-hx,  hy,  hz],
     ];
 
-    // Convertir rotación Euler de grados a radianes
-    let rx = rot[0].to_radians();
-    let ry = rot[1].to_radians();
-    let rz = rot[2].to_radians();
-
-    let (sx, cx) = (rx.sin(), rx.cos());
-    let (sy, cy) = (ry.sin(), ry.cos());
-    let (sz, cz) = (rz.sin(), rz.cos());
-
-    // Transformar cada esquina a coordenadas de mundo
+    // Transformar cada esquina a coordenadas de mundo con la matriz ya
+    // resuelta (incluye la rotación del cuaternión autoritativo y la escala
+    // heredada del padre).
     let mut corners_world = [[0.0f32; 3]; 8];
     for (i, c) in corners_local.iter().enumerate() {
-        let (x, y, z) = (c[0], c[1], c[2]);
-
-        // Rotación Euler (X luego Y luego Z)
-        let y1 = y * cx - z * sx;
-        let z1 = y * sx + z * cx;
-
-        let x2 = x * cy + z1 * sy;
-        let z2 = -x * sy + z1 * cy;
-
-        let x3 = x2 * cz - y1 * sz;
-        let y3 = x2 * sz + y1 * cz;
-
-        corners_world[i] = [pos[0] + x3, pos[1] + y3, pos[2] + z2];
+        corners_world[i] = glass_core::mat4_transform_point(*world, *c);
     }
 
     // Proyectar las 8 esquinas a pantalla
@@ -549,12 +566,15 @@ pub fn draw_selection_bounding_box(
 pub fn draw_camera_gizmo(
     painter: &Painter,
     cam_entity: &EntityData,
+    world: &[f32; 16],
     vp: &[f32; 16],
     rect: Rect,
     is_selected: bool,
 ) -> Option<Rect> {
-    let pos = cam_entity.transform.position;
-    let rot = cam_entity.transform.rotation;
+    // Posición y orientación en mundo: un gizmo de cámara hijo debe dibujarse
+    // donde la cámara está realmente, no donde su transform local dice.
+    let pos = glass_core::mat4_translation(*world);
+    let rot = glass_core::quat_to_euler_deg(glass_core::mat4_to_quat(*world));
 
     let rx = rot[0].to_radians();
     let ry = rot[1].to_radians();
@@ -736,12 +756,13 @@ pub fn draw_camera_gizmo(
 pub fn draw_light_gizmo(
     painter: &Painter,
     light_entity: &EntityData,
+    world: &[f32; 16],
     vp: &[f32; 16],
     rect: Rect,
     is_selected: bool,
 ) -> Option<Rect> {
-    let pos = light_entity.transform.position;
-    let rot = light_entity.transform.rotation;
+    let pos = glass_core::mat4_translation(*world);
+    let rot = glass_core::quat_to_euler_deg(glass_core::mat4_to_quat(*world));
 
     let rx = rot[0].to_radians();
     let ry = rot[1].to_radians();

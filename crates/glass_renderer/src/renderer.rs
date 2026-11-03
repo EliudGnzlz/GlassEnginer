@@ -31,29 +31,49 @@ pub enum RendererError {
     Descriptor(String),
 }
 
+/// Constantes empujadas por malla al shader.
+///
+/// Tamaño total: 208 bytes. El mínimo garantizado por Vulkan es 128 bytes, pero
+/// toda GPU de escritorio expone 256; `context.rs` comprueba
+/// `maxPushConstantsSize` al crear el dispositivo y aborta con un mensaje claro
+/// si no alcanza, en lugar de fallar de forma silenciosa.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MeshPushConstants {
+    /// Proyección * Vista * Modelo. Usado sólo para la posición en clip space.
     pub mvp: [f32; 16],
-    pub light_dir: [f32; 4],
-    pub light_color: [f32; 4],
-    pub material_params: [f32; 4], // x=metallic, y=roughness, z=ao, w=has_light
-    pub object_color: [f32; 4],
+    /// Matriz de modelo. Necesaria aparte de `mvp` porque el fragment shader
+    /// requiere la posición en espacio de mundo para el vector de vista real, y
+    /// el vertex shader necesita transformar la normal.
+    pub model: [f32; 16],
+    pub light_dir: [f32; 4],       // xyz = dirección hacia la luz, w = ambiente
+    pub light_color: [f32; 4],     // xyz = color * intensidad, w = reservado (sin uso)
+    pub material_params: [f32; 4], // x=metallic, y=roughness, z=ao, w=has_light (fuente única)
+    pub object_color: [f32; 4],    // rgb = albedo, a = opacidad
+    pub camera_pos: [f32; 4],      // xyz = posición de la cámara en mundo
 }
+
+/// Tamaño en bytes que el `pipeline_layout` debe declarar y que
+/// `context.rs` valida contra `maxPushConstantsSize`.
+pub const MESH_PUSH_CONSTANTS_SIZE: u32 = std::mem::size_of::<MeshPushConstants>() as u32;
+
+const IDENTITY_MAT4: [f32; 16] = [
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0, 1.0,
+];
 
 impl Default for MeshPushConstants {
     fn default() -> Self {
         Self {
-            mvp: [
-                1.0, 0.0, 0.0, 0.0,
-                0.0, 1.0, 0.0, 0.0,
-                0.0, 0.0, 1.0, 0.0,
-                0.0, 0.0, 0.0, 1.0,
-            ],
+            mvp: IDENTITY_MAT4,
+            model: IDENTITY_MAT4,
             light_dir: [0.5, 1.0, 0.7, 1.0],
             light_color: [1.0, 1.0, 1.0, 0.2],
             material_params: [0.2, 0.5, 1.0, 1.0],
             object_color: [0.18, 0.55, 0.92, 1.0],
+            camera_pos: [0.0, 0.0, 0.0, 1.0],
         }
     }
 }
@@ -66,6 +86,12 @@ impl MeshPushConstants {
         }
     }
 }
+
+// El contrato con GLSL depende de que no haya relleno entre campos: si el
+// compilador insertase padding, los offsets dejarían de coincidir y el shader
+// leería basura sin ningún error de compilación.
+const _: () = assert!(std::mem::size_of::<MeshPushConstants>() == 208);
+const _: () = assert!(std::mem::align_of::<MeshPushConstants>() == 4);
 
 pub struct GlassRenderer {
     pub device: Arc<ash::Device>,
@@ -512,6 +538,14 @@ impl GlassRenderer {
     }
 
     /// Renderiza múltiples mallas 3D a la textura offscreen desacoplada (Scene View)
+    /// LIMITACIÓN CONOCIDA (deuda declarada, no silenciosa):
+    /// este camino sólo empaqueta el MVP. `model` queda en identidad,
+    /// `camera_pos` en cero y `light_dir`/`light_color`/`material_params`
+    /// en sus valores por defecto, así que el shader PBR recibe una cámara
+    /// en el origen y sin luz. Sirve para el blit de standalone y para
+    /// pruebas de humo del pipeline, pero NO para capturar el viewport con
+    /// iluminación correcta. La ruta del editor usa `render_frame` con
+    /// push constants completos.
     pub fn render_offscreen_scene(
         &mut self,
         queue: vk::Queue,
@@ -726,5 +760,98 @@ impl Drop for GlassRenderer {
             .destroy(&mut *self.allocator.lock().unwrap());
         self.game_offscreen
             .destroy(&mut *self.allocator.lock().unwrap());
+    }
+}
+
+#[cfg(test)]
+mod push_constant_contract_tests {
+    use super::*;
+    use std::mem::offset_of;
+
+    /// Los offsets que los cuatro shaders GLSL documentan en sus comentarios.
+    /// Si alguien reordena o añade un campo en Rust sin tocar el GLSL, este test
+    /// falla aquí en vez de producir geometría deformada silenciosa en pantalla.
+    const GLSL_OFFSETS: [(&str, usize, usize); 7] = [
+        ("mvp", 0, 64),
+        ("model", 64, 64),
+        ("light_dir", 128, 16),
+        ("light_color", 144, 16),
+        ("material_params", 160, 16),
+        ("object_color", 176, 16),
+        ("camera_pos", 192, 16),
+    ];
+
+    #[test]
+    fn offsets_coinciden_con_glsl() {
+        let reales: [(&str, usize, usize); 7] = [
+            (
+                "mvp",
+                offset_of!(MeshPushConstants, mvp),
+                std::mem::size_of::<[f32; 16]>(),
+            ),
+            (
+                "model",
+                offset_of!(MeshPushConstants, model),
+                std::mem::size_of::<[f32; 16]>(),
+            ),
+            (
+                "light_dir",
+                offset_of!(MeshPushConstants, light_dir),
+                std::mem::size_of::<[f32; 4]>(),
+            ),
+            (
+                "light_color",
+                offset_of!(MeshPushConstants, light_color),
+                std::mem::size_of::<[f32; 4]>(),
+            ),
+            (
+                "material_params",
+                offset_of!(MeshPushConstants, material_params),
+                std::mem::size_of::<[f32; 4]>(),
+            ),
+            (
+                "object_color",
+                offset_of!(MeshPushConstants, object_color),
+                std::mem::size_of::<[f32; 4]>(),
+            ),
+            (
+                "camera_pos",
+                offset_of!(MeshPushConstants, camera_pos),
+                std::mem::size_of::<[f32; 4]>(),
+            ),
+        ];
+        assert_eq!(reales, GLSL_OFFSETS, "El layout de MeshPushConstants ya no coincide con el bloque push_constant de los shaders .vert/.frag");
+    }
+
+    #[test]
+    fn tamano_y_alineacion_son_los_esperados() {
+        assert_eq!(MESH_PUSH_CONSTANTS_SIZE, 208);
+        assert_eq!(std::mem::align_of::<MeshPushConstants>(), 4);
+        // Todos los offsets deben caer en múltiplo de 16 para respetar std140.
+        for (nombre, off, tam) in GLSL_OFFSETS {
+            assert_eq!(off % 16, 0, "campo '{nombre}' no está alineado a 16 bytes");
+            assert!(off + tam <= 208, "campo '{nombre}' desborda los 208 bytes");
+        }
+    }
+
+    #[test]
+    fn default_es_identidad_y_new_solo_cambia_la_mvp() {
+        let d = MeshPushConstants::default();
+        assert_eq!(d.mvp, IDENTITY_MAT4);
+        assert_eq!(d.model, IDENTITY_MAT4, "el modelo por defecto debe ser identidad, no basura");
+
+        let m = [7.0_f32; 16];
+        let n = MeshPushConstants::new(m);
+        assert_eq!(n.mvp, m);
+        assert_eq!(n.model, IDENTITY_MAT4);
+        assert_eq!(n.camera_pos, d.camera_pos);
+    }
+
+    #[test]
+    fn bytemuck_serializa_exactamente_208_bytes() {
+        let pc = MeshPushConstants::default();
+        let bytes = bytemuck::bytes_of(&pc);
+        assert_eq!(bytes.len(), 208);
+        assert_eq!(bytes.len(), MESH_PUSH_CONSTANTS_SIZE as usize);
     }
 }

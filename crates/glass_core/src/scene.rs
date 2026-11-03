@@ -1,19 +1,90 @@
 use serde::{Deserialize, Serialize};
 
+/// Profundidad máxima de jerarquía que el motor recorre al componer matrices de
+/// mundo. `reparent` ya rechaza ciclos, así que este tope es una red de
+/// seguridad contra escenas manipuladas a mano o corrompidas: sin él, una
+/// cadena cíclica colgaría el hilo de renderizado.
+pub const MAX_HIERARCHY_DEPTH: usize = 256;
+
+
+/// Transform de una entidad, con la orientación almacenada de forma
+/// redundante: un cuaternión autoritativo y una vista Euler en grados.
+///
+/// Ambas representaciones son **privadas** a propósito. Si fueran campos
+/// públicos, cualquiera podría escribir el Euler y dejar el cuaternión
+/// desactualizado (o al revés), y el motor tendría dos verdades contradictorias
+/// sobre la orientación. Todo acceso pasa por los métodos, que mantienen la
+/// invariante: al tocar una representación se recalcula la otra.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransformData {
     pub position: [f32; 3],
-    pub rotation: [f32; 3],
     pub scale: [f32; 3],
+
+    /// Vista Euler en grados. Derivada; se refresca en cada escritura.
+    rotation: [f32; 3],
+
+    /// Cuaternión `[i, j, k, w]` autoritativo de la orientación.
+    ///
+    /// Es la fuente de verdad porque la física (Rapier3D) y los scripts C#
+    /// trabajan en cuaterniones: convertir a Euler en cada ida y vuelta perdía
+    /// precisión y saltaba de rama en gimbal lock. `#[serde(default)]` mantiene
+    /// compatibilidad con las escenas `.scene.json` escritas antes de este campo.
+    #[serde(default)]
+    rotation_quat: [f32; 4],
 }
 
 impl Default for TransformData {
     fn default() -> Self {
         Self {
             position: [0.0, 0.0, 0.0],
-            rotation: [0.0, 0.0, 0.0],
             scale: [1.0, 1.0, 1.0],
+            rotation: [0.0, 0.0, 0.0],
+            rotation_quat: [0.0, 0.0, 0.0, 1.0],
         }
+    }
+}
+
+impl TransformData {
+    /// Vista Euler en grados, para el Inspector y los gizmos.
+    pub fn rotation(&self) -> [f32; 3] {
+        self.rotation
+    }
+
+    /// Cuaternión autoritativo `[i, j, k, w]`.
+    ///
+    /// Si la escena vino de disco sin el campo (versión anterior), se deriva del
+    /// Euler en lugar de devolver el cuaternión cero, que no es una rotación.
+    pub fn rotation_quat(&self) -> [f32; 4] {
+        if self.rotation_quat == [0.0, 0.0, 0.0, 0.0] {
+            crate::math::euler_deg_to_quat(self.rotation)
+        } else {
+            self.rotation_quat
+        }
+    }
+
+    /// Fija la orientación desde un cuaternión y refresca la vista Euler.
+    pub fn set_rotation_quat(&mut self, quat: [f32; 4]) {
+        let q = crate::math::quat_normalize(quat);
+        self.rotation_quat = q;
+        self.rotation = crate::math::quat_to_euler_deg(q);
+    }
+
+    /// Fija la orientación desde la vista Euler y refresca el cuaternión.
+    ///
+    /// Es la ruta del Inspector y de los gizmos: el usuario razona en grados.
+    pub fn set_rotation_euler(&mut self, euler_deg: [f32; 3]) {
+        self.rotation = euler_deg;
+        self.rotation_quat = crate::math::euler_deg_to_quat(euler_deg);
+    }
+
+    /// Escribe una sola componente de la rotación Euler, recalculando el
+    /// cuaternión. Evita que un `rotation[1] += delta` deje el cuaternión viejo.
+    pub fn add_rotation_euler(&mut self, delta: [f32; 3]) {
+        self.set_rotation_euler([
+            self.rotation[0] + delta[0],
+            self.rotation[1] + delta[1],
+            self.rotation[2] + delta[2],
+        ]);
     }
 }
 
@@ -555,21 +626,186 @@ impl SceneState {
         group_id
     }
 
-    /// Retorna la posición acumulada en espacio de mundo recorriendo la jerarquía
+    /// Retorna la posición acumulada en espacio de mundo recorriendo la jerarquía.
+    ///
+    /// Composición real: `world = parent_world * local`, de modo que la rotación
+    /// y la escala de los ancestros afectan al hijo. Véase
+    /// [`SceneState::compute_world_matrices`] para la explicación del defecto que
+    /// esta función tuvo (sumaba componentes ignorando rotación y escala).
+    ///
+    /// Los ciclos no pueden existir (`reparent` los rechaza), pero el recorrido
+    /// lleva un tope de profundidad como red de seguridad para que una escena
+    /// manipulada a mano nunca pueda colgar el motor.
     pub fn get_world_position(&self, id: u64) -> [f32; 3] {
-        let mut pos = [0.0, 0.0, 0.0];
+        let m = self.compute_world_matrix(id);
+        crate::math::mat4_translation(m)
+    }
+
+    /// Matriz de mundo de una entidad, componiendo la cadena de ancestros.
+    ///
+    /// Cacula la cadena raíz->hoja y compone de arriba abajo, que es el orden
+    /// correcto: `T_world = T_root * ... * T_parent * T_local`.
+    pub fn compute_world_matrix(&self, id: u64) -> [f32; 16] {
+        // 1) Recolectar la cadena de ancestros, de la entidad hacia la raíz.
+        let mut chain: Vec<&EntityData> = Vec::new();
         let mut curr = Some(id);
+        let mut guard = 0;
+
         while let Some(eid) = curr {
-            if let Some(ent) = self.get_entity(eid) {
-                pos[0] += ent.transform.position[0];
-                pos[1] += ent.transform.position[1];
-                pos[2] += ent.transform.position[2];
-                curr = ent.parent;
-            } else {
+            guard += 1;
+            if guard > MAX_HIERARCHY_DEPTH {
+                log::warn!(
+                    "Jerarquía de más de {MAX_HIERARCHY_DEPTH} niveles en la entidad {id}; \
+                     se trunca la composición de la matriz de mundo."
+                );
                 break;
             }
+            match self.get_entity(eid) {
+                Some(ent) => {
+                    chain.push(ent);
+                    curr = ent.parent;
+                }
+                None => {
+                    // Padre inexistente: se trata como raíz para que la entidad
+                    // siga siendo visible en lugar de desaparecer.
+                    log::warn!("Entidad {id} referencia a un padre inexistente; se trata como raíz.");
+                    break;
+                }
+            }
         }
-        pos
+
+        // 2) Componer desde la raíz (último de la cadena) hasta la entidad.
+        let mut world = crate::math::mat4_identity();
+        for ent in chain.iter().rev() {
+            // Se compone con el cuaternión autoritativo, no con la vista Euler:
+            // así una orientación acumulada por física o scripting se respeta
+            // exactamente y no salta en gimbal lock.
+            let local = crate::math::mat4_from_trs_quat(
+                ent.transform.position,
+                ent.transform.rotation_quat(),
+                ent.transform.scale,
+            );
+            world = crate::math::mat4_mul(world, local);
+        }
+
+        world
+    }
+
+    /// Escribe una transformación en **espacio de mundo** sobre una entidad,
+    /// convirtiéndola al transform LOCAL que la escena almacena.
+    ///
+    /// Es la ruta obligatoria para todo lo que produce resultados en mundo:
+    /// el solucionador de Rapier3D y cualquier futura cinemática o IK. Escribir
+    /// la posición de mundo directamente en `transform.position` corrompe a
+    /// cualquier entidad con padre, porque esa componente es local.
+    ///
+    /// Devuelve `false` si la entidad no existe.
+    pub fn set_world_transform(
+        &mut self,
+        id: u64,
+        world_pos: [f32; 3],
+        world_rot_quat: [f32; 4],
+    ) -> bool {
+        let parent_world = match self.get_entity(id).and_then(|e| e.parent) {
+            Some(pid) => self.compute_world_matrix(pid),
+            None => crate::math::mat4_identity(),
+        };
+
+        // local = parent^-1 * world  (sólo para la posición).
+        let local_pos = match crate::math::mat4_inverse_affine(parent_world) {
+            Some(inv) => crate::math::mat4_transform_point(inv, world_pos),
+            None => {
+                // Padre con escala cero en algún eje: no existe inversa. La
+                // posición de mundo es la única información válida que se puede
+                // conservar sin inventar valores.
+                log::warn!(
+                    "No se pudo convertir a local la entidad {id}: su padre tiene escala degenerada."
+                );
+                world_pos
+            }
+        };
+
+        // local_rot = conj(parent_rot) * world_rot
+        let parent_rot = crate::math::mat4_to_quat(parent_world);
+        let parent_inv = [-parent_rot[0], -parent_rot[1], -parent_rot[2], parent_rot[3]];
+        let local_rot = crate::math::quat_normalize(crate::math::quat_mul(parent_inv, world_rot_quat));
+
+        if let Some(ent) = self.get_entity_mut(id) {
+            ent.transform.position = local_pos;
+            // El cuaternión local es la verdad; el Euler se deriva para el
+            // Inspector. Guardar sólo el Euler descartaba precisión en cada
+            // tick de física.
+            ent.transform.set_rotation_quat(local_rot);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Matrices de mundo de **todas** las entidades, calculadas en una sola
+    /// pasada topológica (padres antes que hijos).
+    ///
+    /// Es la ruta que debe usar el renderizado por frame: resolver cada entidad
+    /// por separado con [`SceneState::compute_world_matrix`] es correcto pero
+    /// cuesta `O(n * profundidad)`, mientras que esto es `O(n)`.
+    ///
+    /// Entidades cuyo padre no existe en la escena se tratan como raíces.
+    pub fn compute_world_matrices(&self) -> std::collections::HashMap<u64, [f32; 16]> {
+        use std::collections::HashMap;
+
+        let mut out: HashMap<u64, [f32; 16]> = HashMap::with_capacity(self.entities.len());
+        let mut pending: Vec<&EntityData> = self.entities.iter().collect();
+
+        // Pasada topológica: en cada vuelta se resuelven todas las entidades
+        // cuyo padre ya esté resuelto (o que no tengan padre).
+        let mut last_len = pending.len() + 1;
+        while !pending.is_empty() && pending.len() < last_len {
+            last_len = pending.len();
+            let mut still_pending = Vec::with_capacity(pending.len());
+
+            for ent in pending {
+                let parent_world = match ent.parent {
+                    None => Some(crate::math::mat4_identity()),
+                    Some(pid) => out.get(&pid).copied(),
+                };
+
+                match parent_world {
+                    Some(pw) => {
+                        let local = crate::math::mat4_from_trs_quat(
+                            ent.transform.position,
+                            ent.transform.rotation_quat(),
+                            ent.transform.scale,
+                        );
+                        out.insert(ent.id, crate::math::mat4_mul(pw, local));
+                    }
+                    // El padre aún no está resuelto: se intenta en la vuelta siguiente.
+                    None => still_pending.push(ent),
+                }
+            }
+
+            pending = still_pending;
+        }
+
+        // Lo que quede sin resolver sólo puede ser un ciclo o una cadena que
+        // depende de un padre inexistente. Se resuelve como raíz para que nada
+        // desaparezca de la escena.
+        for ent in pending {
+            log::warn!(
+                "Entidad {} no pudo resolver su jerarquía (ciclo o padre inexistente); \
+                 se renderiza como raíz.",
+                ent.id
+            );
+            out.insert(
+                ent.id,
+                crate::math::mat4_from_trs_quat(
+                    ent.transform.position,
+                    ent.transform.rotation_quat(),
+                    ent.transform.scale,
+                ),
+            );
+        }
+
+        out
     }
 
     pub fn get_entity(&self, id: u64) -> Option<&EntityData> {
@@ -592,7 +828,7 @@ impl SceneState {
                 entity.transform.position = pos;
             }
             if let Some(rot) = rotation {
-                entity.transform.rotation = rot;
+                entity.transform.set_rotation_euler(rot);
             }
             if let Some(s) = scale {
                 entity.transform.scale = s;
@@ -830,6 +1066,140 @@ mod tests {
         assert_eq!(child.parent, None);
     }
 
+    // ---- Jerarquía: composición de matrices de mundo ------------------------
+
+    #[test]
+    fn test_hierarchy_rotation_is_inherited_in_world_matrix() {
+        // Defecto corregido en ITERACIÓN 4: el hijo debe heredar la ROTACIÓN del
+        // padre. Antes `get_world_position` sólo sumaba posiciones, de modo que
+        // un hijo a +1 en X de un padre rotado 90 en Y reportaba [1,0,0] en vez
+        // de [0,0,-1].
+        let mut scene = SceneState::new();
+        let p = scene.create_entity("Parent".into(), vec!["Transform".into()]);
+        let c = scene.create_entity("Child".into(), vec!["Transform".into()]);
+
+        scene.modify_transform(p, Some([0.0, 0.0, 0.0]), Some([0.0, 90.0, 0.0]), None);
+        scene.modify_transform(c, Some([1.0, 0.0, 0.0]), None, None);
+        scene.reparent(c, Some(p));
+
+        let wp = scene.get_world_position(c);
+        assert!(wp[0].abs() < 1.0e-4, "x = {} (debería ser 0)", wp[0]);
+        assert!(wp[1].abs() < 1.0e-4, "y = {}", wp[1]);
+        assert!((wp[2] + 1.0).abs() < 1.0e-4, "z = {} (debería ser -1)", wp[2]);
+    }
+
+    #[test]
+    fn test_hierarchy_scale_is_inherited_in_world_matrix() {
+        let mut scene = SceneState::new();
+        let p = scene.create_entity("Parent".into(), vec!["Transform".into()]);
+        let c = scene.create_entity("Child".into(), vec!["Transform".into()]);
+
+        scene.modify_transform(p, Some([0.0, 0.0, 0.0]), None, Some([2.0, 2.0, 2.0]));
+        scene.modify_transform(c, Some([3.0, 0.0, 0.0]), None, None);
+        scene.reparent(c, Some(p));
+
+        let wp = scene.get_world_position(c);
+        assert!((wp[0] - 6.0).abs() < 1.0e-4, "x = {} (debería ser 6)", wp[0]);
+    }
+
+    #[test]
+    fn test_hierarchy_composes_three_levels() {
+        let mut scene = SceneState::new();
+        let a = scene.create_entity("A".into(), vec!["Transform".into()]);
+        let b = scene.create_entity("B".into(), vec!["Transform".into()]);
+        let c = scene.create_entity("C".into(), vec!["Transform".into()]);
+
+        scene.modify_transform(a, Some([10.0, 0.0, 0.0]), None, None);
+        scene.modify_transform(b, Some([0.0, 5.0, 0.0]), None, None);
+        scene.modify_transform(c, Some([0.0, 0.0, 2.0]), None, None);
+
+        scene.reparent(b, Some(a));
+        scene.reparent(c, Some(b));
+
+        let wp = scene.get_world_position(c);
+        assert!((wp[0] - 10.0).abs() < 1.0e-4, "x = {}", wp[0]);
+        assert!((wp[1] - 5.0).abs() < 1.0e-4, "y = {}", wp[1]);
+        assert!((wp[2] - 2.0).abs() < 1.0e-4, "z = {}", wp[2]);
+
+        // La matriz de mundo del hijo debe coincidir con la ruta de la cadena.
+        let m_chain = scene.compute_world_matrix(c);
+        let all = scene.compute_world_matrices();
+        let m_batch = all[&c];
+        for i in 0..16 {
+            assert!(
+                (m_chain[i] - m_batch[i]).abs() < 1.0e-4,
+                "la ruta por lote difiere de la ruta por cadena en el índice {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_world_matrices_batch_covers_every_entity() {
+        let mut scene = SceneState::new();
+        // La escena por defecto ya trae 4 entidades sin jerarquía.
+        let p = scene.create_entity("P".into(), vec!["Transform".into()]);
+        let c = scene.create_entity("C".into(), vec!["Transform".into()]);
+        scene.reparent(c, Some(p));
+
+        let all = scene.compute_world_matrices();
+        assert_eq!(
+            all.len(),
+            scene.entities.len(),
+            "toda entidad debe tener matriz de mundo resuelta"
+        );
+        for ent in &scene.entities {
+            assert!(all.contains_key(&ent.id), "falta la entidad {}", ent.id);
+        }
+    }
+
+    #[test]
+    fn test_orphan_entity_is_treated_as_root_not_dropped() {
+        // Un padre inexistente no debe hacer desaparecer al hijo de la escena.
+        let mut scene = SceneState::new();
+        let c = scene.create_entity("Huerfano".into(), vec!["Transform".into()]);
+        scene.modify_transform(c, Some([7.0, 0.0, 0.0]), None, None);
+        scene.get_entity_mut(c).unwrap().parent = Some(999_999);
+
+        let all = scene.compute_world_matrices();
+        assert!(all.contains_key(&c), "el huérfano debe seguir resolviéndose");
+        let wp = scene.get_world_position(c);
+        assert!((wp[0] - 7.0).abs() < 1.0e-4, "x = {}", wp[0]);
+    }
+
+    #[test]
+    fn test_cyclic_hierarchy_does_not_hang() {
+        // `reparent` rechaza ciclos, así que se fuerza uno a mano para probar la
+        // red de seguridad: la resolución debe terminar, no colgarse.
+        let mut scene = SceneState::new();
+        let a = scene.create_entity("A".into(), vec!["Transform".into()]);
+        let b = scene.create_entity("B".into(), vec!["Transform".into()]);
+        scene.get_entity_mut(a).unwrap().parent = Some(b);
+        scene.get_entity_mut(b).unwrap().parent = Some(a);
+
+        let all = scene.compute_world_matrices();
+        assert_eq!(all.len(), scene.entities.len());
+        // Y la ruta por cadena también debe acotarse por MAX_HIERARCHY_DEPTH.
+        let _ = scene.compute_world_matrix(a);
+    }
+
+    #[test]
+    fn test_root_world_matrix_equals_local_matrix() {
+        let mut scene = SceneState::new();
+        let e = scene.create_entity("Raiz".into(), vec!["Transform".into()]);
+        scene.modify_transform(e, Some([1.0, 2.0, 3.0]), Some([0.0, 45.0, 0.0]), Some([2.0, 2.0, 2.0]));
+
+        let ent = scene.get_entity(e).unwrap();
+        let expected = crate::math::mat4_from_trs_euler(
+            ent.transform.position,
+            ent.transform.rotation(),
+            ent.transform.scale,
+        );
+        let actual = scene.compute_world_matrix(e);
+        for i in 0..16 {
+            assert!((expected[i] - actual[i]).abs() < 1.0e-5, "índice {i}");
+        }
+    }
+
     #[test]
     fn test_world_position_hierarchy() {
         let mut scene = SceneState::new();
@@ -899,5 +1269,144 @@ mod tests {
         assert_eq!(loaded_text.parent, Some(canvas_id));
 
         let _ = std::fs::remove_file(temp_path);
+    }
+
+    #[test]
+    fn set_world_transform_converts_to_local_for_child() {
+        // El padre está rotado 90 grados en Y y escalado x2. Escribir la
+        // posición de mundo [0,0,-2] sobre el hijo debe guardar el offset LOCAL
+        // [1,0,0], no el valor de mundo (que era el defecto original).
+        let mut scene = SceneState::new();
+        let p = scene.create_entity("P".into(), vec!["Transform".into()]);
+        let c = scene.create_entity("C".into(), vec!["Transform".into()]);
+        scene.modify_transform(p, Some([0.0, 0.0, 0.0]), Some([0.0, 90.0, 0.0]), Some([2.0, 2.0, 2.0]));
+        scene.reparent(c, Some(p));
+
+        let world_rot = crate::math::euler_deg_to_quat([0.0, 90.0, 0.0]);
+        assert!(scene.set_world_transform(c, [0.0, 0.0, -2.0], world_rot));
+
+        let local = scene.get_entity(c).unwrap().transform.position;
+        assert!(
+            (local[0] - 1.0).abs() < 1.0e-4,
+            "x = {} (local esperado 1)",
+            local[0]
+        );
+        assert!(local[1].abs() < 1.0e-4, "y = {}", local[1]);
+        assert!(local[2].abs() < 1.0e-4, "z = {}", local[2]);
+
+        // Y al recomponer el mundo se recupera exactamente lo escrito.
+        let back = scene.get_world_position(c);
+        assert!(back[0].abs() < 1.0e-4, "world x = {}", back[0]);
+        assert!(back[1].abs() < 1.0e-4, "world y = {}", back[1]);
+        assert!((back[2] + 2.0).abs() < 1.0e-4, "world z = {}", back[2]);
+    }
+
+    #[test]
+    fn set_world_transform_on_root_equals_local() {
+        let mut scene = SceneState::new();
+        let e = scene.create_entity("Raiz".into(), vec!["Transform".into()]);
+
+        let rot = crate::math::euler_deg_to_quat([10.0, 20.0, 30.0]);
+        assert!(scene.set_world_transform(e, [4.0, 5.0, 6.0], rot));
+
+        let t = &scene.get_entity(e).unwrap().transform;
+        assert!(t.position[0] - 4.0 < 1.0e-4 && 4.0 - t.position[0] < 1.0e-4);
+        assert!(t.position[1] - 5.0 < 1.0e-4 && 5.0 - t.position[1] < 1.0e-4);
+        assert!(t.position[2] - 6.0 < 1.0e-4 && 6.0 - t.position[2] < 1.0e-4);
+    }
+
+    #[test]
+    fn rotation_quat_survives_a_script_round_trip() {
+        // Contrato FFI: un script C# escribe un cuaternión y lo vuelve a leer.
+        // Antes el puente convertía a Euler al escribir y de vuelta a cuaternión
+        // al leer, así que una orientación compuesta acumulaba error y podía
+        // saltar de rama en gimbal lock.
+        let mut scene = SceneState::new();
+        let e = scene.create_entity("Script".into(), vec!["Transform".into()]);
+
+        // Cuaternión no trivial, ya normalizado.
+        let q = crate::math::euler_deg_to_quat([23.0, -71.0, 44.0]);
+        scene.set_world_transform(e, [1.0, 2.0, 3.0], q);
+
+        let stored = scene.get_entity(e).unwrap().transform.rotation_quat();
+        let dot = stored[0] * q[0] + stored[1] * q[1] + stored[2] * q[2] + stored[3] * q[3];
+        assert!(
+            (dot.abs() - 1.0).abs() < 1.0e-6,
+            "el cuaternión no sobrevivió la ida y vuelta: dot = {dot}"
+        );
+
+        // Diez vueltas más no deben degradar la orientación (esto era lo que
+        // fallaba con el rodeo por Euler).
+        for _ in 0..10 {
+            let cur = scene.get_entity(e).unwrap().transform.rotation_quat();
+            scene.set_world_transform(e, [1.0, 2.0, 3.0], cur);
+        }
+        let after = scene.get_entity(e).unwrap().transform.rotation_quat();
+        let drift = after[0] * q[0] + after[1] * q[1] + after[2] * q[2] + after[3] * q[3];
+        assert!(
+            (drift.abs() - 1.0).abs() < 1.0e-5,
+            "la orientación derivó tras 10 vueltas: dot = {drift}"
+        );
+    }
+
+    #[test]
+    fn euler_setter_keeps_quaternion_in_sync() {
+        let mut scene = SceneState::new();
+        let e = scene.create_entity("Inspector".into(), vec!["Transform".into()]);
+
+        // El Inspector escribe Euler; el cuaternión debe quedar coherente.
+        scene.modify_transform(e, None, Some([0.0, 90.0, 0.0]), None);
+        let q = scene.get_entity(e).unwrap().transform.rotation_quat();
+        let expected = crate::math::euler_deg_to_quat([0.0, 90.0, 0.0]);
+        let dot = q[0] * expected[0] + q[1] * expected[1] + q[2] * expected[2] + q[3] * expected[3];
+        assert!((dot.abs() - 1.0).abs() < 1.0e-6, "dot = {dot}");
+
+        // Y la vista Euler sigue siendo la que escribió el usuario.
+        let view = scene.get_entity(e).unwrap().transform.rotation();
+        assert!((view[1] - 90.0).abs() < 1.0e-3, "y = {}", view[1]);
+    }
+
+    #[test]
+    fn transform_json_without_rotation_quat_still_loads() {
+        // Compatibilidad: un `.scene.json` guardado antes de que existiera el
+        // campo autoritativo no debe fallar al cargar, y no debe quedar con la
+        // orientación en el cuaternión cero (que no es una rotación).
+        let legacy = r#"{
+            "position": [1.0, 2.0, 3.0],
+            "rotation": [0.0, 45.0, 0.0],
+            "scale": [1.0, 1.0, 1.0]
+        }"#;
+
+        let t: TransformData = serde_json::from_str(legacy).expect("transform antiguo debe cargar");
+
+        let q = t.rotation_quat();
+        assert!(
+            q != [0.0, 0.0, 0.0, 0.0],
+            "un cuaternión cero no es una rotación válida"
+        );
+
+        let expected = crate::math::euler_deg_to_quat([0.0, 45.0, 0.0]);
+        let dot = q[0] * expected[0] + q[1] * expected[1] + q[2] * expected[2] + q[3] * expected[3];
+        assert!((dot.abs() - 1.0).abs() < 1.0e-5, "dot = {dot}");
+    }
+
+    #[test]
+    fn transform_json_round_trips_both_representations() {
+        // Lo que se guarda debe poder recuperarse: si el cuaternión no se
+        // serializa, la orientación autoritativa se pierde al guardar.
+        let mut t = TransformData::default();
+        t.set_rotation_quat(crate::math::euler_deg_to_quat([15.0, 160.0, -80.0]));
+
+        let json = serde_json::to_string(&t).expect("debe serializar");
+        assert!(
+            json.contains("rotation_quat"),
+            "el cuaternión autoritativo debe persistir: {json}"
+        );
+
+        let back: TransformData = serde_json::from_str(&json).expect("debe deserializar");
+        let a = t.rotation_quat();
+        let b = back.rotation_quat();
+        let dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+        assert!((dot.abs() - 1.0).abs() < 1.0e-6, "dot = {dot}");
     }
 }

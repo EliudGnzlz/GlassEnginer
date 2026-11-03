@@ -6,18 +6,23 @@ layout(location = 1) in vec2 v_uv;
 layout(location = 0) out vec4 out_color;
 
 layout(push_constant) uniform PushConstants {
-    mat4 mvp;
-    vec4 light_dir;
-    vec4 light_color;
-    vec4 material_params;
-    vec4 object_color;
+    mat4 mvp;                // offset 0
+    mat4 model;              // offset 64
+    vec4 light_dir;          // offset 128
+    vec4 light_color;        // offset 144
+    vec4 material_params;    // offset 160
+    vec4 object_color;       // offset 176
+    vec4 camera_pos;         // offset 192
 } u_push;
 
 void main() {
     vec3 N = normalize(v_normal);
     vec3 L = normalize(u_push.light_dir.xyz);
     float ambient = u_push.light_dir.w;
-    float has_light = u_push.light_color.w;
+    // has_light vive en material_params.w (convención PBR). Antes se leía de
+    // light_color.w, que duplicaba el mismo bit: dos fuentes para un dato es
+    // una desincronización esperando a ocurrir.
+    float has_light = u_push.material_params.w;
 
     float diff = max(dot(N, L), 0.0) * has_light;
     vec3 light_contrib = u_push.light_color.xyz * diff;

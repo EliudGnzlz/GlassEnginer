@@ -7,11 +7,13 @@ layout(location = 2) in vec2 v_uv;
 layout(location = 0) out vec4 out_color;
 
 layout(push_constant) uniform PushConstants {
-    mat4 mvp;                // 64 bytes
-    vec4 light_dir;          // 16 bytes: xyz = light_dir, w = light_intensity
-    vec4 light_color;        // 16 bytes: xyz = light_color, w = ambient_intensity
-    vec4 material_params;    // 16 bytes: x = metallic, y = roughness, z = ao, w = has_light
-    vec4 object_color;       // 16 bytes: rgb = albedo, a = opacity
+    mat4 mvp;                // 64 bytes (offset 0)
+    mat4 model;              // 64 bytes (offset 64): matriz de modelo
+    vec4 light_dir;          // 16 bytes (offset 128): xyz = light_dir, w = ambient
+    vec4 light_color;        // 16 bytes (offset 144): xyz = color*intensidad, w = has_light
+    vec4 material_params;    // 16 bytes (offset 160): x = metallic, y = roughness, z = ao, w = has_light
+    vec4 object_color;       // 16 bytes (offset 176): rgb = albedo, a = opacity
+    vec4 camera_pos;         // 16 bytes (offset 192): xyz = posición de cámara en mundo
 } u_push;
 
 const float PI = 3.14159265359;
@@ -65,8 +67,10 @@ void main() {
 
     vec3 N = normalize(v_normal);
     vec3 L = normalize(u_push.light_dir.xyz);
-    // Aproximación de vista ortogonal / central
-    vec3 V = normalize(vec3(0.0, 0.0, 1.0)); 
+    // Vector de vista real: desde la superficie hacia la cámara. Antes era una
+    // constante (0,0,1), así que el término especular no dependía del punto de
+    // vista y los reflejos no se movían al orbitar.
+    vec3 V = normalize(u_push.camera_pos.xyz - v_world_pos);
     vec3 H = normalize(V + L);
 
     // Reflectancia base al 0% de ángulo

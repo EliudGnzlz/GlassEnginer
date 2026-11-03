@@ -113,7 +113,7 @@ impl InspectorPanel {
 
                 if reset_transform {
                     entity.transform.position = [0.0, 0.0, 0.0];
-                    entity.transform.rotation = [0.0, 0.0, 0.0];
+                    entity.transform.set_rotation_euler([0.0, 0.0, 0.0]);
                     entity.transform.scale = [1.0, 1.0, 1.0];
                 }
 
@@ -137,16 +137,22 @@ impl InspectorPanel {
                         });
                         ui.end_row();
 
-                        // Rotación
+                        // Rotación. Se edita una copia del Euler y se reaplica
+                        // por el setter para que el cuaternión autoritativo no
+                        // quede desactualizado cuando el usuario mueve un campo.
                         ui.label("Rotación");
+                        let mut rot_euler = entity.transform.rotation();
                         ui.horizontal(|ui| {
                             ui.colored_label(red, "X");
-                            ui.add(DragValue::new(&mut entity.transform.rotation[0]).speed(0.5).suffix("°"));
+                            ui.add(DragValue::new(&mut rot_euler[0]).speed(0.5).suffix("°"));
                             ui.colored_label(green, "Y");
-                            ui.add(DragValue::new(&mut entity.transform.rotation[1]).speed(0.5).suffix("°"));
+                            ui.add(DragValue::new(&mut rot_euler[1]).speed(0.5).suffix("°"));
                             ui.colored_label(blue, "Z");
-                            ui.add(DragValue::new(&mut entity.transform.rotation[2]).speed(0.5).suffix("°"));
+                            ui.add(DragValue::new(&mut rot_euler[2]).speed(0.5).suffix("°"));
                         });
+                        if rot_euler != entity.transform.rotation() {
+                            entity.transform.set_rotation_euler(rot_euler);
+                        }
                         ui.end_row();
 
                         // Escala

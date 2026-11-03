@@ -23,6 +23,7 @@ glass_audio.workspace = true
 glass_physics.workspace = true
 ash.workspace = true
 winit.workspace = true
+libc = "0.2"
 log.workspace = true
 env_logger.workspace = true
 

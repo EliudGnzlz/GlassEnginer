@@ -596,7 +596,7 @@ impl HierarchyPanel {
         }
     }
 
-    fn instantiate_preset(scene: &mut SceneState, preset: EntityPreset) -> u64 {
+    pub fn instantiate_preset(scene: &mut SceneState, preset: EntityPreset) -> u64 {
         match preset {
             EntityPreset::Group => {
                 scene.create_entity("GameObject Group".into(), vec!["Transform".into()])
@@ -703,7 +703,7 @@ impl HierarchyPanel {
                 );
                 if let Some(ent) = scene.get_entity_mut(id) {
                     ent.transform.position = [0.0, 10.0, 0.0];
-                    ent.transform.rotation = [45.0, -30.0, 0.0];
+                    ent.transform.set_rotation_euler([45.0, -30.0, 0.0]);
                 }
                 id
             }

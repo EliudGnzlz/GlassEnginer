@@ -163,7 +163,7 @@ impl McpServer {
                         },
                         {
                             "name": "glass_capture_viewport",
-                            "description": "Captura una instantánea del Viewport 3D offscreen en VRAM y la devuelve en formato PNG codificado en Base64.",
+                            "description": "Devuelve el último snapshot del Viewport 3D offscreen si el motor lo publicó en la escena. Si no existe (motor no ejecutándose con editor, o sin frame capturado), devuelve una imagen degradada sintética marcada con \"synthetic\": true, nunca una captura real disfrazada.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
@@ -171,7 +171,7 @@ impl McpServer {
                         },
                         {
                             "name": "glass_reload_shaders",
-                            "description": "Solicita la recarga en caliente de los shaders SPIR-V compilados en tiempo de ejecución.",
+                            "description": "Activa el flag shaders_reloaded_flag de la escena. ATENCIÓN: los shaders SPIR-V están embebidos en el binario con include_bytes!, por lo que esta llamada NO reconstruye el pipeline en caliente; exige recompilar glass_renderer y reiniciar el motor.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
@@ -414,8 +414,11 @@ impl McpServer {
             }
 
             "glass_capture_viewport" => {
-                let png_bytes = match &scene.viewport_snapshot_png {
-                    Some(bytes) => bytes.clone(),
+                // `is_real` distingue una captura publicada por el motor de un
+                // relleno generado aquí. La respuesta lo declara explícitamente
+                // para que un cliente MCP no confunda un degradado con el frame.
+                let (png_bytes, is_real) = match &scene.viewport_snapshot_png {
+                    Some(bytes) => (bytes.clone(), true),
                     None => {
                         let mut img = image::RgbaImage::new(1280, 720);
                         for (x, y, pixel) in img.enumerate_pixels_mut() {
@@ -427,16 +430,31 @@ impl McpServer {
                         let mut bytes = Vec::new();
                         let mut cursor = std::io::Cursor::new(&mut bytes);
                         let _ = img.write_to(&mut cursor, image::ImageFormat::Png);
-                        bytes
+                        (bytes, false)
                     }
                 };
 
                 let base64_data = STANDARD.encode(&png_bytes);
                 log::info!("MCP glass_capture_viewport: Snapshot codificado ({} bytes PNG, {} caracteres base64).", png_bytes.len(), base64_data.len());
 
+                let note = if is_real {
+                    format!(
+                        "Viewport 3D capturado: 1280x720 (PNG {} bytes). Snapshot real publicado por el motor.",
+                        png_bytes.len()
+                    )
+                } else {
+                    format!(
+                        "ADVERTENCIA - imagen sintética: no había snapshot en scene.viewport_snapshot_png, \
+                         así que se generó un degradado de 1280x720 (PNG {} bytes). No representa lo que \
+                         renderiza el motor; sólo sirve para validar el canal de transporte MCP.",
+                        png_bytes.len()
+                    )
+                };
+
                 McpResponse::success(
                     id,
                     json!({
+                        "synthetic": !is_real,
                         "content": [
                             {
                                 "type": "image",
@@ -445,7 +463,7 @@ impl McpServer {
                             },
                             {
                                 "type": "text",
-                                "text": format!("Viewport 3D capturado: 1280x720 (PNG {} bytes)", png_bytes.len())
+                                "text": note
                             }
                         ]
                     }),
@@ -454,14 +472,24 @@ impl McpServer {
 
             "glass_reload_shaders" => {
                 scene.shaders_reloaded_flag = true;
-                log::info!("MCP glass_reload_shaders: Flag de recarga en caliente activado.");
+                log::warn!(
+                    "MCP glass_reload_shaders: flag activado, pero los shaders están embebidos \
+                     con include_bytes! y el pipeline no se reconstruye en caliente."
+                );
                 McpResponse::success(
                     id,
                     json!({
+                        "applied": false,
+                        "flag_set": true,
                         "content": [
                             {
                                 "type": "text",
-                                "text": "Shaders SPIR-V recargados exitosamente en tiempo de ejecución."
+                                "text": "Flag shaders_reloaded_flag activado (flag_set: true, applied: false). \
+                                         Los shaders SPIR-V NO quedan recargados exitosamente con esta \
+                                         llamada: los binarios .spv se incorporan al ejecutable con \
+                                         include_bytes! en tiempo de compilación, y todavía no existe \
+                                         una ruta que reconstruya el pipeline en caliente. Para aplicar \
+                                         recompilar glass_renderer y reiniciar el motor."
                             }
                         ]
                     }),

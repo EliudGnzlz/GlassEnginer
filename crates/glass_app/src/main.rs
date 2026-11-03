@@ -36,7 +36,9 @@ impl SceneBridge for EngineSceneBridge {
         let ent = state.entities.iter().find(|e| e.id == entity_id)?;
         Some(TransformFfi {
             position: ent.transform.position,
-            rotation: [0.0, 0.0, 0.0, 1.0],
+            // La escena almacena Euler en grados; la frontera C#/Rapier habla en
+            // cuaterniones. Sin esta conversión el C# siempre ve identidad.
+            rotation: ent.transform.rotation_quat(),
             scale: ent.transform.scale,
         })
     }
@@ -48,6 +50,9 @@ impl SceneBridge for EngineSceneBridge {
         };
         if let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) {
             ent.transform.position = transform.position;
+            // Cuaternión -> Euler en grados, para que lo que escribe un script de C#
+            // (o Rapier) sea visible en el Inspector y en los gizmos.
+            ent.transform.set_rotation_quat(transform.rotation);
             ent.transform.scale = transform.scale;
             true
         } else {
@@ -55,6 +60,45 @@ impl SceneBridge for EngineSceneBridge {
         }
     }
 }
+/// Bandera de apagado ordenado.
+///
+/// ITERACIÓN 4 — diagnóstico del "device lost" fantasma:
+/// el motor esperaba fences con `u64::MAX`; esa espera acaba en el syscall
+/// `drm_syncobj_timeline_wait`. Cuando el proceso recibe `SIGTERM` (p. ej. al
+/// cerrar la sesión gráfica o con `timeout`), el kernel interrumpe el syscall y
+/// NVIDIA/Mesa lo traducen a `VK_TIMEOUT`, que el motor registraba como
+/// `Error durante render_frame: A wait operation has not completed in the
+/// specified time` y acto seguido moría por la acción por defecto de la señal.
+/// Con un manejador propio la bandera se levanta primero y el bucle sale por
+/// `event_loop.exit()`, alcanzando el `Drop` que hace `device_wait_idle()`.
+static SHUTDOWN_REQUESTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn handle_termination_signal(_sig: libc::c_int) {
+    SHUTDOWN_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Instala manejadores para SIGTERM/SIGINT/SIGHUP.
+///
+/// Sólo se hace `store` sobre un atómico: es lo único async-signal-safe que
+/// necesitamos aquí.
+fn install_signal_handlers() {
+    unsafe {
+        for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = handle_termination_signal as *const () as usize;
+            action.sa_flags = 0;
+            libc::sigemptyset(&mut action.sa_mask);
+            let rc = libc::sigaction(sig, &action, std::ptr::null_mut());
+            if rc != 0 {
+                log::warn!("sigaction({}) falló: errno={}", sig, *libc::__errno_location());
+            } else {
+                log::info!("Manejador de señal instalado para {}", sig);
+            }
+        }
+    }
+}
+
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
@@ -79,35 +123,6 @@ fn model_matrix(pos: [f32; 3], rot_y: f32) -> [f32; 16] {
         0.0, 1.0, 0.0, 0.0,
         sin, 0.0, cos, 0.0,
         pos[0], pos[1], pos[2], 1.0,
-    ]
-}
-
-fn model_matrix_trs_euler(pos: [f32; 3], scale: [f32; 3], rot_deg: [f32; 3]) -> [f32; 16] {
-    let rx = rot_deg[0].to_radians();
-    let ry = rot_deg[1].to_radians();
-    let rz = rot_deg[2].to_radians();
-
-    let (sx, cx) = (rx.sin(), rx.cos());
-    let (sy, cy) = (ry.sin(), ry.cos());
-    let (sz, cz) = (rz.sin(), rz.cos());
-
-    let r00 = cy * cz;
-    let r01 = sx * sy * cz - cx * sz;
-    let r02 = cx * sy * cz + sx * sz;
-
-    let r10 = cy * sz;
-    let r11 = sx * sy * sz + cx * cz;
-    let r12 = cx * sy * sz - sx * cz;
-
-    let r20 = -sy;
-    let r21 = sx * cy;
-    let r22 = cx * cy;
-
-    [
-        r00 * scale[0], r10 * scale[0], r20 * scale[0], 0.0,
-        r01 * scale[1], r11 * scale[1], r21 * scale[1], 0.0,
-        r02 * scale[2], r12 * scale[2], r22 * scale[2], 0.0,
-        pos[0],         pos[1],         pos[2],         1.0,
     ]
 }
 
@@ -1125,10 +1140,19 @@ impl GlassEngineApp {
                 let sync_transforms = physics.sync_all_transforms();
                 if let Ok(mut scene) = self.scene_state.lock() {
                     for (entity_id, tf) in sync_transforms {
-                        if let Some(ent) = scene.entities.iter_mut().find(|e| e.id == entity_id) {
-                            ent.transform.position = tf.position;
-                            ent.transform.scale = tf.scale;
-                        }
+                        // Rapier trabaja SIEMPRE en espacio de mundo, pero
+                        // `transform.position` es LOCAL (relativo al padre). Escribir
+                        // el resultado de Rapier directamente ahí corrompía a
+                        // cualquier cuerpo con jerarquía: el hijo acumulaba el
+                        // desplazamiento del padre en cada frame y se alejaba
+                        // volando. `set_world_transform` hace la conversión
+                        // mundo -> local invirtiendo la matriz del padre.
+                        //
+                        // No viaja tf.scale: sync_all_transforms() devuelve [1,1,1]
+                        // fijo, así que copiarlo borraba la escala puesta en el
+                        // Inspector. La escala es propiedad de la escena, no de
+                        // Rapier (que aquí sólo modela posición y orientación).
+                        scene.set_world_transform(entity_id, tf.position, tf.rotation);
                     }
                     // Actualizar telemetría de velocidad lineal en entity.physics
                     for ent in scene.entities.iter_mut() {
@@ -1146,9 +1170,27 @@ impl GlassEngineApp {
             // En modo Edición / Pausa:
             // Sincronizar de inmediato transforms editados en Inspector o mediante gizmos hacia Rapier3D
             if let (Ok(scene), Ok(mut physics)) = (self.scene_state.lock(), self.physics_world.lock()) {
+                // Precalcular matrices de mundo una sola vez: mover un padre
+                // debe desplazar el collider de sus hijos igual que en el render.
+                let world_matrices = scene.compute_world_matrices();
+
                 for ent in &scene.entities {
                     if let Some(bh) = physics.get_body_by_entity(ent.id) {
-                        physics.set_transform(bh, ent.transform.position, [0.0, 0.0, 0.0, 1.0]);
+                        // Rapier indexa cuerpos por posición de mundo, así que aquí
+                        // se sube la transformación de MUNDO (antes se subía la
+                        // local y un hijo con padre quedaba descolocado).
+                        let world = world_matrices.get(&ent.id).copied().unwrap_or_else(|| {
+                            glass_core::mat4_from_trs_euler(
+                                ent.transform.position,
+                                ent.transform.rotation(),
+                                ent.transform.scale,
+                            )
+                        });
+                        let world_pos = glass_core::mat4_translation(world);
+                        // Se subía siempre la identidad, de modo que mover un gizmo de
+                        // rotación no orientaba el collider. Ahora viaja la rotación real.
+                        let rot_quat = glass_core::mat4_to_quat(world);
+                        physics.set_transform(bh, world_pos, rot_quat);
                         physics.set_linear_velocity(bh, [0.0, 0.0, 0.0]);
                     }
                 }
@@ -1156,8 +1198,11 @@ impl GlassEngineApp {
         }
 
         // 4. Renderizar geometría 3D a las texturas offscreen en VRAM (Scene View y Game View independientes)
+        // `eye_scene` / `eye_game_opt` son las posiciones de cámara en mundo. El
+        // fragment shader las necesita para construir el vector de vista real (V),
+        // que antes era la constante (0,0,1).
         #[cfg(feature = "editor")]
-        let (vp_scene, vp_game_opt, light_dir, light_color) = {
+        let (vp_scene, vp_game_opt, light_dir, light_color, eye_scene, eye_game_opt) = {
             let ed = &self.editor_layout.viewport;
             let eye = [
                 ed.editor_cam_center[0] + ed.editor_cam_dist * ed.editor_cam_pitch.cos() * ed.editor_cam_yaw.sin(),
@@ -1169,13 +1214,16 @@ impl GlassEngineApp {
             let proj_scene = perspective_matrix(45.0_f32.to_radians(), aspect_scene, 0.1, 100.0);
             let vp_s = matmul(&proj_scene, &view_scene);
 
-            let (vp_g, l_dir, l_col) = if let Ok(scene) = self.scene_state.lock() {
+            let (vp_g, l_dir, l_col, eye_g) = if let Ok(scene) = self.scene_state.lock() {
                 let cam_target = ed.selected_camera_id
                     .and_then(|cid| scene.entities.iter().find(|e| e.id == cid && e.active && e.camera.is_some()))
                     .or_else(|| scene.active_camera());
 
+                let mut eye_g: Option<[f32; 4]> = None;
                 let vp_g = if let Some(cam) = cam_target {
-                    let view_g = camera_view_matrix(cam.transform.position, cam.transform.rotation);
+                    let cp = cam.transform.position;
+                    eye_g = Some([cp[0], cp[1], cp[2], 1.0]);
+                    let view_g = camera_view_matrix(cam.transform.position, cam.transform.rotation());
                     let fov = cam.camera.as_ref().map(|c| c.fov).unwrap_or(60.0);
                     let near = cam.camera.as_ref().map(|c| c.near_clip).unwrap_or(0.1);
                     let far = cam.camera.as_ref().map(|c| c.far_clip).unwrap_or(1000.0);
@@ -1189,7 +1237,7 @@ impl GlassEngineApp {
                 };
 
                 let (ld, lc) = if let Some(light_ent) = scene.main_light() {
-                    let rot = light_ent.transform.rotation;
+                    let rot = light_ent.transform.rotation();
                     let rx = rot[0].to_radians();
                     let ry = rot[1].to_radians();
                     let (sx, cx) = (rx.sin(), rx.cos());
@@ -1211,31 +1259,36 @@ impl GlassEngineApp {
                     ([0.0, 1.0, 0.0, 0.06], [0.0, 0.0, 0.0, 0.0])
                 };
 
-                (vp_g, ld, lc)
+                (vp_g, ld, lc, eye_g)
             } else {
-                (None, [0.5, 1.0, 0.7, 0.25], [1.0, 1.0, 1.0, 1.0])
+                (None, [0.5, 1.0, 0.7, 0.25], [1.0, 1.0, 1.0, 1.0], None)
             };
 
-            (vp_s, vp_g, l_dir, l_col)
+            let eye_s = [eye[0], eye[1], eye[2], 1.0];
+            (vp_s, vp_g, l_dir, l_col, eye_s, eye_g)
         };
 
         #[cfg(not(feature = "editor"))]
-        let (vp_scene, vp_game_opt, light_dir, light_color) = {
-            let (vp_g, ld, lc) = if let Ok(scene) = self.scene_state.lock() {
+        let (vp_scene, vp_game_opt, light_dir, light_color, eye_scene, eye_game_opt) = {
+            let (vp_g, ld, lc, eye_g) = if let Ok(scene) = self.scene_state.lock() {
+                let mut eye_c: Option<[f32; 4]> = None;
                 let vp_g = if let Some(cam) = scene.active_camera() {
-                    let view_g = camera_view_matrix(cam.transform.position, cam.transform.rotation);
+                    let cp = cam.transform.position;
+                    eye_c = Some([cp[0], cp[1], cp[2], 1.0]);
+                    let view_g = camera_view_matrix(cam.transform.position, cam.transform.rotation());
                     let fov = cam.camera.as_ref().map(|c| c.fov).unwrap_or(60.0);
                     let near = cam.camera.as_ref().map(|c| c.near_clip).unwrap_or(0.1);
                     let far = cam.camera.as_ref().map(|c| c.far_clip).unwrap_or(1000.0);
                     let proj_g = perspective_matrix(fov.to_radians(), 16.0 / 9.0, near, far);
                     Some(matmul(&proj_g, &view_g))
                 } else {
+                    eye_c = Some([3.5, 3.2, 9.5, 1.0]);
                     let v = look_at([3.5, 3.2, 9.5], [3.5, 1.4, 0.0], [0.0, 1.0, 0.0]);
                     let p = perspective_matrix(45.0_f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
                     Some(matmul(&p, &v))
                 };
                 let (ld, lc) = if let Some(light_ent) = scene.main_light() {
-                    let rot = light_ent.transform.rotation;
+                    let rot = light_ent.transform.rotation();
                     let rx = rot[0].to_radians();
                     let ry = rot[1].to_radians();
                     let (sx, cx) = (rx.sin(), rx.cos());
@@ -1256,13 +1309,14 @@ impl GlassEngineApp {
                 } else {
                     ([0.0, 1.0, 0.0, 0.06], [0.0, 0.0, 0.0, 0.0])
                 };
-                (vp_g, ld, lc)
+                (vp_g, ld, lc, eye_c)
             } else {
                 let v = look_at([3.5, 3.2, 9.5], [3.5, 1.4, 0.0], [0.0, 1.0, 0.0]);
                 let p = perspective_matrix(45.0_f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
-                (Some(matmul(&p, &v)), [0.5, 1.0, 0.7, 0.25], [1.0, 1.0, 1.0, 1.0])
+                (Some(matmul(&p, &v)), [0.5, 1.0, 0.7, 0.25], [1.0, 1.0, 1.0, 1.0], Some([3.5, 3.2, 9.5, 1.0]))
             };
-            (vp_g.unwrap(), vp_g, ld, lc)
+            let eye_final = eye_g.unwrap_or([3.5, 3.2, 9.5, 1.0]);
+            (vp_g.unwrap(), vp_g, ld, lc, eye_final, eye_g)
         };
 
         let cache = self.asset_cache.read().unwrap();
@@ -1271,43 +1325,76 @@ impl GlassEngineApp {
             let mut game_batches: Vec<(&glass_renderer::GpuMesh, glass_renderer::MeshPushConstants)> = Vec::new();
 
             if let Ok(scene) = self.scene_state.lock() {
+                // ITERACIÓN 4: matrices de mundo compuestas por jerarquía
+                // (padre * hijo). Antes cada entidad se transformaba con su
+                // matriz local, ignorando ancestros, así que mover, rotar o
+                // escalar un padre no afectaba a sus hijos en el viewport.
+                let world_matrices = scene.compute_world_matrices();
+
                 for ent in &scene.entities {
                     if ent.components.iter().any(|c| c == "MeshRenderer" || c == "Collider" || c == "StaticCollider") {
-                        let pos = ent.transform.position;
-                        // Escalado a half-extents (cube.glb tiene vértices de -1 a +1)
-                        let scale = [
-                            ent.transform.scale[0] * 0.5,
-                            ent.transform.scale[1] * 0.5,
-                            ent.transform.scale[2] * 0.5,
+                        // Matriz de mundo del transform (escala completa).
+                        let world = world_matrices.get(&ent.id).copied().unwrap_or_else(|| {
+                            glass_core::mat4_from_trs_euler(
+                                ent.transform.position,
+                                ent.transform.rotation(),
+                                ent.transform.scale,
+                            )
+                        });
+
+                        // El cubo unitario (cube.glb, vértices -1..+1) se
+                        // renderiza a la mitad para que una escala de 1.0 dé un
+                        // cubo de 1 m. Esa escala pertenece al mesh, no al
+                        // transform, así que se aplica en espacio local (a la
+                        // derecha) y no se propaga a los hijos.
+                        let h = 0.5_f32;
+                        let scale_half = [
+                            h, 0.0, 0.0, 0.0,
+                            0.0, h, 0.0, 0.0,
+                            0.0, 0.0, h, 0.0,
+                            0.0, 0.0, 0.0, 1.0,
                         ];
-                        let model = model_matrix_trs_euler(pos, scale, ent.transform.rotation);
+                        let model = glass_core::mat4_mul(world, scale_half);
+
                         let mvp_scene = matmul(&vp_scene, &model);
                         let obj_col = ent.mesh.as_ref().map(|m| [m.color[0], m.color[1], m.color[2], 1.0]).unwrap_or([0.8, 0.8, 0.8, 1.0]);
 
-                        let has_light = if light_color[3] > 0.0 { 1.0 } else { 0.0 };
+                        // ITERACIÓN 4: la presencia de luz se deriva de la escena,
+                        // no de `light_color.w`. Ese componente quedó reservado
+                        // (sin uso) al unificar `has_light` en `material_params.w`,
+                        // así que leerlo era depender de un valor muerto.
+                        let has_light = if scene.main_light().is_some() { 1.0 } else { 0.0 };
                         let material_params = [0.15, 0.45, 1.0, has_light];
 
                         scene_batches.push((cube_mesh, glass_renderer::MeshPushConstants {
                             mvp: mvp_scene,
+                            model,
                             light_dir,
                             light_color,
                             material_params,
                             object_color: obj_col,
+                            camera_pos: eye_scene,
                         }));
 
                         if let Some(vp_game) = vp_game_opt {
                             let mvp_game = matmul(&vp_game, &model);
                             game_batches.push((cube_mesh, glass_renderer::MeshPushConstants {
                                 mvp: mvp_game,
+                                model,
                                 light_dir,
                                 light_color,
                                 material_params,
                                 object_color: obj_col,
+                                // Si la escena no tiene cámara activa no hay Game
+                                // View, así que este valor sólo se usa cuando
+                                // vp_game_opt es Some.
+                                camera_pos: eye_game_opt.unwrap_or(eye_scene),
                             }));
                         }
                     }
                 }
             }
+
 
             let game_meshes_arg = if vp_game_opt.is_some() {
                 Some(game_batches.as_slice())
@@ -1725,7 +1812,15 @@ impl ApplicationHandler for GlassEngineApp {
         let managed_dir = Path::new("managed/GlassEngine.Core/bin/Debug/net8.0");
         if managed_dir.exists() {
             match self.script_host.initialize(managed_dir) {
-                Ok(()) => log::info!("main: ScriptHost C# (.NET CoreCLR) inicializado exitosamente."),
+                Ok(()) => {
+                    log::info!("main: ScriptHost C# (.NET CoreCLR) inicializado exitosamente.");
+                    // CoreCLR instala sus propios manejadores de señales durante
+                    // el arranque del runtime y pisa el nuestro. Se reinstala
+                    // aquí para que SIGTERM/SIGINT/SIGHUP vuelvan a caer en el
+                    // apagado ordenado y no maten al proceso a mitad de un
+                    // `drm_syncobj_timeline_wait` (VK_TIMEOUT falsos).
+                    install_signal_handlers();
+                }
                 Err(e) => log::warn!("main: ScriptHost no inicializado: {}", e),
             }
         }
@@ -2341,6 +2436,14 @@ impl ApplicationHandler for GlassEngineApp {
             return;
         }
 
+        // Señal de terminación recibida (SIGTERM/SIGINT/SIGHUP): salir por la
+        // vía limpia en lugar de morir a mitad de un syscall de Vulkan.
+        if SHUTDOWN_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) {
+            log::info!("Señal de terminación recibida: cerrando el motor de forma ordenada...");
+            event_loop.exit();
+            return;
+        }
+
         if let Some(w) = &self.window {
             w.request_redraw();
         }
@@ -2432,7 +2535,18 @@ impl ApplicationHandler for GlassEngineApp {
                 }
             }
             WindowEvent::RedrawRequested => {
+                if SHUTDOWN_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) {
+                    event_loop.exit();
+                    return;
+                }
                 if let Err(e) = self.render_frame() {
+                    // Un `VK_TIMEOUT` con la bandera levantada es la firma del
+                    // syscall interrumpido por la señal, no un fallo del motor.
+                    if SHUTDOWN_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) {
+                        log::info!("Frame interrumpido por la señal de terminación; salida ordenada.");
+                        event_loop.exit();
+                        return;
+                    }
                     log::error!("Error durante render_frame: {}", e);
                 }
                 if let Some(w) = &self.window {
@@ -2486,6 +2600,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let event_loop = builder.build()?;
+    install_signal_handlers();
     let mut app = GlassEngineApp::new(
         is_standalone,
         is_headless_test,

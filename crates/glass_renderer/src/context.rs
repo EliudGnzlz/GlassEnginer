@@ -18,6 +18,14 @@ pub enum VulkanError {
     WindowHandle(String),
     #[error("Missing required Vulkan extension or layer: {0}")]
     MissingRequirement(String),
+    #[error(
+        "GPU '{device}' sólo admite {available} bytes de push constants, pero el motor requiere {required}"
+    )]
+    InsufficientPushConstantSpace {
+        device: String,
+        available: u32,
+        required: u32,
+    },
 }
 
 unsafe extern "system" fn vulkan_debug_callback(
@@ -304,6 +312,34 @@ impl VulkanContext {
         let physical_device = best_gpu.device;
         let physical_device_properties = best_gpu.properties;
         let queue_families = best_gpu.indices;
+
+        // 4.b Verificación de capacidad de push constants.
+        // El pipeline declara MESH_PUSH_CONSTANTS_SIZE bytes; si el dispositivo
+        // ofrece menos, `create_pipeline_layout` fallaría más tarde (o peor, se
+        // leería basura). Se comprueba aquí para dar un error explícito.
+        let max_push = physical_device_properties.limits.max_push_constants_size;
+        let required_push = crate::renderer::MESH_PUSH_CONSTANTS_SIZE;
+        if max_push < required_push {
+            let name = unsafe { CStr::from_ptr(physical_device_properties.device_name.as_ptr()) }
+                .to_string_lossy()
+                .into_owned();
+            log::error!(
+                "GPU '{}' expone maxPushConstantsSize={} pero el motor necesita {} bytes.",
+                name,
+                max_push,
+                required_push
+            );
+            return Err(VulkanError::InsufficientPushConstantSpace {
+                device: name,
+                available: max_push,
+                required: required_push,
+            });
+        }
+        log::info!(
+            "Push constants: {} bytes requeridos / {} disponibles.",
+            required_push,
+            max_push
+        );
 
         // 5. Creación de Dispositivo Lógico (Device) y Colas
         let mut unique_queue_families = vec![queue_families.graphics_family];
