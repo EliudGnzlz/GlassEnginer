@@ -16,6 +16,7 @@ layout(push_constant) uniform PushConstants {
     vec4 material_params;    // 16 bytes (offset 160): x = metallic, y = roughness, z = ao, w = has_light
     vec4 object_color;       // 16 bytes (offset 176): rgb = albedo, a = opacity
     vec4 camera_pos;         // 16 bytes (offset 192): xyz = posición de cámara en mundo
+    vec4 lm_params;          // x = índice de la entidad en el UBO del lightmap (-1 = sin bake), y = tamaño del atlas en px
 } u_push;
 
 void main() {

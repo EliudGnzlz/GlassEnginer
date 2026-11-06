@@ -47,6 +47,12 @@ pub struct HierarchyPanel {
     pub search_filter: String,
     pub collapsed_nodes: HashSet<u64>,
     pub dragging_entity: Option<u64>,
+    /// Desplazamiento puntero−esquina de la fila al empezar el
+    /// arrastre: el fantasma se dibuja con ese mismo agarre
+    /// para que la fila quede PEGADA a la punta del ratón.
+    pub drag_grab_offset: egui::Vec2,
+    /// Ancho de la fila agarrada (el fantasma lo conserva).
+    pub drag_row_width: f32,
     pub hovered_drop: Option<(u64, DropPosition)>,
 }
 
@@ -57,6 +63,8 @@ impl Default for HierarchyPanel {
             search_filter: String::new(),
             collapsed_nodes: HashSet::new(),
             dragging_entity: None,
+            drag_grab_offset: egui::Vec2::ZERO,
+            drag_row_width: 0.0,
             hovered_drop: None,
         }
     }
@@ -273,6 +281,10 @@ impl HierarchyPanel {
                     // Inicio del arrastre de la fila
                     if row_resp.drag_started() {
                         self.dragging_entity = Some(entity.id);
+                        if let Some(mp) = mouse_pos {
+                            self.drag_grab_offset = mp - row_rect.min;
+                        }
+                        self.drag_row_width = row_rect.width();
                     }
 
                     // Detección de zona de soltado (Drop Target) cuando se arrastra sobre esta fila
@@ -347,6 +359,15 @@ impl HierarchyPanel {
                             ui.visuals().selection.stroke.color
                         } else {
                             ui.visuals().text_color()
+                        };
+
+                        // La fila que se está arrastrando queda
+                        // atenuada en su sitio (el «original» se
+                        // ve en el fantasma que sigue al ratón).
+                        let text_color = if self.dragging_entity == Some(entity.id) {
+                            text_color.gamma_multiply(0.4)
+                        } else {
+                            text_color
                         };
 
                         // Indentación según profundidad en la jerarquía
@@ -493,18 +514,42 @@ impl HierarchyPanel {
         if self.dragging_entity.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
 
-            // Dibujar preview flotante del objeto que se arrastra junto al ratón
+            // Dibujar el fantasma de la fila arrastrada PEGADO al
+            // punto de agarre del ratón, en la capa superior del
+            // contexto: el painter de panel recortaba el fantasma
+            // al salir del panel y el desplazamiento fijo lo
+            // «despegaba» de la punta del cursor (queja del
+            // usuario el 2026-11-06).
             if let Some(drag_id) = self.dragging_entity {
                 if let Some(mp) = mouse_pos {
                     if let Some(drag_ent) = scene.entities.iter().find(|e| e.id == drag_id) {
-                        let drag_text = format!("▣ {}", drag_ent.name);
-                        let ghost_pos = mp + egui::vec2(14.0, 10.0);
-                        let font_id = egui::FontId::proportional(11.0);
-                        let galley = ui.painter().layout_no_wrap(drag_text, font_id, Color32::WHITE);
-                        let pill_rect = egui::Rect::from_min_size(ghost_pos, galley.size() + egui::vec2(12.0, 6.0));
-                        ui.painter().rect_filled(pill_rect, 3.0, Color32::from_rgba_unmultiplied(25, 30, 45, 230));
-                        ui.painter().rect_stroke(pill_rect, 3.0, egui::Stroke::new(1.0, Color32::from_rgb(0, 160, 255)), egui::StrokeKind::Inside);
-                        ui.painter().galley(ghost_pos + egui::vec2(6.0, 3.0), galley, Color32::WHITE);
+                        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+                            egui::Order::Foreground,
+                            egui::Id::new("fantasma_jerarquia"),
+                        ));
+                        let ghost_rect = egui::Rect::from_min_size(
+                            mp - self.drag_grab_offset,
+                            egui::vec2(self.drag_row_width.max(80.0), 22.0),
+                        );
+                        let sel = ui.visuals().selection.bg_fill;
+                        painter.rect_filled(
+                            ghost_rect,
+                            2.0,
+                            Color32::from_rgba_unmultiplied(sel.r(), sel.g(), sel.b(), 225),
+                        );
+                        painter.rect_stroke(
+                            ghost_rect,
+                            2.0,
+                            egui::Stroke::new(1.0, Color32::from_rgb(0, 160, 255)),
+                            egui::StrokeKind::Inside,
+                        );
+                        painter.text(
+                            ghost_rect.min + egui::vec2(10.0, 11.0),
+                            egui::Align2::LEFT_CENTER,
+                            format!("▣ {}", drag_ent.name),
+                            egui::FontId::proportional(12.0),
+                            Color32::WHITE,
+                        );
                     }
                 }
             }
@@ -635,6 +680,11 @@ impl HierarchyPanel {
                 if let Some(ent) = scene.get_entity_mut(id) {
                     ent.transform.position = [0.0, 2.0, 0.0];
                     if let Some(m) = &mut ent.mesh {
+                        // La primitiva integrada (antes este preset
+                        // dibujaba el cubo). Con el nombre puesto, la
+                        // reconstrucción de física infiere Ball de la
+                        // escala: collider acorde a la forma.
+                        m.model = "sphere".into();
                         m.color = [0.9, 0.4, 0.2];
                     }
                 }
@@ -654,6 +704,10 @@ impl HierarchyPanel {
                     ent.transform.position = [0.0, 2.0, 0.0];
                     ent.transform.scale = [1.0, 2.0, 1.0];
                     if let Some(m) = &mut ent.mesh {
+                        // Primitiva integrada; la escala [1,2,1] de
+                        // siempre sobre la malla de alto 2 la deja en
+                        // 4 m y la física infiere la cápsula acorde.
+                        m.model = "capsule".into();
                         m.color = [0.3, 0.8, 0.4];
                     }
                 }
@@ -673,6 +727,10 @@ impl HierarchyPanel {
                     ent.transform.position = [0.0, 2.0, 0.0];
                     ent.transform.scale = [1.0, 2.0, 1.0];
                     if let Some(m) = &mut ent.mesh {
+                        // Primitiva integrada; la escala [1,2,1] de
+                        // siempre sobre la malla de alto 2 la deja en
+                        // 4 m y la física infiere el cilindro acorde.
+                        m.model = "cylinder".into();
                         m.color = [0.8, 0.8, 0.2];
                     }
                 }
@@ -689,8 +747,15 @@ impl HierarchyPanel {
                 );
                 if let Some(ent) = scene.get_entity_mut(id) {
                     ent.transform.position = [0.0, 0.0, 0.0];
-                    ent.transform.scale = [10.0, 0.1, 10.0];
+                    // La malla "plane" es la primitiva integrada: rejilla
+                    // 1×1 subdividida (sin grosor que escalar en Y, así
+                    // que la escala Y queda en 1 y un desplazamiento de
+                    // vértices futuro no se encoge). Huella de suelo
+                    // 10×10 m como antes; el StaticCollider sale de
+                    // box_extents y no depende de esta escala.
+                    ent.transform.scale = [10.0, 1.0, 10.0];
                     if let Some(m) = &mut ent.mesh {
+                        m.model = "plane".into();
                         m.color = [0.5, 0.5, 0.5];
                     }
                 }
@@ -703,7 +768,10 @@ impl HierarchyPanel {
                 );
                 if let Some(ent) = scene.get_entity_mut(id) {
                     ent.transform.position = [0.0, 10.0, 0.0];
-                    ent.transform.set_rotation_euler([45.0, -30.0, 0.0]);
+                    // Signos migrados al unificar la convención de luz/cámara
+                    // con la matriz de mundo: [-45, 30] produce hoy la misma
+                    // dirección de sol que [45, -30] producía antes.
+                    ent.transform.set_rotation_euler([-45.0, 30.0, 0.0]);
                 }
                 id
             }

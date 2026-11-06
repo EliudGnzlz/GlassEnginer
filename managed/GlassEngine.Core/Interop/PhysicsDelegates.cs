@@ -31,6 +31,27 @@ public delegate ulong AttachSphereColliderDelegate(
     float restitution,
     float friction);
 
+// Cápsula (bloque de primitivas y colliders por forma): espejo de
+// `glass_physics_attach_capsule_collider`. halfHeight es la mitad del
+// tramo recto, sin casquetes (semántica de Rapier).
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate ulong AttachCapsuleColliderDelegate(
+    ulong bodyHandle,
+    float halfHeight,
+    float radius,
+    float restitution,
+    float friction);
+
+// Cilindro: espejo de `glass_physics_attach_cylinder_collider`.
+// halfHeight es la mitad de la altura total.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate ulong AttachCylinderColliderDelegate(
+    ulong bodyHandle,
+    float halfHeight,
+    float radius,
+    float restitution,
+    float friction);
+
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate bool ApplyImpulseDelegate(
     ulong bodyHandle,
@@ -76,3 +97,24 @@ public delegate bool SetLinearVelocityDelegate(
     float velX,
     float velY,
     float velZ);
+
+// Raycast (juego Plat3D): espejo exacto de `glass_physics_cast_ray` en
+// glass_physics/src/ffi.rs. Devuelve true si hubo impacto.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate bool CastRayDelegate(
+    float originX,
+    float originY,
+    float originZ,
+    float dirX,
+    float dirY,
+    float dirZ,
+    float maxDistance,
+    ulong excludeEntityId,
+    out ulong hitEntityId,
+    out float hitPointX,
+    out float hitPointY,
+    out float hitPointZ,
+    out float hitNormalX,
+    out float hitNormalY,
+    out float hitNormalZ,
+    out float hitDistance);

@@ -241,6 +241,14 @@ namespace UnityEngine
         }
 
         public static bool GetButton(string buttonName) => GlassEngine.Core.Input.GetButton(buttonName);
+
+        public static Vector2 mousePosition => GlassEngine.Core.Input.mousePosition;
+
+        public static bool GetMouseButton(int button) => GlassEngine.Core.Input.GetMouseButton(button);
+
+        public static bool GetMouseButtonDown(int button) => GlassEngine.Core.Input.GetMouseButtonDown(button);
+
+        public static bool GetMouseButtonUp(int button) => GlassEngine.Core.Input.GetMouseButtonUp(button);
     }
 
     public static class Debug
@@ -258,6 +266,13 @@ namespace UnityEngine
     {
         public string name { get; set; } = "GameObject";
 
+        /// <summary>
+        /// Clon histórico SOLO gestionado: crea otro wrapper en C# pero
+        /// ninguna entidad en la escena del motor (su EntityId queda a
+        /// 0). Se conserva por compatibilidad; la instanciación real es
+        /// <see cref="GameObject.Spawn"/> /
+        /// <see cref="GameObject.CreatePrimitive"/>.
+        /// </summary>
         public static T Instantiate<T>(T original) where T : Object
         {
             if (original is GameObject go)
@@ -283,13 +298,45 @@ namespace UnityEngine
             return res;
         }
 
+        /// <summary>
+        /// Destruye de verdad (bloque de instanciación): si el objeto
+        /// envuelve una entidad del motor (EntityId != 0), la entidad
+        /// sale de la escena y su cuerpo y colliders salen del mundo
+        /// físico en la misma llamada; sus scripts reciben OnDestroy en
+        /// este frame. Antes de este bloque, Destroy solo escribía en el
+        /// log. Para un objeto solo-gestionado (EntityId == 0, p. ej. un
+        /// clon de Instantiate) sigue sin haber nada nativo que liberar.
+        /// </summary>
         public static void Destroy(Object obj)
         {
             if (obj is GameObject go)
             {
-                Debug.Log($"[Destroy] Destruyendo objeto '{go.name}' (EntityId: {go.EntityId})");
+                if (go.EntityId != 0 && RuntimeBridge.DestroyEntity(go.EntityId))
+                {
+                    GameObject.UnregisterEntity(go.EntityId);
+                    Debug.Log($"[Destroy] Entidad destruida: '{go.name}' (EntityId: {go.EntityId})");
+                    go.EntityId = 0;
+                }
+                else
+                {
+                    Debug.Log($"[Destroy] Destruyendo objeto '{go.name}' (EntityId: {go.EntityId})");
+                }
             }
         }
+    }
+
+    /// <summary>
+    /// Primitivas integradas del motor: cada valor nombra el modelo del
+    /// AssetCache con esa forma y su collider inferido (la esfera choca
+    /// como esfera, el cilindro como cilindro...).
+    /// </summary>
+    public enum PrimitiveType
+    {
+        Cube,
+        Sphere,
+        Capsule,
+        Cylinder,
+        Plane,
     }
 
     public class Component : Object
@@ -407,9 +454,124 @@ namespace UnityEngine
             return go;
         }
 
+        /// <summary>
+        /// Quita a la entidad del mapa id -> wrapper (al destruirla):
+        /// sin esto, el mapa retendría un wrapper por cada entidad
+        /// creada en la sesión y un EntityId reutilizado resucitaría el
+        /// wrapper viejo.
+        /// </summary>
+        internal static void UnregisterEntity(ulong entityId)
+        {
+            _entityMap.Remove(entityId);
+        }
+
+        /// <summary>
+        /// Nombre de modelo integrado de cada primitiva (la clave del
+        /// AssetCache y la que decide el collider inferido).
+        /// </summary>
+        internal static string ModelNameFor(PrimitiveType type) => type switch
+        {
+            PrimitiveType.Sphere => "sphere",
+            PrimitiveType.Capsule => "capsule",
+            PrimitiveType.Cylinder => "cylinder",
+            PrimitiveType.Plane => "plane",
+            _ => "cube",
+        };
+
+        /// <summary>
+        /// Crea una entidad REAL en la escena viva (bloque de
+        /// instanciación), la vía que le faltaba a
+        /// <see cref="Object.Instantiate{T}"/>: aquel sigue clonando
+        /// solo el wrapper gestionado (comportamiento histórico), pero
+        /// Spawn llega al motor — malla, cuerpo físico con la forma
+        /// inferida de la malla, y script si se pide (su instancia nace
+        /// antes del siguiente Update). La transformada es la LOCAL de
+        /// la entidad (relativa a <paramref name="parentId"/>; 0 =
+        /// raíz). Devuelve null si el motor rechazó el spawn (ver el
+        /// log). Una rotación toda a cero se lee como identidad y una
+        /// escala toda a cero como uno, para que los valores por
+        /// defecto de C# sean utilizables tal cual.
+        /// </summary>
+        public static GameObject? Spawn(
+            string model,
+            Vector3 position,
+            Quaternion rotation,
+            Vector3 scale,
+            SpawnPhysicsKind physics = SpawnPhysicsKind.None,
+            string name = "Entity",
+            Color? color = null,
+            string? scriptClass = null,
+            ulong parentId = 0)
+        {
+            if (rotation.x == 0f && rotation.y == 0f && rotation.z == 0f && rotation.w == 0f)
+                rotation = Quaternion.identity;
+            if (scale.x == 0f && scale.y == 0f && scale.z == 0f)
+                scale = Vector3.one;
+            InteropVector3? nativeColor = color.HasValue
+                ? new InteropVector3(color.Value.r, color.Value.g, color.Value.b)
+                : null;
+            ulong id = RuntimeBridge.SpawnEntity(
+                name, model, scriptClass, parentId,
+                position, rotation, scale, physics, nativeColor);
+            if (id == 0)
+            {
+                Debug.LogError($"[Spawn] El motor rechazó crear '{name}' (modelo '{model}').");
+                return null;
+            }
+            return new GameObject(name, id);
+        }
+
+        /// <summary>
+        /// Instancia un Prefab (<c>.prefab.json</c>) en la escena viva,
+        /// por nombre ("Gold_Coin") o por ruta explícita. Devuelve null
+        /// si el motor rechazó la instanciación (ver el log), igual que
+        /// <see cref="Spawn"/>.
+        /// </summary>
+        public static GameObject? InstantiatePrefab(string name, Vector3 position = default)
+        {
+            ulong id = RuntimeBridge.InstantiatePrefab(name, position);
+            if (id == 0)
+            {
+                Debug.LogError($"[InstantiatePrefab] El motor rechazó instanciar '{name}'.");
+                return null;
+            }
+            return new GameObject(name, id);
+        }
+
+
+        /// <summary>
+        /// Como el CreatePrimitive de Unity: crea la primitiva en la
+        /// escena, con su collider — aquí un cuerpo ESTÁTICO con la
+        /// forma inferida (el suelo y los muros de un generador son el
+        /// caso típico). Para piezas dinámicas o sin física, usa
+        /// <see cref="Spawn"/> con el nombre de modelo de la primitiva
+        /// ("sphere", "capsule", "cylinder", "plane", "cube").
+        /// </summary>
+        public static GameObject? CreatePrimitive(
+            PrimitiveType type,
+            Vector3 position = default,
+            Quaternion rotation = default,
+            Vector3 scale = default)
+        {
+            return Spawn(
+                ModelNameFor(type), position, rotation, scale,
+                SpawnPhysicsKind.Static, type.ToString());
+        }
+
+        /// <summary>
+        /// Activa o desactiva la entidad en el motor: la inactiva no se
+        /// dibuja y su cuerpo sale del mundo físico; al reactivarla el
+        /// cuerpo se recrea desde su PhysicsData. Es la operación de
+        /// préstamo de los pools. Sin entidad (EntityId == 0) solo se
+        /// actualiza la bandera local, como antes.
+        /// </summary>
         public void SetActive(bool active)
         {
             activeSelf = active;
+            if (EntityId != 0)
+            {
+                RuntimeBridge.SetEntityActive(EntityId, active);
+            }
         }
 
         public T AddComponent<T>() where T : Component, new()
@@ -496,6 +658,152 @@ namespace UnityEngine
         }
     }
 
+    /// <summary>
+    /// Reproductor de animaciones con piel (bloque de skinning), espejo
+    /// mínimo del <c>Animator</c> de Unity. La pose la evalúa el motor en
+    /// Rust cada frame (muestreo del clip, matrices de articulación,
+    /// deformación en GPU); desde C# solo se pide el clip por nombre,
+    /// igual que en Unity. Sin llamadas, la entidad con componente
+    /// Animator en la escena ya reproduce su clip por defecto sola.
+    /// </summary>
+    public class Animator : Component
+    {
+        /// <summary>Clip aceptado por el último <see cref="Play"/> ("" = ninguno).</summary>
+        public string CurrentClip { get; private set; } = "";
+
+        /// <summary>True si el último <see cref="Play"/> quedó aceptado por el motor.</summary>
+        public bool IsPlaying { get; private set; }
+
+        /// <summary>
+        /// Reproduce el clip indicado en bucle desde el principio. Si el
+        /// modelo no tiene un clip con ese nombre, el motor usa el primer
+        /// clip del modelo.
+        /// </summary>
+        public void Play(string stateName)
+        {
+            int rc = RuntimeBridge.AnimatorPlay(EntityId, stateName);
+            if (rc == 0)
+            {
+                CurrentClip = stateName;
+                IsPlaying = true;
+            }
+            else
+            {
+                Debug.LogError($"[Animator] Play('{stateName}') devolvió {rc} en la entidad {EntityId}.");
+            }
+        }
+        /// <summary>Fija un parámetro bool del controlador (true → 1, false → 0).</summary>
+        public void SetBool(string name, bool value)
+        {
+            int rc = RuntimeBridge.AnimatorSetParam(EntityId, name, 0, value ? 1f : 0f);
+            if (rc != 0)
+                Debug.LogError($"[Animator] SetBool('{name}') devolvió {rc} en la entidad {EntityId}.");
+        }
+
+        /// <summary>Fija un parámetro float del controlador.</summary>
+        public void SetFloat(string name, float value)
+        {
+            int rc = RuntimeBridge.AnimatorSetParam(EntityId, name, 1, value);
+            if (rc != 0)
+                Debug.LogError($"[Animator] SetFloat('{name}') devolvió {rc} en la entidad {EntityId}.");
+        }
+
+        /// <summary>Dispara un trigger del controlador (se consume al dispararse).</summary>
+        public void SetTrigger(string name)
+        {
+            int rc = RuntimeBridge.AnimatorSetParam(EntityId, name, 2, 1f);
+            if (rc != 0)
+                Debug.LogError($"[Animator] SetTrigger('{name}') devolvió {rc} en la entidad {EntityId}.");
+        }
+
+        /// <summary>
+        /// Salta al estado/clip indicado con un fundido de <paramref name="fadeSeconds"/>.
+        /// Con controlador lo resuelve la FSM; sin controlador es un crossfade libre.
+        /// </summary>
+        public void CrossFade(string stateName, float fadeSeconds)
+        {
+            int rc = RuntimeBridge.AnimatorCrossFade(EntityId, stateName, fadeSeconds);
+            if (rc == 0)
+            {
+                CurrentClip = stateName;
+                IsPlaying = true;
+            }
+            else
+            {
+                Debug.LogError($"[Animator] CrossFade('{stateName}') devolvió {rc} en la entidad {EntityId}.");
+            }
+        }
+
+        /// <summary>
+        /// Estado actual de la FSM. Sin controlador devuelve el clip en curso;
+        /// si el puente no conoce nada, el clip aceptado por el último Play.
+        /// </summary>
+        public string GetCurrentState()
+        {
+            string state = RuntimeBridge.AnimatorCurrentState(EntityId);
+            if (!string.IsNullOrEmpty(state))
+                return state;
+            return CurrentClip;
+        }
+    }
+
+    /// <summary>
+    /// Publicación de valores globales para los shaders de grafo. En esta
+    /// versión el motor expone UN solo global: el punto de interacción
+    /// que leen los grafos con el nodo «Punto de interacción» — la
+    /// posición de un intruso (una barca, el jugador) y la FORMA de su
+    /// huella: un disco de radio dado con
+    /// <see cref="SetInteractionPoint"/> o la caja de su collider en
+    /// planta con <see cref="SetInteractionBox"/> — para que materiales
+    /// como el agua reaccionen a su paso abrazando su forma real, no un
+    /// círculo genérico. Es el espíritu del Shader.SetGlobalVector del
+    /// tutorial de referencia, con un nombre propio y honesto: no hay
+    /// más globales que este.
+    /// </summary>
+    public static class Shader
+    {
+        /// <summary>
+        /// Publica el punto de interacción de este frame con huella
+        /// ESFÉRICA: un disco del radio dado alrededor de la posición.
+        /// Hay que llamarlo cada frame mientras el objeto interactúa
+        /// (normalmente desde su Update): al cambiar de escena el motor
+        /// lo limpia solo; si el publicador desaparece sin limpiar, el
+        /// último valor publicado queda fijado. Si el objeto tiene forma
+        /// de caja, publica su huella con
+        /// <see cref="SetInteractionBox"/> en su lugar: el último que
+        /// publica define la forma activa.
+        /// </summary>
+        public static void SetInteractionPoint(Vector3 position, float radius)
+        {
+            RuntimeBridge.SetInteractionPoint(position.x, position.y, position.z, radius);
+        }
+
+        /// <summary>
+        /// Publica la interacción de este frame con huella de CAJA en
+        /// planta (XZ): la del collider del objeto proyectado al suelo.
+        /// <paramref name="halfX"/> y <paramref name="halfZ"/> son los
+        /// semiejes de la caja en su marco local (halfX a lo largo de su
+        /// eje X, halfZ a lo largo de su eje Z) y
+        /// <paramref name="yawRadians"/> su rotación Y en radianes. La
+        /// misma disciplina que la esférica: cada frame desde el Update,
+        /// el motor lo limpia al cambiar de escena y el último que
+        /// publica define la forma activa.
+        /// </summary>
+        public static void SetInteractionBox(Vector3 center, float halfX, float halfZ, float yawRadians)
+        {
+            RuntimeBridge.SetInteractionBox(center.x, center.y, center.z, halfX, halfZ, yawRadians);
+        }
+
+        /// <summary>
+        /// Deja de publicar: el punto vuelve a su valor inactivo y los
+        /// grafos que lo leen se comportan como si nadie interactuara.
+        /// </summary>
+        public static void ClearInteractionPoint()
+        {
+            RuntimeBridge.ClearInteractionPoint();
+        }
+    }
+
     public struct Rect
     {
         public float x;
@@ -535,9 +843,132 @@ namespace UnityEngine
 
     public class Light : Component
     {
-        public Color color { get; set; } = Color.white;
-        public float intensity { get; set; } = 1.0f;
+        private Color _color = Color.white;
+        private float _intensity = 1.0f;
+
+        // El constructor NO llama al puente: la instancia C# puede
+        // crearse antes de que la entidad esté viva en la escena (o con
+        // el puente aún sin enlazar). Los valores locales son la verdad
+        // hasta el primer setter.
+        public Light() { }
+
+        public Color color
+        {
+            get => _color;
+            set
+            {
+                _color = value;
+                RuntimeBridge.LightSetColor(EntityId, value.r, value.g, value.b);
+            }
+        }
+
+        public float intensity
+        {
+            get => _intensity;
+            set
+            {
+                _intensity = value;
+                RuntimeBridge.LightSetIntensity(EntityId, value);
+            }
+        }
     }
+
+public class Text : Component
+{
+    private string _text = "";
+    private float _fontSize = 18f;
+    private Color _color = Color.white;
+
+    public Text() { }
+
+    public string text
+    {
+        get => _text;
+        set
+        {
+            _text = value;
+            RuntimeBridge.UiSetText(EntityId, value);
+        }
+    }
+
+    public float fontSize
+    {
+        get => _fontSize;
+        set
+        {
+            _fontSize = value;
+            RuntimeBridge.UiSetFontSize(EntityId, value);
+        }
+    }
+
+    public Color color
+    {
+        get => _color;
+        set
+        {
+            _color = value;
+            RuntimeBridge.UiSetTextColor(EntityId, value.r, value.g, value.b, value.a);
+        }
+    }
+}
+
+public class Image : Component
+{
+    private string _sprite = "";
+    private Color _color = Color.white;
+
+    public Image() { }
+
+    public string sprite
+    {
+        get => _sprite;
+        set
+        {
+            _sprite = value;
+            RuntimeBridge.UiSetImageSprite(EntityId, value);
+        }
+    }
+
+    public Color color
+    {
+        get => _color;
+        set
+        {
+            _color = value;
+            RuntimeBridge.UiSetImageColor(EntityId, value.r, value.g, value.b, value.a);
+        }
+    }
+}
+
+
+public class Button : Component
+{
+    private Color _color = new Color(0.25f, 0.55f, 0.85f, 1f);
+
+    public Button() { }
+
+    public Color color
+    {
+        get => _color;
+        set
+        {
+            _color = value;
+            RuntimeBridge.UiSetButtonColor(EntityId, value.r, value.g, value.b, value.a);
+        }
+    }
+}
+
+/// <summary>
+/// Contexto del último gesto de drag &amp; drop del Canvas: qué
+/// entidad se arrastró y sobre qué casilla se soltó (0 = en
+/// vacío). Los métodos on_drop/on_drag_end de los scripts lo
+/// consultan para saber la pareja del gesto.
+/// </summary>
+public static class DragDrop
+{
+    public static ulong DraggedEntityId => RuntimeBridge.UiGetDraggedId();
+    public static ulong DropTargetEntityId => RuntimeBridge.UiGetDropTargetId();
+}
 
     // ==========================================
     // COMPONENTES DE UI ESTILO UNITY (CANVAS, RECTTRANSFORM)
@@ -545,8 +976,32 @@ namespace UnityEngine
 
     public class RectTransform : Transform
     {
-        public Vector2 anchoredPosition { get; set; } = Vector2.zero;
-        public Vector2 sizeDelta { get; set; } = new Vector2(100f, 100f);
+        private Vector2 _anchoredPosition = Vector2.zero;
+        private Vector2 _sizeDelta = new Vector2(100f, 100f);
+
+        // anchoredPosition y sizeDelta escriben en el motor por el
+        // puente de UI dinámica: el lote del Canvas se reconstruye
+        // cada frame y el cambio se ve al frame siguiente. Anclas y
+        // pivote quedan locales en v1 (el motor los lee de la
+        // escena, no del script).
+        public Vector2 anchoredPosition
+        {
+            get => _anchoredPosition;
+            set
+            {
+                _anchoredPosition = value;
+                RuntimeBridge.UiSetAnchoredPos(EntityId, value.x, value.y);
+            }
+        }
+        public Vector2 sizeDelta
+        {
+            get => _sizeDelta;
+            set
+            {
+                _sizeDelta = value;
+                RuntimeBridge.UiSetSizeDelta(EntityId, value.x, value.y);
+            }
+        }
         public Vector2 anchorMin { get; set; } = new Vector2(0.5f, 0.5f);
         public Vector2 anchorMax { get; set; } = new Vector2(0.5f, 0.5f);
         public Vector2 pivot { get; set; } = new Vector2(0.5f, 0.5f);
@@ -559,37 +1014,60 @@ namespace UnityEngine
     }
 }
 
-namespace UnityEngine.UI
-{
-    public class UIBehaviour : MonoBehaviour { }
-
-    public class Text : UIBehaviour
-    {
-        public string text { get; set; } = "";
-        public int fontSize { get; set; } = 14;
-        public Color color { get; set; } = Color.white;
-    }
-
-    public class Button : UIBehaviour
-    {
-        public Action? onClick;
-
-        public void Press()
-        {
-            onClick?.Invoke();
-        }
-    }
-}
 
 namespace UnityEngine.SceneManagement
 {
+    /// <summary>
+    /// API de escenas compatible con Unity sobre el SceneManager nativo del motor.
+    /// La carga es diferida: <see cref="LoadScene"/> retorna de inmediato y la
+    /// escena cambia al final del frame, nunca a mitad de el.
+    /// </summary>
     public static class SceneManager
     {
-        public static void LoadScene(string sceneName)
+        /// <summary>Codigos devueltos por el motor (espejo de bindings.rs).</summary>
+        private const int Ok = 0;
+        private const int NotFound = -1;
+        private const int NullPtr = -2;
+        private const int BridgeUnavailable = -4;
+
+        /// <summary>
+        /// Encola la carga de <paramref name="sceneName"/>.
+        /// </summary>
+        /// <returns>
+        /// <c>true</c> si la peticion quedo encolada. <c>false</c> si la escena no
+        /// existe o el puente nativo no esta conectado; en ese caso el log del
+        /// motor indica el motivo exacto y la escena actual no se toca.
+        /// </returns>
+        public static bool LoadScene(string sceneName)
         {
-            Debug.Log($"[SceneManager] Solicitando carga de escena: '{sceneName}'");
+            int rc = RuntimeBridge.SceneLoad(sceneName);
+            switch (rc)
+            {
+                case Ok:
+                    Debug.Log($"[SceneManager] Carga de escena '{sceneName}' encolada para el final del frame.");
+                    return true;
+                case NotFound:
+                    Debug.LogError($"[SceneManager] La escena '{sceneName}' no existe en el proyecto.");
+                    return false;
+                case NullPtr:
+                    Debug.LogError("[SceneManager] LoadScene recibio un nombre nulo.");
+                    return false;
+                case BridgeUnavailable:
+                    Debug.LogError("[SceneManager] El puente nativo de escenas no esta conectado (recompilar GlassEngine.Core).");
+                    return false;
+                default:
+                    Debug.LogError($"[SceneManager] Fallo al cargar '{sceneName}' (codigo {rc}).");
+                    return false;
+            }
         }
 
-        public static string GetActiveSceneName() => "SampleScene";
+        /// <summary>Nombre corto de la escena activa, o cadena vacia si no hay ninguna.</summary>
+        public static string GetActiveSceneName() => RuntimeBridge.GetActiveSceneName() ?? string.Empty;
+
+        /// <summary>Numero de escenas descubiertas en <c>assets/scenes</c>.</summary>
+        public static int GetSceneCount() => RuntimeBridge.GetSceneCount();
+
+        /// <summary>Nombre corto de la escena en la posicion indicada, o cadena vacia.</summary>
+        public static string GetSceneNameAt(int index) => RuntimeBridge.GetSceneNameAt(index) ?? string.Empty;
     }
 }

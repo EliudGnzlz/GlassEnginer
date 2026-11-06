@@ -1,0 +1,218 @@
+[
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": {
+   "far_clip": 1000.0,
+   "fov": 60.0,
+   "is_main": true,
+   "near_clip": 0.1
+  },
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": null,
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "id": 1,
+  "name": "Main Camera",
+  "tag": "MainCamera",
+  "components": [
+   "Transform",
+   "Camera"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    27.0,
+    50.0
+   ],
+   "rotation": [
+    -33.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.98,
+    0.92
+   ],
+   "intensity": 1.0,
+   "light_type": "Directional",
+   "range": 10.0
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "id": 2,
+  "name": "Directional Light",
+  "tag": "Untagged",
+  "components": [
+   "Transform",
+   "Light"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    3.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.32,
+    0.36,
+    0.34
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    32.0,
+    0.5,
+    36.0
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "id": 3,
+  "name": "Suelo",
+  "tag": "Untagged",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -0.5,
+    13.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    64.0,
+    1.0,
+    72.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": null,
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": "GlassEngine.Core.Scripts.PrefabSpawnTest",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.PrefabSpawnTest",
+   "move_speed": 5.0,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "ui_button": null,
+  "ui_text": null,
+  "id": 4,
+  "name": "PrefabSpawnTest",
+  "tag": "Untagged",
+  "components": [
+   "Transform",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  }
+ }
+]

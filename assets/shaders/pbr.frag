@@ -10,11 +10,80 @@ layout(push_constant) uniform PushConstants {
     mat4 mvp;                // 64 bytes (offset 0)
     mat4 model;              // 64 bytes (offset 64): matriz de modelo
     vec4 light_dir;          // 16 bytes (offset 128): xyz = light_dir, w = ambient
-    vec4 light_color;        // 16 bytes (offset 144): xyz = color*intensidad, w = has_light
+    vec4 light_color;        // 16 bytes (offset 144): xyz = color*intensidad, w = reservado
     vec4 material_params;    // 16 bytes (offset 160): x = metallic, y = roughness, z = ao, w = has_light
     vec4 object_color;       // 16 bytes (offset 176): rgb = albedo, a = opacity
     vec4 camera_pos;         // 16 bytes (offset 192): xyz = posición de cámara en mundo
+    vec4 lm_params;          // x = índice de la entidad en el UBO del lightmap (-1 = sin bake), y = tamaño del atlas en px
+    vec4 emissive;           // 16 bytes (offset 224): rgb = color emisivo, w = intensidad
+    vec4 uv_transform;       // 16 bytes (offset 240): xy = tiling, zw = offset
 } u_push;
+
+// Textura base (baseColor) del material glTF. Cuando la entidad no tiene
+// textura, el motor enlaza una textura blanca 1x1 y el resultado es el
+// color plano de siempre.
+layout(set = 0, binding = 0) uniform sampler2D base_color_tex;
+
+// Mapa de sombras del sol (bloque de gráficos): UBO de frame con la VP
+// ortográfica de la luz y un sampler de COMPARACIÓN (el hardware filtra
+// la comparación: un tap devuelve ya el factor de luz en ese téxel).
+// shadow_params: x = 1/tamaño, y = bias de profundidad, z = bias de
+// normal (m), w = 1 si las sombras están activas este frame.
+layout(set = 2, binding = 0) uniform ShadowUbo {
+    mat4 light_vp;
+    vec4 shadow_params;
+} u_shadow;
+layout(set = 2, binding = 1) uniform sampler2DShadow shadow_map;
+
+// Luces puntuales del frame (bloque de iluminación): hasta 8 luces
+// Point con el mismo BRDF que la direccional. Sin sombras en esta v1.
+// count = 0 deja el resultado idéntico al anterior a este bloque.
+layout(set = 3, binding = 0, std140) uniform PointLights {
+    vec4 pos_range[8];        // xyz = posición mundo, w = rango
+    vec4 color_intensity[8];  // xyz = color, w = intensidad
+    uint count;               // nº de luces válidas [0..8]
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
+} u_point_lights;
+
+// Lightmap horneado (bake): atlas con la luz estática ya quemada y,
+// por entidad, los sub-rects de sus 6 grupos (eje, signo). El índice
+// de la entidad llega en lm_params.x; cada grupo ocupa una ranura
+// entidad*6 + eje*2 + signo. rect: xy = uv mínimo, zw = tamaño uv.
+// bounds: xy = mínimo 2D de mundo, zw = extensión 2D de mundo.
+// Grupo ausente: todo ceros.
+layout(set = 4, binding = 0) uniform sampler2D lm_tex;
+layout(set = 5, binding = 0, std140) uniform LmData {
+    vec4 rect[384];
+    vec4 bounds[384];
+} u_lm;
+
+
+// Factor de luz (1 = a pleno sol, 0 = en sombra) con PCF 3x3. La sombra
+// se desvanece junto al borde de la caja ortográfica para que nada
+// aparezca/desaparezca de golpe al cruzar el límite, y todo fragmento
+// fuera de la caja (o tras el plano lejano de la luz) queda a pleno sol.
+float shadow_factor(vec3 world_pos, vec3 n) {
+    if (u_shadow.shadow_params.w < 0.5) return 1.0;
+    vec3 sp = world_pos + n * u_shadow.shadow_params.z;
+    vec4 lc = u_shadow.light_vp * vec4(sp, 1.0);
+    vec3 proj = lc.xyz / lc.w;
+    if (proj.z < 0.0 || proj.z > 1.0) return 1.0;
+    vec2 uv = proj.xy * 0.5 + 0.5;
+    float edge = max(abs(proj.x), abs(proj.y));
+    float fade = 1.0 - smoothstep(0.85, 1.0, edge);
+    if (fade <= 0.0) return 1.0;
+    float ref = proj.z - u_shadow.shadow_params.y;
+    float texel = u_shadow.shadow_params.x;
+    float s = 0.0;
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            s += texture(shadow_map, vec3(uv + vec2(float(x), float(y)) * texel, ref));
+        }
+    }
+    return mix(1.0, s / 9.0, fade);
+}
 
 const float PI = 3.14159265359;
 
@@ -58,8 +127,37 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
+// UV del lightmap para este fragmento: la cara se deduce de la
+// normal geométrica (derivadas de la posición de mundo, como hace
+// el horneado por caras) y la posición se proyecta en su plano.
+// Devuelve false si la entidad no tiene grupo para esa cara.
+bool lm_uv(out vec2 uv_out) {
+    int idx = int(u_push.lm_params.x + 0.5);
+    if (idx < 0) return false;
+    vec3 fn = normalize(cross(dFdx(v_world_pos), dFdy(v_world_pos)));
+    vec3 afn = abs(fn);
+    int axis = 0;
+    if (afn.y > afn.x && afn.y > afn.z) axis = 1;
+    else if (afn.z > afn.x && afn.z > afn.y) axis = 2;
+    int slot = idx * 6 + axis * 2 + (fn[axis] < 0.0 ? 1 : 0);
+    vec4 r = u_lm.rect[slot];
+    vec4 b = u_lm.bounds[slot];
+    if (r.z <= 0.0 || b.z <= 0.0 || b.w <= 0.0) return false;
+    vec2 proj;
+    if (axis == 0) proj = v_world_pos.zy;
+    else if (axis == 1) proj = v_world_pos.xz;
+    else proj = v_world_pos.xy;
+    vec2 t = clamp((proj - b.xy) / b.zw, 0.0, 1.0);
+    float atlas = max(u_push.lm_params.y, 1.0);
+    vec2 size_px = r.zw * atlas;
+    vec2 local_px = 0.5 + t * (size_px - 1.0);
+    uv_out = r.xy + local_px / atlas;
+    return true;
+}
+
 void main() {
-    vec3 albedo = u_push.object_color.rgb;
+    vec2 uv_base = v_uv * u_push.uv_transform.xy + u_push.uv_transform.zw;
+    vec3 albedo = u_push.object_color.rgb * texture(base_color_tex, uv_base).rgb;
     float metallic = clamp(u_push.material_params.x, 0.0, 1.0);
     float roughness = clamp(u_push.material_params.y, 0.05, 1.0);
     float ao = clamp(u_push.material_params.z, 0.0, 1.0);
@@ -94,18 +192,80 @@ void main() {
     float NdotL = max(dot(N, L), 0.0);
 
     // Iluminación directa solar
-    vec3 radiance = u_push.light_color.rgb * u_push.light_dir.w * has_light;
+    vec3 radiance = u_push.light_color.rgb * has_light;
     vec3 Lo = (kD * albedo / PI + specular) * radiance * NdotL;
+    // La sombra del sol atenúa SOLO la luz directa: el ambiente
+    // hemisférico sigue llegando (es luz rebotada/difusa del cielo).
+    float shadow_f = shadow_factor(v_world_pos, N) * has_light + (1.0 - has_light);
+    Lo *= shadow_f;
 
-    // Iluminación ambiental base ponderada por AO
-    float ambient_intensity = u_push.light_color.w;
-    vec3 ambient = vec3(ambient_intensity) * albedo * ao;
+    // Iluminación ambiental hemisférica ponderada por AO: las caras
+    // hacia el cielo reciben más ambiente (con un tinte frío) que las
+    // que miran al suelo (tinte cálido y menor factor). Antes el
+    // ambiente era plano — el mismo para todas las caras — y las caras
+    // en sombra salían casi tan brillantes como las iluminadas: la
+    // escena se veía lavada y sin volumen.
+    float ambient_intensity = u_push.light_dir.w;
+    float hemi_t = N.y * 0.5 + 0.5;
+    float hemi_factor = mix(0.45, 1.0, hemi_t);
+    vec3 ambient_color = mix(vec3(0.62, 0.58, 0.55), vec3(0.82, 0.88, 1.0), hemi_t);
+    vec3 ambient = ambient_color * (ambient_intensity * hemi_factor) * albedo * ao;
 
-    vec3 final_color = ambient + Lo;
+        // --- Puntuales: mismo BRDF Cook-Torrance que la direccional ---------
+    // Atenuación: corte suave a 0 en el rango y caída 1/d², coherente
+    // con el tono físico del PBR y sin borde duro.
+    // Sin sombras para puntuales en esta v1.
+    vec3 Lo_points = vec3(0.0);
+    for (int i = 0; i < int(u_point_lights.count); ++i) {
+        vec3 to_light = u_point_lights.pos_range[i].xyz - v_world_pos;
+        float d = length(to_light);
+        float range = max(u_point_lights.pos_range[i].w, 0.0001);
+        if (d >= range) continue;
 
-    // Reinhard tone mapping y corrección gamma
-    final_color = final_color / (final_color + vec3(1.0));
-    final_color = pow(final_color, vec3(1.0 / 2.2));
+        vec3 Lp = to_light / max(d, 0.0001);
+        float atten = clamp(1.0 - pow(d / range, 4.0), 0.0, 1.0);
+        atten *= atten;
+        atten /= (d * d + 1.0);
 
+        vec3 Hp = normalize(V + Lp);
+        vec3 Fp = fresnelSchlick(max(dot(Hp, V), 0.0), F0);
+
+        float NDFp = DistributionGGX(N, Hp, roughness);
+        float Gp = GeometrySmith(N, V, Lp, roughness);
+        vec3 specular_p = (NDFp * Gp * Fp) /
+            (4.0 * max(dot(N, V), 0.0) * max(dot(N, Lp), 0.0) + 0.0001);
+
+        vec3 kSp = Fp;
+        vec3 kDp = vec3(1.0) - kSp;
+        kDp *= (1.0 - metallic);
+
+        float NdotLp = max(dot(N, Lp), 0.0);
+        vec3 radiance_p = u_point_lights.color_intensity[i].rgb
+                        * u_point_lights.color_intensity[i].w
+                        * atten;
+
+        Lo_points += (kDp * albedo / PI + specular_p) * radiance_p * NdotLp;
+    }
+
+    // Bake: si esta entidad tiene lightmap, su difuso del sol y su
+    // ambiente son los horneados (el atlas ya trae ambiente + sol con
+    // oclusión); el especular del sol y las puntuales siguen vivos.
+    vec2 lm_uv_v;
+    if (lm_uv(lm_uv_v)) {
+        vec3 baked = texture(lm_tex, lm_uv_v).rgb;
+        Lo = specular * radiance * NdotL * shadow_f;
+        ambient = kD * albedo * baked;
+    }
+
+    vec3 final_color = ambient + Lo + Lo_points * has_light
+        + u_push.emissive.rgb * u_push.emissive.w;
+
+    // SIN mapeo de tono en este shader (camino con post-procesado): la
+    // escena se escribe LINEAL y sin comprimir en el objetivo HDR
+    // (R16G16B16A16_SFLOAT) y el ACES — con la exposición 1,5 de siempre —
+    // vive en la pasada final (post_final.frag), DESPUÉS de sumar el
+    // bloom. La gamma sigue siendo única y la hace la presentación
+    // (swapchain *_SRGB) aguas abajo de la pasada final, como siempre.
+    // El gemelo con ACES dentro es pbr_legacy.frag (post desactivado).
     out_color = vec4(final_color, u_push.object_color.a);
 }

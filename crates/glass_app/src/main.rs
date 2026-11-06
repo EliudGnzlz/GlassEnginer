@@ -6,19 +6,28 @@ use egui_ash_renderer::allocator::GpuAllocator;
 #[cfg(feature = "editor")]
 use egui_winit::State as EguiWinitState;
 use glass_audio::{register_global_audio_system, AudioSystem};
-use glass_physics::{register_global_physics_world, BodyType, PhysicsWorld};
-use glass_core::{GlassWindow, SceneState, WindowConfig};
+use glass_physics::{collider_shape_for_builtin, register_global_physics_world, BodyType, ColliderShape, PhysicsWorld};
+use glass_core::{GlassWindow, SceneManager, SceneState, WindowConfig};
 #[cfg(feature = "editor")]
 use glass_editor::{
     AppMode, EditorDockingLayout, LauncherAction, LauncherPanel, ProjectTemplate, SampleScenePreset,
 };
 #[cfg(feature = "editor")]
 use glass_mcp::McpServer;
+#[cfg(feature = "editor")]
+use std::io::IsTerminal;
 use glass_renderer::{
     AssetCache, AssetReloadEvent, AssetWatcher, GlassRenderer, MeshLoader, VulkanConfig,
     VulkanContext,
 };
-use glass_scripting::{register_scene_bridge, SceneBridge, ScriptHost, TransformFfi};
+use glass_scripting::{
+    register_scene_bridge, SceneBridge, SceneLoadRejection, ScriptHost, SpawnSpec, TransformFfi,
+    SPAWN_PHYSICS_KINEMATIC, SPAWN_PHYSICS_STATIC,
+};
+mod bake;
+mod canvas_ui;
+mod mouse_input;
+
 use std::ffi::CStr;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
@@ -28,6 +37,109 @@ use winit::application::ApplicationHandler;
 
 struct EngineSceneBridge {
     scene_state: Arc<Mutex<SceneState>>,
+    /// Gestor de escenas compartido con el bucle principal.
+    ///
+    /// El puente **sólo encola**: no carga nada aquí. Cargar dentro de una
+    /// llamada de C# significaría sustituir entidades mientras el render o la
+    /// física las están recorriendo, así que `apply_pending` se ejecuta al final
+    /// del frame, en `render_frame`, con la misma semántica diferida de Unity.
+    scene_manager: Arc<Mutex<SceneManager>>,
+    /// Mundo físico vivo, compartido con la app: el spawn/despawn de
+    /// entidades (bloque de instanciación) crea y retira cuerpos EN EL
+    /// ACTO sobre este mundo, sin esperar a la reconstrucción de escena
+    /// (que solo corre al cargar una). Los candados de escena y física
+    /// nunca se retienen a la vez: se captura lo necesario bajo uno, se
+    /// suelta, y se actúa bajo el otro — la disciplina de
+    /// `rebuild_physics_from_scene`.
+    physics_world: Arc<Mutex<PhysicsWorld>>,
+    /// Cola de (entidad, clase) de los scripts spawneados cuya instancia
+    /// C# aún no existe. Crear la instancia dentro del propio callback
+    /// FFI de spawn instanciaría C# en mitad de una llamada (y un
+    /// `Awake` que spawnease a su vez entraría por la misma vía), así
+    /// que la app la drena cada frame justo antes de `update_all`, en
+    /// `reconcile_spawned_scripts`.
+    pending_script_spawns: Arc<Mutex<Vec<(u64, String)>>>,
+}
+
+/// Todo lo que hace falta para crear el cuerpo Rapier de una entidad,
+/// capturado bajo el candado de escena y consumido bajo el de física.
+struct SpawnedBodySpec {
+    entity_id: u64,
+    body_type: BodyType,
+    position: [f32; 3],
+    rotation: [f32; 4],
+    shape: ColliderShape,
+    friction: f32,
+    restitution: f32,
+}
+
+impl EngineSceneBridge {
+    /// Deriva el cuerpo de una entidad de su `PhysicsData` y su matriz
+    /// de mundo, EXACTAMENTE como `rebuild_physics_from_scene`: el tipo
+    /// sale de `body_type`, la forma se infiere de la malla integrada
+    /// con la escala de mundo y `box_extents`, de modo que una entidad
+    /// spawneada y su gemela autorada en la escena son físicamente
+    /// idénticas. `None` si la entidad no tiene componente de física.
+    fn body_spec_for(
+        world_matrices: &std::collections::HashMap<u64, [f32; 16]>,
+        ent: &glass_core::EntityData,
+    ) -> Option<SpawnedBodySpec> {
+        let body = ent.physics.as_ref()?;
+        let body_type = match body.body_type.as_str() {
+            "Static" => BodyType::Static,
+            "Kinematic" => BodyType::Kinematic,
+            _ => BodyType::Dynamic,
+        };
+        let world = world_matrices.get(&ent.id).copied().unwrap_or_else(|| {
+            glass_core::mat4_from_trs_euler(
+                ent.transform.position,
+                ent.transform.rotation(),
+                ent.transform.scale,
+            )
+        });
+        let model = ent.mesh.as_ref().map(|m| m.model.as_str()).unwrap_or("");
+        let shape = collider_shape_for_builtin(model, glass_core::mat4_scale(world), body.box_extents);
+        Some(SpawnedBodySpec {
+            entity_id: ent.id,
+            body_type,
+            position: glass_core::mat4_translation(world),
+            rotation: glass_core::mat4_to_quat(world),
+            shape,
+            friction: body.friction,
+            restitution: body.restitution,
+        })
+    }
+
+    /// Crea el cuerpo de una entidad en el mundo vivo (idempotente: si
+    /// ya tenía cuerpo, no duplica). Único punto de creación de cuerpos
+    /// por la vía del spawn/activación, para que la inferencia de forma
+    /// no pueda divergir entre caminos.
+    fn create_body(&self, spec: SpawnedBodySpec) {
+        let Ok(mut physics) = self.physics_world.lock() else {
+            return;
+        };
+        if physics.get_body_by_entity(spec.entity_id).is_some() {
+            return;
+        }
+        let handle = physics.create_rigid_body(spec.entity_id, spec.body_type, spec.position, spec.rotation);
+        // OJO, orden deliberado: se pasa (friction, restitution) a la
+        // firma (restitution, friction) de `attach_collider`, EL MISMO
+        // cruce histórico de `rebuild_physics_from_scene`. Un spawn y su
+        // gemelo autorado deben comportarse igual; el cruce se paga el
+        // día que se corrija en TODAS las rutas a la vez (deuda
+        // registrada en REGISTRO_PRIMITIVAS_COLLIDERS.md).
+        physics.attach_collider(handle, spec.shape, spec.friction, spec.restitution);
+    }
+
+    /// Retira del mundo vivo el cuerpo (y con él los colliders) de una
+    /// entidad, si lo tenía.
+    fn remove_body(&self, entity_id: u64) {
+        if let Ok(mut physics) = self.physics_world.lock() {
+            if let Some(handle) = physics.get_body_by_entity(entity_id) {
+                physics.remove_rigid_body(handle);
+            }
+        }
+    }
 }
 
 impl SceneBridge for EngineSceneBridge {
@@ -59,7 +171,770 @@ impl SceneBridge for EngineSceneBridge {
             false
         }
     }
+
+    fn request_scene_load(&self, name: &str) -> Result<(), SceneLoadRejection> {
+        let mut manager = self
+            .scene_manager
+            .lock()
+            .map_err(|_| SceneLoadRejection::Unavailable(
+                "gestor de escenas bloqueado por un hilo en pánico".to_string(),
+            ))?;
+        manager.request_load(name).map(|_| ()).map_err(|e| {
+            // Traducción explícita: los códigos FFI dependen de esta variante, no
+            // del texto del mensaje, así que el mapeo tiene que ser exhaustivo.
+            match e {
+                glass_core::SceneError::NotFound { requested, available } => {
+                    SceneLoadRejection::NotFound(format!(
+                        "escena no encontrada: '{requested}' (disponibles: {})",
+                        if available.is_empty() {
+                            "ninguna".to_string()
+                        } else {
+                            available.join(", ")
+                        }
+                    ))
+                }
+                glass_core::SceneError::InvalidPath(err) => {
+                    SceneLoadRejection::Invalid(format!("ruta de escena rechazada: {err}"))
+                }
+                glass_core::SceneError::NoProjectRoot => SceneLoadRejection::Unavailable(
+                    "no se encontró project.json subiendo desde el directorio actual".to_string(),
+                ),
+                other => SceneLoadRejection::Invalid(other.to_string()),
+            }
+        })
+    }
+
+    fn active_scene_name(&self) -> Option<String> {
+        self.scene_manager
+            .lock()
+            .ok()
+            .map(|m| m.active_scene_name().to_string())
+    }
+
+    fn available_scenes(&self) -> Vec<String> {
+        self.scene_manager
+            .lock()
+            .map(|m| m.available_scenes())
+            .unwrap_or_default()
+    }
+
+    /// `Animator.Play` de C#: sin controlador, fija el clip del
+    /// componente Animator y lo pone en reproducción (comportamiento de
+    /// siempre; el bucle de dibujo detecta el cambio de clip y reinicia
+    /// su tiempo a 0). CON controlador (bloque FSM), Play es un salto al
+    /// estado nombrado con un fundido corto de 0,1 s: no se toca `clip`,
+    /// lo resuelve `AnimatorData::advance` en el pase previo del frame.
+    /// Si la entidad no tenía componente, se le crea (y se anota en su
+    /// lista de componentes para que el Inspector lo muestre).
+    fn animator_play(&self, entity_id: u64, clip: &str) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        if let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) {
+            let animator = ent.animator.get_or_insert_with(Default::default);
+            if animator.controller.is_empty() {
+                // Sin controlador: comportamiento clásico (clip directo).
+                animator.clip = clip.to_string();
+            } else {
+                // Con controlador: Play = salto de estado con fundido corto.
+                // NO se toca `clip`; lo resuelve `AnimatorData::advance`.
+                animator.pending_play = Some((clip.to_string(), 0.1));
+            }
+            animator.playing = true;
+            if !ent.components.iter().any(|c| c == "Animator") {
+                ent.components.push("Animator".to_string());
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// `Animator.SetBool/SetFloat/SetTrigger` de C#: escribe un parámetro
+    /// del controlador. `kind`: 0 = bool, 1 = float, 2 = trigger. Un trigger
+    /// se escribe como 1.0 y lo consume `AnimatorData::advance` al dispararlo.
+    fn animator_set_param(&self, entity_id: u64, param: &str, kind: i32, value: f32) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(animator) = ent.animator.as_mut() else {
+            return false;
+        };
+        let v = match kind {
+            0 => {
+                if value != 0.0 {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            2 => 1.0,
+            _ => value,
+        };
+        animator.params.insert(param.to_string(), v);
+        true
+    }
+
+    /// `Animator.GetCurrentState` de C#: con controlador, el estado actual
+    /// (vacío mientras no haya avanzado nunca); sin controlador, el clip.
+    fn animator_current_state(&self, entity_id: u64) -> String {
+        let state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return String::new(),
+        };
+        let Some(ent) = state.entities.iter().find(|e| e.id == entity_id) else {
+            return String::new();
+        };
+        let Some(animator) = ent.animator.as_ref() else {
+            return String::new();
+        };
+        if animator.controller.is_empty() {
+            animator.clip.clone()
+        } else {
+            animator.current_state.clone()
+        }
+    }
+
+    /// `Animator.CrossFade` de C#: con controlador, salto de estado con el
+    /// fundido pedido; sin controlador, crossfade libre entre clips que
+    /// consume el bucle de dibujo (`pending_free_crossfade`).
+    fn animator_crossfade(&self, entity_id: u64, name: &str, fade: f32) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let animator = ent.animator.get_or_insert_with(Default::default);
+        let fade = fade.max(0.0);
+        if animator.controller.is_empty() {
+            animator.pending_free_crossfade = Some((name.to_string(), fade));
+        } else {
+            animator.pending_play = Some((name.to_string(), fade));
+        }
+        animator.playing = true;
+        if !ent.components.iter().any(|c| c == "Animator") {
+            ent.components.push("Animator".to_string());
+        }
+        true
+    }
+
+    /// Spawn real de una entidad (bloque de instanciación): crea la
+    /// entidad en la escena viva con su malla, transformada, física
+    /// inferida y script declarado, y su cuerpo en el mundo de Rapier,
+    /// todo en la misma llamada — el script que spawnea recibe un id ya
+    /// utilizable. La instancia C# del script, si lo hay, NO se crea
+    /// aquí: se encola en `pending_script_spawns` y la app la instancia
+    /// en su reconciliación, antes del siguiente `update_all`.
+    /// `Light.color` de C#: escribe el color del componente Light de la
+    /// entidad. El motor ya lee `light.color * light.intensity` cada
+    /// frame, así que basta con mutar `LightData`.
+    // ---- UI dinámica (Canvas v2): los setters de Text/Image/
+    // RectTransform de C# mutan los datos de UI de la entidad; el
+    // lote del Canvas se reconstruye cada frame desde la escena,
+    // así que el cambio se ve en el frame siguiente. Cambiar el
+    // sprite además dispara la reconstrucción del atlas de
+    // imágenes (la clave de sprites cambia sola).
+
+    fn ui_set_text(&self, entity_id: u64, text: &str) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(t) = ent.ui_text.as_mut() else {
+            return false;
+        };
+        t.text = text.to_string();
+        true
+    }
+
+    fn ui_set_font_size(&self, entity_id: u64, size: f32) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(t) = ent.ui_text.as_mut() else {
+            return false;
+        };
+        t.font_size = size.max(1.0);
+        true
+    }
+
+    fn ui_set_text_color(&self, entity_id: u64, r: f32, g: f32, b: f32, a: f32) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(t) = ent.ui_text.as_mut() else {
+            return false;
+        };
+        t.color = [r, g, b, a];
+        true
+    }
+
+    fn ui_set_image_sprite(&self, entity_id: u64, sprite: &str) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(img) = ent.ui_image.as_mut() else {
+            return false;
+        };
+        img.sprite = sprite.to_string();
+        true
+    }
+
+    fn ui_set_image_color(&self, entity_id: u64, r: f32, g: f32, b: f32, a: f32) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(img) = ent.ui_image.as_mut() else {
+            return false;
+        };
+        img.color = [r, g, b, a];
+        true
+    }
+
+    fn ui_set_button_color(&self, entity_id: u64, r: f32, g: f32, b: f32, a: f32) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(btn) = ent.ui_button.as_mut() else {
+            return false;
+        };
+        btn.target_graphic_color = [r, g, b, a];
+        true
+    }
+
+    fn ui_set_anchored_pos(&self, entity_id: u64, x: f32, y: f32) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(rt) = ent.rect_transform.as_mut() else {
+            return false;
+        };
+        rt.anchored_position = [x, y];
+        true
+    }
+
+    fn ui_set_size_delta(&self, entity_id: u64, w: f32, h: f32) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(rt) = ent.rect_transform.as_mut() else {
+            return false;
+        };
+        rt.size_delta = [w, h];
+        true
+    }
+
+    /// `DragDrop.DraggedEntityId` de C#: la entidad del último
+    /// arrastre del Canvas (0 si aún no hubo ninguno).
+    fn ui_dragged_id(&self) -> u64 {
+        DRAG_CURRENT.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// `DragDrop.DropTargetEntityId` de C#: la casilla que recibió
+    /// la última suelta (0 si se soltó en vacío).
+    fn ui_drop_target_id(&self) -> u64 {
+        DROP_TARGET_CURRENT.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn light_set_color(&self, entity_id: u64, r: f32, g: f32, b: f32) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(light) = ent.light.as_mut() else {
+            return false;
+        };
+        light.color = [r, g, b];
+        true
+    }
+
+    /// `Light.intensity` de C#: escribe la intensidad del componente
+    /// Light de la entidad, acotada a >= 0.0.
+    fn light_set_intensity(&self, entity_id: u64, intensity: f32) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(light) = ent.light.as_mut() else {
+            return false;
+        };
+        light.intensity = intensity.max(0.0);
+        true
+    }
+    fn spawn_entity(&self, spec: &SpawnSpec) -> Option<u64> {
+        // Fase 1, candado de escena: crear y configurar la entidad y
+        // capturar su cuerpo. El candado se suelta antes de tocar física.
+        let (id, body_spec) = {
+            let mut state = self.scene_state.lock().ok()?;
+            if spec.parent_id != 0 && state.get_entity(spec.parent_id).is_none() {
+                log::warn!(
+                    "[Spawn] Padre {} inexistente: no se crea '{}'.",
+                    spec.parent_id,
+                    spec.name
+                );
+                return None;
+            }
+            let mut components = vec!["Transform".to_string(), "MeshRenderer".to_string()];
+            match spec.physics {
+                SPAWN_PHYSICS_STATIC => components.push("StaticCollider".to_string()),
+                glass_scripting::SPAWN_PHYSICS_DYNAMIC | SPAWN_PHYSICS_KINEMATIC => {
+                    components.push("RigidBody".to_string())
+                }
+                _ => {}
+            }
+            if !spec.script.is_empty() {
+                components.push("Script".to_string());
+            }
+            let name = if spec.name.is_empty() {
+                "Entity".to_string()
+            } else {
+                spec.name.clone()
+            };
+            let id = state.create_entity(name, components);
+            {
+                let ent = state.get_entity_mut(id)?;
+                ent.transform.position = spec.position;
+                ent.transform.set_rotation_quat(spec.rotation);
+                ent.transform.scale = spec.scale;
+                if let Some(mesh) = &mut ent.mesh {
+                    mesh.model = spec.model.clone();
+                    if spec.has_color {
+                        mesh.color = spec.color;
+                    }
+                }
+                if let Some(body) = &mut ent.physics {
+                    if spec.physics == SPAWN_PHYSICS_KINEMATIC {
+                        body.body_type = "Kinematic".to_string();
+                    }
+                    // La caja de respaldo se deriva de la escala, como
+                    // cabría esperar de un primitivo de 1 m: sin esto, un
+                    // cubo escalado a 3 seguiría chocando como de 1 m.
+                    body.box_extents = [
+                        spec.scale[0].abs() / 2.0,
+                        spec.scale[1].abs() / 2.0,
+                        spec.scale[2].abs() / 2.0,
+                    ];
+                }
+                if !spec.script.is_empty() {
+                    // El componente "Script" recién creado trae la clase
+                    // por defecto del editor en el campo heredado: se
+                    // limpia y manda `script_data.class_name`, la misma
+                    // precedencia que usa la carga de escenas.
+                    ent.script = None;
+                    ent.script_data
+                        .get_or_insert_with(Default::default)
+                        .class_name = spec.script.clone();
+                }
+                if spec.parent_id != 0 {
+                    ent.parent = Some(spec.parent_id);
+                }
+            }
+            if spec.parent_id != 0 {
+                if let Some(parent) = state.get_entity_mut(spec.parent_id) {
+                    parent.children.push(id);
+                }
+            }
+            let body_spec = if spec.physics != glass_scripting::SPAWN_PHYSICS_NONE {
+                let world_matrices = state.compute_world_matrices();
+                state
+                    .get_entity(id)
+                    .and_then(|ent| Self::body_spec_for(&world_matrices, ent))
+            } else {
+                None
+            };
+            (id, body_spec)
+        };
+
+        // Fase 2, candado de física: el cuerpo nace ya, en este frame.
+        if let Some(body_spec) = body_spec {
+            self.create_body(body_spec);
+        }
+        if !spec.script.is_empty() {
+            if let Ok(mut pending) = self.pending_script_spawns.lock() {
+                pending.push((id, spec.script.clone()));
+            }
+        }
+        Some(id)
+    }
+
+    /// Instancia un Prefab (`.prefab.json`) en la escena viva (bloque de
+    /// instanciación desde C#): resuelve nombre o ruta, carga el
+    /// archivo con `Prefab::load_from_file`, lo instancia con
+    /// `SceneState::instantiate_prefab` (reasigna ids, no toca el
+    /// `parent_id`: siempre nace como raíz de la escena, igual que
+    /// `GameObject.InstantiatePrefab` de Unity) y da cuerpo físico en
+    /// Rapier a la raíz y a cada descendiente que traiga datos de
+    /// física, con el mismo `body_spec_for` que usa `spawn_entity`.
+    fn instantiate_prefab(&self, path: &str, position: [f32; 3]) -> Option<u64> {
+        // Guarda de ruta: nada de rutas absolutas ni de '..' (con '/'
+        // o con '\'): un script no puede sacar la carga de prefabs
+        // fuera del proyecto.
+        let sospechosa = path.starts_with('/')
+            || path.starts_with('\\')
+            || path.split(['/', '\\']).any(|seg| seg == "..")
+            || (path.len() > 1 && path.as_bytes()[1] == b':');
+        if sospechosa {
+            log::warn!("[InstantiatePrefab] Ruta rechazada fuera del proyecto: '{path}'");
+            return None;
+        }
+
+        // Resolución de ruta: si trae '/' o ya termina en
+        // ".prefab.json" se usa tal cual; si no, es un nombre y la
+        // ruta es la convención de la carpeta de prefabs del proyecto.
+        let resolved_path = if path.contains('/') || path.ends_with(".prefab.json") {
+            path.to_string()
+        } else {
+            format!("assets/prefabs/{path}.prefab.json")
+        };
+
+        let prefab = match glass_core::Prefab::load_from_file(&resolved_path) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!(
+                    "[InstantiatePrefab] No se pudo cargar '{resolved_path}': {e}"
+                );
+                return None;
+            }
+        };
+
+        // Fase 1, candado de escena: instanciar el prefab (raíz y
+        // descendientes con ids nuevos) y capturar los body_spec de
+        // todas las entidades con física, antes de soltar el candado.
+        let (root_id, body_specs) = {
+            let mut state = self.scene_state.lock().ok()?;
+            let root_id = state.instantiate_prefab(&prefab, None, Some(position));
+
+            let world_matrices = state.compute_world_matrices();
+            let mut body_specs = Vec::new();
+
+            if let Some(ent) = state.get_entity(root_id) {
+                if ent.physics.is_some() {
+                    if let Some(bs) = Self::body_spec_for(&world_matrices, ent) {
+                        body_specs.push(bs);
+                    }
+                }
+            }
+            // Los descendientes recién creados son los hijos (directos
+            // e indirectos) de la raíz nueva: se recorren desde el
+            // árbol vivo, no desde `prefab.descendant_entities`, para
+            // usar siempre los ids ya reasignados por `instantiate_prefab`.
+            let mut stack: Vec<u64> = state
+                .get_entity(root_id)
+                .map(|e| e.children.clone())
+                .unwrap_or_default();
+            while let Some(child_id) = stack.pop() {
+                if let Some(ent) = state.get_entity(child_id) {
+                    if ent.physics.is_some() {
+                        if let Some(bs) = Self::body_spec_for(&world_matrices, ent) {
+                            body_specs.push(bs);
+                        }
+                    }
+                    stack.extend(ent.children.clone());
+                }
+            }
+
+            (root_id, body_specs)
+        };
+
+        // Fase 2, candado de física: igual que `spawn_entity`, el
+        // cuerpo nace ya en este frame, con el candado de escena suelto.
+        for body_spec in body_specs {
+            self.create_body(body_spec);
+        }
+
+        Some(root_id)
+    }
+
+
+    /// Despawn: la entidad sale de la escena (sus hijos se reemparentan,
+    /// la semántica de borrado del editor) y su cuerpo y colliders
+    /// salen del mundo de Rapier en la misma llamada. Sus instancias de
+    /// script las dispone la reconciliación de la app en este frame.
+    fn destroy_entity(&self, entity_id: u64) -> bool {
+        let existed = {
+            let Ok(mut state) = self.scene_state.lock() else {
+                return false;
+            };
+            state.delete_entity(entity_id)
+        };
+        if existed {
+            self.remove_body(entity_id);
+        }
+        existed
+    }
+
+    /// Activar/desactivar (la base física de los pools): la inactiva
+    /// pierde su cuerpo; al reactivarla, el cuerpo se recrea desde su
+    /// `PhysicsData` con `body_spec_for`, el mismo camino del spawn.
+    fn set_entity_active(&self, entity_id: u64, active: bool) -> bool {
+        {
+            let Ok(mut state) = self.scene_state.lock() else {
+                return false;
+            };
+            let Some(ent) = state.get_entity_mut(entity_id) else {
+                return false;
+            };
+            if ent.active == active {
+                return true;
+            }
+            ent.active = active;
+        }
+        if active {
+            let body_spec = {
+                let Ok(state) = self.scene_state.lock() else {
+                    return true;
+                };
+                let world_matrices = state.compute_world_matrices();
+                state
+                    .get_entity(entity_id)
+                    .and_then(|ent| Self::body_spec_for(&world_matrices, ent))
+            };
+            if let Some(body_spec) = body_spec {
+                self.create_body(body_spec);
+            }
+        } else {
+            self.remove_body(entity_id);
+        }
+        true
+    }
+
+    fn entity_count(&self) -> Option<usize> {
+        self.scene_state.lock().ok().map(|s| s.entities.len())
+    }
+
+    fn physics_counts(&self) -> Option<(usize, usize)> {
+        self.physics_world
+            .lock()
+            .ok()
+            .map(|p| (p.body_count(), p.collider_count()))
+    }
 }
+/// Reconciliación por frame del bloque de instanciación: (1) crea las
+/// instancias C# de los scripts spawneados desde el frame anterior y
+/// (2) dispone las instancias cuya entidad ya no existe (destruida por
+/// un script, borrada en el editor o sustituida), purgando también su
+/// estado de animación. Corre justo antes de `update_all`, sin ningún
+/// candado de escena o física retenido, así que los `Awake`/`OnDestroy`
+/// que se ejecutan aquí pueden a su vez spawnear o destruir: sus
+/// efectos de instanciación llegan en la reconciliación del frame
+/// siguiente, nunca en cascada recursiva dentro de esta. El orden de
+/// los `OnDestroy` dentro del mismo frame NO es determinista (depende
+/// del orden interno de las instancias), como se documenta en C#.
+///
+/// Es función libre y no método porque `render_frame` retiene un
+/// préstamo mutable del renderer durante todo el frame: el llamante
+/// pasa los campos sueltos que esto necesita. Devuelve `(handle,
+/// entidad)` si entre lo spawneado había un `PlayerController`, para
+/// que la app lo siga como jugador, igual que al cargar una escena.
+/// Pase previo de la máquina de estados (bloque FSM): con la escena
+/// en mutable y ANTES del bucle de dibujo (que la itera en
+/// inmutable), avanza cada `AnimatorData` con controlador y deja la
+/// decisión de pose del frame en `anim_pose`. También consume los
+/// crossfade libres pedidos sin controlador. Sin controlador ni
+/// peticiones, no toca nada: el camino clásico queda intacto.
+fn avanzar_animadores_fsm(
+    animator_controllers: &mut std::collections::HashMap<String, glass_core::animator::AnimatorController>,
+    anim_pose: &mut std::collections::HashMap<u64, (String, f32, Option<String>, f32, f32)>,
+    anim_free_fade: &mut std::collections::HashMap<u64, FreeFadeRt>,
+    anim_runtime: &mut std::collections::HashMap<u64, (String, f32)>,
+    scene: &mut SceneState,
+    cache: &glass_renderer::AssetCache,
+    dt: f32,
+) {
+    anim_pose.clear();
+    for ent in scene.entities.iter_mut() {
+        let Some(anim) = ent.animator.as_mut() else {
+            continue;
+        };
+        if !anim.playing {
+            continue;
+        }
+        let clips: &[glass_renderer::AnimationClip] = ent
+            .mesh
+            .as_ref()
+            .filter(|m| !m.model.is_empty())
+            .and_then(|m| cache.animations.get(&m.model))
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        let duration = |name: &str| clips.iter().find(|c| c.name == name).map(|c| c.duration);
+
+        if !anim.controller.is_empty() {
+            let name = anim.controller.clone();
+            if !animator_controllers.contains_key(&name) {
+                let path = format!("assets/animators/{name}.animator.json");
+                match glass_core::animator::AnimatorController::load_from_file(&path) {
+                    Ok(c) => {
+                        animator_controllers.insert(name.clone(), c);
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "Animator: no se pudo cargar el controlador '{name}': {e} \
+                             (la entidad sigue con su clip, sin máquina)"
+                        );
+                        anim.controller.clear();
+                    }
+                }
+            }
+            if let Some(ctrl) = animator_controllers.get(&name) {
+                let out = anim.advance(dt * anim.speed.max(0.0), ctrl, duration);
+                anim_pose.insert(
+                    ent.id,
+                    (out.clip_a, out.time_a, out.clip_b, out.time_b, out.weight_b),
+                );
+                continue;
+            }
+        }
+
+        // CrossFade libre pendiente (sin controlador): el fundido lo
+        // resuelve el bucle de dibujo mezclando el clip saliente —
+        // con su reloj en curso — contra el entrante, que arranca
+        // de cero como un Play de siempre.
+        if let Some((dest, fade)) = anim.pending_free_crossfade.take() {
+            let from_clip = if anim.clip.is_empty() {
+                clips.first().map(|c| c.name.clone()).unwrap_or_default()
+            } else {
+                anim.clip.clone()
+            };
+            let from_time = anim_runtime
+                .get(&ent.id)
+                .map(|e| e.1)
+                .unwrap_or(0.0);
+            anim_free_fade.insert(
+                ent.id,
+                FreeFadeRt {
+                    from_clip,
+                    from_time,
+                    duration: fade.max(0.0),
+                    elapsed: 0.0,
+                },
+            );
+            anim.clip = dest;
+            if let Some(e) = anim_runtime.get_mut(&ent.id) {
+                e.0.clear(); // el bucle reinicia el reloj del entrante
+            }
+        }
+    }
+}
+
+
+fn reconcile_spawned_scripts(
+    script_host: &mut ScriptHost,
+    scene_state: &Arc<Mutex<SceneState>>,
+    pending_script_spawns: &Arc<Mutex<Vec<(u64, String)>>>,
+    anim_runtime: &mut std::collections::HashMap<u64, (String, f32)>,
+    skin_joint_buffers: &mut std::collections::HashMap<u64, glass_renderer::JointBuffer>,
+    retired_joint_buffers: &mut Vec<glass_renderer::JointBuffer>,
+) -> Option<(i32, u64)> {
+    if !script_host.is_initialized {
+        return None;
+    }
+    let mut spawned_player: Option<(i32, u64)> = None;
+    // (1) Spawns con script pendientes. La cola se vacía con `mem::take`
+    // ANTES de crear ninguna instancia: un Awake que spawnee con script
+    // encola para el frame siguiente, sin tocar la lista en curso.
+    let pending: Vec<(u64, String)> = match pending_script_spawns.lock() {
+        Ok(mut queue) => std::mem::take(&mut *queue),
+        Err(_) => Vec::new(),
+    };
+    if !pending.is_empty() {
+        let alive_now: HashSet<u64> = match scene_state.lock() {
+            Ok(scene) => scene.entities.iter().map(|e| e.id).collect(),
+            Err(_) => HashSet::new(),
+        };
+        for (entity_id, class_name) in pending {
+            // La entidad pudo morir entre el spawn y este frame:
+            // instanciar su script sería crear un zombi que la pasada
+            // (2) dispondría en el acto.
+            if !alive_now.contains(&entity_id) {
+                continue;
+            }
+            match script_host.create_instance(entity_id, &class_name) {
+                Ok(handle) => {
+                    log::info!(
+                        "Script spawneado '{class_name}' instanciado para entidad {entity_id} (handle {handle})."
+                    );
+                    if class_name.ends_with("PlayerController") {
+                        spawned_player = Some((handle, entity_id));
+                    }
+                }
+                Err(e) => log::warn!(
+                    "No se pudo instanciar el script spawneado '{class_name}' para {entity_id}: {e}"
+                ),
+            }
+        }
+    }
+    // (2) Huérfanos: instancias sin entidad y estado de animación de
+    // entidades muertas. Sin esta pasada, cada entidad con script
+    // destruida dejaría su GlassBehaviour vivo para siempre y los
+    // buffers de articulaciones crecerían sin cota por ciclo.
+    let alive: HashSet<u64> = match scene_state.lock() {
+        Ok(scene) => scene.entities.iter().map(|e| e.id).collect(),
+        Err(_) => return spawned_player,
+    };
+    let disposed = script_host.destroy_instances_not_in(&alive);
+    if disposed > 0 {
+        log::info!("Reconciliación: {disposed} instancia(s) de entidades destruidas dispuestas.");
+    }
+    anim_runtime.retain(|id, _| alive.contains(id));
+    let dead_skinned: Vec<u64> = skin_joint_buffers
+        .keys()
+        .filter(|id| !alive.contains(id))
+        .copied()
+        .collect();
+    for id in dead_skinned {
+        if let Some(jb) = skin_joint_buffers.remove(&id) {
+            // A la lista de retirados: se libera tras la espera de fence
+            // del próximo frame, como en el cambio de escena.
+            retired_joint_buffers.push(jb);
+        }
+    }
+    spawned_player
+}
+
 /// Bandera de apagado ordenado.
 ///
 /// ITERACIÓN 4 — diagnóstico del "device lost" fantasma:
@@ -99,7 +974,7 @@ fn install_signal_handlers() {
     }
 }
 
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::WindowId;
@@ -161,18 +1036,39 @@ fn look_at(eye: [f32; 3], target: [f32; 3], up: [f32; 3]) -> [f32; 16] {
 }
 
 fn camera_view_matrix(pos: [f32; 3], rot_deg: [f32; 3]) -> [f32; 16] {
-    let rx = rot_deg[0].to_radians();
-    let ry = rot_deg[1].to_radians();
-
-    let (sx, cx) = (rx.sin(), rx.cos());
-    let (sy, cy) = (ry.sin(), ry.cos());
-
-    // Vector forward hacia la escena (-Z base con rotación Euler)
-    let fwd = [sy * cx, -sx, -cy * cx];
-    let up = [sy * sx, cx, -cy * sx];
+    // La orientación sale de la matriz de mundo de la cámara (convención
+    // única del motor, glass_core::math: R = Rz*Ry*Rx): forward = -columna 2
+    // y up = columna 1. Antes se reconstruía a mano con los signos de
+    // pitch/yaw opuestos a esa convención, así que la cámara de juego miraba
+    // según (-pitch, -yaw) respecto a su transform y su gizmo no podía
+    // coincidir con ella. Las escenas de ejemplo y el preset de luz se
+    // migraron de signo al hacer este cambio para conservar su encuadre.
+    let m = glass_core::mat4_from_trs_euler(pos, rot_deg, [1.0, 1.0, 1.0]);
+    let back = [m[8], m[9], m[10]];
+    let bl = (back[0] * back[0] + back[1] * back[1] + back[2] * back[2]).sqrt().max(0.0001);
+    let fwd = [-back[0] / bl, -back[1] / bl, -back[2] / bl];
+    let up_raw = [m[4], m[5], m[6]];
+    let ul = (up_raw[0] * up_raw[0] + up_raw[1] * up_raw[1] + up_raw[2] * up_raw[2]).sqrt().max(0.0001);
+    let up = [up_raw[0] / ul, up_raw[1] / ul, up_raw[2] / ul];
 
     let target = [pos[0] + fwd[0], pos[1] + fwd[1], pos[2] + fwd[2]];
     look_at(pos, target, up)
+}
+
+/// Copia un directorio completo, con subcarpetas, al destino.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
 }
 
 fn matmul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
@@ -187,6 +1083,160 @@ fn matmul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
         }
     }
     res
+}
+
+/// Fundido libre clip→clip en curso (bloque FSM): el origen y su
+/// tiempo, que sigue avanzando mientras el destino entra.
+struct FreeFadeRt {
+    from_clip: String,
+    from_time: f32,
+    duration: f32,
+    elapsed: f32,
+}
+
+/// Ids del último gesto de drag & drop del Canvas (UI v2): los
+/// escribe el bucle de frames y los lee el puente hacia C#
+/// (clase `DragDrop` del managed). 0 = sin arrastre / sin destino.
+static DRAG_CURRENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static DROP_TARGET_CURRENT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Nombre canónico (minúsculas) de una tecla física para las
+/// definiciones de ejes de entrada (Input v2). Las definiciones
+/// usan estos nombres: "w", "space", "left", "shift_left"...
+/// Estado muestreado del mando (el primero conectado).
+#[derive(Default, Clone, Copy)]
+struct PadState {
+    lx: f32,
+    ly: f32,
+    south: bool,
+    east: bool,
+    north: bool,
+    west: bool,
+    start: bool,
+    dpad_left: bool,
+    dpad_right: bool,
+    dpad_up: bool,
+    dpad_down: bool,
+}
+
+/// Drena los eventos de gilrs y lee el estado del primer mando
+/// conectado. Sin mando devuelve el estado neutro.
+fn poll_gamepad(gilrs: &mut gilrs::Gilrs) -> PadState {
+    while gilrs.next_event().is_some() {}
+    let mut st = PadState::default();
+    if let Some((_id, gp)) = gilrs.gamepads().next() {
+        use gilrs::{Axis, Button};
+        st.lx = gp.value(Axis::LeftStickX);
+        st.ly = gp.value(Axis::LeftStickY);
+        st.south = gp.is_pressed(Button::South);
+        st.east = gp.is_pressed(Button::East);
+        st.north = gp.is_pressed(Button::North);
+        st.west = gp.is_pressed(Button::West);
+        st.start = gp.is_pressed(Button::Start);
+        st.dpad_left = gp.is_pressed(Button::DPadLeft);
+        st.dpad_right = gp.is_pressed(Button::DPadRight);
+        st.dpad_up = gp.is_pressed(Button::DPadUp);
+        st.dpad_down = gp.is_pressed(Button::DPadDown);
+    }
+    st
+}
+
+/// Botón físico del mando asignado a cada eje por nombre
+/// (equivalencias de Unity: A salta, B cancela...).
+fn pad_button_for(axis_name: &str, st: &PadState) -> bool {
+    match axis_name {
+        "Jump" => st.south,
+        "Fire1" => st.west,
+        "Fire2" => st.east,
+        "Fire3" => st.north,
+        "Submit" => st.start || st.south,
+        "Cancel" => st.start || st.east,
+        _ => false,
+    }
+}
+
+/// Fuente analógica del mando por eje: el stick izquierdo
+/// (X para Horizontal, Y para Vertical; en gilrs el Y del
+/// stick crece hacia ARRIBA, como W/S esperan).
+fn pad_axis_for(axis_name: &str, st: &PadState) -> f32 {
+    match axis_name {
+        "Horizontal" => st.lx,
+        "Vertical" => st.ly,
+        _ => 0.0,
+    }
+}
+
+fn key_name(code: KeyCode) -> Option<&'static str> {
+    use KeyCode::*;
+    Some(match code {
+        KeyA => "a", KeyB => "b", KeyC => "c", KeyD => "d", KeyE => "e",
+        KeyF => "f", KeyG => "g", KeyH => "h", KeyI => "i", KeyJ => "j",
+        KeyK => "k", KeyL => "l", KeyM => "m", KeyN => "n", KeyO => "o",
+        KeyP => "p", KeyQ => "q", KeyR => "r", KeyS => "s", KeyT => "t",
+        KeyU => "u", KeyV => "v", KeyW => "w", KeyX => "x", KeyY => "y",
+        KeyZ => "z",
+        Digit0 => "0", Digit1 => "1", Digit2 => "2", Digit3 => "3",
+        Digit4 => "4", Digit5 => "5", Digit6 => "6", Digit7 => "7",
+        Digit8 => "8", Digit9 => "9",
+        Space => "space",
+        ArrowLeft => "left", ArrowRight => "right",
+        ArrowUp => "up", ArrowDown => "down",
+        ShiftLeft => "shift_left", ShiftRight => "shift_right",
+        ControlLeft => "ctrl_left", ControlRight => "ctrl_right",
+        AltLeft => "alt_left", AltRight => "alt_right",
+        Enter => "return", Escape => "escape", Tab => "tab",
+        Backspace => "backspace", Delete => "delete",
+        Home => "home", End => "end",
+        PageUp => "pageup", PageDown => "pagedown",
+        F1 => "f1", F2 => "f2", F3 => "f3", F4 => "f4", F5 => "f5",
+        F6 => "f6", F7 => "f7", F8 => "f8", F9 => "f9", F10 => "f10",
+        F11 => "f11", F12 => "f12",
+        Comma => "comma", Period => "period", Minus => "minus",
+        Equal => "equals", Semicolon => "semicolon", Quote => "apostrophe",
+        BracketLeft => "lbracket", BracketRight => "rbracket",
+        Backslash => "backslash", Slash => "slash", Backquote => "grave",
+        _ => return None,
+    })
+}
+
+/// Carga las definiciones de ejes del proyecto
+/// (`assets/input_axes.json`, formato `{ "axes": [ ... ] }`).
+/// Cualquier problema (no existe, JSON inválido) devuelve los
+/// ejes por defecto de Unity y lo anota en el log.
+fn load_input_axis_defs() -> Vec<glass_scripting::input_axes::InputAxisDef> {
+    let defaults = glass_scripting::input_axes::default_input_axes;
+    let text = match std::fs::read_to_string("assets/input_axes.json") {
+        Ok(t) => t,
+        Err(_) => {
+            log::info!("Input v2: sin assets/input_axes.json; ejes por defecto.");
+            return defaults();
+        }
+    };
+    let parsed = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v.get("axes").cloned())
+        .and_then(|axes| {
+            serde_json::from_value::<
+                Vec<glass_scripting::input_axes::InputAxisDef>,
+            >(axes)
+            .ok()
+        });
+    match parsed {
+        Some(axes) if !axes.is_empty() => {
+            log::info!(
+                "Input v2: {} ejes cargados de assets/input_axes.json",
+                axes.len()
+            );
+            axes
+        }
+        _ => {
+            log::warn!(
+                "Input v2: input_axes.json inválido o vacío; uso los de por defecto."
+            );
+            defaults()
+        }
+    }
 }
 
 struct GlassEngineApp {
@@ -219,12 +1269,39 @@ struct GlassEngineApp {
     pub app_mode: AppMode,
     #[cfg(feature = "editor")]
     pub launcher: LauncherPanel,
+    /// Arranque de la app: su elapsed es el tiempo que consumen los
+    /// materiales de grafo (viaja en `light_color.w`, canal reservado).
+    pub start_instant: std::time::Instant,
     #[cfg(feature = "editor")]
     pub pending_launcher_action: Option<LauncherAction>,
     pub scene_state: Arc<Mutex<SceneState>>,
+    /// Atlas de imágenes del Canvas (UI v2): clave = sprites de la
+    /// escena activa (uno por línea); si cambia, se reconstruye el
+    /// mapa y se resube el atlas al renderer.
+    pub ui_images_key: String,
+    pub ui_images_map: canvas_ui::UiSceneImages,
+    /// Atlas de CPU de las fuentes con nombre (assets/fonts) que
+    /// la escena usa, y el registro de las que fallaron al cargar
+    /// (para no reintentar ni repetir el aviso cada frame).
+    pub ui_font_atlases: std::collections::HashMap<String, glass_renderer::FontAtlas>,
+    /// Activos de material cargados (Materiales v1), por nombre.
+    pub materiales: std::collections::HashMap<String, glass_core::MaterialData>,
+    /// Materiales que fallaron al cargar (avisar una sola vez).
+    pub materiales_failed: std::collections::HashSet<String>,
+    /// Texturas de material ya subidas a la caché de texturas.
+    pub material_textures: std::collections::HashSet<String>,
+    pub ui_font_failed: std::collections::HashSet<String>,
+    /// Gestor de escenas: dueño de las rutas reales y de la carga diferida.
+    pub scene_manager: Arc<Mutex<SceneManager>>,
     #[cfg(feature = "editor")]
-    #[allow(dead_code)]
     pub mcp_server: Arc<McpServer>,
+    /// Hilo stdio del MCP en vivo (modo editor): sirve `mcp_server` sobre
+    /// la escena compartida mientras el editor corre. `None` si no se
+    /// lanzó (stdin de terminal sin `--mcp-live`). El handle se conserva
+    /// como constancia; no se hace join: el hilo termina por EOF de stdio
+    /// o con el proceso cuando la app sale.
+    #[cfg(feature = "editor")]
+    pub mcp_stdio_thread: Option<std::thread::JoinHandle<()>>,
     asset_cache: Arc<RwLock<AssetCache>>,
     asset_watcher: Option<AssetWatcher>,
     #[allow(dead_code)]
@@ -232,6 +1309,15 @@ struct GlassEngineApp {
     pub script_host: ScriptHost,
     pub audio_system: Arc<AudioSystem>,
     pub physics_world: Arc<Mutex<PhysicsWorld>>,
+    /// Lightmap horneado de la escena en curso (bake, etapa 3b): el
+    /// atlas y los grupos por entidad, si la escena tiene bake en
+    /// `assets/lightmaps/`. El bucle de dibujo lo pasa al renderer.
+    pub lightmap_runtime: Option<crate::bake::LightmapRuntime>,
+    /// Cola de scripts spawneados pendientes de instanciar (bloque de
+    /// instanciación): la comparte con `EngineSceneBridge`, que la
+    /// alimenta desde el callback FFI de spawn, y la app la drena cada
+    /// frame en `reconcile_spawned_scripts`.
+    pending_script_spawns: Arc<Mutex<Vec<(u64, String)>>>,
     pub is_standalone: bool,
     is_headless_test: bool,
     is_m5_test: bool,
@@ -247,6 +1333,53 @@ struct GlassEngineApp {
     player_script_handle: Option<i32>,
     /// Teclas WASD/Espacio actualmente presionadas (para movimiento del jugador).
     keys_pressed: HashSet<PhysicalKey>,
+    /// Banco de ejes configurables (Input v2): suaviza los ejes
+    /// y calcula los botones con sus bordes cada frame.
+    axis_bank: glass_scripting::input_axes::AxisBank,
+    /// Las definiciones de ejes se cargan del archivo del
+    /// proyecto (o los defaults) y se RECARGAN si el archivo
+    /// cambia (el Input Manager del editor escribe ese archivo).
+    input_defs_loaded: bool,
+    /// Fecha del input_axes.json ya cargado (para la recarga).
+    input_defs_mtime: Option<std::time::SystemTime>,
+    /// Mandos (gilrs): None si la plataforma no los inicializa.
+    gamepad: Option<gilrs::Gilrs>,
+    /// Estado del primer mando conectado, muestreado por frame.
+    pad_state: PadState,
+    /// Estado del ratón alimentado por `CursorMoved`/`MouseInput` de
+    /// winit en `window_event` y consumido por frame en `render_frame`.
+    mouse: mouse_input::MouseState,
+    /// Gesto de clic sobre botones del Canvas en curso (solo standalone).
+    button_click_tracker: canvas_ui::ButtonClickTracker,
+    ui_drag_session: Option<canvas_ui::DragSession>,
+    /// Buffers de matrices de articulación por entidad con piel (bloque de
+    /// skinning): uno por entidad viva, creado perezosamente en el bucle
+    /// de dibujo con la capacidad de la piel de su modelo y reescrito cada
+    /// frame con la pose evaluada. Se liberan en `Drop` y al cambiar de
+    /// escena.
+    skin_joint_buffers: std::collections::HashMap<u64, glass_renderer::JointBuffer>,
+    /// Estado de reproducción por entidad: (clip en curso, tiempo en
+    /// segundos). El tiempo NO viaja en la escena serializada: es estado
+    /// de runtime, como el tiempo acumulado de un Animator de Unity.
+    anim_runtime: std::collections::HashMap<u64, (String, f32)>,
+    /// Caché de controladores de animación cargados por nombre (bloque
+    /// FSM): `assets/animators/<nombre>.animator.json`, una sola carga.
+    animator_controllers: std::collections::HashMap<String, glass_core::animator::AnimatorController>,
+    /// Decisión de pose del frame por entidad (bloque FSM): la escribe
+    /// el pase previo `avanzar_animadores_fsm` (con la escena en mutable)
+    /// y la consume el bucle de dibujo, que itera la escena en inmutable.
+    /// (clip_a, tiempo_a, clip_b, tiempo_b, peso_b).
+    anim_pose: std::collections::HashMap<u64, (String, f32, Option<String>, f32, f32)>,
+    /// Fundidos libres clip→clip en curso (bloque FSM: `CrossFade` sin
+    /// controlador), por entidad.
+    anim_free_fade: std::collections::HashMap<u64, FreeFadeRt>,
+    /// Último instante en que se avanzaron las animaciones (para el dt).
+    last_anim_instant: Instant,
+    /// Buffers de articulación retirados (cambio de escena o piel con otro
+    /// nº de articulaciones): destruirlos en el acto podría pillar un
+    /// frame aún en vuelo que los está leyendo, así que esperan aquí a que
+    /// el siguiente `render_frame` espere el fence y los libere.
+    retired_joint_buffers: Vec<glass_renderer::JointBuffer>,
     /// Handle del RigidBody del jugador en Rapier3D (para aplicar fuerzas/impulsos).
     player_body_handle: Option<glass_physics::BodyHandle>,
 }
@@ -260,6 +1393,20 @@ impl Drop for GlassEngineApp {
         if let Some(vk_ctx) = &self.vulkan_context {
             unsafe {
                 let _ = vk_ctx.device.device_wait_idle();
+            }
+        }
+        // Buffers de articulación: hay que liberarlos mientras el renderer
+        // (dueño del pool de sus descriptor sets) sigue vivo. El proceso
+        // ya esperó el device en reposo arriba, así que aquí sí se puede
+        // destruir en el acto, incluidos los retirados pendientes.
+        if let Some(renderer) = &self.renderer {
+            let joints_pool = renderer.joints_pool;
+            let device = renderer.device.clone();
+            for (_, mut jb) in std::mem::take(&mut self.skin_joint_buffers) {
+                jb.destroy(&device, &mut *renderer.allocator.lock().unwrap(), joints_pool);
+            }
+            for mut jb in self.retired_joint_buffers.drain(..) {
+                jb.destroy(&device, &mut *renderer.allocator.lock().unwrap(), joints_pool);
             }
         }
 
@@ -314,6 +1461,25 @@ impl GlassEngineApp {
         scene_to_load: Option<String>,
     ) -> Self {
         let scene_state = Arc::new(Mutex::new(SceneState::new()));
+        // El gestor de escenas descubre la raíz del proyecto (project.json)
+        // subiendo desde el directorio actual. Si no la encuentra, el motor debe
+        // seguir arrancando: se ancla al cwd y las cargas por nombre fallarán
+        // con un error explícito en lugar de impedir el arranque.
+        let scene_manager = match SceneManager::locate() {
+            Ok(manager) => {
+                log::info!(
+                    "SceneManager: raíz '{}' con {} escena(s) disponibles.",
+                    manager.vfs().root().display(),
+                    manager.available_scenes().len()
+                );
+                manager
+            }
+            Err(e) => {
+                log::warn!("SceneManager: sin project.json ({e}); se ancla al directorio actual.");
+                SceneManager::new(".")
+            }
+        };
+        let scene_manager = Arc::new(Mutex::new(scene_manager));
         #[cfg(feature = "editor")]
         let mcp_server = Arc::new(McpServer::new(scene_state.clone()));
         let asset_cache = AssetCache::new();
@@ -321,6 +1487,44 @@ impl GlassEngineApp {
         register_global_audio_system(audio_system.clone());
         let physics_world = Arc::new(Mutex::new(PhysicsWorld::new()));
         register_global_physics_world(physics_world.clone());
+
+        // Clips de audio de los juegos (Plat3D): todo `.wav` bajo
+        // `assets/audio/` (recursivo) se registra en el AudioSystem con el
+        // nombre del fichero sin extensión, listo para reproducirse desde
+        // script por nombre (p. ej. `assets/audio/plat3d/plat3d_jump.wav`
+        // se reproduce como "plat3d_jump"). Hasta ahora el sistema solo
+        // traía los beeps internos de demostración.
+        {
+            let audio_root = scene_manager
+                .lock()
+                .map(|m| m.vfs().root().join("assets").join("audio"))
+                .unwrap_or_default();
+            let mut pending = vec![audio_root];
+            let mut loaded = 0_usize;
+            while let Some(dir) = pending.pop() {
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            pending.push(path);
+                        } else if path
+                            .extension()
+                            .map(|e| e.eq_ignore_ascii_case("wav"))
+                            .unwrap_or(false)
+                        {
+                            if let (Some(stem), Ok(bytes)) = (
+                                path.file_stem().and_then(|s| s.to_str()),
+                                std::fs::read(&path),
+                            ) {
+                                audio_system.load_clip(stem.to_string(), bytes);
+                                loaded += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            log::info!("Audio: {loaded} clips .wav cargados desde assets/audio/");
+        }
 
         #[cfg(feature = "editor")]
         let egui_ctx = egui::Context::default();
@@ -376,17 +1580,30 @@ impl GlassEngineApp {
             app_mode,
             #[cfg(feature = "editor")]
             launcher: LauncherPanel::new(),
+            start_instant: std::time::Instant::now(),
             #[cfg(feature = "editor")]
             pending_launcher_action: None,
             scene_state,
+            ui_images_key: String::new(),
+            ui_images_map: canvas_ui::UiSceneImages::new(),
+            ui_font_atlases: std::collections::HashMap::new(),
+            materiales: std::collections::HashMap::new(),
+            materiales_failed: std::collections::HashSet::new(),
+            material_textures: std::collections::HashSet::new(),
+            ui_font_failed: std::collections::HashSet::new(),
+            scene_manager,
             #[cfg(feature = "editor")]
             mcp_server,
+            #[cfg(feature = "editor")]
+            mcp_stdio_thread: None,
             asset_cache,
             asset_watcher: None,
             start_time: Instant::now(),
             script_host: ScriptHost::new(),
             audio_system,
             physics_world,
+            lightmap_runtime: None,
+            pending_script_spawns: Arc::new(Mutex::new(Vec::new())),
             is_standalone,
             is_headless_test,
             is_m5_test,
@@ -401,7 +1618,100 @@ impl GlassEngineApp {
             scene_to_load,
             player_script_handle: None,
             keys_pressed: HashSet::new(),
+            axis_bank: glass_scripting::input_axes::AxisBank::new(
+                glass_scripting::input_axes::default_input_axes(),
+            ),
+            input_defs_loaded: false,
+            input_defs_mtime: None,
+            gamepad: match gilrs::Gilrs::new() {
+                Ok(g) => {
+                    log::info!("Input v2: subsistema de mandos (gilrs) listo.");
+                    Some(g)
+                }
+                Err(e) => {
+                    log::warn!("Input v2: sin subsistema de mandos ({e}).");
+                    None
+                }
+            },
+            pad_state: PadState::default(),
+            mouse: mouse_input::MouseState::new(),
+            button_click_tracker: canvas_ui::ButtonClickTracker::new(),
+            ui_drag_session: None,
+            skin_joint_buffers: std::collections::HashMap::new(),
+            anim_runtime: std::collections::HashMap::new(),
+            animator_controllers: std::collections::HashMap::new(),
+            anim_pose: std::collections::HashMap::new(),
+            anim_free_fade: std::collections::HashMap::new(),
+            last_anim_instant: Instant::now(),
+            retired_joint_buffers: Vec::new(),
             player_body_handle: None,
+        }
+    }
+
+    /// Decide si el canal MCP por stdio debe arrancar en modo editor.
+    ///
+    /// Función pura (sin tocar el stdio real) para poder probarla. Regla:
+    /// un cliente MCP lanza el proceso con pipes (stdin no es TTY), así
+    /// que se arranca salvo que stdin sea una terminal interactiva — ahí
+    /// las teclas del usuario no son JSON-RPC y las respuestas del
+    /// servidor ensuciarían la consola —. `force` (`--mcp-live`) salta
+    /// esa protección explícitamente.
+    #[cfg(feature = "editor")]
+    pub fn live_mcp_stdio_decision(force: bool, stdin_is_terminal: bool) -> bool {
+        force || !stdin_is_terminal
+    }
+
+    /// Arranca el servidor MCP nativo sobre la escena VIVA del editor,
+    /// sirviendo JSON-RPC por stdio en un hilo dedicado.
+    ///
+    /// No crea un `SceneState` ni un `McpServer` nuevos: reutiliza
+    /// `self.mcp_server`, que ya comparte el mismo
+    /// `Arc<Mutex<SceneState>>` que usa el editor (ver `new`). Lo que
+    /// faltaba era el transporte: en modo editor nadie leía stdio y el
+    /// MCP solo existía para el autotest en proceso y para el modo
+    /// headless `--mcp` (que sí crea su propia escena).
+    ///
+    /// Concurrencia: cada tool toma el `Mutex` de la escena durante su
+    /// ejecución (el locking grueso ya existente en `McpServer`), así que
+    /// el hilo nunca toca la escena a la vez que el bucle de render, y la
+    /// espera en stdio ocurre FUERA del lock. Ninguna tool toca Vulkan ni
+    /// el `AssetCache`: mutan datos CPU de la escena y el hilo principal
+    /// los sube a GPU en su frame, tras la espera del fence.
+    ///
+    /// El hilo es fire-and-forget a propósito: NO debe hacerse `join`
+    /// sobre `mcp_stdio_thread` en el camino de apagado, porque
+    /// `run_stdio_loop` queda bloqueado en lectura de stdin y esperar su
+    /// fin colgaría el cierre si el cliente no cierra su extremo de
+    /// escritura. El hilo termina por EOF (el cliente cerró; el editor
+    /// sigue en marcha sin canal MCP) o con el proceso al salir la app.
+    #[cfg(feature = "editor")]
+    pub fn start_live_mcp_stdio(&mut self, force: bool) {
+        if self.mcp_stdio_thread.is_some() {
+            return;
+        }
+        let stdin_is_terminal = std::io::stdin().is_terminal();
+        if !Self::live_mcp_stdio_decision(force, stdin_is_terminal) {
+            log::info!(
+                "MCP en vivo: canal stdio NO abierto (stdin es una terminal interactiva). \
+                 Lanza el editor con stdin por pipe o pasa --mcp-live para servir el MCP \
+                 sobre la escena del editor; el modo headless sigue en --mcp."
+            );
+            return;
+        }
+        // El mismo servidor (y la misma escena) que ya usa el editor.
+        let server = self.mcp_server.clone();
+        match std::thread::Builder::new()
+            .name("glass-mcp-stdio".to_string())
+            .spawn(move || {
+                log::info!("MCP en vivo: hilo stdio sirviendo la escena del editor.");
+                server.run_stdio_loop();
+                log::info!(
+                    "MCP en vivo: stdio cerrado (EOF o error de lectura); \
+                     el editor sigue en marcha sin canal MCP."
+                );
+            }) {
+            Ok(handle) => self.mcp_stdio_thread = Some(handle),
+            Err(e) => log::error!("MCP en vivo: no se pudo lanzar el hilo stdio: {e}"),
         }
     }
 
@@ -424,7 +1734,7 @@ impl GlassEngineApp {
                 "Directional Light".into(),
                 vec!["Transform".into(), "Light".into()],
             );
-            state.modify_transform(light_id, Some([0.0, 10.0, 0.0]), Some([50.0, -30.0, 0.0]), Some([1.0, 1.0, 1.0]));
+            state.modify_transform(light_id, Some([0.0, 10.0, 0.0]), Some([-50.0, 30.0, 0.0]), Some([1.0, 1.0, 1.0]));
 
             let floor_id = state.create_entity(
                 "Static Floor".into(),
@@ -527,7 +1837,7 @@ impl GlassEngineApp {
                 "Directional Light".into(),
                 vec!["Transform".into(), "Light".into()],
             );
-            state.modify_transform(light_id, Some([0.0, 10.0, 0.0]), Some([50.0, -30.0, 0.0]), Some([1.0, 1.0, 1.0]));
+            state.modify_transform(light_id, Some([0.0, 10.0, 0.0]), Some([-50.0, 30.0, 0.0]), Some([1.0, 1.0, 1.0]));
 
             // 2. Plataformas 3D (Escalables)
             let floor_id = state.create_entity(
@@ -689,8 +1999,16 @@ impl GlassEngineApp {
 
     pub fn execute_build_and_run(&mut self) {
         log::info!("🚀 Iniciando Pipeline de Build & Run Standalone...");
-        let scene_path = "assets/scenes/SampleScene.scene.json";
+        // La escena del build es la escena EDITADA en este momento. Se guarda
+        // con un nombre propio del build: antes se volcaba siempre sobre
+        // SampleScene.scene.json, sobrescribiendo la escena de ejemplo del
+        // proyecto en cada build.
+        let scene_path = "assets/scenes/Standalone.scene.json";
         if let Ok(sc) = self.scene_state.lock() {
+            // save_to_json no crea el directorio padre.
+            if let Some(parent) = std::path::Path::new(scene_path).parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
             if let Err(e) = sc.save_to_json(scene_path) {
                 log::error!("Fallo al guardar escena para el build: {}", e);
             }
@@ -703,56 +2021,42 @@ impl GlassEngineApp {
         }
 
         let build_dir = std::path::Path::new("build/standalone");
-        let _ = std::fs::create_dir_all(build_dir.join("assets/shaders"));
-        let _ = std::fs::create_dir_all(build_dir.join("assets/models"));
-        let _ = std::fs::create_dir_all(build_dir.join("assets/scenes"));
-        let _ = std::fs::create_dir_all(build_dir.join("managed/GlassEngine.Core/bin/Debug/net8.0"));
 
-        // 1. Copiar shaders compilados
-        if let Ok(entries) = std::fs::read_dir("assets/shaders") {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("spv") {
-                    if let Some(file_name) = path.file_name() {
-                        let _ = std::fs::copy(&path, build_dir.join("assets/shaders").join(file_name));
-                    }
-                }
-            }
+        // 1. Copiar TODO el árbol de assets (shaders, modelos .glb y .gltf,
+        // texturas, audio y escenas, con sus subcarpetas). Antes la copia era
+        // plana y con filtro de extensión: un .gltf con sus texturas en una
+        // subcarpeta, o el audio, nunca llegaban al paquete y el juego
+        // arrancaba incompleto.
+        if let Err(e) = copy_dir_recursive(std::path::Path::new("assets"), &build_dir.join("assets")) {
+            log::error!("Fallo copiando assets al build: {}", e);
         }
 
-        // 2. Copiar modelos
-        if let Ok(entries) = std::fs::read_dir("assets/models") {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("glb") {
-                    if let Some(file_name) = path.file_name() {
-                        let _ = std::fs::copy(&path, build_dir.join("assets/models").join(file_name));
-                    }
-                }
-            }
-        }
-
-        // 3. Copiar escena y project.json
-        let _ = std::fs::copy(scene_path, build_dir.join(scene_path));
+        // 2. Copiar project.json (con la escena del build como default).
         let _ = std::fs::copy("project.json", build_dir.join("project.json"));
 
-        // 4. Copiar DLLs gestionadas de C#
+        // 3. Copiar la carpeta gestionada de C# completa (antes: una lista
+        // fija de 4 ficheros; cualquier dependencia nueva quedaba fuera).
         let managed_src = std::path::Path::new("managed/GlassEngine.Core/bin/Debug/net8.0");
         let managed_dst = build_dir.join("managed/GlassEngine.Core/bin/Debug/net8.0");
-        for file in &["GlassEngine.Core.dll", "GlassEngine.Core.runtimeconfig.json", "GlassEngine.Core.deps.json", "GlassEngine.Core.pdb"] {
-            let src = managed_src.join(file);
-            if src.exists() {
-                let _ = std::fs::copy(&src, managed_dst.join(file));
+        if managed_src.exists() {
+            if let Err(e) = copy_dir_recursive(managed_src, &managed_dst) {
+                log::error!("Fallo copiando DLLs gestionadas al build: {}", e);
             }
         }
 
-        // 5. Copiar binario de la aplicación
+        // 4. Copiar binario de la aplicación. El nombre lleva la extensión de
+        // ejecutable de la plataforma (.exe en Windows): sin ella, Windows no
+        // puede lanzar el juego. Nota: este binario es el del propio editor en
+        // modo --standalone; el binario de juego puro se compila con
+        // `cargo build -p glass_app --no-default-features`.
+        let exe_name = format!("GlassEngineGame{}", std::env::consts::EXE_SUFFIX);
         if let Ok(current_exe) = std::env::current_exe() {
-            let _ = std::fs::copy(&current_exe, build_dir.join("GlassEngineGame"));
+            let dst = build_dir.join(&exe_name);
+            let _ = std::fs::copy(&current_exe, &dst);
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(build_dir.join("GlassEngineGame"), std::fs::Permissions::from_mode(0o755));
+                let _ = std::fs::set_permissions(&dst, std::fs::Permissions::from_mode(0o755));
             }
         }
 
@@ -765,8 +2069,8 @@ impl GlassEngineApp {
             ));
         }
 
-        // 6. Lanzar ejecutable standalone en segundo plano
-        let child_res = std::process::Command::new("./GlassEngineGame")
+        // 5. Lanzar ejecutable standalone en segundo plano.
+        let child_res = std::process::Command::new(build_dir.join(&exe_name))
             .current_dir(build_dir)
             .args(["--standalone", "--scene", scene_path])
             .spawn();
@@ -796,7 +2100,7 @@ impl GlassEngineApp {
                 "Directional Light".into(),
                 vec!["Transform".into(), "Light".into()],
             );
-            state.modify_transform(light_id, Some([0.0, 10.0, 0.0]), Some([45.0, -35.0, 0.0]), Some([1.0, 1.0, 1.0]));
+            state.modify_transform(light_id, Some([0.0, 10.0, 0.0]), Some([-45.0, 35.0, 0.0]), Some([1.0, 1.0, 1.0]));
 
             let floor_id = state.create_entity(
                 "Static Floor".into(),
@@ -968,6 +2272,66 @@ impl GlassEngineApp {
         log::info!("Proyecto '{}' creado y cargado en el editor: {:?}", name, project_dir);
     }
 
+    /// Si el modelo importado trae piel, sube también su malla gemela con
+    /// formato `SkinnedVertex` y registra piel y clips en la caché (la
+    /// subida rígida normal ya se hizo en el llamante y queda como
+    /// respaldo). Sin piel, no hace nada: los modelos de siempre no pagan
+    /// ni un byte extra.
+    /// OJO con la concurrencia: el allocator y la caché llegan YA
+    /// bloqueados por el llamante (ambas rutas de carga los tienen tomados
+    /// para la subida rígida y las texturas). Volver a bloquear cualquiera
+    /// de los dos aquí dentro cuelga la app: ni Mutex ni RwLock de std son
+    /// reentrantes (cazado en vivo dos veces durante este bloque).
+    fn upload_skin_if_any(
+        &self,
+        renderer: &GlassRenderer,
+        vk_ctx: &VulkanContext,
+        alloc: &mut gpu_allocator::vulkan::Allocator,
+        cache: &mut AssetCache,
+        model: &glass_renderer::mesh::LoadedModel,
+        stem: &str,
+    ) {
+        let Some(skin) = &model.skin else { return };
+        let upload_res = MeshLoader::upload_skinned_to_gpu(
+            &renderer.device,
+            alloc,
+            model,
+            vk_ctx.graphics_queue,
+            renderer.command_pool,
+        );
+        match upload_res {
+            Ok(gpu_mesh) => {
+                cache.insert_skinned_mesh(&renderer.device, alloc, stem, gpu_mesh);
+                cache.insert_skin_data(stem, skin.clone(), model.animations.clone());
+                log::info!(
+                    "Modelo '{}' con piel: {} articulaciones y {} clips registrados",
+                    stem,
+                    skin.joints.len(),
+                    model.animations.len()
+                );
+            }
+            Err(e) => {
+                log::error!("Error subiendo la malla con piel de '{}': {}", stem, e);
+            }
+        }
+    }
+
+    /// Retira los buffers de articulación y olvida el estado de
+    /// reproducción. Al cambiar de escena las entidades nuevas pueden
+    /// reutilizar ids: no deben heredar ni buffers ni poses de la
+    /// anterior. Los buffers NO se destruyen aquí (podría haber un frame
+    /// en vuelo leyéndolos): pasan a la lista de retirados, que
+    /// `render_frame` libera tras esperar el fence.
+    fn reset_skinning_runtime(&mut self) {
+        let vivos: Vec<glass_renderer::JointBuffer> =
+            self.skin_joint_buffers.drain().map(|(_, jb)| jb).collect();
+        self.retired_joint_buffers.extend(vivos);
+        self.anim_runtime.clear();
+        self.anim_pose.clear();
+        self.anim_free_fade.clear();
+        self.last_anim_instant = Instant::now();
+    }
+
     fn check_asset_reloads(&mut self) {
         let events: Vec<AssetReloadEvent> = if let Some(watcher) = &self.asset_watcher {
             watcher.receiver.try_iter().collect()
@@ -981,14 +2345,14 @@ impl GlassEngineApp {
                     log::info!("Procesando recarga en caliente de modelo: {:?}", path);
                     if let (Some(renderer), Some(vk_ctx)) = (&self.renderer, &self.vulkan_context) {
                         if let Ok(bytes) = std::fs::read(&path) {
-                            if let Ok((verts, indices)) = MeshLoader::load_from_glb_bytes(&bytes) {
+                            if let Ok(model) = MeshLoader::load_model_from_glb_bytes(&bytes) {
                                 let upload_res = {
                                     let mut alloc = renderer.allocator.lock().unwrap();
                                     MeshLoader::upload_to_gpu(
                                         &renderer.device,
                                         &mut *alloc,
-                                        &verts,
-                                        &indices,
+                                        &model.vertices,
+                                        &model.indices,
                                         vk_ctx.graphics_queue,
                                         renderer.command_pool,
                                     )
@@ -1001,12 +2365,49 @@ impl GlassEngineApp {
                                         .unwrap_or("unnamed");
                                     let mut alloc = renderer.allocator.lock().unwrap();
                                     let mut cache = self.asset_cache.write().unwrap();
+                                    let primary = model.primary_material().cloned();
                                     cache.insert_mesh(
                                         &renderer.device,
                                         &mut *alloc,
                                         stem,
                                         gpu_mesh,
                                     );
+                                    // La recarga también refresca materiales e
+                                    // imágenes: si el .blend cambió el material,
+                                    // el editor debe ver el nuevo, no el viejo.
+                                    cache.insert_model_data(
+                                        stem,
+                                        model.materials.clone(),
+                                        primary,
+                                        model.images.clone(),
+                                        model.primitive_ranges.clone(),
+                                    );
+                                    self.upload_skin_if_any(renderer, vk_ctx, &mut *alloc, &mut *cache, &model, stem);
+                                    // Y las texturas GPU de todos los
+                                    // materiales: se resuben y los sets del
+                                    // modelo se reapuntan a las nuevas vistas.
+                                    if let Some(layout) = renderer.pbr_pipeline.descriptor_set_layout {
+                                        let mut uploaded: Vec<usize> = Vec::new();
+                                        for mat in &model.materials {
+                                            if let Some(idx) = mat.base_color_image {
+                                                if !uploaded.contains(&idx) {
+                                                    uploaded.push(idx);
+                                                    if let Some(img) = model.images.get(idx) {
+                                                        cache.insert_texture(
+                                                            &renderer.device,
+                                                            &mut *alloc,
+                                                            vk_ctx.graphics_queue,
+                                                            renderer.command_pool,
+                                                            layout,
+                                                            stem,
+                                                            idx,
+                                                            img,
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1019,7 +2420,284 @@ impl GlassEngineApp {
         }
     }
 
+    /// Aplica la carga de escena pendiente, si la hay, al final del frame.
+    ///
+    /// `SceneManager.LoadScene` de C# (y el menú del editor) sólo encolan; aquí
+    /// es donde la escena cambia de verdad. El orden importa:
+    ///
+    /// 1. Se destruyen los scripts vivos **antes** de tocar las entidades, para
+    ///    que ningún `GlassBehaviour` llame a `GetTransform` con un id que ya no
+    ///    existe.
+    /// 2. `apply_pending` sustituye el conjunto de entidades de golpe.
+    /// 3. Se reconstruye la física desde los componentes `Physics` de la escena
+    ///    nueva: los cuerpos de Rapier apuntan a ids viejos y hay que rehacerlos.
+    /// 4. Se instancian los scripts que declara la escena nueva.
+    fn apply_pending_scene_load(&mut self) {
+        let result = {
+            let Ok(mut manager) = self.scene_manager.lock() else {
+                log::error!("SceneManager: candado envenenado, no se aplica la carga pendiente.");
+                return;
+            };
+            if !manager.has_pending() {
+                return;
+            }
+            let requested = manager.pending_request().unwrap_or("?").to_string();
+            let mut scene = match self.scene_state.lock() {
+                Ok(s) => s,
+                Err(_) => {
+                    log::error!("SceneManager: SceneState bloqueado, se cancela la carga de '{requested}'.");
+                    manager.cancel_pending();
+                    return;
+                }
+            };
+            log::info!("SceneManager: aplicando carga diferida de '{requested}' al final del frame...");
+            manager.apply_pending(&mut scene)
+        };
+
+        match result {
+            Ok(Some(loaded)) => {
+                // Silencia el audio de la escena anterior al activarse la nueva.
+                self.audio_system.stop_all();
+
+                log::info!(
+                    "SceneManager: escena '{}' activa ({} entidades, clave {}).",
+                    loaded.name,
+                    loaded.entity_ids.len(),
+                    loaded.asset_key
+                );
+
+                // 1. Fuera las instancias de la escena anterior.
+                self.player_script_handle = None;
+                self.player_body_handle = None;
+                self.script_host.destroy_all_instances();
+
+                // 1a. Punto de interacción: quien lo publicaba era un
+                // script de la escena anterior; si quedara fijado, la
+                // escena nueva heredaría un intruso fantasma en sus
+                // grafos. Vuelve al valor inactivo y ya publicará quien
+                // corresponda en la escena nueva.
+                glass_scripting::bindings::clear_interaction_point_state();
+
+                // 1b. Skinning: los buffers y tiempos de animación de la
+                // escena anterior no deben sobrevivir al cambio (los ids
+                // de entidad se reutilizan entre escenas).
+                self.reset_skinning_runtime();
+
+                // 2. Física desde cero: los handles de Rapier no sobreviven a
+                //    una sustitución de entidades.
+                self.rebuild_physics_from_scene();
+
+                // 3. Scripts que declara la escena nueva.
+                self.instantiate_scene_scripts(&loaded.scripted);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                // La escena anterior sigue intacta: `apply_pending` sólo
+                // sustituye entidades después de parsear con éxito.
+                log::error!("SceneManager: no se pudo cargar la escena: {e}");
+                self.audio_system.stop_all();
+            }
+        }
+    }
+
+    /// Reconstruye el mundo de Rapier a partir de los componentes `Physics`.
+    fn rebuild_physics_from_scene(&mut self) {
+        let world_matrices = {
+            let Ok(scene) = self.scene_state.lock() else {
+                return;
+            };
+            scene.compute_world_matrices()
+        };
+
+        let mut descriptors: Vec<(
+            u64,
+            BodyType,
+            [f32; 3],
+            [f32; 4],
+            ColliderShape,
+            f32,
+            f32,
+            [f32; 3],
+        )> = Vec::new();
+        {
+            let Ok(scene) = self.scene_state.lock() else {
+                return;
+            };
+            for ent in &scene.entities {
+                let Some(body) = &ent.physics else { continue };
+                if !ent.active {
+                    continue;
+                }
+                let body_type = match body.body_type.as_str() {
+                    "Static" => BodyType::Static,
+                    "Kinematic" => BodyType::Kinematic,
+                    _ => BodyType::Dynamic,
+                };
+                let world = world_matrices.get(&ent.id).copied().unwrap_or_else(|| {
+                    glass_core::mat4_from_trs_euler(
+                        ent.transform.position,
+                        ent.transform.rotation(),
+                        ent.transform.scale,
+                    )
+                });
+                let pos = glass_core::mat4_translation(world);
+                let rot = glass_core::mat4_to_quat(world);
+                // Forma del collider: se deriva de la malla integrada
+                // de la entidad (sphere/capsule/cylinder) con su
+                // escala mundial; cualquier otro modelo —incluido no
+                // tener malla, que al dibujar cae al cubo— produce la
+                // caja de `box_extents` de siempre (compatibilidad
+                // total con el contenido existente: ninguna escena
+                // usa aún los nombres nuevos).
+                let model = ent.mesh.as_ref().map(|m| m.model.as_str()).unwrap_or("");
+                let shape = collider_shape_for_builtin(
+                    model,
+                    glass_core::mat4_scale(world),
+                    body.box_extents,
+                );
+                descriptors.push((
+                    ent.id,
+                    body_type,
+                    pos,
+                    rot,
+                    shape,
+                    body.friction,
+                    body.restitution,
+                    body.linear_velocity,
+                ));
+            }
+        }
+
+        let Ok(mut physics) = self.physics_world.lock() else {
+            log::error!("Física: candado envenenado, no se reconstruye el mundo.");
+            return;
+        };
+        *physics = PhysicsWorld::new();
+        for (id, body_type, pos, rot, shape, friction, restitution, linvel) in descriptors {
+            let handle = physics.create_rigid_body(id, body_type, pos, rot);
+            // OJO, orden deliberado: este paso de argumentos lleva
+            // (friction, restitution) desde siempre y todo el
+            // contenido está calibrado con ese cruce respecto a la
+            // firma (restitution, friction) del mundo. Se conserva
+            // EXACTO al pasar al dispatcher: «arreglarlo» aquí
+            // cambiaría el comportamiento físico de todas las
+            // escenas existentes.
+            physics.attach_collider(handle, shape, friction, restitution);
+            physics.set_linear_velocity(handle, linvel);
+        }
+        log::info!(
+            "Física reconstruida: {} cuerpo(s), {} collider(s).",
+            physics.body_count(),
+            physics.collider_count()
+        );
+    }
+
+    /// Arranque directo de una escena (`--scene` o la escena por defecto
+    /// del standalone): `load_from_json` solo sustituye las entidades, así
+    /// que sin este paso la escena quedaría «en cartel» —renderizada pero
+    /// sin física ni scripts— porque la reconstrucción completa solo la
+    /// hacía la carga diferida de `SceneManager`
+    /// (`apply_pending_scene_load`). Aquí se aplican a la escena ya
+    /// cargada los mismos dos pasos: reconstruir la física desde sus
+    /// componentes e instanciar los scripts que declara (con la misma
+    /// regla que `SceneManager::apply_pending`: manda
+    /// `script_data.class_name` y se cae al campo `script` heredado).
+    fn bootstrap_scene_scripts_and_physics(&mut self, scene_path: &str) {
+        // La carga directa no pasa por `SceneManager::apply_pending`,
+        // que es quien marca la escena activa: sin esto, un script que
+        // lea el nombre de la escena activa (p. ej. una meta que decide
+        // el siguiente nivel) vería el valor por defecto («Untitled») y
+        // enrutaría mal. Se marca con el mismo nombre corto que deriva
+        // `apply_pending` de la clave del activo.
+        if let Ok(mut manager) = self.scene_manager.lock() {
+            manager.set_active_name(&glass_core::scenes::short_scene_name(scene_path));
+        }
+        let scripted: Vec<(u64, String)> = {
+            let Ok(scene) = self.scene_state.lock() else {
+                return;
+            };
+            scene
+                .entities
+                .iter()
+                .filter_map(|e| {
+                    let class = e
+                        .script_data
+                        .as_ref()
+                        .map(|s| s.class_name.clone())
+                        .or_else(|| e.script.clone())?;
+                    Some((e.id, class))
+                })
+                .collect()
+        };
+        self.rebuild_physics_from_scene();
+        self.instantiate_scene_scripts(&scripted);
+    }
+
+    /// Instancia en `ScriptHost` los scripts declarados por la escena cargada.
+    fn instantiate_scene_scripts(&mut self, scripted: &[(u64, String)]) {
+        if !self.script_host.is_initialized {
+            log::warn!(
+                "ScriptHost no inicializado: {} script(s) de la escena quedan sin instanciar.",
+                scripted.len()
+            );
+            return;
+        }
+        for (entity_id, class_name) in scripted {
+            match self.script_host.create_instance(*entity_id, class_name) {
+                Ok(handle) => {
+                    log::info!("Script '{class_name}' instanciado para entidad {entity_id} (handle {handle}).");
+                    // El jugador se localiza por clase: es la única forma de
+                    // recuperar el handle del `RigidBody` que mueve el controlador
+                    // sin meter un campo extra en el formato de escena.
+                    if class_name.ends_with("PlayerController") {
+                        self.player_script_handle = Some(handle);
+                        if let Ok(physics) = self.physics_world.lock() {
+                            self.player_body_handle = physics.get_body_by_entity(*entity_id);
+                        }
+                    }
+                }
+                Err(e) => log::warn!("No se pudo instanciar '{class_name}' para {entity_id}: {e}"),
+            }
+        }
+    }
+
+    // Reconciliación por frame del bloque de instanciación: vive en la
+    // función libre `reconcile_spawned_scripts` (después de este
+    // `impl`) porque `render_frame` retiene un préstamo mutable del
+    // renderer durante todo el frame: ahí dentro solo se pueden tocar
+    // campos sueltos de `self`, nunca `&mut self` entero.
+
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Antes de recargar o expulsar activos hay que garantizar que la GPU
+        // terminó el frame anterior: la recarga en caliente y `evict_idle`
+        // destruyen texturas y descriptor sets, y hasta ahora la única espera
+        // de este fence vivía dentro de `render_views()`/del pase egui, es
+        // decir DESPUÉS de esas destrucciones (la seguridad era transitiva y
+        // se perdía en las rutas de retorno temprano). Se espera SIN reset:
+        // el reset lo hace, como siempre, quien graba el siguiente envío. El
+        // fence nace señalado (ver creación en glass_renderer), así que el
+        // primer frame no se bloquea.
+        if let Some(renderer) = &self.renderer {
+            unsafe {
+                renderer
+                    .device
+                    .wait_for_fences(&[renderer.fence], true, u64::MAX)?;
+            }
+        }
+
+        // Buffers de articulación retirados en frames anteriores (cambio
+        // de escena o piel recreada): con el fence ya esperado, ningún
+        // frame en vuelo los lee y se pueden liberar.
+        if !self.retired_joint_buffers.is_empty() {
+            if let Some(renderer) = &self.renderer {
+                let joints_pool = renderer.joints_pool;
+                let device = renderer.device.clone();
+                for mut jb in self.retired_joint_buffers.drain(..) {
+                    jb.destroy(&device, &mut *renderer.allocator.lock().unwrap(), joints_pool);
+                }
+            }
+        }
+
         self.check_asset_reloads();
 
         #[cfg(feature = "editor")]
@@ -1065,41 +2743,301 @@ impl GlassEngineApp {
             _ => return Ok(()),
         };
 
-        // 0. Sincronizar estado de inputs (teclado W, A, S, D, Flechas, Espacio)
-        let mut move_x = 0.0_f32;
-        let mut move_z = 0.0_f32;
-        let mut jump_val = 0_u8;
-
+        // 0. Sincronizar estado de inputs (Input v2: los ejes son
+        // DATOS — assets/input_axes.json o los defaults clásicos —
+        // y el banco los suaviza y calcula los botones con borde.
+        // El dt es el mismo paso fijo que reciben los scripts.)
+        {
+            let mtime = std::fs::metadata("assets/input_axes.json")
+                .and_then(|m| m.modified())
+                .ok();
+            if !self.input_defs_loaded || mtime != self.input_defs_mtime {
+                self.input_defs_loaded = true;
+                self.input_defs_mtime = mtime;
+                let defs = load_input_axis_defs();
+                glass_scripting::input_axes::set_axis_defs(defs.clone());
+                self.axis_bank = glass_scripting::input_axes::AxisBank::new(defs);
+            }
+        }
+        // Mando: muestrear el primero conectado (si lo hay).
+        if let Some(g) = self.gamepad.as_mut() {
+            self.pad_state = poll_gamepad(g);
+        }
+        let pad = self.pad_state;
+        let mut down_names: std::collections::HashSet<&'static str> =
+            std::collections::HashSet::new();
         for key in &self.keys_pressed {
             if let PhysicalKey::Code(code) = key {
-                match code {
-                    KeyCode::KeyW | KeyCode::ArrowUp => move_z += 1.0,
-                    KeyCode::KeyS | KeyCode::ArrowDown => move_z -= 1.0,
-                    KeyCode::KeyD | KeyCode::ArrowRight => move_x += 1.0,
-                    KeyCode::KeyA | KeyCode::ArrowLeft => move_x -= 1.0,
-                    KeyCode::Space => jump_val = 1,
-                    _ => {}
+                if let Some(n) = key_name(*code) {
+                    down_names.insert(n);
                 }
             }
+        }
+        if down_names.contains("shift_left") || down_names.contains("shift_right") {
+            down_names.insert("shift");
+        }
+        if down_names.contains("ctrl_left") || down_names.contains("ctrl_right") {
+            down_names.insert("ctrl");
+        }
+        if down_names.contains("alt_left") || down_names.contains("alt_right") {
+            down_names.insert("alt");
         }
 
         #[cfg(feature = "editor")]
         {
             self.egui_ctx.input(|i| {
-                if i.key_down(egui::Key::W) || i.key_down(egui::Key::ArrowUp) { move_z += 1.0; }
-                if i.key_down(egui::Key::S) || i.key_down(egui::Key::ArrowDown) { move_z -= 1.0; }
-                if i.key_down(egui::Key::D) || i.key_down(egui::Key::ArrowRight) { move_x += 1.0; }
-                if i.key_down(egui::Key::A) || i.key_down(egui::Key::ArrowLeft) { move_x -= 1.0; }
-                if i.key_down(egui::Key::Space) { jump_val = 1; }
+                // En el editor, winit cede el teclado a egui: los
+                // mismos nombres canónicos desde su estado.
+                if i.key_down(egui::Key::W) { down_names.insert("w"); }
+                if i.key_down(egui::Key::S) { down_names.insert("s"); }
+                if i.key_down(egui::Key::D) { down_names.insert("d"); }
+                if i.key_down(egui::Key::A) { down_names.insert("a"); }
+                if i.key_down(egui::Key::ArrowUp) { down_names.insert("up"); }
+                if i.key_down(egui::Key::ArrowDown) { down_names.insert("down"); }
+                if i.key_down(egui::Key::ArrowRight) { down_names.insert("right"); }
+                if i.key_down(egui::Key::ArrowLeft) { down_names.insert("left"); }
+                if i.key_down(egui::Key::Space) { down_names.insert("space"); }
+                if i.key_down(egui::Key::V) { down_names.insert("v"); }
+                if i.modifiers.shift { down_names.insert("shift"); }
             });
         }
 
+        if pad.dpad_right { down_names.insert("right"); }
+        if pad.dpad_left { down_names.insert("left"); }
+        if pad.dpad_up { down_names.insert("up"); }
+        if pad.dpad_down { down_names.insert("down"); }
+        if self.mouse.left_held { down_names.insert("mouse0"); }
+        if self.mouse.right_held { down_names.insert("mouse1"); }
+        if self.mouse.middle_held { down_names.insert("mouse2"); }
+
+        // Fuentes del mando por eje, resueltas ANTES de la
+        // llamada (el banco se toma prestado mutable en ella).
+        let pad_src: Vec<(bool, f32)> = self
+            .axis_bank
+            .defs()
+            .iter()
+            .map(|d| (pad_button_for(&d.name, &pad), pad_axis_for(&d.name, &pad)))
+            .collect();
+        let axis_frame = self.axis_bank.update_with_pad(
+            0.016667,
+            &|n: &str| down_names.contains(n),
+            &|_i: usize| 0.0,
+            &|i: usize| pad_src.get(i).map_or(false, |t| t.0),
+            &|i: usize| pad_src.get(i).map_or(0.0, |t| t.1),
+        );
+        let move_x = self.axis_bank.value_of("Horizontal");
+        let move_z = self.axis_bank.value_of("Vertical");
+        let jump_idx = self.axis_bank.index_of("Jump");
+        let jump_val = jump_idx
+            .and_then(|ix| axis_frame.buttons.get(ix).copied())
+            .unwrap_or(false) as u8;
+        let run_val = down_names.contains("shift") as u8;
+        let camera_val = down_names.contains("v") as u8;
+
+        // Ratón: winit entrega la posición en píxeles físicos de ventana,
+        // pero el Canvas vive en el espacio del offscreen (el blit escala
+        // entre ambos al presentar), así que la conversión se hace aquí,
+        // donde se conocen los dos tamaños. Los bordes de pulsación y
+        // liberación se consumen una sola vez por frame.
+        let (mouse_down_edge, mouse_up_edge) = self.mouse.take_edges();
+        let win_size = window.inner.inner_size();
+        let (off_w, off_h) = (
+            renderer.offscreen.extent.width as f32,
+            renderer.offscreen.extent.height as f32,
+        );
+        let mouse_render_x = if win_size.width > 0 {
+            self.mouse.pos.0 as f32 * off_w / win_size.width as f32
+        } else {
+            0.0
+        };
+        let mouse_render_y = if win_size.height > 0 {
+            self.mouse.pos.1 as f32 * off_h / win_size.height as f32
+        } else {
+            0.0
+        };
+
+        let mut axes_arr = [0.0f32; 32];
+        let mut axes_raw_arr = [0.0f32; 32];
+        axes_arr[..axis_frame.values.len()].copy_from_slice(&axis_frame.values);
+        axes_raw_arr[..axis_frame.raw.len()].copy_from_slice(&axis_frame.raw);
+        let (mut btn, mut btn_down, mut btn_up) = (0u32, 0u32, 0u32);
+        for (i, (b, d, u)) in axis_frame
+            .buttons
+            .iter()
+            .zip(&axis_frame.buttons_down)
+            .zip(&axis_frame.buttons_up)
+            .map(|((b, d), u)| (b, d, u))
+            .enumerate()
+        {
+            if *b { btn |= 1 << i; }
+            if *d { btn_down |= 1 << i; }
+            if *u { btn_up |= 1 << i; }
+        }
+
         glass_scripting::set_input_state(glass_scripting::InputDataFfi {
-            move_x: move_x.clamp(-1.0, 1.0),
-            move_z: move_z.clamp(-1.0, 1.0),
+            move_x,
+            move_z,
             jump: jump_val,
-            run: 0,
+            run: run_val,
+            camera: camera_val,
+            mouse_x: mouse_render_x,
+            mouse_y: mouse_render_y,
+            mouse_left_held: self.mouse.left_held as u8,
+            mouse_left_down: mouse_down_edge as u8,
+            mouse_left_up: mouse_up_edge as u8,
+            axis_count: axis_frame.values.len() as u32,
+            axes: axes_arr,
+            axes_raw: axes_raw_arr,
+            buttons: btn,
+            buttons_down: btn_down,
+            buttons_up: btn_up,
         });
+
+        // Clics sobre botones del Canvas: solo en el standalone, donde el
+        // Canvas lo pinta el pase 2D propio; en el editor la superposición
+        // de egui ya gestiona sus clics y esta ruta duplicaría el efecto.
+        #[cfg(feature = "editor")]
+        let ui_clicks_active = self.is_standalone;
+        #[cfg(not(feature = "editor"))]
+        let ui_clicks_active = true;
+        if ui_clicks_active && (mouse_down_edge || mouse_up_edge) {
+            // El gesto se resuelve bajo el candado de escena, pero la
+            // INVOCACIÓN a C# ocurre fuera: un handler puede spawnear o
+            // destruir entidades (bloque de instanciación) y eso vuelve a
+            // pedir este mismo candado — invocando dentro, el primer
+            // botón que crease un objeto colgaría el frame. Antes ningún
+            // handler tocaba la escena y el riesgo era latente.
+            let mut completed_click: Option<canvas_ui::CanvasButtonClick> = None;
+            if let Ok(scene) = self.scene_state.lock() {
+                if mouse_down_edge && self.ui_drag_session.is_none() {
+                    self.button_click_tracker.press(
+                        &scene,
+                        mouse_render_x,
+                        mouse_render_y,
+                        off_w,
+                        off_h,
+                    );
+                }
+                if mouse_up_edge {
+                    completed_click = self.button_click_tracker.release(
+                        &scene,
+                        mouse_render_x,
+                        mouse_render_y,
+                        off_w,
+                        off_h,
+                    );
+                }
+            }
+            if let Some(click) = completed_click {
+                log::info!(
+                    "[Canvas UI] Botón '{}' clickeado en el standalone! (acción: '{}')",
+                    click.entity_name,
+                    click.action
+                );
+                if !click.action.is_empty() && self.script_host.is_initialized {
+                    self.script_host
+                        .invoke_button_click(click.entity_id, &click.action);
+                }
+            }
+        }
+
+        // Drag & drop del Canvas (UI v2): pulsar sobre un elemento
+        // arrastrable inicia la sesión; mientras se mantiene el
+        // botón, su anchored_position sigue al ratón conservando el
+        // agarre; al soltar, si hay una casilla que acepta sueltas
+        // debajo, el elemento encaja en su anchored (snap) y si no,
+        // vuelve a su sitio. Las invocaciones a C# van fuera del
+        // candado de escena, como las de los clics.
+        if ui_clicks_active {
+            let mut drag_calls: Vec<(u64, String)> = Vec::new();
+            if mouse_down_edge && self.ui_drag_session.is_none() {
+                if let Ok(scene) = self.scene_state.lock() {
+                    if let Some(session) = canvas_ui::drag_press(
+                        &scene,
+                        mouse_render_x,
+                        mouse_render_y,
+                        off_w,
+                        off_h,
+                    ) {
+                        DRAG_CURRENT.store(
+                            session.entity_id,
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                        DROP_TARGET_CURRENT.store(0, std::sync::atomic::Ordering::Relaxed);
+                        if !session.begin_action.is_empty() {
+                            drag_calls.push((session.entity_id, session.begin_action.clone()));
+                        }
+                        self.ui_drag_session = Some(session);
+                    }
+                }
+            }
+            if self.ui_drag_session.is_some() {
+                if self.mouse.left_held {
+                    let (id, nueva) = {
+                        let s = self.ui_drag_session.as_ref().expect("presente");
+                        (s.entity_id, s.follow(mouse_render_x, mouse_render_y))
+                    };
+                    if let Ok(mut scene) = self.scene_state.lock() {
+                        if let Some(ent) = scene.entities.iter_mut().find(|e| e.id == id) {
+                            if let Some(rt) = ent.rect_transform.as_mut() {
+                                rt.anchored_position = nueva;
+                            }
+                        }
+                    }
+                }
+                if mouse_up_edge {
+                    let session = self.ui_drag_session.take().expect("presente");
+                    if let Ok(mut scene) = self.scene_state.lock() {
+                        match canvas_ui::drag_drop_target(
+                            &scene,
+                            session.entity_id,
+                            mouse_render_x,
+                            mouse_render_y,
+                            off_w,
+                            off_h,
+                        ) {
+                            Some(hit) => {
+                                DROP_TARGET_CURRENT.store(
+                                    hit.entity_id,
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+                                if let Some(ent) =
+                                    scene.entities.iter_mut().find(|e| e.id == session.entity_id)
+                                {
+                                    if let Some(rt) = ent.rect_transform.as_mut() {
+                                        rt.anchored_position = hit.anchored;
+                                    }
+                                }
+                                if !hit.drop_action.is_empty() {
+                                    drag_calls.push((hit.entity_id, hit.drop_action.clone()));
+                                }
+                            }
+                            None => {
+                                DROP_TARGET_CURRENT.store(
+                                    0,
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+                                if let Some(ent) =
+                                    scene.entities.iter_mut().find(|e| e.id == session.entity_id)
+                                {
+                                    if let Some(rt) = ent.rect_transform.as_mut() {
+                                        rt.anchored_position = session.start_anchored();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if !session.end_action.is_empty() {
+                        drag_calls.push((session.entity_id, session.end_action.clone()));
+                    }
+                }
+            }
+            if self.script_host.is_initialized {
+                for (entity_id, action) in drag_calls {
+                    self.script_host.invoke_button_click(entity_id, &action);
+                }
+            }
+        }
 
         // 1. Manejo de estado de ejecución (Play / Pause / Stop)
         #[cfg(feature = "editor")]
@@ -1128,8 +3066,26 @@ impl GlassEngineApp {
             log::info!("Simulación detenida (Stop): Jugador y física restablecidos a posición de spawn.");
         }
 
-        // 2. Ejecutar paso de C# Scripting (.NET CoreCLR) — solo si simulación activa
+        // 2. Ejecutar paso de C# Scripting (.NET CoreCLR) — solo si simulación activa.
+        // Antes del Update va la reconciliación de instanciación: crea los
+        // scripts spawneados en el frame anterior (su primer Update es ESTE)
+        // y dispone los de las entidades destruidas. Se llama por campos
+        // sueltos: el renderer está prestado en `renderer` desde el inicio
+        // del frame y un `&mut self` entero no compilaría aquí.
         if simulation_running && self.script_host.is_initialized {
+            if let Some((handle, entity_id)) = reconcile_spawned_scripts(
+                &mut self.script_host,
+                &self.scene_state,
+                &self.pending_script_spawns,
+                &mut self.anim_runtime,
+                &mut self.skin_joint_buffers,
+                &mut self.retired_joint_buffers,
+            ) {
+                self.player_script_handle = Some(handle);
+                if let Ok(physics) = self.physics_world.lock() {
+                    self.player_body_handle = physics.get_body_by_entity(entity_id);
+                }
+            }
             self.script_host.update_all(0.016667);
         }
 
@@ -1238,14 +3194,13 @@ impl GlassEngineApp {
 
                 let (ld, lc) = if let Some(light_ent) = scene.main_light() {
                     let rot = light_ent.transform.rotation();
-                    let rx = rot[0].to_radians();
-                    let ry = rot[1].to_radians();
-                    let (sx, cx) = (rx.sin(), rx.cos());
-                    let (sy, cy) = (ry.sin(), ry.cos());
-                    // L es el vector hacia la fuente de luz en el cielo
-                    // Rayos de sol viajan en [sy * cx, -sx, -cy * cx] (hacia el suelo cuando rx > 0)
-                    // Por tanto, L hacia el sol es [-sy * cx, sx, cy * cx]
-                    let l_dir_vec = [-sy * cx, sx, cy * cx];
+                    // L (hacia la fuente) = columna 2 de la matriz de la luz:
+                    // los rayos viajan a lo largo de su forward (-columna 2),
+                    // como en Unity y como dibuja su gizmo. Antes se
+                    // reconstruía con los signos de pitch/yaw opuestos a la
+                    // convención del motor (glass_core::math).
+                    let lm = glass_core::mat4_from_trs_euler([0.0, 0.0, 0.0], rot, [1.0, 1.0, 1.0]);
+                    let l_dir_vec = [lm[8], lm[9], lm[10]];
                     let len = (l_dir_vec[0] * l_dir_vec[0] + l_dir_vec[1] * l_dir_vec[1] + l_dir_vec[2] * l_dir_vec[2]).sqrt().max(0.001);
                     let norm = [l_dir_vec[0] / len, l_dir_vec[1] / len, l_dir_vec[2] / len];
                     let ldata = light_ent.light.as_ref().cloned().unwrap_or_default();
@@ -1289,14 +3244,13 @@ impl GlassEngineApp {
                 };
                 let (ld, lc) = if let Some(light_ent) = scene.main_light() {
                     let rot = light_ent.transform.rotation();
-                    let rx = rot[0].to_radians();
-                    let ry = rot[1].to_radians();
-                    let (sx, cx) = (rx.sin(), rx.cos());
-                    let (sy, cy) = (ry.sin(), ry.cos());
-                    // L es el vector hacia la fuente de luz en el cielo
-                    // Rayos de sol viajan en [sy * cx, -sx, -cy * cx] (hacia el suelo cuando rx > 0)
-                    // Por tanto, L hacia el sol es [-sy * cx, sx, cy * cx]
-                    let l_dir_vec = [-sy * cx, sx, cy * cx];
+                    // L (hacia la fuente) = columna 2 de la matriz de la luz:
+                    // los rayos viajan a lo largo de su forward (-columna 2),
+                    // como en Unity y como dibuja su gizmo. Antes se
+                    // reconstruía con los signos de pitch/yaw opuestos a la
+                    // convención del motor (glass_core::math).
+                    let lm = glass_core::mat4_from_trs_euler([0.0, 0.0, 0.0], rot, [1.0, 1.0, 1.0]);
+                    let l_dir_vec = [lm[8], lm[9], lm[10]];
                     let len = (l_dir_vec[0] * l_dir_vec[0] + l_dir_vec[1] * l_dir_vec[1] + l_dir_vec[2] * l_dir_vec[2]).sqrt().max(0.001);
                     let norm = [l_dir_vec[0] / len, l_dir_vec[1] / len, l_dir_vec[2] / len];
                     let ldata = light_ent.light.as_ref().cloned().unwrap_or_default();
@@ -1319,10 +3273,172 @@ impl GlassEngineApp {
             (vp_g.unwrap(), vp_g, ld, lc, eye_final, eye_g)
         };
 
+        // El canal w de light_color está reservado en el PBR (no lo lee) y
+        // los materiales de grafo lo leen como tiempo en segundos: se
+        // sobrescribe aquí con el tiempo desde el arranque de la app.
+        let light_color = {
+            let mut lc = light_color;
+            lc[3] = self.start_instant.elapsed().as_secs_f32();
+            lc
+        };
+
+        // Expulsión de activos ociosos (P2): la caché no debe crecer sin
+        // límite en sesiones procedurales que crean y descartan mundos. Se
+        // expulsa lo no dibujado en los últimos ~10 s (600 ticks) que la
+        // escena actual no referencie; el cubo nunca se expulsa. Es seguro
+        // hacerlo aquí: un modelo ocioso no participó en el frame anterior,
+        // así que la GPU no lo está usando.
+        {
+            let protected: std::collections::HashSet<String> = {
+                let mut set = std::collections::HashSet::new();
+                if let Ok(scene) = self.scene_state.lock() {
+                    for ent in scene.entities.iter() {
+                        if let Some(m) = &ent.mesh {
+                            if !m.model.is_empty() {
+                                set.insert(m.model.clone());
+                            }
+                        }
+                    }
+                }
+                set
+            };
+            let mut alloc = renderer.allocator.lock().unwrap();
+            let mut cache = self.asset_cache.write().unwrap();
+            cache.advance_tick();
+            let evicted = cache.evict_idle(&renderer.device, &mut *alloc, 600, &protected);
+            if !evicted.is_empty() {
+                log::info!("AssetCache: {} modelos ociosos expulsados: {:?}", evicted.len(), evicted);
+            }
+        }
+
+        // dt de animación (bloque de skinning): tiempo real entre frames
+        // con tope de 0,1 s, para que una pausa larga (depurador, pérdida
+        // de foco) no teletransporte las poses al volver.
+        let anim_dt = {
+            let now = Instant::now();
+            let dt = (now - self.last_anim_instant).as_secs_f32().min(0.1);
+            self.last_anim_instant = now;
+            dt
+        };
+
+                // Materiales (Materiales v1): cargar bajo demanda
+                // los activos que la escena referencia y subir las
+                // texturas que aún no estén en la caché.
+                {
+                    let wanted: Vec<String> = match self.scene_state.lock() {
+                        Ok(scene) => {
+                            let mut v: Vec<String> = scene
+                                .entities
+                                .iter()
+                                .filter(|e| e.active)
+                                .filter_map(|e| e.mesh.as_ref())
+                                .map(|m| m.material.clone())
+                                .filter(|m| !m.is_empty())
+                                .collect();
+                            v.sort();
+                            v.dedup();
+                            v
+                        }
+                        Err(_) => Vec::new(),
+                    };
+                    for name in wanted {
+                        if self.materiales.contains_key(&name)
+                            || self.materiales_failed.contains(&name)
+                        {
+                            continue;
+                        }
+                        let path = format!("assets/materials/{}.material.json", name);
+                        let leido = std::fs::read_to_string(&path)
+                            .map_err(|e| e.to_string())
+                            .and_then(|text| {
+                                serde_json::from_str::<glass_core::MaterialData>(&text)
+                                    .map_err(|e| e.to_string())
+                            });
+                        match leido {
+                            Ok(mat) => {
+                                if !mat.texture.is_empty()
+                                    && !self.material_textures.contains(&mat.texture)
+                                {
+                                    let tex_path = format!("assets/{}", mat.texture);
+                                    match image::open(&tex_path) {
+                                        Ok(img) => {
+                                            let rgba = img.to_rgba8();
+                                            let (w, h) = rgba.dimensions();
+                                            let data = glass_renderer::mesh::GltfImageData {
+                                                width: w,
+                                                height: h,
+                                                rgba: rgba.into_raw(),
+                                            };
+                                            if let Some(layout) =
+                                                renderer.pbr_pipeline.descriptor_set_layout
+                                            {
+                                                let mut alloc =
+                                                    renderer.allocator.lock().unwrap();
+                                                let mut cache =
+                                                    self.asset_cache.write().unwrap();
+                                                cache.insert_texture(
+                                                    &renderer.device,
+                                                    &mut *alloc,
+                                                    vk_ctx.graphics_queue,
+                                                    renderer.command_pool,
+                                                    layout,
+                                                    format!("material:{}", mat.texture),
+                                                    0,
+                                                    &data,
+                                                );
+                                                self.material_textures
+                                                    .insert(mat.texture.clone());
+                                            }
+                                        }
+                                        Err(e) => log::warn!(
+                                            "Material '{}': no se pudo decodificar su textura '{}': {}",
+                                            name,
+                                            mat.texture,
+                                            e
+                                        ),
+                                    }
+                                }
+                                self.materiales.insert(name, mat);
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "Material '{}' no cargado ({}): {}",
+                                    name,
+                                    path,
+                                    e
+                                );
+                                self.materiales_failed.insert(name);
+                            }
+                        }
+                    }
+                }
+
         let cache = self.asset_cache.read().unwrap();
+        // Pase previo de la FSM (bloque FSM): la escena se bloquea en
+        // mutable un instante, antes del bloqueo en inmutable del bucle
+        // de dibujo que consume las decisiones.
+        if let Ok(mut scene) = self.scene_state.lock() {
+            avanzar_animadores_fsm(
+                &mut self.animator_controllers,
+                &mut self.anim_pose,
+                &mut self.anim_free_fade,
+                &mut self.anim_runtime,
+                &mut scene,
+                &cache,
+                anim_dt,
+            );
+        }
         if let Some(cube_mesh) = cache.meshes.get("cube") {
-            let mut scene_batches: Vec<(&glass_renderer::GpuMesh, glass_renderer::MeshPushConstants)> = Vec::new();
-            let mut game_batches: Vec<(&glass_renderer::GpuMesh, glass_renderer::MeshPushConstants)> = Vec::new();
+            let mut scene_batches: Vec<(&glass_renderer::GpuMesh, glass_renderer::MeshPushConstants, vk::DescriptorSet, Option<String>, (u32, u32))> = Vec::new();
+            let mut game_batches: Vec<(&glass_renderer::GpuMesh, glass_renderer::MeshPushConstants, vk::DescriptorSet, Option<String>, (u32, u32))> = Vec::new();
+            let mut scene_skinned: Vec<glass_renderer::SkinnedDrawItem> = Vec::new();
+            let mut game_skinned: Vec<glass_renderer::SkinnedDrawItem> = Vec::new();
+            // Proyectores del mapa de sombras (bloque de gráficos): cada
+            // entidad dibujada proyecta con la misma malla y la misma
+            // matriz de modelo de su lote; las con piel, además, con su
+            // set de articulaciones (la sombra sigue la pose).
+            let mut shadow_statics: Vec<(&glass_renderer::GpuMesh, [f32; 16])> = Vec::new();
+            let mut shadow_skinned: Vec<(&glass_renderer::GpuMesh, [f32; 16], vk::DescriptorSet)> = Vec::new();
 
             if let Ok(scene) = self.scene_state.lock() {
                 // ITERACIÓN 4: matrices de mundo compuestas por jerarquía
@@ -1332,6 +3448,14 @@ impl GlassEngineApp {
                 let world_matrices = scene.compute_world_matrices();
 
                 for ent in &scene.entities {
+                    // Una entidad inactiva no se dibuja: la física y el
+                    // Canvas ya respetaban `active`, y el render era el
+                    // único que no — sin esto, «desactivar» en un pool
+                    // dejaba el objeto visible (Plat3D lo sorteaba con
+                    // escala 0,001 porque no había alternativa).
+                    if !ent.active {
+                        continue;
+                    }
                     if ent.components.iter().any(|c| c == "MeshRenderer" || c == "Collider" || c == "StaticCollider") {
                         // Matriz de mundo del transform (escala completa).
                         let world = world_matrices.get(&ent.id).copied().unwrap_or_else(|| {
@@ -1354,7 +3478,25 @@ impl GlassEngineApp {
                             0.0, 0.0, h, 0.0,
                             0.0, 0.0, 0.0, 1.0,
                         ];
-                        let model = glass_core::mat4_mul(world, scale_half);
+                        // Malla de la entidad: su modelo importado si lo tiene
+                        // y está en la caché; si no, el cubo por defecto. La
+                        // media escala de arriba solo aplica al cubo (sus
+                        // vértices van de -1 a +1); un modelo importado se
+                        // dibuja con su matriz de mundo tal cual. Antes TODAS
+                        // las entidades dibujaban el cubo y los modelos
+                        // importados nunca llegaban a pantalla.
+                        let model_key = ent.mesh.as_ref().map(|m| m.model.as_str()).filter(|s| !s.is_empty());
+                        let using_model = model_key.map(|k| cache.meshes.contains_key(k)).unwrap_or(false);
+                        let ent_mesh: &glass_renderer::GpuMesh = model_key
+                            .and_then(|k| cache.meshes.get(k))
+                            .unwrap_or(cube_mesh);
+                        let model = if using_model {
+                            world
+                        } else {
+                            glass_core::mat4_mul(world, scale_half)
+                        };
+                        // Uso registrado para la expulsión de ociosos (P2).
+                        cache.touch(if using_model { model_key.unwrap() } else { "cube" });
 
                         let mvp_scene = matmul(&vp_scene, &model);
                         let obj_col = ent.mesh.as_ref().map(|m| [m.color[0], m.color[1], m.color[2], 1.0]).unwrap_or([0.8, 0.8, 0.8, 1.0]);
@@ -1364,45 +3506,586 @@ impl GlassEngineApp {
                         // (sin uso) al unificar `has_light` en `material_params.w`,
                         // así que leerlo era depender de un valor muerto.
                         let has_light = if scene.main_light().is_some() { 1.0 } else { 0.0 };
-                        let material_params = [0.15, 0.45, 1.0, has_light];
 
-                        scene_batches.push((cube_mesh, glass_renderer::MeshPushConstants {
-                            mvp: mvp_scene,
-                            model,
-                            light_dir,
-                            light_color,
-                            material_params,
-                            object_color: obj_col,
-                            camera_pos: eye_scene,
-                        }));
+                        // Lotes de dibujo de la entidad (color, parámetros
+                        // de material, set de textura y rango de índices
+                        // por lote): uno por primitiva con SU material si
+                        // el modelo es un glTF importado con rangos; si no,
+                        // un único lote con la malla entera, el material
+                        // principal y, en su defecto, el color plano de la
+                        // entidad y los valores históricos (0.15 / 0.45).
+                        // El shader PBR siempre muestrea, así que cada lote
+                        // lleva un set válido (el de su imagen o el blanco).
+                        let mut draw_items: Vec<([f32; 4], [f32; 4], vk::DescriptorSet, (u32, u32), [f32; 4], [f32; 4])> = Vec::new();
+                        // Materiales v1: el activo asignado a la
+                        // entidad manda sobre cualquier otro camino
+                        // (un solo lote con sus parámetros y su
+                        // textura). Y las primitivas integradas se
+                        // pintan con el color de la entidad: su
+                        // «material» de caché es sintético y blanco,
+                        // que era el defecto de las primitivas con
+                        // `model` explícito saliendo blancas.
+                        let nombre_material = ent
+                            .mesh
+                            .as_ref()
+                            .map(|m| m.material.as_str())
+                            .unwrap_or("");
+                        let material_entidad = if nombre_material.is_empty() {
+                            None
+                        } else {
+                            self.materiales.get(nombre_material)
+                        };
+                        let es_primitiva = matches!(
+                            model_key,
+                            Some("cube" | "plane" | "sphere" | "capsule" | "cylinder")
+                        );
+                        if let Some(mat) = material_entidad {
+                            let tex_set = if mat.texture.is_empty() {
+                                cache
+                                    .set_for_image(None, None)
+                                    .unwrap_or(vk::DescriptorSet::null())
+                            } else {
+                                cache
+                                    .set_for_image(
+                                        Some(&format!("material:{}", mat.texture)),
+                                        Some(0),
+                                    )
+                                    .unwrap_or(vk::DescriptorSet::null())
+                            };
+                            draw_items.push((
+                                mat.albedo,
+                                [mat.metallic, mat.roughness, 1.0, has_light],
+                                tex_set,
+                                (0, ent_mesh.index_count),
+                                [
+                                    mat.emissive[0],
+                                    mat.emissive[1],
+                                    mat.emissive[2],
+                                    mat.emissive_intensity,
+                                ],
+                                [mat.tiling[0], mat.tiling[1], mat.offset[0], mat.offset[1]],
+                            ));
+                        } else if es_primitiva && using_model {
+                            draw_items.push((
+                                obj_col,
+                                [0.15, 0.45, 1.0, has_light],
+                                cache
+                                    .set_for_image(None, None)
+                                    .unwrap_or(vk::DescriptorSet::null()),
+                                (0, ent_mesh.index_count),
+                                [0.0, 0.0, 0.0, 0.0],
+                                [1.0, 1.0, 0.0, 0.0],
+                            ));
+                        }
+                        let ranges = if using_model {
+                            model_key
+                                .and_then(|k| cache.primitive_ranges.get(k))
+                                .filter(|r| !r.is_empty())
+                        } else {
+                            None
+                        };
+                        if draw_items.is_empty() {
+                        if let (Some(key), Some(ranges)) = (model_key, ranges) {
+                            let materials = cache.materials.get(key);
+                            for range in ranges {
+                                let mat = range.material.and_then(|i| materials.and_then(|ms| ms.get(i)));
+                                let (c, mp) = if let Some(m) = mat {
+                                    (m.base_color_factor, [m.metallic, m.roughness, 1.0, has_light])
+                                } else {
+                                    (obj_col, [0.15, 0.45, 1.0, has_light])
+                                };
+                                let tex_set = cache
+                                    .set_for_image(Some(key), mat.and_then(|m| m.base_color_image))
+                                    .unwrap_or(vk::DescriptorSet::null());
+                                draw_items.push((c, mp, tex_set, (range.first_index, range.index_count), [0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0]));
+                            }
+                        }
+                        }
+                        if draw_items.is_empty() {
+                            let (c, mp) = if using_model {
+                                if let Some(mat) = model_key.and_then(|k| cache.primary_materials.get(k)) {
+                                    (mat.base_color_factor, [mat.metallic, mat.roughness, 1.0, has_light])
+                                } else {
+                                    (obj_col, [0.15, 0.45, 1.0, has_light])
+                                }
+                            } else {
+                                (obj_col, [0.15, 0.45, 1.0, has_light])
+                            };
+                            let primary_image = if using_model {
+                                model_key
+                                    .and_then(|k| cache.primary_materials.get(k))
+                                    .and_then(|m| m.base_color_image)
+                            } else {
+                                None
+                            };
+                            let tex_set = cache
+                                .set_for_image(if using_model { model_key } else { None }, primary_image)
+                                .unwrap_or(vk::DescriptorSet::null());
+                            draw_items.push((c, mp, tex_set, (0, ent_mesh.index_count), [0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0]));
+                        }
 
-                        if let Some(vp_game) = vp_game_opt {
-                            let mvp_game = matmul(&vp_game, &model);
-                            game_batches.push((cube_mesh, glass_renderer::MeshPushConstants {
-                                mvp: mvp_game,
+                        // Material de grafo: MeshData.shader = "graph:<nombre>".
+                        let mut shader_name = ent.mesh.as_ref()
+                            .and_then(|m| m.shader.strip_prefix("graph:"))
+                            .map(|s| s.to_string());
+                        // Material transparente sin grafo propio: el
+                        // pipeline PBR transparente registrado al
+                        // arrancar.
+                        if shader_name.is_none() {
+                            if let Some(mat) = material_entidad {
+                                if mat.transparent {
+                                    shader_name = Some("material_transparent".to_string());
+                                }
+                            }
+                        }
+
+                        // --- Bloque de skinning: pose de ESTA entidad ---
+                        // Si el modelo de la entidad tiene piel en caché, su
+                        // pose de este frame se evalúa aquí y sus lotes van
+                        // por el pipeline con piel (la rama de dentro del
+                        // bucle de lotes). El resultado es el set de
+                        // articulaciones ya escrito y la malla con piel;
+                        // `None` = entidad rígida de siempre.
+                        let skin_pose: Option<(vk::DescriptorSet, &glass_renderer::GpuMesh)> = 'pose: {
+                            if !using_model {
+                                break 'pose None;
+                            }
+                            let Some(key) = model_key else { break 'pose None };
+                            let (Some(skin), Some(skinned_mesh)) =
+                                (cache.skins.get(key), cache.skinned_meshes.get(key))
+                            else {
+                                break 'pose None;
+                            };
+                            let clips: &[glass_renderer::AnimationClip] = cache
+                                .animations
+                                .get(key)
+                                .map(|v| v.as_slice())
+                                .unwrap_or(&[]);
+                            // Clip del componente Animator: el nombrado, o el
+                            // primero del modelo si el campo está vacío o el
+                            // nombre no existe. Sin componente Animator no hay
+                            // clip: la entidad se dibuja en bind pose.
+                            let animator = ent.animator.as_ref();
+                            let clip: Option<&glass_renderer::AnimationClip> =
+                                animator.and_then(|a| {
+                                    if a.clip.is_empty() {
+                                        clips.first()
+                                    } else {
+                                        clips
+                                            .iter()
+                                            .find(|c| c.name == a.clip)
+                                            .or_else(|| clips.first())
+                                    }
+                                });
+                            // Tiempo de reproducción: estado de runtime por
+                            // entidad; cambiar de clip lo reinicia a 0.
+                            let entry = self
+                                .anim_runtime
+                                .entry(ent.id)
+                                .or_insert_with(|| (String::new(), 0.0));
+                            let clip_name = clip.map(|c| c.name.as_str()).unwrap_or("");
+                            if entry.0 != clip_name {
+                                entry.0 = clip_name.to_string();
+                                entry.1 = 0.0;
+                            }
+                            if animator.map(|a| a.playing).unwrap_or(false) {
+                                entry.1 += anim_dt * animator.map(|a| a.speed).unwrap_or(1.0);
+                            }
+                            let t = entry.1;
+                            // Pose del frame (bloque FSM): si el pase
+                            // previo dejó una decisión para esta entidad,
+                            // manda ella (un clip, u dos mezclados durante
+                            // un fundido de la máquina). Si hay un
+                            // crossfade libre en curso, se mezcla el clip
+                            // saliente contra el entrante clásico. En
+                            // cualquier otro caso, el camino de siempre.
+                            let matrices = if let Some((ca_name, ta, cb_name, tb, w)) =
+                                self.anim_pose.get(&ent.id)
+                            {
+                                let find_clip = |n: &str| clips.iter().find(|c| c.name == n);
+                                match cb_name {
+                                    Some(nb) => glass_renderer::skin::evaluate_skin_matrices_blended(
+                                        skin,
+                                        find_clip(ca_name),
+                                        *ta,
+                                        find_clip(nb),
+                                        *tb,
+                                        *w,
+                                    ),
+                                    None => glass_renderer::skin::evaluate_skin_matrices(
+                                        skin,
+                                        find_clip(ca_name),
+                                        *ta,
+                                    ),
+                                }
+                            } else if self.anim_free_fade.contains_key(&ent.id) {
+                                let (from_name, from_t, w, done) = {
+                                    let f = self.anim_free_fade.get_mut(&ent.id).unwrap();
+                                    f.elapsed += anim_dt;
+                                    f.from_time +=
+                                        anim_dt * animator.map(|a| a.speed).unwrap_or(1.0);
+                                    let w = if f.duration > 0.0 {
+                                        (f.elapsed / f.duration).clamp(0.0, 1.0)
+                                    } else {
+                                        1.0
+                                    };
+                                    (f.from_clip.clone(), f.from_time, w, w >= 1.0)
+                                };
+                                let m = glass_renderer::skin::evaluate_skin_matrices_blended(
+                                    skin,
+                                    clips.iter().find(|c| c.name == from_name),
+                                    from_t,
+                                    clip,
+                                    t,
+                                    w,
+                                );
+                                if done {
+                                    self.anim_free_fade.remove(&ent.id);
+                                }
+                                m
+                            } else {
+                                glass_renderer::skin::evaluate_skin_matrices(skin, clip, t)
+                            };
+                            // Buffer por entidad: se crea si falta y se
+                            // recrea si la piel cambió de nº de articulaciones
+                            // (recarga en caliente de un rig distinto); el
+                            // viejo se retira, no se destruye en el acto.
+                            let joint_count = skin.joints.len();
+                            let stale = self
+                                .skin_joint_buffers
+                                .get(&ent.id)
+                                .map(|jb| jb.joint_count != joint_count)
+                                .unwrap_or(true);
+                            if stale {
+                                if let Some(old) = self.skin_joint_buffers.remove(&ent.id) {
+                                    self.retired_joint_buffers.push(old);
+                                }
+                                match renderer.create_joint_buffer(joint_count) {
+                                    Ok(jb) => {
+                                        self.skin_joint_buffers.insert(ent.id, jb);
+                                    }
+                                    Err(e) => {
+                                        log::error!(
+                                            "Skinning: sin buffer de articulaciones para la entidad {}: {}",
+                                            ent.id,
+                                            e
+                                        );
+                                        break 'pose None;
+                                    }
+                                }
+                            }
+                            let jb = self.skin_joint_buffers.get_mut(&ent.id).unwrap();
+                            jb.write(&matrices);
+                            Some((jb.descriptor_set, skinned_mesh))
+                        };
+
+                        let lm_params = renderer.lm_params_for(ent.id);
+                        let mut shadow_recorded = false;
+                        for (c, mp, tex_set, range, em_item, uv_item) in draw_items {
+                            if !shadow_recorded {
+                                shadow_recorded = true;
+                                if skin_pose.is_none() {
+                                    shadow_statics.push((ent_mesh, model));
+                                }
+                            }
+                            // Rama con piel: mismos push constants y rangos
+                            // que la ruta normal, pero malla `SkinnedVertex`,
+                            // set 0 de textura (con el blanco de respaldo si
+                            // el lote no traía: el pipeline con piel exige
+                            // AMBOS sets enlazados) y set 1 de articulaciones.
+                            if let Some((joints_set, skinned_mesh)) = skin_pose {
+                                let tex = if tex_set != vk::DescriptorSet::null() {
+                                    tex_set
+                                } else {
+                                    renderer.fallback_set
+                                };
+                                if tex == vk::DescriptorSet::null() {
+                                    continue;
+                                }
+                                shadow_skinned.push((skinned_mesh, model, joints_set));
+                                scene_skinned.push((skinned_mesh, glass_renderer::MeshPushConstants {
+                                    mvp: mvp_scene,
+                                    model,
+                                    light_dir,
+                                    light_color,
+                                    material_params: mp,
+                                    object_color: c,
+                                    camera_pos: eye_scene,
+                                    lm_params,
+                                    emissive: em_item,
+                                    uv_transform: uv_item,
+                                }, tex, joints_set, range));
+                                if let Some(vp_game) = vp_game_opt {
+                                    let mvp_game = matmul(&vp_game, &model);
+                                    game_skinned.push((skinned_mesh, glass_renderer::MeshPushConstants {
+                                        mvp: mvp_game,
+                                        model,
+                                        light_dir,
+                                        light_color,
+                                        material_params: mp,
+                                        object_color: c,
+                                        camera_pos: eye_game_opt.unwrap_or(eye_scene),
+                                        lm_params,
+                                        emissive: em_item,
+                                        uv_transform: uv_item,
+                                    }, tex, joints_set, range));
+                                }
+                                continue;
+                            }
+                            scene_batches.push((ent_mesh, glass_renderer::MeshPushConstants {
+                                mvp: mvp_scene,
                                 model,
                                 light_dir,
                                 light_color,
-                                material_params,
-                                object_color: obj_col,
-                                // Si la escena no tiene cámara activa no hay Game
-                                // View, así que este valor sólo se usa cuando
-                                // vp_game_opt es Some.
-                                camera_pos: eye_game_opt.unwrap_or(eye_scene),
-                            }));
+                                material_params: mp,
+                                object_color: c,
+                                camera_pos: eye_scene,
+                                lm_params,
+                                emissive: em_item,
+                                uv_transform: uv_item,
+                            }, tex_set, shader_name.clone(), range));
+
+                            if let Some(vp_game) = vp_game_opt {
+                                let mvp_game = matmul(&vp_game, &model);
+                                game_batches.push((ent_mesh, glass_renderer::MeshPushConstants {
+                                    mvp: mvp_game,
+                                    model,
+                                    light_dir,
+                                    light_color,
+                                    material_params: mp,
+                                    object_color: c,
+                                    // Si la escena no tiene cámara activa no hay Game
+                                    // View, así que este valor sólo se usa cuando
+                                    // vp_game_opt es Some.
+                                    camera_pos: eye_game_opt.unwrap_or(eye_scene),
+                                    lm_params,
+                                    emissive: em_item,
+                                    uv_transform: uv_item,
+                                }, tex_set, shader_name.clone(), range));
+                            }
                         }
                     }
                 }
             }
 
 
+            // ------------------------------------------------------------
+            // Portales (bloque Portales): si la escena tiene una
+            // pareja enlazada y hay cámara de juego, se preparan
+            // las dos vistas virtuales (clonando los lotes de
+            // juego con la VP virtual: cada push ya trae su
+            // `model`), se sacan las superficies de los lotes
+            // normales y se construyen sus dibujos de portal.
+            // La llamada a render_portal_views va justo antes de
+            // render_views, cuando ya están los proyectores.
+            // ------------------------------------------------------------
+            let mut portal_render: Option<(
+                Vec<glass_renderer::MeshDrawItem>,
+                Vec<glass_renderer::SkinnedDrawItem>,
+                Vec<glass_renderer::MeshDrawItem>,
+                Vec<glass_renderer::SkinnedDrawItem>,
+            )> = None;
+            let mut scene_portal_draws: Vec<glass_renderer::PortalDrawItem> = Vec::new();
+            let mut game_portal_draws: Vec<glass_renderer::PortalDrawItem> = Vec::new();
+            if vp_game_opt.is_some() {
+                let datos = self.scene_state.lock().ok().and_then(|scene| {
+                    let mut portales: Vec<(
+                        u64,
+                        glass_core::portal::PortalData,
+                        [f32; 16],
+                        String,
+                    )> = scene
+                        .entities
+                        .iter()
+                        .filter(|e| e.active && e.portal.is_some())
+                        .map(|e| {
+                            (
+                                e.id,
+                                e.portal.clone().unwrap(),
+                                scene.compute_world_matrix(e.id),
+                                e.mesh
+                                    .as_ref()
+                                    .map(|m| m.model.clone())
+                                    .unwrap_or_default(),
+                            )
+                        })
+                        .collect();
+                    portales.sort_by_key(|(id, _, _, _)| *id);
+                    let primera = portales.first()?.1.pair.clone();
+                    let pareja: Vec<_> = portales
+                        .iter()
+                        .filter(|(_, d, _, _)| d.pair == primera)
+                        .take(2)
+                        .cloned()
+                        .collect();
+                    if pareja.len() != 2 {
+                        return None;
+                    }
+                    let cam = scene.active_camera()?.clone();
+                    Some((pareja, cam))
+                });
+                if let Some((pareja, cam)) = datos {
+                    let (id_a, data_a, world_a, modelo_a) = pareja[0].clone();
+                    let (id_b, data_b, world_b, modelo_b) = pareja[1].clone();
+                    let _ = (id_a, id_b, &data_a, &data_b);
+                    // Mitad local de la superficie según su malla:
+                    // el plano integrado abarca ±0,5 y el cubo
+                    // (glb o de reserva) ±1. El anillo del shader
+                    // se normaliza con esto.
+                    let mitad_local = |modelo: &str| -> [f32; 2] {
+                        if modelo == "plane" {
+                            [0.5, 0.5]
+                        } else {
+                            [1.0, 1.0]
+                        }
+                    };
+                    let view_g = camera_view_matrix(cam.transform.position, cam.transform.rotation());
+                    let cam_world = glass_core::mat4_inverse_affine(view_g).unwrap_or(view_g);
+                    let fov = cam.camera.as_ref().map(|c| c.fov).unwrap_or(60.0);
+                    let far = cam.camera.as_ref().map(|c| c.far_clip).unwrap_or(1000.0);
+                    // La virtual que se muestra EN A es la cámara
+                    // real transportada de A a B (T(src=A, dst=B)):
+                    // queda DETRÁS de B, mirando a través de su
+                    // plano (el near coincide con ese plano).
+                    let hacer_virtual = |src_w: [f32; 16],
+                                         dst_w: [f32; 16]|
+                     -> Option<([f32; 16], [f32; 4])> {
+                        let t = glass_core::portal::pair_transform(src_w, dst_w)?;
+                        let virt_world = matmul(&t, &cam_world);
+                        let view_v = glass_core::mat4_inverse_affine(virt_world)?;
+                        let ojo = glass_core::mat4_translation(virt_world);
+                        // El plano cercano COINCIDE con el plano
+                        // del portal de salida: recorta la pared
+                        // que lo contiene y todo lo que quede
+                        // entre la cámara virtual y el portal.
+                        let dist = glass_core::portal::signed_distance(dst_w, ojo).abs();
+                        let near = (dist - 0.03).clamp(0.05, 8.0);
+                        let proj = perspective_matrix(fov.to_radians(), 1.0, near, far);
+                        Some((matmul(&proj, &view_v), [ojo[0], ojo[1], ojo[2], 1.0]))
+                    };
+                    if let (Some((vp_virt_a, ojo_a)), Some((vp_virt_b, ojo_b))) = (
+                        hacer_virtual(world_a, world_b),
+                        hacer_virtual(world_b, world_a),
+                    ) {
+                        let mut items_a = clonar_lotes_portal(&game_batches, vp_virt_a, ojo_a);
+                        let piel_a = clonar_piel_portal(&game_skinned, vp_virt_a, ojo_a);
+                        let mut items_b = clonar_lotes_portal(&game_batches, vp_virt_b, ojo_b);
+                        let piel_b = clonar_piel_portal(&game_skinned, vp_virt_b, ojo_b);
+                        // Las dos superficies fuera de las vistas
+                        // virtuales: la de salida quedaría pegada
+                        // al plano cercano y taparía el centro de
+                        // su propia vista con su cara trasera.
+                        items_a.retain(|(_, pc, _, _, _)| {
+                            pc.model != world_a && pc.model != world_b
+                        });
+                        items_b.retain(|(_, pc, _, _, _)| {
+                            pc.model != world_a && pc.model != world_b
+                        });
+                        portal_render = Some((items_a, piel_a, items_b, piel_b));
+
+                        // Superficies: se roba la malla+rango de
+                        // los lotes de juego antes de filtrarlos.
+                        let sup_a = robar_superficie(&game_batches, world_a);
+                        let sup_b = robar_superficie(&game_batches, world_b);
+                        let vp_game = vp_game_opt.unwrap();
+                        if let Some((mesh, range)) = sup_a {
+                            empujar_draw_portal(&mut game_portal_draws, &mut scene_portal_draws, mesh, range, world_a, vp_game, vp_scene, vp_virt_a, 0, [1.0, 0.45, 0.08, 1.0], mitad_local(&modelo_a));
+                        }
+                        if let Some((mesh, range)) = sup_b {
+                            empujar_draw_portal(&mut game_portal_draws, &mut scene_portal_draws, mesh, range, world_b, vp_game, vp_scene, vp_virt_b, 1, [0.15, 0.45, 1.0, 1.0], mitad_local(&modelo_b));
+                        }
+
+                        // Fuera de los lotes normales (la
+                        // superficie la dibuja el pase de portal).
+                        scene_batches.retain(|(_, pc, _, _, _)| {
+                            pc.model != world_a && pc.model != world_b
+                        });
+                        game_batches.retain(|(_, pc, _, _, _)| {
+                            pc.model != world_a && pc.model != world_b
+                        });
+                    }
+                }
+            }
+
             let game_meshes_arg = if vp_game_opt.is_some() {
                 Some(game_batches.as_slice())
             } else {
                 None
             };
+            let game_skinned_arg = if vp_game_opt.is_some() {
+                Some(game_skinned.as_slice())
+            } else {
+                None
+            };
 
-            renderer.render_views(vk_ctx.graphics_queue, &scene_batches, game_meshes_arg)?;
+            // Canal global de interacción de los grafos: lo que los
+            // scripts hayan publicado este frame (el punto y la forma
+            // de su huella; la barca de L2, p. ej.) llega al UBO global
+            // del Renderer; sin publicador vale el valor inactivo y los
+            // grafos ni se enteran.
+            renderer.set_graph_globals(glass_scripting::bindings::get_interaction_point_state());
+
+            // Sombras del sol (bloque de gráficos): la caja
+            // ortográfica sigue a la cámara de juego (a la de escena
+            // en el editor sin cámara de juego) y la luz es la
+            // principal de la escena — la misma de la que salen
+            // `light_dir`/`light_color` de los lotes. Sin luz: el canal
+            // se publica inactivo y el pase ni se graba.
+            {
+                let shadow_center = eye_game_opt.unwrap_or(eye_scene);
+                if light_color[0] + light_color[1] + light_color[2] > 0.0 || light_dir[3] > 0.1 {
+                    let vp = glass_core::directional_shadow_vp(
+                        [shadow_center[0], shadow_center[1], shadow_center[2]],
+                        [light_dir[0], light_dir[1], light_dir[2]],
+                        glass_renderer::shadow::SHADOW_ORTHO_HALF,
+                        glass_renderer::shadow::SHADOW_MAP_SIZE,
+                        glass_renderer::shadow::SHADOW_BACK,
+                        glass_renderer::shadow::SHADOW_FRONT,
+                    );
+                    renderer.set_shadow_frame(vp, [
+                        1.0 / glass_renderer::shadow::SHADOW_MAP_SIZE as f32,
+                        glass_renderer::shadow::SHADOW_DEPTH_BIAS,
+                        glass_renderer::shadow::SHADOW_NORMAL_BIAS,
+                        1.0,
+                    ]);
+                } else {
+                    renderer.set_shadow_frame(glass_core::mat4_identity(), [0.0, 0.0, 0.0, 0.0]);
+                }
+            }
+            let shadow_casters = glass_renderer::ShadowCasters {
+                statics: &shadow_statics,
+                skinned: &shadow_skinned,
+            };
+
+            // Luces puntuales del frame: las 8 «Point» más cercanas al
+            // ojo activo, publicadas en el renderer antes de dibujar.
+            {
+                let pl_eye = eye_game_opt.unwrap_or(eye_scene);
+                let ubo_luces = match self.scene_state.lock() {
+                    Ok(scene) => recolectar_luces_puntuales(&scene, [pl_eye[0], pl_eye[1], pl_eye[2]]),
+                    Err(_) => glass_renderer::PointLightsUbo::default(),
+                };
+                renderer.set_point_lights(ubo_luces);
+            }
+
+            if let Some((items_a, piel_a, items_b, piel_b)) = &portal_render {
+                renderer.render_portal_views(
+                    vk_ctx.graphics_queue,
+                    (items_a, piel_a),
+                    (items_b, piel_b),
+                    Some(&shadow_casters),
+                )?;
+            }
+
+            renderer.render_views(vk_ctx.graphics_queue, &scene_batches, game_meshes_arg, &scene_skinned, game_skinned_arg, Some(&shadow_casters), &scene_portal_draws, Some(&game_portal_draws))?;
+
+            // Post-procesado de las vistas renderizadas (sin post
+            // activo, estas llamadas no hacen nada). La vista de juego
+            // solo se procesa si se renderizó este frame.
+            renderer.render_post(vk_ctx.graphics_queue, glass_renderer::PostView::Scene)?;
+            if game_meshes_arg.is_some() {
+                renderer.render_post(vk_ctx.graphics_queue, glass_renderer::PostView::Game)?;
+            }
         } else {
             renderer.render_offscreen(vk_ctx.graphics_queue)?;
         }
@@ -1413,6 +4096,121 @@ impl GlassEngineApp {
         let render_standalone = self.is_standalone;
         #[cfg(not(feature = "editor"))]
         let render_standalone = true;
+
+        // Canvas de juego (UI) en el standalone: dentro del editor lo
+        // pinta la superposición de egui sobre la vista de juego, pero el
+        // binario puro no tiene egui y sin este pase el HUD de la escena
+        // no existiría en el juego compilado. Se compone sobre el
+        // offscreen (la imagen que presenta el blit) tras el 3D y antes
+        // del blit. En el modo editor normal NO se ejecuta: allí manda
+        // la ruta de egui y así nada se dibuja dos veces.
+        if render_standalone {
+            let batch = {
+                // Atlas de imágenes del Canvas (UI v2): se
+                // reconstruye solo cuando cambia la lista de
+                // sprites de la escena activa.
+                {
+                    let key = match self.scene_state.lock() {
+                        Ok(scene) => scene
+                            .entities
+                            .iter()
+                            .filter(|e| e.active)
+                            .filter_map(|e| e.ui_image.as_ref())
+                            .map(|i| i.sprite.as_str())
+                            .filter(|s| !s.is_empty())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        Err(_) => String::new(),
+                    };
+                    if key != self.ui_images_key {
+                        self.ui_images_key = key;
+                        let built = match self.scene_state.lock() {
+                            Ok(scene) => canvas_ui::build_ui_scene_images(
+                                &scene,
+                                std::path::Path::new("assets"),
+                            ),
+                            Err(_) => (canvas_ui::UiSceneImages::new(), None),
+                        };
+                        self.ui_images_map = built.0;
+                        match built.1 {
+                            Some(atlas) => {
+                                let _ = renderer.set_ui_image_atlas(
+                                    vk_ctx.graphics_queue,
+                                    atlas.rgba,
+                                    atlas.size,
+                                );
+                            }
+                            None => renderer.clear_ui_image_atlas(),
+                        }
+                    }
+                }
+                // Fuentes con nombre (UI v2): cargar bajo demanda
+                // las que la escena use y aún no estén (CPU + GPU).
+                {
+                    let wanted: Vec<String> = match self.scene_state.lock() {
+                        Ok(scene) => {
+                            let mut v: Vec<String> = scene
+                                .entities
+                                .iter()
+                                .filter(|e| e.active)
+                                .filter_map(|e| e.ui_text.as_ref())
+                                .map(|t| t.font.clone())
+                                .filter(|f| !f.is_empty() && f != "default")
+                                .collect();
+                            v.sort();
+                            v.dedup();
+                            v
+                        }
+                        Err(_) => Vec::new(),
+                    };
+                    for name in wanted {
+                        if self.ui_font_atlases.contains_key(&name)
+                            || self.ui_font_failed.contains(&name)
+                        {
+                            continue;
+                        }
+                        let path = format!("assets/fonts/{name}.ttf");
+                        let cargada = std::fs::read(&path)
+                            .map_err(|e| e.to_string())
+                            .and_then(|bytes| {
+                                glass_renderer::FontAtlas::build(&bytes)
+                                    .map(|atlas| (bytes, atlas))
+                                    .map_err(|e| e)
+                            })
+                            .and_then(|(bytes, atlas)| {
+                                renderer
+                                    .ensure_named_font(vk_ctx.graphics_queue, &name, &bytes)
+                                    .map(|_| atlas)
+                                    .map_err(|e| e.to_string())
+                            });
+                        match cargada {
+                            Ok(atlas) => {
+                                self.ui_font_atlases.insert(name, atlas);
+                            }
+                            Err(e) => {
+                                log::warn!("fuente '{name}' no disponible ({e}); se usa la de por defecto");
+                                self.ui_font_failed.insert(name);
+                            }
+                        }
+                    }
+                }
+                let font = renderer.ui_font();
+                match self.scene_state.lock() {
+                    Ok(scene) => canvas_ui::build_canvas_batch(
+                        &scene,
+                        &canvas_ui::UiFonts {
+                            default: font,
+                            named: &self.ui_font_atlases,
+                        },
+                        &self.ui_images_map,
+                        renderer.offscreen.extent.width as f32,
+                        renderer.offscreen.extent.height as f32,
+                    ),
+                    Err(_) => Vec::new(),
+                }
+            };
+            renderer.render_ui_overlay(vk_ctx.graphics_queue, &batch)?;
+        }
 
         if render_standalone {
             let (image_index, _suboptimal) = match renderer
@@ -1438,7 +4236,7 @@ impl GlassEngineApp {
 
             let swapchains = [renderer.swapchain.swapchain];
             let image_indices = [image_index];
-            let signal_semaphores = [renderer.render_finished_semaphore];
+            let signal_semaphores = [renderer.render_finished_for(image_index)];
             let present_info = vk::PresentInfoKHR::default()
                 .wait_semaphores(&signal_semaphores)
                 .swapchains(&swapchains)
@@ -1448,6 +4246,15 @@ impl GlassEngineApp {
                 let _ = renderer.swapchain.loader.queue_present(vk_ctx.present_queue, &present_info);
                 let _ = vk_ctx.device.queue_wait_idle(vk_ctx.present_queue);
             }
+
+            // Carga de escena diferida (la «3.b» de la ruta del editor):
+            // la rama standalone devolvía el control aquí sin mirar nunca
+            // las peticiones de `SceneManager.LoadScene` de los scripts,
+            // así que un juego quedaba atrapado en su escena de arranque
+            // (el menú no podía pasar al nivel 1). Se aplica en la misma
+            // ventana temporal que en el editor: frame completo ya
+            // presentado, nadie recorriendo las entidades.
+            self.apply_pending_scene_load();
 
             return Ok(());
         }
@@ -1470,6 +4277,7 @@ impl GlassEngineApp {
             let launcher = &mut self.launcher;
             let app_mode = self.app_mode;
             let scene_state = &self.scene_state;
+            let scene_manager = &self.scene_manager;
             let scene_tid = self.viewport_texture_id;
             let game_tid = self.game_viewport_texture_id;
 
@@ -1480,7 +4288,13 @@ impl GlassEngineApp {
                         launcher_action = launcher.render(ui);
                     }
                     AppMode::Editor => {
-                        editor_layout.render(ui, scene_tid, game_tid, scene_state);
+                        editor_layout.render(
+                            ui,
+                            scene_tid,
+                            game_tid,
+                            scene_state,
+                            scene_manager,
+                        );
                     }
                 }
             });
@@ -1584,7 +4398,7 @@ impl GlassEngineApp {
                 // 7. Enviar a la cola gráfica
                 let wait_semaphores = [renderer.image_available_semaphore];
                 let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-                let signal_semaphores = [renderer.render_finished_semaphore];
+                let signal_semaphores = [renderer.render_finished_for(image_index)];
                 let command_buffers = [cmd];
 
                 let submit_info = [vk::SubmitInfo::default()
@@ -1615,6 +4429,15 @@ impl GlassEngineApp {
                 }
             }
         }
+
+        // 3.b Carga de escena diferida.
+        //
+        // Va después de presentar y antes de devolver el control: el frame
+        // completo (input, scripts, física, present) se ejecutó ya sobre la
+        // escena vieja, así que aquí nadie está recorriendo `entities` y la
+        // sustitución no puede producir un frame a medio dibujar. Es la misma
+        // ventana temporal que usa Unity para aplicar `SceneManager.LoadScene`.
+        self.apply_pending_scene_load();
 
         if request_build {
             self.execute_build_and_run();
@@ -1684,7 +4507,14 @@ impl ApplicationHandler for GlassEngineApp {
                     in_flight_frames: 1,
                     enable_depth_test: false,
                     enable_depth_write: false,
-                    srgb_framebuffer: false,
+                    // El swapchain es B8G8R8A8_SRGB: el hardware ya codifica
+                    // a sRGB al escribir. Con `false`, el shader de egui
+                    // codificaba OTRA vez en el shader → doble gamma en
+                    // toda la ventana (medido: un lineal 0,5 llegaba a
+                    // pantalla como 0,87 en vez de 0,73) y la escena 3D se
+                    // veía lavada. Con `true` egui entrega lineal y la
+                    // única gamma es la del framebuffer.
+                    srgb_framebuffer: true,
                 },
             ) {
                 Ok(er) => er,
@@ -1723,25 +4553,82 @@ impl ApplicationHandler for GlassEngineApp {
             (None, None, None, None, None, None, None, None)
         };
 
-        // 5. Cargar modelo 3D inicial (cube.glb convertido desde Blender) a VRAM
-        let cube_glb_path = "assets/models/cube.glb";
-        if Path::new(cube_glb_path).exists() {
-            if let Ok(bytes) = std::fs::read(cube_glb_path) {
-                match MeshLoader::load_from_glb_bytes(&bytes) {
-                    Ok((verts, indices)) => {
+        // 5. Precargar TODOS los modelos .glb de assets/models/ a VRAM, cada
+        // uno bajo la clave de su nombre de archivo sin extensión, junto con
+        // sus materiales e imágenes importados. Antes solo se cargaba
+        // cube.glb: cualquier otro modelo de la escena no existía en la caché
+        // al arrancar (solo entraba si el watcher lo recargaba en caliente).
+        // Textura blanca por defecto y su descriptor set: el shader PBR
+        // siempre muestrea la textura base; las entidades sin textura
+        // enlazan este set y el color plano se comporta como siempre.
+        if let Some(set_layout) = renderer.pbr_pipeline.descriptor_set_layout {
+            {
+                let mut alloc = renderer.allocator.lock().unwrap();
+                let mut cache = self.asset_cache.write().unwrap();
+                cache.ensure_default_texture(
+                    &renderer.device,
+                    &mut *alloc,
+                    vk_ctx.graphics_queue,
+                    renderer.command_pool,
+                    set_layout,
+                );
+            }
+            if let Some(set) = self.asset_cache.read().unwrap().default_set {
+                renderer.fallback_set = set;
+            }
+        }
+
+        // Materiales de grafo: cada graph_<nombre>.frag.spv de assets/shaders
+        // se registra como pipeline; una entidad lo usa con shader =
+        // "graph:<nombre>" en su MeshData.
+        renderer.load_graph_materials(std::path::Path::new("assets/shaders"));
+
+        // El pipeline transparente de los materiales vive en el
+        // renderer (registrado como «material_transparent» al
+        // construirlo, con los layouts completos del PBR).
+
+        {
+            let models_dir = Path::new("assets/models");
+            let mut glb_paths: Vec<std::path::PathBuf> = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(models_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("glb") {
+                        glb_paths.push(path);
+                    }
+                }
+            }
+            glb_paths.sort();
+            for glb_path in &glb_paths {
+                let stem = glb_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unnamed")
+                    .to_string();
+                let bytes = match std::fs::read(glb_path) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        log::error!("Error leyendo modelo {:?}: {}", glb_path, e);
+                        continue;
+                    }
+                };
+                match MeshLoader::load_model_from_glb_bytes(&bytes) {
+                    Ok(model) => {
                         log::info!(
-                            "Cargador glTF: {} vértices y {} índices extraídos de {}",
-                            verts.len(),
-                            indices.len(),
-                            cube_glb_path
+                            "Cargador glTF: {} vértices, {} índices, {} materiales y {} imágenes extraídos de {:?}",
+                            model.vertices.len(),
+                            model.indices.len(),
+                            model.materials.len(),
+                            model.images.len(),
+                            glb_path
                         );
                         let upload_res = {
                             let mut alloc = renderer.allocator.lock().unwrap();
                             MeshLoader::upload_to_gpu(
                                 &renderer.device,
                                 &mut *alloc,
-                                &verts,
-                                &indices,
+                                &model.vertices,
+                                &model.indices,
                                 vk_ctx.graphics_queue,
                                 renderer.command_pool,
                             )
@@ -1749,22 +4636,135 @@ impl ApplicationHandler for GlassEngineApp {
 
                         match upload_res {
                             Ok(gpu_mesh) => {
-                                log::info!("main: Malla subida a GPU, insertando en cache...");
                                 let mut alloc = renderer.allocator.lock().unwrap();
                                 let mut cache = self.asset_cache.write().unwrap();
+                                let primary = model.primary_material().cloned();
                                 cache.insert_mesh(
                                     &renderer.device,
                                     &mut *alloc,
-                                    "cube",
+                                    stem.clone(),
                                     gpu_mesh,
                                 );
-                                log::info!("main: Inserción en cache completada.");
+                                cache.insert_model_data(
+                                    stem.clone(),
+                                    model.materials.clone(),
+                                    primary,
+                                    model.images.clone(),
+                                    model.primitive_ranges.clone(),
+                                );
+                                self.upload_skin_if_any(&renderer, &vk_ctx, &mut *alloc, &mut *cache, &model, &stem);
+                                // Texturas base de TODOS los materiales: una
+                                // subida por cada imagen distinta referenciada,
+                                // para que cada primitiva muestree la suya.
+                                if let Some(layout) = renderer.pbr_pipeline.descriptor_set_layout {
+                                    let mut uploaded: Vec<usize> = Vec::new();
+                                    for mat in &model.materials {
+                                        if let Some(idx) = mat.base_color_image {
+                                            if !uploaded.contains(&idx) {
+                                                uploaded.push(idx);
+                                                if let Some(img) = model.images.get(idx) {
+                                                    cache.insert_texture(
+                                                        &renderer.device,
+                                                        &mut *alloc,
+                                                        vk_ctx.graphics_queue,
+                                                        renderer.command_pool,
+                                                        layout,
+                                                        stem.clone(),
+                                                        idx,
+                                                        img,
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                log::info!("main: Modelo '{}' registrado en la caché.", stem);
                             }
                             Err(e) => log::error!("Error subiendo malla a GPU: {}", e),
                         }
                     }
-                    Err(e) => log::error!("Error importando glTF {}: {}", cube_glb_path, e),
+                    Err(e) => log::error!("Error importando glTF {:?}: {}", glb_path, e),
                 }
+            }
+        }
+
+        // Primitiva Plano integrada: no es un archivo, la genera el
+        // renderer (rejilla subdividida lista para que un grafo con etapa
+        // de vértices la ondule) y se registra en la caché con el mismo
+        // mecanismo que los .glb — clave por nombre, `MeshData.model =
+        // "plane"`. Si un proyecto trae su propio plane.glb, ese gana:
+        // solo se registra cuando la clave está libre.
+        {
+            let has_plane = self.asset_cache.read().unwrap().meshes.contains_key("plane");
+            if !has_plane {
+                let (vertices, indices) = glass_renderer::generate_plane(glass_renderer::PLANE_SEGMENTS);
+                let upload_res = {
+                    let mut alloc = renderer.allocator.lock().unwrap();
+                    glass_renderer::MeshLoader::upload_to_gpu(
+                        &renderer.device,
+                        &mut *alloc,
+                        &vertices,
+                        &indices,
+                        vk_ctx.graphics_queue,
+                        renderer.command_pool,
+                    )
+                };
+                match upload_res {
+                    Ok(gpu_mesh) => {
+                        let mut alloc = renderer.allocator.lock().unwrap();
+                        let mut cache = self.asset_cache.write().unwrap();
+                        cache.insert_mesh(&renderer.device, &mut *alloc, "plane", gpu_mesh);
+                        log::info!(
+                            "main: Primitiva 'plane' registrada ({} vértices, {} índices).",
+                            vertices.len(),
+                            indices.len()
+                        );
+                    }
+                    Err(e) => log::error!("main: fallo subiendo la primitiva 'plane': {}", e),
+                }
+            }
+        }
+
+        // Primitivas Esfera/Cápsula/Cilindro integradas: mismo
+        // mecanismo y misma regla que el plano — generadas por el
+        // renderer, registradas por nombre solo si la clave está
+        // libre (un sphere.glb del proyecto ganaría a la integrada).
+        // Hasta aquí, los presets de esfera/cápsula/cilindro del
+        // editor dibujaban la malla de cubo: no existían generadores.
+        for (name, generator) in [
+            ("sphere", glass_renderer::generate_sphere as fn() -> (Vec<glass_renderer::Vertex>, Vec<u32>)),
+            ("capsule", glass_renderer::generate_capsule as fn() -> (Vec<glass_renderer::Vertex>, Vec<u32>)),
+            ("cylinder", glass_renderer::generate_cylinder as fn() -> (Vec<glass_renderer::Vertex>, Vec<u32>)),
+        ] {
+            let ya_registrada = self.asset_cache.read().unwrap().meshes.contains_key(name);
+            if ya_registrada {
+                continue;
+            }
+            let (vertices, indices) = generator();
+            let upload_res = {
+                let mut alloc = renderer.allocator.lock().unwrap();
+                glass_renderer::MeshLoader::upload_to_gpu(
+                    &renderer.device,
+                    &mut *alloc,
+                    &vertices,
+                    &indices,
+                    vk_ctx.graphics_queue,
+                    renderer.command_pool,
+                )
+            };
+            match upload_res {
+                Ok(gpu_mesh) => {
+                    let mut alloc = renderer.allocator.lock().unwrap();
+                    let mut cache = self.asset_cache.write().unwrap();
+                    cache.insert_mesh(&renderer.device, &mut *alloc, name, gpu_mesh);
+                    log::info!(
+                        "main: Primitiva '{}' registrada ({} vértices, {} índices).",
+                        name,
+                        vertices.len(),
+                        indices.len()
+                    );
+                }
+                Err(e) => log::error!("main: fallo subiendo la primitiva '{}': {}", name, e),
             }
         }
 
@@ -1807,6 +4807,9 @@ impl ApplicationHandler for GlassEngineApp {
         // Conectar el bridge de scripting con el SceneState
         register_scene_bridge(Box::new(EngineSceneBridge {
             scene_state: self.scene_state.clone(),
+            scene_manager: self.scene_manager.clone(),
+            physics_world: self.physics_world.clone(),
+            pending_script_spawns: self.pending_script_spawns.clone(),
         }));
 
         let managed_dir = Path::new("managed/GlassEngine.Core/bin/Debug/net8.0");
@@ -1839,15 +4842,153 @@ impl ApplicationHandler for GlassEngineApp {
         if !is_test_run {
             if let Some(ref scene_file) = self.scene_to_load {
                 log::info!("Cargando escena solicitada desde archivo: {}", scene_file);
-                if let Ok(mut sc) = self.scene_state.lock() {
-                    let _ = sc.load_from_json(scene_file);
+                let cargada = match self.scene_state.lock() {
+                    Ok(mut sc) => sc.load_from_json(scene_file).is_ok(),
+                    Err(_) => false,
+                };
+                if cargada {
+                    let ruta = scene_file.clone();
+                    self.bootstrap_scene_scripts_and_physics(&ruta);
                 }
             } else if self.is_standalone {
                 let default_sc = glass_core::ProjectSettings::load_or_default("project.json").default_scene;
                 if std::path::Path::new(&default_sc).exists() {
                     log::info!("Modo Standalone: Cargando escena por defecto desde project.json: {}", default_sc);
-                    if let Ok(mut sc) = self.scene_state.lock() {
-                        let _ = sc.load_from_json(&default_sc);
+                    let cargada = match self.scene_state.lock() {
+                        Ok(mut sc) => match sc.load_from_json(&default_sc) {
+                            Ok(()) => true,
+                            Err(e) => {
+                                log::error!(
+                                    "Modo Standalone: la escena por defecto no cargó: {}",
+                                    e
+                                );
+                                false
+                            }
+                        },
+                        Err(_) => false,
+                    };
+                    if cargada {
+                        self.bootstrap_scene_scripts_and_physics(&default_sc);
+                        // Lightmap horneado de esta escena, si existe.
+                        self.lightmap_runtime =
+                            crate::bake::load_lightmap_runtime(&default_sc);
+                        if let Some(lm) = &self.lightmap_runtime {
+                            log::info!(
+                                "Lightmap cargado para la escena: {} entidades, atlas {} px.",
+                                lm.entities.len(),
+                                lm.atlas_size
+                            );
+                        }
+                        if let (Some(renderer), Some(lm), Some(ctx)) = (
+                            &mut self.renderer,
+                            &self.lightmap_runtime,
+                            &self.vulkan_context,
+                        ) {
+                            if let Err(e) = renderer.set_lightmap(
+                                ctx.graphics_queue,
+                                &lm.rgba,
+                                lm.atlas_size,
+                                &lm.entities,
+                                &lm.groups,
+                            ) {
+                                log::error!("No se pudo publicar el lightmap: {e}");
+                            }
+                        }
+                        // Horneado sin interfaz: con GLASS_BAKE=<densidad>
+                        // se hornea el lightmap de la escena cargada, se
+                        // escribe en assets/lightmaps/ y el proceso sale.
+                        if let Ok(dens) = std::env::var("GLASS_BAKE") {
+                            let densidad: f32 = dens.parse().unwrap_or(8.0);
+                            let nombre = std::path::Path::new(&default_sc)
+                                .file_stem()
+                                .map(|s| s.to_string_lossy().replace(".scene", ""))
+                                .unwrap_or_else(|| "scene".to_string());
+                            let resultado = match self.scene_state.lock() {
+                                Ok(sc) => crate::bake::bake_scene_lightmap(
+                                    &sc,
+                                    &self.physics_world,
+                                    densidad,
+                                ),
+                                Err(_) => Err("scene_state envenenado".to_string()),
+                            };
+                            match resultado {
+                                Ok(out) => {
+                                    let dir = "assets/lightmaps";
+                                    let _ = std::fs::create_dir_all(dir);
+                                    let png = format!("{dir}/{nombre}.lm.png");
+                                    let json = format!("{dir}/{nombre}.lm.json");
+                                    // El atlas se guarda codificado en
+                                    // sRGB: la textura se sube como SRGB
+                                    // y al muestrear devuelve el valor
+                                    // lineal horneado.
+                                    let mut srgb = out.rgba.clone();
+                                    for px in srgb.chunks_exact_mut(4) {
+                                        for ch in px.iter_mut().take(3) {
+                                            let l = *ch as f32 / 255.0;
+                                            let s = if l <= 0.003_130_8 {
+                                                l * 12.92
+                                            } else {
+                                                1.055 * l.powf(1.0 / 2.4) - 0.055
+                                            };
+                                            *ch = (s * 255.0).round().clamp(0.0, 255.0) as u8;
+                                        }
+                                    }
+                                    if let Some(img) = image::RgbaImage::from_raw(
+                                        out.size,
+                                        out.size,
+                                        srgb,
+                                    ) {
+                                        let _ = img.save(&png);
+                                    }
+                                    let rects: Vec<_> = out
+                                        .rects
+                                        .iter()
+                                        .map(|r| {
+                                            serde_json::json!({
+                                                "entity": r.entity, "x": r.x, "y": r.y,
+                                                "w": r.w, "h": r.h,
+                                            })
+                                        })
+                                        .collect();
+                                    let groups: Vec<_> = out
+                                        .groups
+                                        .iter()
+                                        .map(|gs| {
+                                            gs.iter()
+                                                .map(|g| {
+                                                    serde_json::json!({
+                                                        "axis": g.axis, "negative": g.negative,
+                                                        "x": g.x, "y": g.y, "w": g.w, "h": g.h,
+                                                        "min_u": g.min_u, "max_u": g.max_u,
+                                                        "min_v": g.min_v, "max_v": g.max_v,
+                                                    })
+                                                })
+                                                .collect::<Vec<_>>()
+                                        })
+                                        .collect();
+                                    let meta = serde_json::json!({
+                                        "atlas_size": out.size,
+                                        "entities": out.baked_entities,
+                                        "rects": rects,
+                                        "groups": groups,
+                                        "skipped_models": out.skipped_models,
+                                    });
+                                    let _ = std::fs::write(
+                                        &json,
+                                        serde_json::to_string_pretty(&meta)
+                                            .unwrap_or_default(),
+                                    );
+                                    log::info!(
+                                        "GLASS_BAKE: {} entidades horneadas en {png} (atlas {} px); saltados: {:?}",
+                                        out.baked_entities.len(),
+                                        out.size,
+                                        out.skipped_models
+                                    );
+                                }
+                                Err(e) => log::error!("GLASS_BAKE falló: {e}"),
+                            }
+                            std::process::exit(0);
+                        }
                     }
                 } else {
                     log::info!("Iniciando escena de juego por defecto en Standalone...");
@@ -2472,7 +5613,9 @@ impl ApplicationHandler for GlassEngineApp {
                     if let WindowEvent::KeyboardInput { event: ref key_ev, .. } = event {
                         if let PhysicalKey::Code(code) = key_ev.physical_key {
                             match code {
-                                KeyCode::KeyW | KeyCode::KeyS | KeyCode::KeyA | KeyCode::KeyD | KeyCode::Space => {
+                                KeyCode::KeyW | KeyCode::KeyS | KeyCode::KeyA | KeyCode::KeyD | KeyCode::Space
+                                | KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight
+                                | KeyCode::ShiftLeft | KeyCode::ShiftRight | KeyCode::KeyV => {
                                     match key_ev.state {
                                         ElementState::Pressed => { self.keys_pressed.insert(key_ev.physical_key); }
                                         ElementState::Released => { self.keys_pressed.remove(&key_ev.physical_key); }
@@ -2505,11 +5648,17 @@ impl ApplicationHandler for GlassEngineApp {
                 log::info!("Tecla Escape presionada. Saliendo.");
                 event_loop.exit();
             }
-            // Captura de input WASD / Espacio para el jugador
+            // Captura de input WASD / Espacio para el jugador, más las
+            // teclas que la sincronización de input también consume
+            // (Shift = correr/lanzar, V = cámara): sin ellas en el
+            // conjunto, `run` y `camera` nunca podían valer 1 en el
+            // binario puro (en el editor las cubría la vía de egui).
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     match code {
-                        KeyCode::KeyW | KeyCode::KeyS | KeyCode::KeyA | KeyCode::KeyD | KeyCode::Space => {
+                        KeyCode::KeyW | KeyCode::KeyS | KeyCode::KeyA | KeyCode::KeyD | KeyCode::Space
+                        | KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight
+                        | KeyCode::ShiftLeft | KeyCode::ShiftRight | KeyCode::KeyV => {
                             match event.state {
                                 ElementState::Pressed => {
                                     self.keys_pressed.insert(event.physical_key);
@@ -2521,6 +5670,22 @@ impl ApplicationHandler for GlassEngineApp {
                         }
                         _ => {}
                     }
+                }
+            }
+            // Captura de ratón (posición y botón izquierdo) para el input
+            // de juego y los clics del Canvas. No consume el evento: en
+            // modo editor, egui-winit ya recibió su copia más arriba y la
+            // UI del editor se comporta exactamente como antes.
+            WindowEvent::CursorMoved { position, .. } => {
+                self.mouse.on_cursor_moved(position.x, position.y);
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let pressed = state == ElementState::Pressed;
+                match button {
+                    MouseButton::Left => self.mouse.on_left_button(pressed),
+                    MouseButton::Right => self.mouse.on_right_button(pressed),
+                    MouseButton::Middle => self.mouse.on_middle_button(pressed),
+                    _ => {}
                 }
             }
             WindowEvent::Resized(physical_size) => {
@@ -2558,6 +5723,155 @@ impl ApplicationHandler for GlassEngineApp {
     }
 }
 
+/// ¿Este arranque es un arranque de juego (standalone)?
+///
+/// Con la feature de editor, solo si se pide con `--standalone`/`--game`:
+/// sin esa bandera el binario completo abre el Lanzador. El binario de
+/// juego puro (sin la feature) no tiene lanzador ni modo editor: cualquier
+/// arranque suyo es un arranque de juego, y sin esta regla caía en la
+/// escena demo interactiva del editor (la rama final de `resumed`), que
+/// no es una vía de juego documentada — lanzado sin argumentos se
+/// estrellaba (ver REGISTRO_FIX_SIN_ARGS.md). Como juego le corresponde
+/// lo mismo que a `--standalone` sin `--scene`: la escena por defecto del
+/// proyecto (project.json) o la escena de ejemplo integrada.
+fn is_standalone_launch(pure_build: bool, args: &[String]) -> bool {
+    pure_build || args.iter().any(|arg| arg == "--standalone" || arg == "--game")
+}
+
+/// Recolecta las luces puntuales de la escena en el UBO del frame: las
+/// `MAX_POINT_LIGHTS` entidades con luz «Point» más cercanas al ojo,
+/// con su posición de MUNDO (matriz jerárquica, no el Transform local).
+/// La «Spot» se reconoce pero en esta v1 no emite (queda fuera del UBO,
+/// como si no estuviera). La direccional no pasa por aquí: sigue en los
+/// push constants de siempre.
+/// Clona los lotes de mallas con otra VP (las vistas de
+/// portal): cada push ya trae su `model`, así que basta
+/// recomponer el MVP y mover el ojo.
+fn clonar_lotes_portal<'x>(
+    lotes: &[glass_renderer::MeshDrawItem<'x>],
+    vp: [f32; 16],
+    ojo: [f32; 4],
+) -> Vec<glass_renderer::MeshDrawItem<'x>> {
+    lotes
+        .iter()
+        .map(|(m, pc, tex, sh, r)| {
+            let mut pc2 = *pc;
+            pc2.mvp = matmul(&vp, &pc.model);
+            pc2.camera_pos = ojo;
+            (*m, pc2, *tex, sh.clone(), *r)
+        })
+        .collect()
+}
+
+/// Igual que `clonar_lotes_portal` para los lotes con piel.
+fn clonar_piel_portal<'x>(
+    lotes: &[glass_renderer::SkinnedDrawItem<'x>],
+    vp: [f32; 16],
+    ojo: [f32; 4],
+) -> Vec<glass_renderer::SkinnedDrawItem<'x>> {
+    lotes
+        .iter()
+        .map(|(m, pc, tex, joints, r)| {
+            let mut pc2 = *pc;
+            pc2.mvp = matmul(&vp, &pc.model);
+            pc2.camera_pos = ojo;
+            (*m, pc2, *tex, *joints, *r)
+        })
+        .collect()
+}
+
+/// Busca en los lotes el dibujo cuya `model` sea el mundo del
+/// portal: devuelve su malla y rango (la superficie que el
+/// pase de portal va a dibujar en su lugar).
+fn robar_superficie<'x>(
+    lotes: &[glass_renderer::MeshDrawItem<'x>],
+    w: [f32; 16],
+) -> Option<(&'x glass_renderer::GpuMesh, (u32, u32))> {
+    lotes
+        .iter()
+        .find(|(_, pc, _, _, _)| pc.model == w)
+        .map(|(m, _, _, _, r)| (*m, *r))
+}
+
+/// Añade el dibujo de una superficie de portal a las listas
+/// de juego (con su VP) y de escena (misma textura y VP
+/// virtual; en v1 la vista de escena muestra la vista del
+/// juego, no la suya propia).
+#[allow(clippy::too_many_arguments)]
+fn empujar_draw_portal<'x>(
+    draws_game: &mut Vec<glass_renderer::PortalDrawItem<'x>>,
+    draws_scene: &mut Vec<glass_renderer::PortalDrawItem<'x>>,
+    mesh: &'x glass_renderer::GpuMesh,
+    range: (u32, u32),
+    mundo: [f32; 16],
+    vp_game: [f32; 16],
+    vp_scene: [f32; 16],
+    vp_virtual: [f32; 16],
+    texture_index: usize,
+    rim: [f32; 4],
+    local_half: [f32; 2],
+) {
+    let push = glass_renderer::PortalPushConstants {
+        mvp: matmul(&vp_game, &mundo),
+        mvp_virtual: matmul(&vp_virtual, &mundo),
+        rim,
+        local_half,
+        _pad: [0.0, 0.0],
+    };
+    draws_game.push(glass_renderer::PortalDrawItem {
+        mesh,
+        push,
+        texture_index,
+        range,
+    });
+    let mut push_s = push;
+    push_s.mvp = matmul(&vp_scene, &mundo);
+    draws_scene.push(glass_renderer::PortalDrawItem {
+        mesh,
+        push: push_s,
+        texture_index,
+        range,
+    });
+}
+
+fn recolectar_luces_puntuales(
+    scene: &glass_core::SceneState,
+    eye: [f32; 3],
+) -> glass_renderer::PointLightsUbo {
+    let mundos = scene.compute_world_matrices();
+    let mut candidatas: Vec<(f32, [f32; 4], [f32; 4])> = Vec::new();
+    for ent in &scene.entities {
+        if !ent.active {
+            continue;
+        }
+        let Some(l) = ent.light.as_ref() else { continue };
+        if l.light_type != "Point" {
+            continue;
+        }
+        let p = mundos
+            .get(&ent.id)
+            .map(|m| [m[12], m[13], m[14]])
+            .unwrap_or(ent.transform.position);
+        let dx = p[0] - eye[0];
+        let dy = p[1] - eye[1];
+        let dz = p[2] - eye[2];
+        candidatas.push((
+            dx * dx + dy * dy + dz * dz,
+            [p[0], p[1], p[2], l.range.max(0.0)],
+            [l.color[0], l.color[1], l.color[2], l.intensity.max(0.0)],
+        ));
+    }
+    candidatas.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut ubo = glass_renderer::PointLightsUbo::default();
+    let n = candidatas.len().min(glass_renderer::MAX_POINT_LIGHTS);
+    for i in 0..n {
+        ubo.pos_range[i] = candidatas[i].1;
+        ubo.color_intensity[i] = candidatas[i].2;
+    }
+    ubo.count = n as u32;
+    ubo
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
@@ -2572,7 +5886,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let is_standalone = args.iter().any(|arg| arg == "--standalone" || arg == "--game");
+    let is_standalone = is_standalone_launch(!cfg!(feature = "editor"), &args);
     let is_standalone_test = args.iter().any(|arg| arg == "--test-standalone");
     let scene_to_load = args.iter().position(|a| a == "--scene").and_then(|idx| args.get(idx + 1)).cloned();
     let is_sample_game_test = args.iter().any(|arg| arg == "--test-sample-game");
@@ -2615,7 +5929,255 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         is_standalone_test,
         scene_to_load,
     );
+    // MCP sobre la escena viva: con la feature de editor, el servidor MCP
+    // de la app sirve su stdio en un hilo dedicado (ver
+    // `start_live_mcp_stdio` para la decisión de arranque y sus porqués).
+    #[cfg(feature = "editor")]
+    app.start_live_mcp_stdio(args.iter().any(|arg| arg == "--mcp-live"));
     event_loop.run_app(&mut app)?;
 
     Ok(())
+}
+
+#[cfg(all(test, feature = "editor"))]
+mod live_mcp_stdio_tests {
+    use super::*;
+
+    #[test]
+    fn terminal_interactiva_sin_force_no_arranca() {
+        // Usuario en una consola real, sin --mcp-live: no arrancar.
+        assert!(!GlassEngineApp::live_mcp_stdio_decision(false, true));
+    }
+
+    #[test]
+    fn pipes_sin_force_arranca() {
+        // Caso real de un cliente MCP: stdin no es TTY, arranca por defecto.
+        assert!(GlassEngineApp::live_mcp_stdio_decision(false, false));
+    }
+
+    #[test]
+    fn force_arranca_incluso_en_terminal() {
+        // --mcp-live fuerza el arranque aunque stdin sea una terminal.
+        assert!(GlassEngineApp::live_mcp_stdio_decision(true, true));
+        assert!(GlassEngineApp::live_mcp_stdio_decision(true, false));
+    }
+}
+
+/// Tests del puente de instanciación contra una escena y un mundo
+/// Rapier REALES (sin GPU ni CoreCLR): el spawn crea la entidad y su
+/// cuerpo con la forma inferida, el despawn libera ambos, y
+/// activar/desactivar retira y recrea el cuerpo — el ciclo entero que
+/// un generador procedural repite sin parar.
+#[cfg(test)]
+mod spawn_bridge_tests {
+    use super::*;
+
+    fn make_bridge() -> EngineSceneBridge {
+        EngineSceneBridge {
+            scene_state: Arc::new(Mutex::new(SceneState::new())),
+            scene_manager: Arc::new(Mutex::new(SceneManager::new("."))),
+            physics_world: Arc::new(Mutex::new(PhysicsWorld::new())),
+            pending_script_spawns: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn spec(model: &str, physics: i32) -> SpawnSpec {
+        SpawnSpec {
+            name: "Pieza".to_string(),
+            model: model.to_string(),
+            script: String::new(),
+            parent_id: 0,
+            position: [0.0, 5.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [2.0, 2.0, 2.0],
+            color: [0.0; 3],
+            has_color: false,
+            physics,
+        }
+    }
+
+    fn counts(bridge: &EngineSceneBridge) -> (usize, usize) {
+        bridge.physics_counts().expect("conteos con puente real")
+    }
+
+    #[test]
+    fn spawn_dinamico_crea_entidad_cuerpo_y_collider() {
+        let bridge = make_bridge();
+        let id = bridge
+            .spawn_entity(&spec("sphere", glass_scripting::SPAWN_PHYSICS_DYNAMIC))
+            .expect("spawn de esfera");
+        assert_eq!(bridge.entity_count(), Some(5), "4 de la escena por defecto + 1");
+        assert_eq!(counts(&bridge), (1, 1));
+        let state = bridge.scene_state.lock().unwrap();
+        let ent = state.get_entity(id).expect("la entidad existe");
+        assert_eq!(ent.mesh.as_ref().map(|m| m.model.as_str()), Some("sphere"));
+        assert_eq!(
+            ent.physics.as_ref().map(|p| p.body_type.as_str()),
+            Some("Dynamic")
+        );
+        // La caja de respaldo se deriva de la escala (2 -> semiextensión 1).
+        assert_eq!(ent.physics.as_ref().unwrap().box_extents, [1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn spawn_estatico_y_sin_fisica_se_distinguen() {
+        let bridge = make_bridge();
+        let suelo = bridge
+            .spawn_entity(&spec("cube", SPAWN_PHYSICS_STATIC))
+            .expect("spawn de suelo");
+        let decorado = bridge
+            .spawn_entity(&spec("cube", glass_scripting::SPAWN_PHYSICS_NONE))
+            .expect("spawn decorativo");
+        assert_eq!(counts(&bridge), (1, 1), "solo el estático tiene cuerpo");
+        let state = bridge.scene_state.lock().unwrap();
+        assert_eq!(
+            state.get_entity(suelo).unwrap().physics.as_ref().unwrap().body_type,
+            "Static"
+        );
+        assert!(state.get_entity(decorado).unwrap().physics.is_none());
+    }
+
+    #[test]
+    fn despawn_libera_entidad_cuerpo_y_collider() {
+        let bridge = make_bridge();
+        let id = bridge
+            .spawn_entity(&spec("capsule", glass_scripting::SPAWN_PHYSICS_DYNAMIC))
+            .unwrap();
+        assert_eq!(counts(&bridge), (1, 1));
+        assert!(bridge.destroy_entity(id));
+        assert_eq!(counts(&bridge), (0, 0), "Rapier vuelve a la base exacta");
+        assert_eq!(bridge.entity_count(), Some(4));
+        assert!(!bridge.destroy_entity(id), "destruir dos veces es no-op");
+    }
+
+    #[test]
+    fn desactivar_retira_el_cuerpo_y_reactivar_lo_recrea() {
+        let bridge = make_bridge();
+        let id = bridge
+            .spawn_entity(&spec("cylinder", glass_scripting::SPAWN_PHYSICS_DYNAMIC))
+            .unwrap();
+        assert!(bridge.set_entity_active(id, false));
+        assert_eq!(counts(&bridge), (0, 0), "inactiva = sin cuerpo");
+        assert_eq!(bridge.entity_count(), Some(5), "pero la entidad sigue ahí");
+        assert!(bridge.set_entity_active(id, true));
+        assert_eq!(counts(&bridge), (1, 1), "al reactivar el cuerpo vuelve");
+        assert!(!bridge.set_entity_active(9999, true));
+    }
+
+    #[test]
+    fn spawn_con_padre_pone_el_cuerpo_en_su_sitio_de_mundo() {
+        let bridge = make_bridge();
+        let mut padre = spec("cube", glass_scripting::SPAWN_PHYSICS_NONE);
+        padre.position = [10.0, 0.0, 0.0];
+        padre.scale = [1.0, 1.0, 1.0]; // sin escala: mundo = padre + local, sin factor
+        let parent_id = bridge.spawn_entity(&padre).unwrap();
+        let mut hijo = spec("sphere", glass_scripting::SPAWN_PHYSICS_DYNAMIC);
+        hijo.position = [1.0, 2.0, 0.0];
+        hijo.parent_id = parent_id;
+        let child_id = bridge.spawn_entity(&hijo).unwrap();
+        let state = bridge.scene_state.lock().unwrap();
+        assert_eq!(state.get_entity(child_id).unwrap().parent, Some(parent_id));
+        assert!(state.get_entity(parent_id).unwrap().children.contains(&child_id));
+        drop(state);
+        // El cuerpo nace en la posición de MUNDO (padre + local): si
+        // naciese en la local, la primera sincronización lo teletransportaría.
+        let physics = bridge.physics_world.lock().unwrap();
+        assert!(physics.get_body_by_entity(child_id).is_some(), "cuerpo del hijo");
+        let bodies = physics.sync_all_transforms();
+        let tf = bodies
+            .iter()
+            .find(|(eid, _)| *eid == child_id)
+            .map(|(_, tf)| *tf)
+            .expect("transform sincronizada del hijo");
+        let pos = tf.position;
+        assert!((pos[0] - 11.0).abs() < 0.01, "x de mundo ~11, vino {pos:?}");
+        assert!((pos[1] - 2.0).abs() < 0.01, "y de mundo ~2, vino {pos:?}");
+    }
+
+    #[test]
+    fn spawn_con_script_encola_la_instancia_y_rechaza_padre_inexistente() {
+        let bridge = make_bridge();
+        let mut con_script = spec("cube", glass_scripting::SPAWN_PHYSICS_NONE);
+        con_script.script = "MiGenerador".to_string();
+        let id = bridge.spawn_entity(&con_script).unwrap();
+        {
+            let state = bridge.scene_state.lock().unwrap();
+            let ent = state.get_entity(id).unwrap();
+            assert_eq!(
+                ent.script_data.as_ref().map(|s| s.class_name.as_str()),
+                Some("MiGenerador")
+            );
+            assert!(ent.script.is_none(), "el campo heredado no debe apuntar al PlayerController");
+        }
+        let pending = bridge.pending_script_spawns.lock().unwrap();
+        assert_eq!(pending.as_slice(), [(id, "MiGenerador".to_string())]);
+        drop(pending);
+
+        let mut huerfano = spec("cube", glass_scripting::SPAWN_PHYSICS_NONE);
+        huerfano.parent_id = 424242;
+        assert!(bridge.spawn_entity(&huerfano).is_none());
+    }
+
+    /// El ciclo del generador en miniatura: 200 spawns mezclados, todos
+    /// destruidos, y el mundo y la escena vuelven EXACTO a la base.
+    #[test]
+    fn ciclo_spawn_destroy_masivo_vuelve_a_la_base() {
+        let bridge = make_bridge();
+        let base_entities = bridge.entity_count().unwrap();
+        let models = ["cube", "sphere", "capsule", "cylinder", "plane"];
+        let mut ids = Vec::new();
+        for i in 0..200 {
+            let physics = if i % 2 == 0 {
+                glass_scripting::SPAWN_PHYSICS_DYNAMIC
+            } else {
+                SPAWN_PHYSICS_STATIC
+            };
+            let mut s = spec(models[i % models.len()], physics);
+            s.position = [(i % 20) as f32, 5.0, (i / 20) as f32];
+            ids.push(bridge.spawn_entity(&s).unwrap());
+        }
+        assert_eq!(counts(&bridge), (200, 200));
+        for id in ids {
+            assert!(bridge.destroy_entity(id));
+        }
+        assert_eq!(counts(&bridge), (0, 0));
+        assert_eq!(bridge.entity_count(), Some(base_entities));
+    }
+}
+
+#[cfg(test)]
+mod standalone_launch_tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn binario_puro_sin_argumentos_es_juego() {
+        // La regresión: el binario puro sin argumentos caía en la escena
+        // demo del editor y se estrellaba. Como juego, todo arranque
+        // suyo es standalone.
+        assert!(is_standalone_launch(true, &args(&["glass_app"])));
+    }
+
+    #[test]
+    fn binario_puro_con_escena_es_juego() {
+        assert!(is_standalone_launch(
+            true,
+            &args(&["glass_app", "--scene", "assets/scenes/SampleScene.scene.json"])
+        ));
+    }
+
+    #[test]
+    fn editor_sin_argumentos_no_es_juego() {
+        // El binario completo sin banderas abre el Lanzador, no un juego.
+        assert!(!is_standalone_launch(false, &args(&["glass_app"])));
+    }
+
+    #[test]
+    fn editor_con_bandera_es_juego() {
+        assert!(is_standalone_launch(false, &args(&["glass_app", "--standalone"])));
+        assert!(is_standalone_launch(false, &args(&["glass_app", "--game"])));
+    }
 }

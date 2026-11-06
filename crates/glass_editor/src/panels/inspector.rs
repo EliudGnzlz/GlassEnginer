@@ -2,18 +2,63 @@ use egui::{Color32, DragValue, RichText, Slider, Ui};
 use glass_core::{
     AudioSourceData, CameraData, CanvasData, LightData, MeshData, PhysicsData,
     RectTransformData, SceneState, ScriptComponentData, UIButtonData, UITextData,
+    UIImageData,
+    UIDragData,
 };
 use std::sync::{Arc, Mutex};
+
+/// Busca los modelos que una entidad puede usar: los nombres (sin
+/// extensión) de los `.glb` bajo `assets/`, que es lo que la precarga del
+/// motor sube al AssetCache con esa misma clave.
+fn scan_model_names() -> Vec<String> {
+    fn walk(dir: &std::path::Path, depth: u32, out: &mut Vec<String>) {
+        if depth > 8 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, depth + 1, out);
+            } else if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("glb"))
+            {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    out.push(stem.to_string());
+                }
+            }
+        }
+    }
+    let mut names = Vec::new();
+    walk(std::path::Path::new("assets"), 0, &mut names);
+    names.sort();
+    names.dedup();
+    names
+}
 
 #[derive(Default)]
 pub struct InspectorPanel {
     show_add_component_menu: bool,
+    /// Nombres de modelo disponibles (los .glb bajo `assets/`, sin
+    /// extensión) para el selector de malla. Se cachean por entidad
+    /// seleccionada y se refrescan al cambiar la selección o con el
+    /// botón ↻ de la sección Mesh Renderer.
+    model_names: Vec<String>,
+    model_names_for: Option<u64>,
+    model_names_dirty: bool,
 }
 
 impl InspectorPanel {
     pub fn new() -> Self {
         Self {
             show_add_component_menu: false,
+            model_names: Vec::new(),
+            model_names_for: None,
+            model_names_dirty: true,
         }
     }
 
@@ -47,6 +92,14 @@ impl InspectorPanel {
                 return;
             }
         };
+
+        // La lista de modelos del selector de malla se refresca al cambiar
+        // la entidad seleccionada (o cuando la sección pide un refresco).
+        if self.model_names_dirty || self.model_names_for != Some(entity.id) {
+            self.model_names = scan_model_names();
+            self.model_names_for = Some(entity.id);
+            self.model_names_dirty = false;
+        }
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.push_id(entity.id, |ui| {
@@ -180,9 +233,68 @@ impl InspectorPanel {
                             ui.label("Color Albedo:");
                             ui.color_edit_button_rgb(&mut mesh.color);
                         });
+                        // Selector de modelo: la clave es el nombre del
+                        // .glb en assets/ (vacío = cubo por defecto), la
+                        // misma que usa el bucle de dibujo desde la P1.
+                        ui.horizontal(|ui| {
+                            ui.label("Modelo:");
+                            let selected_label = if mesh.model.is_empty() {
+                                "(Cubo por defecto)".to_string()
+                            } else {
+                                mesh.model.clone()
+                            };
+                            egui::ComboBox::from_id_salt(format!("model_combo_{}", entity.id))
+                                .selected_text(selected_label)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut mesh.model, String::new(), "(Cubo por defecto)");
+                                    for name in &self.model_names {
+                                        ui.selectable_value(&mut mesh.model, name.clone(), name.as_str());
+                                    }
+                                    if !mesh.model.is_empty() && !self.model_names.contains(&mesh.model) {
+                                        let missing = mesh.model.clone();
+                                        ui.selectable_value(&mut mesh.model, missing.clone(), format!("{missing} (no está en assets/)"));
+                                    }
+                                });
+                            if ui.small_button("↻").on_hover_text("Volver a buscar modelos en assets/").clicked() {
+                                self.model_names_dirty = true;
+                            }
+                        });
+                        if !mesh.model.is_empty() && !self.model_names.contains(&mesh.model) {
+                            ui.label(
+                                RichText::new("⚠ Ese modelo no está en assets/: al dibujar se usará el cubo.")
+                                    .size(11.0)
+                                    .color(Color32::from_rgb(200, 120, 0)),
+                            );
+                        }
                         ui.checkbox(&mut mesh.wireframe, "Modo Wireframe");
+                        // Material (Materiales v1): nombre del activo
+                        // en assets/materials/<nombre>.material.json.
+                        // Con material, sus parámetros mandan sobre el
+                        // color y los valores por defecto.
+                        ui.horizontal(|ui| {
+                            ui.label("Material:");
+                            ui.text_edit_singleline(&mut mesh.material);
+                        });
+                        if !mesh.material.is_empty() {
+                            let ruta = format!(
+                                "assets/materials/{}.material.json",
+                                mesh.material
+                            );
+                            if std::path::Path::new(&ruta).exists() {
+                                ui.label("Activo encontrado en assets/materials/.");
+                            } else if ui
+                                .small_button("➕ Crear material con valores por defecto")
+                                .clicked()
+                            {
+                                let _ = std::fs::create_dir_all("assets/materials");
+                                // JSON del MaterialData por defecto,
+                                // escrito a mano: glass_editor no
+                                // depende de serde_json.
+                                let texto = "{\n  \"albedo\": [1.0, 1.0, 1.0, 1.0],\n  \"texture\": \"\",\n  \"metallic\": 0.0,\n  \"roughness\": 0.45,\n  \"emissive\": [0.0, 0.0, 0.0],\n  \"emissive_intensity\": 0.0,\n  \"tiling\": [1.0, 1.0],\n  \"offset\": [0.0, 0.0],\n  \"transparent\": false\n}\n";
+                                let _ = std::fs::write(&ruta, texto);
+                            }
+                        }
                         ui.label(format!("Shader: {}", mesh.shader));
-                        ui.label("Malla: cube.glb (Cargador glTF/SPIR-V)");
 
                         if ui.small_button("🗑 Quitar MeshRenderer").clicked() {
                             remove_mesh = true;
@@ -490,6 +602,24 @@ impl InspectorPanel {
                             ui.label("Color:");
                             ui.color_edit_button_rgba_unmultiplied(&mut txt.color);
                         });
+                        ui.horizontal(|ui| {
+                            ui.label("Fuente:");
+                            ui.text_edit_singleline(&mut txt.font);
+                        });
+                        ui.label("Nombre del .ttf en assets/fonts (sin extensión) o «default».");
+                        ui.horizontal(|ui| {
+                            ui.label("Alineación:");
+                            for (valor, etiqueta) in
+                                [("Left", "Izquierda"), ("Center", "Centro"), ("Right", "Derecha")]
+                            {
+                                if ui
+                                    .selectable_label(txt.align == valor, etiqueta)
+                                    .clicked()
+                                {
+                                    txt.align = valor.to_string();
+                                }
+                            }
+                        });
                         if ui.small_button("🗑 Quitar Text").clicked() {
                             remove_text = true;
                         }
@@ -522,6 +652,59 @@ impl InspectorPanel {
                 if remove_btn {
                     entity.ui_button = None;
                     entity.components.retain(|c| c != "Button");
+                }
+
+                let mut remove_img = false;
+                if let Some(ref mut img) = entity.ui_image {
+                    ui.collapsing("🖼 Image", |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Sprite:");
+                            ui.text_edit_singleline(&mut img.sprite);
+                        });
+                        ui.label("Ruta relativa a assets/, p. ej. textures/icono.png");
+                        ui.horizontal(|ui| {
+                            ui.label("Tinte:");
+                            ui.color_edit_button_rgba_unmultiplied(&mut img.color);
+                        });
+                        ui.checkbox(&mut img.preserve_aspect, "Preserve Aspect (encajar sin deformar)");
+                        if ui.small_button("🗑 Quitar Image").clicked() {
+                            remove_img = true;
+                        }
+                    });
+                    ui.separator();
+                }
+                if remove_img {
+                    entity.ui_image = None;
+                    entity.components.retain(|c| c != "Image");
+                }
+
+                let mut remove_drag = false;
+                if let Some(ref mut drag) = entity.ui_drag {
+                    ui.collapsing("✋ Drag & Drop (UI)", |ui| {
+                        ui.checkbox(&mut drag.draggable, "Draggable (se puede arrastrar)");
+                        ui.checkbox(&mut drag.accepts_drop, "Accepts Drop (recibe sueltas)");
+                        ui.horizontal(|ui| {
+                            ui.label("On Begin Drag:");
+                            ui.text_edit_singleline(&mut drag.on_begin_drag);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("On Drag End:");
+                            ui.text_edit_singleline(&mut drag.on_drag_end);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("On Drop:");
+                            ui.text_edit_singleline(&mut drag.on_drop);
+                        });
+                        ui.label("Métodos del script de esta entidad; DragDrop.DraggedEntityId / DropTargetEntityId dan la pareja del gesto.");
+                        if ui.small_button("🗑 Quitar Drag & Drop").clicked() {
+                            remove_drag = true;
+                        }
+                    });
+                    ui.separator();
+                }
+                if remove_drag {
+                    entity.ui_drag = None;
+                    entity.components.retain(|c| c != "DragDrop");
                 }
 
                 // ==========================================
@@ -598,6 +781,18 @@ impl InspectorPanel {
                         if entity.ui_button.is_none() && ui.button("🔘 Button").clicked() {
                             entity.ui_button = Some(UIButtonData::default());
                             entity.components.push("Button".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if entity.ui_image.is_none() && ui.button("🖼 Image").clicked() {
+                            entity.ui_image = Some(UIImageData::default());
+                            entity.components.push("Image".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if entity.ui_drag.is_none() && ui.button("✋ Drag & Drop").clicked() {
+                            entity.ui_drag = Some(UIDragData::default());
+                            entity.components.push("DragDrop".into());
                             self.show_add_component_menu = false;
                         }
                     });

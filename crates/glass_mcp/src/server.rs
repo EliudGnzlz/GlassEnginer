@@ -5,8 +5,17 @@ use base64::Engine as _;
 use glass_audio::AudioSystem;
 use glass_physics::{BodyHandle, BodyType, PhysicsWorld};
 use serde_json::json;
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 use std::sync::{Arc, Mutex};
+
+// Cotas de entrada del servidor MCP: la superficie la conduce un agente y
+// ninguna petición puede colgar el proceso ni agotar la memoria. Los
+// excesos devuelven un error JSON-RPC claro; nunca se truncan en silencio.
+const MAX_SIMULATION_STEPS: u64 = 3600; // 60 s de simulación a 60 Hz
+const MAX_ENTITY_NAME_CHARS: usize = 256;
+const MAX_COMPONENTS_PER_CALL: usize = 64;
+const MAX_ENTITIES_PER_SCENE: usize = 10_000;
+const MAX_LINE_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB por línea stdio
 
 pub struct McpServer {
     pub scene: Arc<Mutex<SceneState>>,
@@ -243,6 +252,63 @@ impl McpServer {
                                 },
                                 "required": ["action"]
                             }
+                        },
+                        {
+                            "name": "glass_bake_lightmap",
+                            "description": "Hornea el lightmap de la escena actual (sol + luces puntuales, con oclusión por raycasts) y lo escribe en assets/lightmaps/<nombre>.lm.png/.json, listo para que el runtime lo cargue.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {
+                                        "type": "string",
+                                        "description": "Nombre base de los archivos (sin extensión). Por defecto 'LiveScene'."
+                                    },
+                                    "density": {
+                                        "type": "number",
+                                        "description": "Densidad de téxeles por metro (default 8)"
+                                    }
+                                }
+                            }
+                        },
+                        {
+                            "name": "glass_get_input_axes",
+                            "description": "Devuelve los ejes de entrada configurados (Input Manager): nombre, teclas, gravity, dead, sensitivity, snap e invert.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "glass_list_materials",
+                            "description": "Lista los materiales disponibles en assets/materials/ con sus parámetros (albedo, textura, metallic, roughness, emisivo, tiling, transparente).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "glass_set_entity_material",
+                            "description": "Asigna un material de assets/materials/ a la malla de una entidad (nombre sin extensión .material.json; cadena vacía para quitarlo).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "integer", "description": "Id de la entidad" },
+                                    "material": { "type": "string", "description": "Nombre del material" }
+                                },
+                                "required": ["entity_id", "material"]
+                            }
+                        },
+                        {
+                            "name": "glass_set_ui_text",
+                            "description": "Pone el texto del componente UIText de una entidad del Canvas (lo crea con valores por defecto si la entidad no lo tiene).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "integer", "description": "Id de la entidad" },
+                                    "text": { "type": "string", "description": "Texto a mostrar" }
+                                },
+                                "required": ["entity_id", "text"]
+                            }
                         }
                     ]
                 }),
@@ -310,6 +376,16 @@ impl McpServer {
                             .collect()
                     })
                     .unwrap_or_else(|| vec!["Transform".into()]);
+
+                if entity_name.chars().count() > MAX_ENTITY_NAME_CHARS {
+                    return McpResponse::invalid_params(id, "Field 'name' exceeds 256 characters");
+                }
+                if components.len() > MAX_COMPONENTS_PER_CALL {
+                    return McpResponse::invalid_params(id, "Too many components in one call (max 64)");
+                }
+                if scene.entities.len() >= MAX_ENTITIES_PER_SCENE {
+                    return McpResponse::error(id, -32003, "Scene capacity reached (10000 entities)");
+                }
 
                 let new_id = scene.create_entity(entity_name.clone(), components.clone());
                 log::info!("MCP glass_create_entity: Creada entidad #{} '{}'", new_id, entity_name);
@@ -383,6 +459,25 @@ impl McpServer {
 
                 let wireframe = args.get("wireframe").and_then(|w| w.as_bool());
                 let script_opt = args.get("script").and_then(|s| s.as_str()).map(|s| s.to_string());
+
+                // Ningún valor no finito llega al transform ni al material:
+                // un f64 gigante se convierte en `inf` en el cast a f32, y
+                // NaN/inf acabarían en la escena y en Rapier.
+                for (field, vals) in [
+                    ("position", pos),
+                    ("rotation", rot),
+                    ("scale", scale),
+                    ("color", color),
+                ] {
+                    if let Some(v) = vals {
+                        if !v.iter().all(|c| c.is_finite()) {
+                            return McpResponse::invalid_params(
+                                id,
+                                &format!("Field '{}' must contain only finite numbers", field),
+                            );
+                        }
+                    }
+                }
 
                 let mut modified = false;
                 if pos.is_some() || rot.is_some() || scale.is_some() {
@@ -498,6 +593,9 @@ impl McpServer {
 
             "glass_setup_platformer_scene" => {
                 let initial_y = args.get("player_initial_y").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+                if !initial_y.is_finite() {
+                    return McpResponse::invalid_params(id, "Field 'player_initial_y' must be a finite number");
+                }
 
                 // 1. Limpiar o añadir entidades de la escena básica en SceneState
                 let floor_id = scene.create_entity(
@@ -697,7 +795,11 @@ impl McpServer {
                     None => return McpResponse::invalid_params(id, "Field 'action' is required ('move_forward', 'jump', 'step_climb', 'query')"),
                 };
 
-                let steps = args.get("steps").and_then(|s| s.as_u64()).unwrap_or(30) as usize;
+                let steps = args.get("steps").and_then(|s| s.as_u64()).unwrap_or(30);
+                if steps > MAX_SIMULATION_STEPS {
+                    return McpResponse::invalid_params(id, "Field 'steps' exceeds the maximum of 3600 (60 s at 60 Hz)");
+                }
+                let steps = steps as usize;
 
                 let player_body_opt = *self.player_body.lock().unwrap();
                 let phys_arc = self.get_physics();
@@ -801,6 +903,244 @@ impl McpServer {
                     }),
                 )
             }
+            "glass_bake_lightmap" => {
+                let nombre = args
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("LiveScene")
+                    .to_string();
+                if nombre.is_empty()
+                    || nombre.chars().any(|c| c == '/' || c == '\\' || c == '.')
+                {
+                    return McpResponse::invalid_params(
+                        id,
+                        "Field 'name' must be a plain file stem",
+                    );
+                }
+                let densidad = args
+                    .get("density")
+                    .and_then(|d| d.as_f64())
+                    .unwrap_or(8.0) as f32;
+                if !(densidad > 0.0) || densidad > 256.0 {
+                    return McpResponse::invalid_params(
+                        id,
+                        "Field 'density' must be in (0, 256]",
+                    );
+                }
+                let physics = self.get_physics();
+                match crate::bake::bake_scene_lightmap(&scene, &physics, densidad) {
+                    Ok(out) => {
+                        match crate::bake::write_lightmap_files(
+                            "assets/lightmaps",
+                            &nombre,
+                            &out,
+                        ) {
+                            Ok((png, json_path)) => McpResponse::success(
+                                id,
+                                json!({
+                                    "content": [{
+                                        "type": "text",
+                                        "text": format!(
+                                            "Lightmap horneado: {} entidades en {} (atlas {} px); saltados: {:?}. Metadatos: {}",
+                                            out.baked_entities.len(),
+                                            png,
+                                            out.size,
+                                            out.skipped_models,
+                                            json_path
+                                        )
+                                    }]
+                                }),
+                            ),
+                            Err(e) => McpResponse::error(
+                                id,
+                                -32000,
+                                format!("No se pudo escribir el lightmap: {e}"),
+                            ),
+                        }
+                    }
+                    Err(e) => McpResponse::error(
+                        id,
+                        -32000,
+                        format!("El horneado falló: {e}"),
+                    ),
+                }
+            }
+
+            "glass_get_input_axes" => {
+                // Registro vivo primero (modo --mcp-live dentro del
+                // editor); en stdio puro el registro está vacío y
+                // se lee el archivo del proyecto, con los ejes por
+                // defecto como último recurso.
+                let mut defs = glass_scripting::input_axes::axis_defs();
+                let mut fuente = "registro del motor en vivo";
+                if defs.is_empty() {
+                    if let Ok(texto) = std::fs::read_to_string("assets/input_axes.json") {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&texto) {
+                            if let Some(arr) = v.get("axes") {
+                                if let Ok(d) = serde_json::from_value::<
+                                    Vec<glass_scripting::input_axes::InputAxisDef>,
+                                >(arr.clone())
+                                {
+                                    defs = d;
+                                    fuente = "assets/input_axes.json";
+                                }
+                            }
+                        }
+                    }
+                }
+                if defs.is_empty() {
+                    defs = glass_scripting::input_axes::default_input_axes();
+                    fuente = "valores por defecto (sin archivo ni registro)";
+                }
+                let texto = serde_json::to_string_pretty(&defs).unwrap_or_default();
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": format!(
+                                "Ejes de entrada configurados ({}; fuente: {}):\n{}",
+                                defs.len(),
+                                fuente,
+                                texto
+                            )
+                        }]
+                    }),
+                )
+            }
+
+            "glass_list_materials" => {
+                let mut lista: Vec<serde_json::Value> = Vec::new();
+                if let Ok(rd) = std::fs::read_dir("assets/materials") {
+                    for ent in rd.flatten() {
+                        let path = ent.path();
+                        let nombre = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        if !nombre.ends_with(".material.json") {
+                            continue;
+                        }
+                        if let Ok(texto) = std::fs::read_to_string(&path) {
+                            if let Ok(mat) =
+                                serde_json::from_str::<glass_core::MaterialData>(&texto)
+                            {
+                                lista.push(json!({
+                                    "name": nombre.replace(".material.json", ""),
+                                    "material": mat,
+                                }));
+                            }
+                        }
+                    }
+                }
+                lista.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": format!(
+                                "Materiales en assets/materials/ ({}):\n{}",
+                                lista.len(),
+                                serde_json::to_string_pretty(&lista).unwrap_or_default()
+                            )
+                        }]
+                    }),
+                )
+            }
+
+            "glass_set_entity_material" => {
+                let entity_id = match args.get("entity_id").and_then(|n| n.as_u64()) {
+                    Some(v) => v,
+                    None => {
+                        return McpResponse::invalid_params(id, "Field 'entity_id' is required")
+                    }
+                };
+                let material = match args.get("material").and_then(|n| n.as_str()) {
+                    Some(v) => v.to_string(),
+                    None => {
+                        return McpResponse::invalid_params(id, "Field 'material' is required")
+                    }
+                };
+                if material.chars().count() > MAX_ENTITY_NAME_CHARS {
+                    return McpResponse::invalid_params(id, "Field 'material' is too long");
+                }
+                let Some(ent) = scene.entities.iter_mut().find(|e| e.id == entity_id) else {
+                    return McpResponse::error(id, -32004, "Entity not found");
+                };
+                let Some(mesh) = ent.mesh.as_mut() else {
+                    return McpResponse::error(
+                        id,
+                        -32005,
+                        "La entidad no tiene componente Mesh",
+                    );
+                };
+                mesh.material = material.clone();
+                log::info!(
+                    "MCP glass_set_entity_material: entidad #{} material='{}'",
+                    entity_id,
+                    material
+                );
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": format!(
+                                "Material de la entidad #{} ahora es '{}'",
+                                entity_id, material
+                            )
+                        }]
+                    }),
+                )
+            }
+
+            "glass_set_ui_text" => {
+                let entity_id = match args.get("entity_id").and_then(|n| n.as_u64()) {
+                    Some(v) => v,
+                    None => {
+                        return McpResponse::invalid_params(id, "Field 'entity_id' is required")
+                    }
+                };
+                let texto = match args.get("text").and_then(|n| n.as_str()) {
+                    Some(v) => v.to_string(),
+                    None => {
+                        return McpResponse::invalid_params(id, "Field 'text' is required")
+                    }
+                };
+                if texto.chars().count() > 4096 {
+                    return McpResponse::invalid_params(id, "Field 'text' is too long");
+                }
+                let Some(ent) = scene.entities.iter_mut().find(|e| e.id == entity_id) else {
+                    return McpResponse::error(id, -32004, "Entity not found");
+                };
+                match ent.ui_text.as_mut() {
+                    Some(t) => {
+                        t.text = texto.clone();
+                    }
+                    None => {
+                        let mut t = glass_core::UITextData::default();
+                        t.text = texto.clone();
+                        ent.ui_text = Some(t);
+                        if !ent.components.iter().any(|c| c == "UIText") {
+                            ent.components.push("UIText".to_string());
+                        }
+                    }
+                }
+                log::info!(
+                    "MCP glass_set_ui_text: entidad #{} texto actualizado",
+                    entity_id
+                );
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": format!("Texto UI de la entidad #{}: '{}'", entity_id, texto)
+                        }]
+                    }),
+                )
+            }
 
             _ => McpResponse::method_not_found(id, name),
         }
@@ -810,19 +1150,153 @@ impl McpServer {
     pub fn run_stdio_loop(&self) {
         let stdin = std::io::stdin();
         let mut stdout = std::io::stdout();
-        let reader = stdin.lock();
+        let mut reader = stdin.lock();
 
-        for line in reader.lines() {
-            if let Ok(l) = line {
-                let trimmed = l.trim();
-                if trimmed.is_empty() {
-                    continue;
+        // Límite duro por línea (ver MAX_LINE_BYTES): `lines()` dejaba
+        // crecer el buffer sin cota hasta OOM si un cliente concatenaba
+        // contexto sin '\n'. Cada línea se lee a través de un `take()`
+        // acotado; si excede, se descarta el resto sin almacenarlo, se
+        // responde -32700 y el bucle sigue vivo.
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let read = reader
+                .by_ref()
+                .take(MAX_LINE_BYTES + 1)
+                .read_line(&mut line);
+            match read {
+                Ok(0) => break, // EOF
+                Ok(_) => {
+                    if line.len() as u64 > MAX_LINE_BYTES {
+                        if !line.ends_with('\n') {
+                            // Descartar hasta el fin de la línea sin guardarla.
+                            loop {
+                                match reader.fill_buf() {
+                                    Ok(buf) if !buf.is_empty() => {
+                                        match buf.iter().position(|&b| b == b'\n') {
+                                            Some(i) => {
+                                                reader.consume(i + 1);
+                                                break;
+                                            }
+                                            None => {
+                                                let n = buf.len();
+                                                reader.consume(n);
+                                            }
+                                        }
+                                    }
+                                    _ => break,
+                                }
+                            }
+                        }
+                        let err_resp = McpResponse::error(
+                            None,
+                            -32700,
+                            format!(
+                                "Request line too long (limit {} bytes)",
+                                MAX_LINE_BYTES
+                            ),
+                        );
+                        if let Ok(s) = serde_json::to_string(&err_resp) {
+                            let _ = writeln!(stdout, "{}", s);
+                            let _ = stdout.flush();
+                        }
+                        continue;
+                    }
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if let Some(resp) = self.handle_json(trimmed) {
+                        let _ = writeln!(stdout, "{}", resp);
+                        let _ = stdout.flush();
+                    }
                 }
-                if let Some(resp) = self.handle_json(trimmed) {
-                    let _ = writeln!(stdout, "{}", resp);
-                    let _ = stdout.flush();
-                }
+                Err(_) => break,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_catchup {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn servidor() -> McpServer {
+        McpServer::new(Arc::new(Mutex::new(SceneState::new())))
+    }
+
+    fn llamar(srv: &McpServer, tool: &str, args: serde_json::Value) -> String {
+        let req = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{}","arguments":{}}}}}"#,
+            tool, args
+        );
+        srv.handle_json(&req).unwrap_or_default()
+    }
+
+    #[test]
+    fn lista_incluye_las_tools_nuevas() {
+        let srv = servidor();
+        let resp = srv
+            .handle_json(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+            .unwrap_or_default();
+        for nombre in [
+            "glass_bake_lightmap",
+            "glass_get_input_axes",
+            "glass_list_materials",
+            "glass_set_entity_material",
+            "glass_set_ui_text",
+        ] {
+            assert!(resp.contains(nombre), "falta {nombre} en tools/list");
+        }
+    }
+
+    #[test]
+    fn input_axes_devuelve_los_registrados() {
+        glass_scripting::input_axes::set_axis_defs(
+            glass_scripting::input_axes::default_input_axes(),
+        );
+        let srv = servidor();
+        let resp = llamar(&srv, "glass_get_input_axes", json!({}));
+        assert!(resp.contains("Horizontal"), "resp: {resp}");
+        assert!(resp.contains("Jump"), "resp: {resp}");
+    }
+
+    #[test]
+    fn set_material_y_texto_ui_sobre_entidad() {
+        let srv = servidor();
+        let id = {
+            let mut sc = srv.scene.lock().unwrap();
+            sc.create_entity("Cubo MCP".to_string(), vec!["Transform".into()])
+        };
+        // Sin Mesh, asignar material es un error claro (-32005).
+        let resp = llamar(
+            &srv,
+            "glass_set_entity_material",
+            json!({ "entity_id": id, "material": "oro" }),
+        );
+        assert!(resp.contains("-32005"), "resp: {resp}");
+        // El texto UI sí se crea sobre la entidad.
+        let resp = llamar(
+            &srv,
+            "glass_set_ui_text",
+            json!({ "entity_id": id, "text": "Hola MCP" }),
+        );
+        assert!(resp.contains("Hola MCP"), "resp: {resp}");
+        let sc = srv.scene.lock().unwrap();
+        let ent = sc.entities.iter().find(|e| e.id == id).unwrap();
+        assert_eq!(ent.ui_text.as_ref().unwrap().text, "Hola MCP");
+    }
+
+    #[test]
+    fn bake_escena_vacia_hornea_cero_entidades() {
+        // SceneState::new() trae su luz principal por defecto: el
+        // horneado de una escena sin estáticos tiene éxito con 0
+        // entidades y escribe los dos archivos (se limpian aquí).
+        let srv = servidor();
+        let resp = llamar(&srv, "glass_bake_lightmap", json!({ "name": "TestMcp" }));
+        assert!(resp.contains("0 entidades"), "resp: {resp}");
+        let _ = std::fs::remove_file("assets/lightmaps/TestMcp.lm.png");
+        let _ = std::fs::remove_file("assets/lightmaps/TestMcp.lm.json");
     }
 }

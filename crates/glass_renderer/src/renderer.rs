@@ -3,8 +3,12 @@ use crate::mesh::GpuMesh;
 use crate::offscreen::OffscreenTarget;
 use crate::pipeline::GraphicsPipeline;
 use crate::swapchain::SwapchainContext;
+use crate::ui::{FontAtlas, UiAtlasKind, UiBatch, UiRenderer, UiSegment};
 use ash::vk;
-use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
+use gpu_allocator::vulkan::{
+    Allocation, AllocationCreateDesc, AllocationScheme, Allocator, AllocatorCreateDesc,
+};
+use gpu_allocator::MemoryLocation;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
@@ -13,7 +17,46 @@ const FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/triangle.frag.sp
 const MESH_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/mesh.vert.spv");
 const MESH_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/mesh.frag.spv");
 const PBR_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/pbr.vert.spv");
+const PORTAL_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/portal.vert.spv");
+const PORTAL_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/portal.frag.spv");
 const PBR_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/pbr.frag.spv");
+const PBR_SKINNED_VERT_SPV: &[u8] =
+    include_bytes!("../../../assets/shaders/pbr_skinned.vert.spv");
+/// Gemelo del PBR con el ACES dentro: el camino SIN post-procesado
+/// (GLASS_POST=0), bit a bit el comportamiento anterior al bloque de
+/// gráficos. El `pbr.frag` normal escribe lineal HDR y el ACES vive en
+/// la pasada final del post.
+const PBR_LEGACY_FRAG_SPV: &[u8] =
+    include_bytes!("../../../assets/shaders/pbr_legacy.frag.spv");
+
+/// Proyectores del pase de sombras de un frame: mallas rígidas (malla +
+/// matriz de modelo) y mallas con piel (malla + modelo + set de
+/// articulaciones de la entidad). La MVP de luz la compone el renderer
+/// con la VP fijada por `set_shadow_frame`.
+pub struct ShadowCasters<'a> {
+    pub statics: &'a [(&'a GpuMesh, [f32; 16])],
+    pub skinned: &'a [(&'a GpuMesh, [f32; 16], vk::DescriptorSet)],
+}
+
+/// Qué vista procesa `render_post` (la de escena o la de juego).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PostView {
+    Scene,
+    Game,
+}
+
+/// Lote de dibujo de una malla CON piel, para una primitiva: malla (con
+/// vértices `SkinnedVertex`), push constants como en el lote normal, set 0
+/// con la textura del material y set 1 con el SSBO de articulaciones DE
+/// ESA ENTIDAD (cada instancia animada tiene su propia pose), y el rango
+/// de índices de la primitiva.
+pub type SkinnedDrawItem<'a> = (
+    &'a GpuMesh,
+    MeshPushConstants,
+    vk::DescriptorSet,
+    vk::DescriptorSet,
+    (u32, u32),
+);
 
 #[derive(Error, Debug)]
 pub enum RendererError {
@@ -51,11 +94,53 @@ pub struct MeshPushConstants {
     pub material_params: [f32; 4], // x=metallic, y=roughness, z=ao, w=has_light (fuente única)
     pub object_color: [f32; 4],    // rgb = albedo, a = opacidad
     pub camera_pos: [f32; 4],      // xyz = posición de la cámara en mundo
+    pub lm_params: [f32; 4],       // x = índice en el UBO del lightmap (-1 = sin bake), y = tamaño del atlas px
+    pub emissive: [f32; 4],        // rgb = color emisivo, w = intensidad (Materiales v1; 0 = sin emisión)
+    pub uv_transform: [f32; 4],    // xy = tiling, zw = offset de la UV de la textura base
 }
 
 /// Tamaño en bytes que el `pipeline_layout` debe declarar y que
 /// `context.rs` valida contra `maxPushConstantsSize`.
 pub const MESH_PUSH_CONSTANTS_SIZE: u32 = std::mem::size_of::<MeshPushConstants>() as u32;
+
+/// Push constants de la superficie de un portal (144 B):
+/// el MVP de la vista que la dibuja, el MVP de la CÁMARA
+/// VIRTUAL del portal enlazado (para el muestreo proyectivo
+/// de su textura) y el color del anillo.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct PortalPushConstants {
+    pub mvp: [f32; 16],
+    pub mvp_virtual: [f32; 16],
+    pub rim: [f32; 4],
+    /// Mitad local de la superficie en X e Y (el cubo glb
+    /// abarca ±1, el plano integrado ±0,5): el anillo del
+    /// borde se calcula desde la posición local normalizada
+    /// por esto, NO desde el UV (el cubo trae UV de atlas y
+    /// el anillo salía como una banda vertical).
+    pub local_half: [f32; 2],
+    pub _pad: [f32; 2],
+}
+
+/// Un dibujo de superficie de portal dentro de una vista:
+/// la malla (el plano del portal), sus dos MVP y qué textura
+/// de portal muestrea (0 = vista del portal A, 1 = la del B).
+pub struct PortalDrawItem<'a> {
+    pub mesh: &'a GpuMesh,
+    pub push: PortalPushConstants,
+    pub texture_index: usize,
+    pub range: (u32, u32),
+}
+
+/// El lote de mallas de una vista (alias del tipo que ya
+/// viajaba por las firmas de render).
+pub type MeshDrawItem<'a> = (
+    &'a GpuMesh,
+    MeshPushConstants,
+    vk::DescriptorSet,
+    Option<String>,
+    (u32, u32),
+);
 
 const IDENTITY_MAT4: [f32; 16] = [
     1.0, 0.0, 0.0, 0.0,
@@ -74,6 +159,9 @@ impl Default for MeshPushConstants {
             material_params: [0.2, 0.5, 1.0, 1.0],
             object_color: [0.18, 0.55, 0.92, 1.0],
             camera_pos: [0.0, 0.0, 0.0, 1.0],
+            lm_params: [-1.0, 0.0, 0.0, 0.0],
+            emissive: [0.0, 0.0, 0.0, 0.0],
+            uv_transform: [1.0, 1.0, 0.0, 0.0],
         }
     }
 }
@@ -90,8 +178,95 @@ impl MeshPushConstants {
 // El contrato con GLSL depende de que no haya relleno entre campos: si el
 // compilador insertase padding, los offsets dejarían de coincidir y el shader
 // leería basura sin ningún error de compilación.
-const _: () = assert!(std::mem::size_of::<MeshPushConstants>() == 208);
+const _: () = assert!(std::mem::size_of::<MeshPushConstants>() == 256);
 const _: () = assert!(std::mem::align_of::<MeshPushConstants>() == 4);
+
+pub const MAX_POINT_LIGHTS: usize = 8;
+pub const POINT_LIGHTS_UBO_SIZE: u64 = 272;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct PointLightsUbo {
+    pub pos_range: [[f32; 4]; MAX_POINT_LIGHTS],
+    pub color_intensity: [[f32; 4]; MAX_POINT_LIGHTS],
+    pub count: u32,
+    pub _pad: [u32; 3],
+}
+
+const _: () = assert!(std::mem::size_of::<PointLightsUbo>() == 272);
+
+impl Default for PointLightsUbo {
+    fn default() -> Self {
+        Self {
+            pos_range: [[0.0; 4]; MAX_POINT_LIGHTS],
+            color_intensity: [[0.0; 4]; MAX_POINT_LIGHTS],
+            count: 0,
+            _pad: [0; 3],
+        }
+    }
+}
+
+/// UBO del lightmap (set 5 del PBR): por entidad horneada (máx. 64),
+/// los 6 grupos (eje, signo) con su sub-rect en el atlas (rect, en
+/// UV) y sus cotas 2D de mundo (bounds: mínimo y extensión). Ranura =
+/// entidad*6 + eje*2 + signo. Grupo ausente: todo ceros.
+pub const MAX_LM_ENTITIES: usize = 64;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct LmDataUbo {
+    pub rect: [[f32; 4]; MAX_LM_ENTITIES * 6],
+    pub bounds: [[f32; 4]; MAX_LM_ENTITIES * 6],
+}
+
+const _: () = assert!(std::mem::size_of::<LmDataUbo>() == 12288);
+
+impl Default for LmDataUbo {
+    fn default() -> Self {
+        Self {
+            rect: [[0.0; 4]; MAX_LM_ENTITIES * 6],
+            bounds: [[0.0; 4]; MAX_LM_ENTITIES * 6],
+        }
+    }
+}
+
+fn create_point_lights_set_layout(
+    device: &ash::Device,
+) -> Result<vk::DescriptorSetLayout, vk::Result> {
+    let binding = [vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+        .descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&binding);
+    unsafe { device.create_descriptor_set_layout(&info, None) }
+}
+
+/// Layout del set 4 del lightmap: el atlas como textura muestreable.
+fn create_lm_tex_set_layout(
+    device: &ash::Device,
+) -> Result<vk::DescriptorSetLayout, vk::Result> {
+    let binding = [vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+        .descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&binding);
+    unsafe { device.create_descriptor_set_layout(&info, None) }
+}
+
+/// Layout del set 5 del lightmap: el UBO de grupos por entidad.
+fn create_lm_data_set_layout(
+    device: &ash::Device,
+) -> Result<vk::DescriptorSetLayout, vk::Result> {
+    let binding = [vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+        .descriptor_count(1)
+        .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&binding);
+    unsafe { device.create_descriptor_set_layout(&info, None) }
+}
 
 pub struct GlassRenderer {
     pub device: Arc<ash::Device>,
@@ -101,14 +276,167 @@ pub struct GlassRenderer {
     pub swapchain_framebuffers: Vec<vk::Framebuffer>,
     pub offscreen: OffscreenTarget,
     pub game_offscreen: OffscreenTarget,
+    /// Objetivos LDR de presentación (bloque de gráficos): con el post
+    /// activo, los objetivos de arriba son HDR (lineal, R16G16B16A16_
+    /// SFLOAT) y la pasada final escribe aquí; la UI 2D, el blit del
+    /// standalone y egui consumen ESTOS, con el formato y el layout de
+    /// siempre. Sin post, el 3D se dibuja directamente aquí con los
+    /// pipelines `*_legacy` y la cadena no se ejecuta.
+    pub final_offscreen: OffscreenTarget,
+    pub final_game_offscreen: OffscreenTarget,
+    /// Objetivos HDR de las vistas de portal (bloque Portales):
+    /// la escena renderizada desde las cámaras virtuales de
+    /// cada portal de la pareja. Las superficies de portal los
+    /// muestrean con `portal_sets` (set 4, layout del lightmap).
+    pub portal_targets: [OffscreenTarget; 2],
+    /// Sets que muestrean `portal_targets` (uno por objetivo).
+    pub portal_sets: [vk::DescriptorSet; 2],
+    /// Pipelines de la superficie de portal (HDR y legacy).
+    pub portal_pipeline: GraphicsPipeline,
+    pub portal_pipeline_legacy: GraphicsPipeline,
     pub pipeline: GraphicsPipeline,
     pub mesh_pipeline: GraphicsPipeline,
     pub pbr_pipeline: GraphicsPipeline,
+    /// Pipeline de mallas con piel (bloque de skinning): ver
+    /// `pipeline::GraphicsPipeline::new_skinned_pipeline`.
+    pub skinned_pipeline: GraphicsPipeline,
+    /// Gemelos de los pipelines de arriba contra el render pass LDR y,
+    /// en el PBR/piel, con el fragmento `pbr_legacy.frag` (ACES dentro):
+    /// el camino sin post, bit a bit el de antes del bloque.
+    pub triangle_pipeline_legacy: GraphicsPipeline,
+    pub mesh_pipeline_legacy: GraphicsPipeline,
+    pub pbr_pipeline_legacy: GraphicsPipeline,
+    pub skinned_pipeline_legacy: GraphicsPipeline,
+    /// Recursos del mapa de sombras del sol (módulo `shadow`).
+    pub shadow: crate::shadow::ShadowResources,
+    /// Cadena de post-procesado (módulo `post`).
+    pub post: crate::post::PostChain,
+    /// ¿Post activo? Se lee de `GLASS_POST` al crear el renderer
+    /// (defecto: activo). Sin post, `render_post` no hace nada y
+    /// `render_views` dibuja en los objetivos LDR con los pipelines
+    /// legacy.
+    pub post_enabled: bool,
+    /// Parámetros del post (umbral/intensidad del bloom, viñeta,
+    /// exposición), con overrides de entorno al crear el renderer.
+    pub post_settings: crate::post::PostSettings,
+    /// ¿Sombras activas? De `GLASS_SHADOWS` (defecto: activas). Solo
+    /// apaga el efecto: el pase se salta y el UBO se publica inactivo.
+    pub shadows_enabled: bool,
+    /// VP de la luz del frame en curso (lado CPU; la vuelca
+    /// `render_views` al UBO del set 2 tras el fence).
+    shadow_vp: [f32; 16],
+    /// Parámetros del UBO de sombras del frame (lado CPU).
+    shadow_params: [f32; 4],
+    /// Pool de sets del set 1 (SSBO de articulaciones) de los
+    /// `JointBuffer` por entidad. Los sets se liberan con
+    /// FREE_DESCRIPTOR_SET cuando el buffer de una entidad se destruye.
+    pub joints_pool: vk::DescriptorPool,
+    /// Pipelines de materiales de grafo, por nombre (`graph:<nombre>` en el
+    /// `MeshData.shader` de la entidad). Comparten vertex shader y layout
+    /// con el PBR; solo cambia el fragmento generado por el grafo.
+    pub custom_pipelines: std::collections::HashMap<String, GraphicsPipeline>,
+    /// Gemelos de los pipelines de grafo contra el render pass LDR
+    /// (mismos SPV; los grafos no mapean tono en ninguna de las dos
+    /// rutas). Solo se usan con el post desactivado.
+    pub custom_pipelines_legacy: std::collections::HashMap<String, GraphicsPipeline>,
+    /// Canal global de los grafos (bloques «punto de interacción» y
+    /// «huella con forma»): layout del set 1 (`GraphGlobals`, dos vec4
+    /// UNIFORM_BUFFER leídos en vértices y fragmento) que comparten
+    /// TODOS los pipelines de grafo y solo ellos — el PBR, las mallas y
+    /// la piel conservan sus layouts de siempre. El Renderer posee el
+    /// layout, el pool, el buffer y el set; el valor CPU vive en
+    /// `graph_globals` y se vuelca al buffer al principio de
+    /// `render_views`, tras la espera del fence (el mismo patrón de
+    /// sincronización que los `JointBuffer`: un frame en vuelo).
+    pub graph_globals_layout: vk::DescriptorSetLayout,
+    /// Pool del que sale el único set global (no se libera nunca).
+    pub graph_globals_pool: vk::DescriptorPool,
+    /// El set global ya enlazado al buffer; se enlaza en el índice 1 en
+    /// cada dibujo con pipeline de grafo.
+    pub graph_globals_set: vk::DescriptorSet,
+    /// Buffer de los vec4 globales (32 B, CpuToGpu, mapeado
+    /// persistentemente).
+    pub graph_globals_buffer: vk::Buffer,
+    #[allow(dead_code)]
+    graph_globals_allocation: Option<Allocation>,
+    graph_globals_mapped: *mut u8,
+    /// Valor actual del canal global, en el lado CPU: el punto de
+    /// interacción (posición de mundo + radio en el w) seguido de la
+    /// forma de su huella (semiejes X/Z de la caja, rotación Y en
+    /// radianes y discriminador 0 = esfera / 1 = caja). Inactivo =
+    /// `glass_core::shader_graph::INTERACTION_GLOBALS_INACTIVE`.
+    graph_globals: [f32; 8],
+    /// Set 3 de los pipelines PBR y de piel: el UBO de luces puntuales
+    /// del frame (hasta 8 Point; las Spot se reconocen pero en esta v1
+    /// no emiten). Mismo patrón de buffer mapeado CpuToGpu y de volcado
+    /// por frame que el canal de grafos. El renderer posee layout, pool,
+    /// buffer y set; el valor CPU vive en `point_lights` y la app lo
+    /// publica con `set_point_lights` antes de `render_views`.
+    pub point_lights_layout: vk::DescriptorSetLayout,
+    /// Pool del que sale el único set de luces (no se libera nunca).
+    pub point_lights_pool: vk::DescriptorPool,
+    /// El set de luces ya enlazado al buffer; se enlaza en el índice 3
+    /// en cada dibujo PBR o con piel.
+    pub point_lights_set: vk::DescriptorSet,
+    /// Buffer del UBO de luces (272 B, CpuToGpu, mapeado).
+    pub point_lights_buffer: vk::Buffer,
+    #[allow(dead_code)]
+    point_lights_allocation: Option<Allocation>,
+    point_lights_mapped: *mut u8,
+    /// Valor actual del UBO de luces en el lado CPU.
+    point_lights: PointLightsUbo,
+    /// Sets 4 y 5 (lightmap horneado): atlas + UBO de grupos. Mismo
+    /// patrón de propiedad que el set 3. Sin bake publicado, el set 4
+    /// enlaza una textura 1×1 negra y el UBO está a ceros: el PBR se
+    /// comporta como siempre (lm_params = -1 en cada dibujo).
+    pub lm_tex_layout: vk::DescriptorSetLayout,
+    pub lm_data_layout: vk::DescriptorSetLayout,
+    /// Pool de los sets del lightmap (defecto, datos y atlas vigente).
+    pub lm_pool: vk::DescriptorPool,
+    /// Set 4 vigente: el del atlas publicado o el de la textura 1×1.
+    pub lm_tex_set: vk::DescriptorSet,
+    /// Set 4 de la textura 1×1 negra (al que vuelve `clear_lightmap`).
+    lm_default_tex_set: vk::DescriptorSet,
+    /// Set 4 reutilizable del atlas publicado: `set_lightmap` solo
+    /// reescribe su enlace (el pool no admite liberar sets).
+    lm_runtime_tex_set: vk::DescriptorSet,
+    /// Set 5 ya enlazado al buffer de grupos.
+    pub lm_data_set: vk::DescriptorSet,
+    pub lm_data_buffer: vk::Buffer,
+    #[allow(dead_code)]
+    lm_data_allocation: Option<Allocation>,
+    lm_data_mapped: *mut u8,
+    /// Muestreador propio del atlas (lineal, clamp).
+    lm_sampler: vk::Sampler,
+    /// La textura 1×1 negra por defecto (se conserva viva siempre).
+    lm_default_texture: Option<crate::mesh::GpuTexture>,
+    /// El atlas publicado por `set_lightmap`, si lo hay.
+    lm_atlas_texture: Option<crate::mesh::GpuTexture>,
+    /// Entidad → índice en el UBO de grupos.
+    lm_index: std::collections::HashMap<u64, u32>,
+    /// Tamaño del atlas vigente (1 si no hay bake).
+    lm_atlas_size: f32,
+    /// Pase 2D del Canvas de juego (sin egui) para el standalone: ver
+    /// `render_ui_overlay` y el módulo `ui`.
+    pub ui: UiRenderer,
+    /// Pase 2D del atlas de imágenes del Canvas (UI v2); None si
+    /// la escena activa no usa elementos Imagen.
+    pub ui_images: Option<UiRenderer>,
+    /// Pases 2D de fuentes con nombre (UI v2): una UiRenderer por
+    /// fuente de assets/fonts usada por la escena; se crean bajo
+    /// demanda con `ensure_named_font`.
+    pub ui_named_fonts: std::collections::HashMap<String, UiRenderer>,
     pub command_pool: vk::CommandPool,
     pub command_buffer: vk::CommandBuffer,
     pub fence: vk::Fence,
     pub image_available_semaphore: vk::Semaphore,
-    pub render_finished_semaphore: vk::Semaphore,
+    pub render_finished_semaphores: Vec<vk::Semaphore>,
+    /// Descriptor set de respaldo para los caminos que dibujan sin pasar por
+    /// la AssetCache (capturas offscreen): el set de la textura blanca por
+    /// defecto. La app lo fija al crear esa textura; si queda nulo, los
+    /// dibujos de ese camino no enlazan set (camino de deuda ya documentado
+    /// en `render_offscreen_scene`).
+    pub fallback_set: vk::DescriptorSet,
 }
 
 fn create_swapchain_render_pass(
@@ -207,14 +535,45 @@ impl GlassRenderer {
             swapchain.extent,
         )?;
 
-        // 4. Inicializar Viewports Offscreen desacoplados (1280x720) para Scene View y Game View
-        let offscreen = OffscreenTarget::new(
+        // Flags del bloque de gráficos, leídos una sola vez del
+        // entorno: GLASS_POST=0 apaga la cadena de post y
+        // GLASS_SHADOWS=0 las sombras (ver el módulo `post`).
+        let post_enabled = std::env::var("GLASS_POST").map(|v| v != "0").unwrap_or(true);
+        let shadows_enabled = std::env::var("GLASS_SHADOWS").map(|v| v != "0").unwrap_or(true);
+        let post_settings = crate::post::PostSettings::from_env();
+
+        // Layouts del set 2 de sombras (el real, para PBR/piel, y el de
+        // relleno, para grafos): se crean antes que los pipelines que
+        // los referencian en sus layouts.
+        let shadow_set_layout = crate::shadow::ShadowResources::create_set_layout(&device)?;
+        let shadow_dummy_layout = crate::shadow::ShadowResources::create_dummy_layout(&device)?;
+
+        // 4. Viewports Offscreen desacoplados (1280x720): los de
+        // escena/juego en HDR lineal R16G16B16A16_SFLOAT (ahí se dibuja
+        // el 3D con el post activo) y los de presentación en el UNORM
+        // LDR de siempre (los consume la UI, el blit y egui; sin post,
+        // el 3D se dibuja directamente en ellos).
+        let offscreen = OffscreenTarget::with_format(
+            device.clone(),
+            &mut *allocator.lock().unwrap(),
+            1280,
+            720,
+            vk::Format::R16G16B16A16_SFLOAT,
+        )?;
+        let game_offscreen = OffscreenTarget::with_format(
+            device.clone(),
+            &mut *allocator.lock().unwrap(),
+            1280,
+            720,
+            vk::Format::R16G16B16A16_SFLOAT,
+        )?;
+        let final_offscreen = OffscreenTarget::new(
             device.clone(),
             &mut *allocator.lock().unwrap(),
             1280,
             720,
         )?;
-        let game_offscreen = OffscreenTarget::new(
+        let final_game_offscreen = OffscreenTarget::new(
             device.clone(),
             &mut *allocator.lock().unwrap(),
             1280,
@@ -222,9 +581,286 @@ impl GlassRenderer {
         )?;
 
         // 5. Inicializar Pipelines Gráficos (Triángulo por defecto + Mallas 3D + Cook-Torrance PBR)
+        // Los de la ruta con post se crean contra el render pass HDR;
+        // sus gemelos `*_legacy`, contra el LDR (y el PBR/piel legacy
+        // con el fragmento que lleva el ACES dentro).
         let pipeline = GraphicsPipeline::new(device.clone(), offscreen.render_pass, VERT_SPV, FRAG_SPV)?;
-        let mesh_pipeline = GraphicsPipeline::new_mesh_pipeline(device.clone(), offscreen.render_pass, MESH_VERT_SPV, MESH_FRAG_SPV)?;
-        let pbr_pipeline = GraphicsPipeline::new_mesh_pipeline(device.clone(), offscreen.render_pass, PBR_VERT_SPV, PBR_FRAG_SPV)?;
+        let triangle_pipeline_legacy = GraphicsPipeline::new(device.clone(), final_offscreen.render_pass, VERT_SPV, FRAG_SPV)?;
+        // Layout del set 3 (luces puntuales): lo comparten los pipelines
+        // PBR y de piel, en sus dos variantes de pase.
+        let point_lights_layout = create_point_lights_set_layout(&device)?;
+        let lm_tex_layout = create_lm_tex_set_layout(&device)?;
+        let lm_data_layout = create_lm_data_set_layout(&device)?;
+        let mesh_pipeline = GraphicsPipeline::new_mesh_pipeline(device.clone(), offscreen.render_pass, MESH_VERT_SPV, MESH_FRAG_SPV, None, None, None)?;
+        let mesh_pipeline_legacy = GraphicsPipeline::new_mesh_pipeline(device.clone(), final_offscreen.render_pass, MESH_VERT_SPV, MESH_FRAG_SPV, None, None, None)?;
+        let pbr_pipeline = GraphicsPipeline::new_mesh_pipeline(device.clone(), offscreen.render_pass, PBR_VERT_SPV, PBR_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)))?;
+        let pbr_pipeline_legacy = GraphicsPipeline::new_mesh_pipeline(device.clone(), final_offscreen.render_pass, PBR_VERT_SPV, PBR_LEGACY_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)))?;
+        let skinned_pipeline = GraphicsPipeline::new_skinned_pipeline(device.clone(), offscreen.render_pass, PBR_SKINNED_VERT_SPV, PBR_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)))?;
+        let skinned_pipeline_legacy = GraphicsPipeline::new_skinned_pipeline(device.clone(), final_offscreen.render_pass, PBR_SKINNED_VERT_SPV, PBR_LEGACY_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)))?;
+        // Objetivos y pipelines de las vistas de portal (bloque
+        // Portales): dos HDR de 1024² (las vistas desde cada
+        // portal de la pareja), sus pipelines de superficie
+        // (muestrean el objetivo contrario vía el set 4, con el
+        // layout de textura del lightmap) y los sets que los
+        // exponen.
+        // OJO: cada with_format en su PROPIA sentencia — el
+        // guardián temporal de allocator.lock() vive hasta el
+        // fin de la sentencia; dentro de un literal de array
+        // compartido, el segundo lock se autobloqueaba.
+        let portal_target_a = OffscreenTarget::with_format(
+            device.clone(),
+            &mut *allocator.lock().unwrap(),
+            1024,
+            1024,
+            vk::Format::R16G16B16A16_SFLOAT,
+        )?;
+        let portal_target_b = OffscreenTarget::with_format(
+            device.clone(),
+            &mut *allocator.lock().unwrap(),
+            1024,
+            1024,
+            vk::Format::R16G16B16A16_SFLOAT,
+        )?;
+        let portal_targets = [portal_target_a, portal_target_b];
+        let portal_pipeline = GraphicsPipeline::new_mesh_pipeline(
+            device.clone(),
+            offscreen.render_pass,
+            PORTAL_VERT_SPV,
+            PORTAL_FRAG_SPV,
+            None,
+            None,
+            Some((lm_tex_layout, lm_data_layout)),
+        )?;
+        let portal_pipeline_legacy = GraphicsPipeline::new_mesh_pipeline(
+            device.clone(),
+            final_offscreen.render_pass,
+            PORTAL_VERT_SPV,
+            PORTAL_FRAG_SPV,
+            None,
+            None,
+            Some((lm_tex_layout, lm_data_layout)),
+        )?;
+        let portal_sets = unsafe {
+            let pool_sizes = [vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(2)];
+            let pool_info = vk::DescriptorPoolCreateInfo::default()
+                .pool_sizes(&pool_sizes)
+                .max_sets(2);
+            let pool = device.create_descriptor_pool(&pool_info, None)?;
+            let layouts = [lm_tex_layout, lm_tex_layout];
+            let alloc_info = vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(pool)
+                .set_layouts(&layouts);
+            let sets = device.allocate_descriptor_sets(&alloc_info)?;
+            for (i, set) in sets.iter().enumerate() {
+                let image_info = [vk::DescriptorImageInfo::default()
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image_view(portal_targets[i].color_view)
+                    .sampler(portal_targets[i].sampler)];
+                let write = [vk::WriteDescriptorSet::default()
+                    .dst_set(*set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&image_info)];
+                device.update_descriptor_sets(&write, &[]);
+            }
+            let mut it = sets.into_iter();
+            [it.next().unwrap(), it.next().unwrap()]
+        };
+        // Variantes transparentes del PBR (Materiales v1): mismos
+        // layouts que el PBR (el fragmento declara los sets 3/4/5,
+        // así que NO pueden crearse como pipelines de grafo) con
+        // mezcla por alfa. Se registran en los mapas de pipelines
+        // con nombre reservado tras construir el renderer.
+        let pbr_transparent = GraphicsPipeline::new_mesh_pipeline_transparent(device.clone(), offscreen.render_pass, PBR_VERT_SPV, PBR_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)))?;
+        let pbr_transparent_legacy = GraphicsPipeline::new_mesh_pipeline_transparent(device.clone(), final_offscreen.render_pass, PBR_VERT_SPV, PBR_LEGACY_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)))?;
+
+        // Recursos del mapa de sombras: imagen D32, UBO de frame, set
+        // real (set 2 del PBR/piel) y de relleno (set 2 de grafos) y
+        // los dos pipelines de profundidad — el de piel enlaza el set 1
+        // de articulaciones, cuyo layout posee el pipeline con piel.
+        let shadow = crate::shadow::ShadowResources::new(
+            device.clone(),
+            &mut *allocator.lock().unwrap(),
+            shadow_set_layout,
+            shadow_dummy_layout,
+            skinned_pipeline
+                .joints_set_layout
+                .ok_or_else(|| RendererError::Descriptor("pipeline con piel sin layout de articulaciones".into()))?,
+            pbr_pipeline
+                .descriptor_set_layout
+                .ok_or_else(|| RendererError::Descriptor("pipeline PBR sin layout de textura".into()))?,
+            PBR_VERT_SPV,
+            PBR_SKINNED_VERT_SPV,
+        )?;
+
+        // Cadena de post-procesado: bright/blur a media resolución y la
+        // pasada final contra el render pass LDR de presentación.
+        let post = crate::post::PostChain::new(
+            device.clone(),
+            &mut *allocator.lock().unwrap(),
+            1280,
+            720,
+            final_offscreen.render_pass,
+        )?;
+
+        // Pool de sets de articulaciones: un STORAGE_BUFFER por entidad
+        // con piel viva; 256 cubre de sobra los personajes/NPC del bloque.
+        let joints_pool = unsafe {
+            let pool_sizes = [vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(256)];
+            let pool_info = vk::DescriptorPoolCreateInfo::default()
+                .pool_sizes(&pool_sizes)
+                .max_sets(256)
+                .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
+            device.create_descriptor_pool(&pool_info, None)?
+        };
+
+        // 5b. Canal global de los grafos: layout + pool + buffer + set del
+        // UBO `GraphGlobals` (dos vec4). Se crea una sola vez y lo comparten
+        // todos los pipelines de grafo; ningún otro pipeline lo declara.
+        // Mismo patrón de buffer mapeado CpuToGpu que los JointBuffer.
+        let (graph_globals_layout, graph_globals_pool, graph_globals_set, graph_globals_buffer, graph_globals_allocation, graph_globals_mapped) =
+            unsafe {
+                let binding = [vk::DescriptorSetLayoutBinding::default()
+                    .binding(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)];
+                let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&binding);
+                let layout = device.create_descriptor_set_layout(&layout_info, None)?;
+
+                let pool_sizes = [vk::DescriptorPoolSize::default()
+                    .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                    .descriptor_count(1)];
+                let pool_info = vk::DescriptorPoolCreateInfo::default()
+                    .pool_sizes(&pool_sizes)
+                    .max_sets(1);
+                let pool = device.create_descriptor_pool(&pool_info, None)?;
+
+                let size = std::mem::size_of::<[f32; 8]>() as u64;
+                let buffer_info = vk::BufferCreateInfo::default()
+                    .size(size)
+                    .usage(vk::BufferUsageFlags::UNIFORM_BUFFER)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE);
+                let buffer = device.create_buffer(&buffer_info, None)?;
+                let mem_reqs = device.get_buffer_memory_requirements(buffer);
+                let allocation = allocator
+                    .lock()
+                    .unwrap()
+                    .allocate(&AllocationCreateDesc {
+                        name: "graph_globals",
+                        requirements: mem_reqs,
+                        location: MemoryLocation::CpuToGpu,
+                        linear: true,
+                        allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+                    })
+                    .map_err(RendererError::Allocator)?;
+                device.bind_buffer_memory(buffer, allocation.memory(), allocation.offset())?;
+
+                let layouts = [layout];
+                let set_alloc_info = vk::DescriptorSetAllocateInfo::default()
+                    .descriptor_pool(pool)
+                    .set_layouts(&layouts);
+                let set = device
+                    .allocate_descriptor_sets(&set_alloc_info)?
+                    .into_iter()
+                    .next()
+                    .ok_or(RendererError::Descriptor("pool de globales sin sets".into()))?;
+                let buffer_desc = [vk::DescriptorBufferInfo::default()
+                    .buffer(buffer)
+                    .offset(0)
+                    .range(size)];
+                let write = [vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(&buffer_desc)];
+                device.update_descriptor_sets(&write, &[]);
+
+                let mapped = allocation
+                    .mapped_ptr()
+                    .map(|p| p.as_ptr() as *mut u8)
+                    .ok_or(RendererError::Descriptor(
+                        "el buffer de globales de grafo no quedó mapeado".into(),
+                    ))?;
+                // Valor inicial: el canal inactivo, para que un grafo que
+                // use el nodo antes de que nadie publique se vea normal.
+                let inactive = glass_core::shader_graph::INTERACTION_GLOBALS_INACTIVE;
+                std::ptr::copy_nonoverlapping(
+                    inactive.as_ptr() as *const u8,
+                    mapped,
+                    std::mem::size_of::<[f32; 8]>(),
+                );
+                (layout, pool, set, buffer, Some(allocation), mapped)
+            };
+
+        // 5c. Luces puntuales: pool + buffer + set del UBO (set 3).
+        // Mismo patrón que 5b; el contenido inicial es todo ceros
+        // (count = 0: ninguna luz, resultado idéntico al de antes).
+        let (point_lights_pool, point_lights_set, point_lights_buffer,
+             point_lights_allocation, point_lights_mapped) = unsafe {
+            let pool_sizes = [vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)];
+            let pool_info = vk::DescriptorPoolCreateInfo::default()
+                .pool_sizes(&pool_sizes)
+                .max_sets(1);
+            let pool = device.create_descriptor_pool(&pool_info, None)?;
+
+            let size = POINT_LIGHTS_UBO_SIZE;
+            let buffer_info = vk::BufferCreateInfo::default()
+                .size(size)
+                .usage(vk::BufferUsageFlags::UNIFORM_BUFFER)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            let buffer = device.create_buffer(&buffer_info, None)?;
+            let mem_reqs = device.get_buffer_memory_requirements(buffer);
+            let allocation = allocator
+                .lock()
+                .unwrap()
+                .allocate(&AllocationCreateDesc {
+                    name: "point_lights",
+                    requirements: mem_reqs,
+                    location: MemoryLocation::CpuToGpu,
+                    linear: true,
+                    allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+                })
+                .map_err(RendererError::Allocator)?;
+            device.bind_buffer_memory(buffer, allocation.memory(), allocation.offset())?;
+
+            let layouts = [point_lights_layout];
+            let set_alloc_info = vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(pool)
+                .set_layouts(&layouts);
+            let set = device
+                .allocate_descriptor_sets(&set_alloc_info)?
+                .into_iter()
+                .next()
+                .ok_or(RendererError::Descriptor("pool de luces puntuales sin sets".into()))?;
+
+            let buffer_desc = [vk::DescriptorBufferInfo::default()
+                .buffer(buffer)
+                .offset(0)
+                .range(size)];
+            let write = [vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(&buffer_desc)];
+            device.update_descriptor_sets(&write, &[]);
+
+            let mapped = allocation
+                .mapped_ptr()
+                .map(|p| p.as_ptr() as *mut u8)
+                .ok_or(RendererError::Descriptor(
+                    "el buffer de luces puntuales no quedó mapeado".into(),
+                ))?;
+            std::ptr::write_bytes(mapped, 0, size as usize);
+
+            (pool, set, buffer, Some(allocation), mapped)
+        };
 
         // 6. Command Pool y Buffers
         let pool_info = vk::CommandPoolCreateInfo::default()
@@ -238,13 +874,161 @@ impl GlassRenderer {
             .command_buffer_count(1);
         let command_buffer = unsafe { device.allocate_command_buffers(&alloc_info)?[0] };
 
+
+        // 6c. Lightmap (sets 4 y 5): pool, UBO de grupos a ceros,
+        // muestreador propio y textura 1×1 negra por defecto con su
+        // set. Sin bake publicado, los dibujos PBR enlazan esto y el
+        // shader no muestrea nada (lm_params = -1): coste cero.
+        let (lm_pool, lm_data_set, lm_data_buffer, lm_data_allocation,
+             lm_data_mapped, lm_sampler, lm_default_tex_set,
+             lm_runtime_tex_set, lm_default_texture) = unsafe {
+            let pool_sizes = [
+                vk::DescriptorPoolSize::default()
+                    .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_count(2),
+                vk::DescriptorPoolSize::default()
+                    .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                    .descriptor_count(1),
+            ];
+            let pool_info = vk::DescriptorPoolCreateInfo::default()
+                .pool_sizes(&pool_sizes)
+                .max_sets(3);
+            let pool = device.create_descriptor_pool(&pool_info, None)?;
+
+            let size = std::mem::size_of::<LmDataUbo>() as u64;
+            let buffer_info = vk::BufferCreateInfo::default()
+                .size(size)
+                .usage(vk::BufferUsageFlags::UNIFORM_BUFFER)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            let buffer = device.create_buffer(&buffer_info, None)?;
+            let mem_reqs = device.get_buffer_memory_requirements(buffer);
+            let allocation = allocator
+                .lock()
+                .unwrap()
+                .allocate(&AllocationCreateDesc {
+                    name: "lightmap_groups",
+                    requirements: mem_reqs,
+                    location: MemoryLocation::CpuToGpu,
+                    linear: true,
+                    allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+                })
+                .map_err(RendererError::Allocator)?;
+            device.bind_buffer_memory(buffer, allocation.memory(), allocation.offset())?;
+
+            let layouts = [lm_data_layout];
+            let set_alloc_info = vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(pool)
+                .set_layouts(&layouts);
+            let data_set = device
+                .allocate_descriptor_sets(&set_alloc_info)?
+                .into_iter()
+                .next()
+                .ok_or(RendererError::Descriptor(
+                    "pool del lightmap sin set de datos".into(),
+                ))?;
+            let buffer_desc = [vk::DescriptorBufferInfo::default()
+                .buffer(buffer)
+                .offset(0)
+                .range(size)];
+            let write = [vk::WriteDescriptorSet::default()
+                .dst_set(data_set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(&buffer_desc)];
+            device.update_descriptor_sets(&write, &[]);
+
+            let mapped = allocation
+                .mapped_ptr()
+                .map(|p| p.as_ptr() as *mut u8)
+                .ok_or(RendererError::Descriptor(
+                    "el UBO del lightmap no quedó mapeado".into(),
+                ))?;
+            std::ptr::write_bytes(mapped, 0, size as usize);
+
+            let sampler_info = vk::SamplerCreateInfo::default()
+                .mag_filter(vk::Filter::LINEAR)
+                .min_filter(vk::Filter::LINEAR)
+                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .mipmap_mode(vk::SamplerMipmapMode::LINEAR);
+            let sampler = device.create_sampler(&sampler_info, None)?;
+
+            let default_tex = crate::mesh::MeshLoader::upload_texture_to_gpu(
+                &device,
+                &mut *allocator.lock().unwrap(),
+                &crate::mesh::GltfImageData {
+                    width: 1,
+                    height: 1,
+                    rgba: vec![0, 0, 0, 255],
+                },
+                context.graphics_queue,
+                command_pool,
+            )
+            .map_err(RendererError::Descriptor)?;
+
+            let tex_layouts = [lm_tex_layout, lm_tex_layout];
+            let tex_alloc_info = vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(pool)
+                .set_layouts(&tex_layouts);
+            let mut tex_sets = device
+                .allocate_descriptor_sets(&tex_alloc_info)?
+                .into_iter();
+            let default_set = tex_sets.next().ok_or(RendererError::Descriptor(
+                "pool del lightmap sin set de textura".into(),
+            ))?;
+            let runtime_set = tex_sets.next().ok_or(RendererError::Descriptor(
+                "pool del lightmap sin set runtime".into(),
+            ))?;
+            let image_info = [vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(default_tex.image_view)
+                .sampler(sampler)];
+            let write = [
+                vk::WriteDescriptorSet::default()
+                    .dst_set(default_set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&image_info),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(runtime_set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&image_info),
+            ];
+            device.update_descriptor_sets(&write, &[]);
+
+            (
+                pool,
+                data_set,
+                buffer,
+                Some(allocation),
+                mapped,
+                sampler,
+                default_set,
+                runtime_set,
+                Some(default_tex),
+            )
+        };
+
+        // 6b. Pase 2D del Canvas (UI de juego sin egui): necesita la cola
+        // y el pool para la subida única del atlas de fuente.
+        let ui = UiRenderer::new(
+            device.clone(),
+            &mut *allocator.lock().unwrap(),
+            context.graphics_queue,
+            command_pool,
+        )?;
+
         // 7. Sincronización
         let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
         let fence = unsafe { device.create_fence(&fence_info, None)? };
 
         let semaphore_info = vk::SemaphoreCreateInfo::default();
         let image_available_semaphore = unsafe { device.create_semaphore(&semaphore_info, None)? };
-        let render_finished_semaphore = unsafe { device.create_semaphore(&semaphore_info, None)? };
+        let render_finished_semaphores = (0..swapchain.images.len())
+            .map(|_| unsafe { device.create_semaphore(&semaphore_info, None) })
+            .collect::<Result<Vec<_>, _>>()?;
 
         log::info!("GlassRenderer inicializado con éxito con soporte de Swapchain, PBR y Viewports Offscreen independientes (Scene & Game).");
 
@@ -256,15 +1040,508 @@ impl GlassRenderer {
             swapchain_framebuffers,
             offscreen,
             game_offscreen,
+            final_offscreen,
+            final_game_offscreen,
+            portal_targets,
+            portal_sets,
+            portal_pipeline,
+            portal_pipeline_legacy,
             pipeline,
             mesh_pipeline,
             pbr_pipeline,
+            skinned_pipeline,
+            triangle_pipeline_legacy,
+            mesh_pipeline_legacy,
+            pbr_pipeline_legacy,
+            skinned_pipeline_legacy,
+            shadow,
+            post,
+            post_enabled,
+            post_settings,
+            shadows_enabled,
+            shadow_vp: IDENTITY_MAT4,
+            shadow_params: [
+                1.0 / crate::shadow::SHADOW_MAP_SIZE as f32,
+                crate::shadow::SHADOW_DEPTH_BIAS,
+                crate::shadow::SHADOW_NORMAL_BIAS,
+                0.0,
+            ],
+            joints_pool,
+            custom_pipelines: std::collections::HashMap::from([(
+                "material_transparent".to_string(),
+                pbr_transparent,
+            )]),
+            custom_pipelines_legacy: std::collections::HashMap::from([(
+                "material_transparent".to_string(),
+                pbr_transparent_legacy,
+            )]),
+            graph_globals_layout,
+            graph_globals_pool,
+            graph_globals_set,
+            graph_globals_buffer,
+            graph_globals_allocation,
+            graph_globals_mapped,
+            graph_globals: glass_core::shader_graph::INTERACTION_GLOBALS_INACTIVE,
+            point_lights_layout,
+            point_lights_pool,
+            point_lights_set,
+            point_lights_buffer,
+            point_lights_allocation,
+            point_lights_mapped,
+            point_lights: PointLightsUbo::default(),
+            lm_tex_layout,
+            lm_data_layout,
+            lm_pool,
+            lm_tex_set: lm_default_tex_set,
+            lm_default_tex_set,
+            lm_runtime_tex_set,
+            lm_data_set,
+            lm_data_buffer,
+            lm_data_allocation,
+            lm_data_mapped,
+            lm_sampler,
+            lm_default_texture,
+            lm_atlas_texture: None,
+            lm_index: std::collections::HashMap::new(),
+            lm_atlas_size: 1.0,
+            ui,
+            ui_images: None,
+            ui_named_fonts: std::collections::HashMap::new(),
             command_pool,
             command_buffer,
             fence,
             image_available_semaphore,
-            render_finished_semaphore,
+            render_finished_semaphores,
+            fallback_set: vk::DescriptorSet::null(),
         })
+    }
+
+    pub fn render_finished_for(&self, image_index: u32) -> vk::Semaphore {
+        self.render_finished_semaphores[image_index as usize]
+    }
+
+    /// Crea el buffer de matrices de articulación de UNA entidad con piel
+    /// (capacidad = nº de articulaciones de su piel), con su set del pool
+    /// de articulaciones. La app guarda uno por entidad y lo reescribe
+    /// cada frame con la pose evaluada.
+    pub fn create_joint_buffer(
+        &self,
+        joint_count: usize,
+    ) -> Result<crate::skin::JointBuffer, RendererError> {
+        let layout = self
+            .skinned_pipeline
+            .joints_set_layout
+            .ok_or_else(|| RendererError::Descriptor("pipeline con piel sin layout de set 1".into()))?;
+        crate::skin::JointBuffer::new(
+            &self.device,
+            &mut *self.allocator.lock().unwrap(),
+            self.joints_pool,
+            layout,
+            joint_count,
+        )
+        .map_err(RendererError::Descriptor)
+    }
+
+    /// Dibuja los lotes con piel de una pasada. Se llama DESPUÉS de los
+    /// lotes normales: enlaza el pipeline con piel una vez y, por lote,
+    /// los sets 0 (textura) y 1 (articulaciones) en una sola llamada —
+    /// dejar el set 0 de un dibujo anterior enlazado sería justo el fallo
+    /// que el diseño quiere imposibilitar al ser explícito.
+    unsafe fn draw_skinned(&self, cmd: vk::CommandBuffer, items: &[SkinnedDrawItem<'_>], legacy: bool) {
+        let pipe = if legacy { &self.skinned_pipeline_legacy } else { &self.skinned_pipeline };
+        self.device.cmd_bind_pipeline(
+            cmd,
+            vk::PipelineBindPoint::GRAPHICS,
+            pipe.pipeline,
+        );
+        for (mesh, push_consts, tex_set, joints_set, range) in items {
+            let sets = [*tex_set, *joints_set];
+            self.device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipe.layout,
+                0,
+                &sets,
+                &[],
+            );
+            // Set 2: el UBO de sombras (el fragmento es el mismo PBR).
+            self.device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipe.layout,
+                2,
+                &[self.shadow.set],
+                &[],
+            );
+            // Set 3: el UBO de luces puntuales (mismo fragmento PBR).
+            self.device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipe.layout,
+                3,
+                &[self.point_lights_set],
+                &[],
+            );
+            // Sets 4 y 5: el lightmap (mismo fragmento PBR).
+            self.bind_lightmap_sets(cmd, pipe);
+            let push_bytes = bytemuck::bytes_of(push_consts);
+            self.device.cmd_push_constants(
+                cmd,
+                pipe.layout,
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                0,
+                push_bytes,
+            );
+            self.device
+                .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
+            self.device
+                .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
+            self.device
+                .cmd_draw_indexed(cmd, range.1, 1, range.0, 0, 0);
+        }
+    }
+
+    /// Registra un pipeline de fragmento personalizado (material de grafo)
+    /// bajo `name`. Mismo vertex shader y mismo layout que el PBR.
+    pub fn register_fragment_pipeline(&mut self, name: &str, frag_spv: &[u8]) -> Result<(), RendererError> {
+        self.register_graph_pipeline(name, None, frag_spv, false)
+    }
+
+    /// Fija el canal global que leerán los grafos desde el frame
+    /// siguiente: los dos vec4 seguidos (punto de interacción + forma de
+    /// su huella). El valor se vuelca al UBO global al principio de
+    /// `render_views`, tras la espera del fence; llamarlo entre frames
+    /// es siempre seguro. Para desactivar el efecto, publicar
+    /// `glass_core::shader_graph::INTERACTION_GLOBALS_INACTIVE`.
+    pub fn set_graph_globals(&mut self, globals: [f32; 8]) {
+        self.graph_globals = globals;
+    }
+
+    /// El canal global vigente en el lado CPU.
+    pub fn graph_globals(&self) -> [f32; 8] {
+        self.graph_globals
+    }
+
+    /// Fija la VP de la luz y los parámetros de sombra del frame
+    /// siguiente (`params.w = 1` activa el efecto; ver `shadow::
+    /// ShadowUbo`). El valor se vuelca al UBO del set 2 al principio de
+    /// `render_views`, tras la espera del fence, y el pase de
+    /// profundidad se graba con los proyectores que acompañen a esa
+    /// llamada. Sin luz en la escena, la app publica `params.w = 0`.
+    pub fn set_shadow_frame(&mut self, light_vp: [f32; 16], params: [f32; 4]) {
+        self.shadow_vp = light_vp;
+        self.shadow_params = params;
+    }
+
+    /// Enlaza el set 2 en un dibujo: el set real de sombras en el PBR
+    /// (su shader lo declara) y el de RELLENO en los grafos (su shader
+    /// no lo declara, pero su layout tiene la misma forma y el enlace
+    /// mantiene válidos los sets 0/1 al alternar pipelines). El
+    /// pipeline de mallas (Lambert) no declara set 2 y no recibe
+    /// sombra en esta entrega.
+    unsafe fn bind_shadow_set(&self, cmd: vk::CommandBuffer, pipe: &GraphicsPipeline) {
+        if pipe.shadow_set_layout.is_some() {
+            let set = if pipe.globals_set_layout.is_some() {
+                self.shadow.dummy_set
+            } else {
+                self.shadow.set
+            };
+            self.device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipe.layout,
+                2,
+                &[set],
+                &[],
+            );
+        }
+    }
+
+    /// Publica el UBO de luces puntuales del frame siguiente: la app lo
+    /// recolecta de la escena (las 8 Point más cercanas a la cámara) y
+    /// `render_views` lo vuelca al buffer tras la espera del fence.
+    pub fn set_point_lights(&mut self, lights: PointLightsUbo) {
+        self.point_lights = lights;
+    }
+
+    /// Enlaza el set 3 en un dibujo cuyo pipeline lo declara (PBR; la
+    /// piel lo enlaza dentro de `draw_skinned`). Los grafos y el
+    /// Lambert no lo declaran y no lo reciben.
+    unsafe fn bind_point_lights_set(&self, cmd: vk::CommandBuffer, pipe: &GraphicsPipeline) {
+        if pipe.point_lights_set_layout.is_some() {
+            self.device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipe.layout,
+                3,
+                &[self.point_lights_set],
+                &[],
+            );
+        }
+    }
+
+
+    /// Publica el lightmap horneado de la escena (bake, etapa 3b):
+    /// sube el atlas, rellena el UBO de grupos y deja el set 4
+    /// apuntando a él. `groups[i]` corresponde a `entities[i]`; la
+    /// ranura de cada grupo es i*6 + eje*2 + signo. El atlas llega
+    /// codificado en sRGB y la textura es SRGB: al muestrear se
+    /// recupera el valor lineal horneado.
+    pub fn set_lightmap(
+        &mut self,
+        queue: vk::Queue,
+        rgba: &[u8],
+        size: u32,
+        entities: &[u64],
+        groups: &[Vec<glass_core::lightmap::LmGroupRect>],
+    ) -> Result<(), String> {
+        let tex = crate::mesh::MeshLoader::upload_texture_to_gpu(
+            &self.device,
+            &mut *self.allocator.lock().unwrap(),
+            &crate::mesh::GltfImageData {
+                width: size,
+                height: size,
+                rgba: rgba.to_vec(),
+            },
+            queue,
+            self.command_pool,
+        )?;
+        let image_info = [vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(tex.image_view)
+            .sampler(self.lm_sampler)];
+        let write = [vk::WriteDescriptorSet::default()
+            .dst_set(self.lm_runtime_tex_set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&image_info)];
+        unsafe { self.device.update_descriptor_sets(&write, &[]) };
+        if let Some(mut prev) = self.lm_atlas_texture.take() {
+            prev.destroy(&self.device, &mut *self.allocator.lock().unwrap());
+        }
+        self.lm_atlas_texture = Some(tex);
+        self.lm_tex_set = self.lm_runtime_tex_set;
+        self.lm_atlas_size = size as f32;
+        self.lm_index.clear();
+        let mut data = LmDataUbo::default();
+        let fsize = size as f32;
+        for (i, gs) in groups.iter().enumerate().take(MAX_LM_ENTITIES) {
+            if let Some(&e) = entities.get(i) {
+                self.lm_index.insert(e, i as u32);
+            }
+            for g in gs {
+                let slot = i * 6 + g.axis as usize * 2 + g.negative as usize;
+                data.rect[slot] = [
+                    g.x as f32 / fsize,
+                    g.y as f32 / fsize,
+                    g.w as f32 / fsize,
+                    g.h as f32 / fsize,
+                ];
+                data.bounds[slot] =
+                    [g.min_u, g.min_v, g.max_u - g.min_u, g.max_v - g.min_v];
+            }
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytemuck::bytes_of(&data).as_ptr(),
+                self.lm_data_mapped,
+                std::mem::size_of::<LmDataUbo>(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Retira el lightmap publicado: el set 4 vuelve a la textura
+    /// 1×1, el UBO se pone a ceros y el atlas se destruye.
+    pub fn clear_lightmap(&mut self) {
+        self.lm_tex_set = self.lm_default_tex_set;
+        if let Some(mut prev) = self.lm_atlas_texture.take() {
+            prev.destroy(&self.device, &mut *self.allocator.lock().unwrap());
+        }
+        self.lm_index.clear();
+        self.lm_atlas_size = 1.0;
+        unsafe {
+            std::ptr::write_bytes(
+                self.lm_data_mapped,
+                0,
+                std::mem::size_of::<LmDataUbo>(),
+            );
+        }
+    }
+
+    /// Push `lm_params` para una entidad: [índice, tamaño del
+    /// atlas, 0, 0] si está horneada; [-1, 0, 0, 0] si no.
+    pub fn lm_params_for(&self, entity: u64) -> [f32; 4] {
+        match self.lm_index.get(&entity) {
+            Some(&idx) => [idx as f32, self.lm_atlas_size, 0.0, 0.0],
+            None => [-1.0, 0.0, 0.0, 0.0],
+        }
+    }
+
+    /// Enlaza los sets 4 y 5 en un dibujo cuyo pipeline los declara
+    /// (PBR y piel; los demás conservan su layout sin ellos).
+    unsafe fn bind_lightmap_sets(&self, cmd: vk::CommandBuffer, pipe: &GraphicsPipeline) {
+        if pipe.lm_set_layouts.is_some() {
+            self.device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipe.layout,
+                4,
+                &[self.lm_tex_set],
+                &[],
+            );
+            self.device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipe.layout,
+                5,
+                &[self.lm_data_set],
+                &[],
+            );
+        }
+    }
+
+    /// Registra un material de grafo bajo `name`: su fragmento y, si el
+    /// grafo declara etapa de vértices (`vert_spv`), también su vertex
+    /// shader de desplazamiento. Sin vértice se usa el estándar PBR, así
+    /// que los grafos sin sub-red de vértices se comportan como siempre.
+    /// El layout es el del PBR MÁS el set 1 con el UBO global de los
+    /// grafos (`GraphGlobals`): es lo único que distingue a estos
+    /// pipelines de los de malla.
+    ///
+    /// Con `transparent` el pipeline mezcla el alfa del fragmento y no
+    /// escribe profundidad (ver `GraphicsPipeline::new_graph_pipeline`);
+    /// el grafo lo declara en su JSON y el cargador de materiales lo
+    /// sabe por el marcador hermano del .spv.
+    pub fn register_graph_pipeline(
+        &mut self,
+        name: &str,
+        vert_spv: Option<&[u8]>,
+        frag_spv: &[u8],
+        transparent: bool,
+    ) -> Result<(), RendererError> {
+        let pipeline = GraphicsPipeline::new_graph_pipeline(
+            self.device.clone(),
+            self.offscreen.render_pass,
+            vert_spv.unwrap_or(PBR_VERT_SPV),
+            frag_spv,
+            self.graph_globals_layout,
+            transparent,
+            Some(self.shadow.dummy_layout),
+        )?;
+        self.custom_pipelines.insert(name.to_string(), pipeline);
+        // Gemelo contra el render pass LDR para la ruta sin post
+        // (mismos SPV: los grafos no mapean tono en ninguna ruta).
+        let pipeline_legacy = GraphicsPipeline::new_graph_pipeline(
+            self.device.clone(),
+            self.final_offscreen.render_pass,
+            vert_spv.unwrap_or(PBR_VERT_SPV),
+            frag_spv,
+            self.graph_globals_layout,
+            transparent,
+            Some(self.shadow.dummy_layout),
+        )?;
+        self.custom_pipelines_legacy.insert(name.to_string(), pipeline_legacy);
+        log::info!(
+            "Renderer: material de grafo '{}' registrado{}{}",
+            name,
+            if vert_spv.is_some() { " (con desplazamiento de vértices)" } else { "" },
+            if transparent { " (transparente)" } else { "" }
+        );
+        Ok(())
+    }
+
+    /// Carga como materiales todos los `graph_<nombre>.frag.spv` de un
+    /// directorio de shaders. Si junto a un fragmento existe su hermano
+    /// `graph_<nombre>.vert.spv` (el grafo declara etapa de vértices), el
+    /// pipeline se crea con ese vértice. Si existe el marcador
+    /// `graph_<nombre>.transparent` (el grafo se declara transparente en
+    /// su JSON), el pipeline se crea con mezcla alfa y sin escritura de
+    /// profundidad. Un archivo que falle se registra y se sigue.
+    pub fn load_graph_materials(&mut self, shaders_dir: &std::path::Path) {
+        let entries = match std::fs::read_dir(shaders_dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let fname = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if let Some(rest) = fname.strip_prefix("graph_") {
+                if let Some(name) = rest.strip_suffix(".frag.spv") {
+                    match std::fs::read(&path) {
+                        Ok(bytes) => {
+                            let vert_path = shaders_dir.join(format!("graph_{}.vert.spv", name));
+                            // Solo «no existe» es el caso normal (grafo sin
+                            // etapa de vértices); cualquier otro error de
+                            // lectura se avisa, no se traga como ausencia.
+                            let vert_bytes = match std::fs::read(&vert_path) {
+                                Ok(b) => Some(b),
+                                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                                Err(e) => {
+                                    log::warn!(
+                                        "Renderer: no se pudo leer el vértice del grafo '{}' ({:?}: {}); se usa el vértice estándar",
+                                        name, vert_path, e
+                                    );
+                                    None
+                                }
+                            };
+                            // El marcador de transparencia es un
+                            // fichero (posiblemente vacío) junto al
+                            // .spv, como el .vert.spv hermano: su mera
+                            // presencia declara el pipeline transparente.
+                            let transparent =
+                                shaders_dir.join(format!("graph_{}.transparent", name)).exists();
+                            if let Err(e) = self.register_graph_pipeline(
+                                name,
+                                vert_bytes.as_deref(),
+                                &bytes,
+                                transparent,
+                            ) {
+                                log::error!("Renderer: fallo registrando material de grafo '{}': {}", name, e);
+                            }
+                        }
+                        Err(e) => log::error!("Renderer: no se pudo leer {:?}: {}", path, e),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Enlaza el set 1 con el UBO global cuando el pipeline del lote es
+    /// de grafo (su layout lo declara). Para el resto de pipelines no
+    /// hace nada: ni el PBR ni el de piel conocen ese set. Se llama en
+    /// cada dibujo, como el set 0 de textura: los layouts de grafo y PBR
+    /// son handles distintos aunque el set 0 tenga el mismo contenido,
+    /// así que ningún enlace se hereda entre pipelines.
+    unsafe fn bind_graph_globals(&self, cmd: vk::CommandBuffer, pipe: &GraphicsPipeline) {
+        if pipe.globals_set_layout.is_some() {
+            self.device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipe.layout,
+                1,
+                &[self.graph_globals_set],
+                &[],
+            );
+        }
+    }
+
+    /// El pipeline de un lote: el del grafo si lo pide y existe; si
+    /// no, PBR. Con `legacy` (post desactivado) se usan los gemelos
+    /// creados contra el render pass LDR.
+    fn pipeline_for(&self, shader_name: &Option<String>, legacy: bool) -> &GraphicsPipeline {
+        match shader_name {
+            Some(name) => {
+                if legacy {
+                    self.custom_pipelines_legacy.get(name).unwrap_or(&self.pbr_pipeline_legacy)
+                } else {
+                    self.custom_pipelines.get(name).unwrap_or(&self.pbr_pipeline)
+                }
+            }
+            None => {
+                if legacy { &self.pbr_pipeline_legacy } else { &self.pbr_pipeline }
+            }
+        }
     }
 
     /// Recrea el Swapchain y sus framebuffers cuando la ventana nativa cambia de tamaño.
@@ -282,6 +1559,9 @@ impl GlassRenderer {
             for fb in self.swapchain_framebuffers.drain(..) {
                 self.device.destroy_framebuffer(fb, None);
             }
+            for semaphore in self.render_finished_semaphores.drain(..) {
+                self.device.destroy_semaphore(semaphore, None);
+            }
         }
         let old_swapchain = self.swapchain.swapchain;
         self.swapchain = SwapchainContext::new(
@@ -294,6 +1574,10 @@ impl GlassRenderer {
             height,
             Some(old_swapchain),
         )?;
+        let semaphore_info = vk::SemaphoreCreateInfo::default();
+        self.render_finished_semaphores = (0..self.swapchain.images.len())
+            .map(|_| unsafe { self.device.create_semaphore(&semaphore_info, None) })
+            .collect::<Result<Vec<_>, _>>()?;
         self.swapchain_framebuffers = create_swapchain_framebuffers(
             &self.device,
             self.swapchain_render_pass,
@@ -320,8 +1604,8 @@ impl GlassRenderer {
             &self.device,
             layout,
             pool,
-            self.offscreen.color_view,
-            self.offscreen.sampler,
+            self.final_offscreen.color_view,
+            self.final_offscreen.sampler,
         )
         .map_err(|e| RendererError::Descriptor(e.to_string()))?;
 
@@ -340,8 +1624,8 @@ impl GlassRenderer {
             &self.device,
             layout,
             pool,
-            self.game_offscreen.color_view,
-            self.game_offscreen.sampler,
+            self.final_game_offscreen.color_view,
+            self.final_game_offscreen.sampler,
         )
         .map_err(|e| RendererError::Descriptor(e.to_string()))?;
 
@@ -349,15 +1633,309 @@ impl GlassRenderer {
     }
 
     /// Renderiza ambas vistas (Scene View y Game View) de manera desacoplada e independiente en un solo comando de GPU.
+    /// Vuelca los UBO del frame (globales de grafo, luces
+    /// puntuales y sombras) a la memoria mapeada, con la GPU en
+    /// reposo tras el fence. Devuelve los parámetros de sombra
+    /// efectivos (con GLASS_SHADOWS=0 ya aplicados). Lo usan
+    /// `render_views` y `render_portal_views`.
+    fn upload_frame_ubos(&mut self) -> [f32; 4] {
+        unsafe {
+        // Canal global de los grafos: con la GPU ya en reposo tras el
+        // fence, los dos vec4 del frame se vuelcan al UBO mapeado (el
+        // mismo patrón de sincronización que los JointBuffer).
+        std::ptr::copy_nonoverlapping(
+            self.graph_globals.as_ptr() as *const u8,
+            self.graph_globals_mapped,
+            std::mem::size_of::<[f32; 8]>(),
+        );
+
+        // UBO de luces puntuales del frame (mismo patrón y momento).
+        let pl_bytes = bytemuck::bytes_of(&self.point_lights);
+        std::ptr::copy_nonoverlapping(
+            pl_bytes.as_ptr(),
+            self.point_lights_mapped,
+            pl_bytes.len(),
+        );
+
+        // UBO de sombras del frame (mismo patrón): la VP fijada por
+        // la app y los parámetros, con el flag de actividad
+        // combinado con el del renderer (GLASS_SHADOWS=0 lo apaga
+        // aunque la app lo publique activo).
+        let mut shadow_params = self.shadow_params;
+        if !self.shadows_enabled {
+            shadow_params[3] = 0.0;
+        }
+        self.shadow.write_ubo(&crate::shadow::ShadowUbo {
+            light_vp: self.shadow_vp,
+            params: shadow_params,
+        });
+            shadow_params
+        }
+    }
+
+
+    /// Pase de profundidad del mapa de sombras (proyectores
+    /// estáticos y con piel). Extraído de `render_views`.
+    fn record_shadow_pass(
+        &self,
+        cmd: vk::CommandBuffer,
+        casters: &ShadowCasters,
+        shadow_params: [f32; 4],
+    ) {
+        unsafe {
+        if shadow_params[3] > 0.5 && (!casters.statics.is_empty() || !casters.skinned.is_empty()) {
+                self.shadow.begin_pass(&self.device, cmd);
+                if !casters.statics.is_empty() {
+                    self.device.cmd_bind_pipeline(
+                        cmd,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.shadow.depth_pipeline,
+                    );
+                    for (mesh, model) in casters.statics {
+                        let pc = MeshPushConstants {
+                            mvp: glass_core::mat4_mul(self.shadow_vp, *model),
+                            model: *model,
+                            ..Default::default()
+                        };
+                        self.device.cmd_push_constants(
+                            cmd,
+                            self.shadow.depth_layout,
+                            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                            0,
+                            bytemuck::bytes_of(&pc),
+                        );
+                        self.device
+                            .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
+                        self.device
+                            .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
+                        self.device.cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                    }
+                }
+                if !casters.skinned.is_empty() {
+                    self.device.cmd_bind_pipeline(
+                        cmd,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.shadow.depth_skinned_pipeline,
+                    );
+                    for (mesh, model, joints_set) in casters.skinned {
+                        self.device.cmd_bind_descriptor_sets(
+                            cmd,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            self.shadow.depth_skinned_layout,
+                            1,
+                            &[*joints_set],
+                            &[],
+                        );
+                        let pc = MeshPushConstants {
+                            mvp: glass_core::mat4_mul(self.shadow_vp, *model),
+                            model: *model,
+                            ..Default::default()
+                        };
+                        self.device.cmd_push_constants(
+                            cmd,
+                            self.shadow.depth_skinned_layout,
+                            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                            0,
+                            bytemuck::bytes_of(&pc),
+                        );
+                        self.device
+                            .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
+                        self.device
+                            .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
+                        self.device.cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                    }
+                }
+                self.device.cmd_end_render_pass(cmd);
+            }
+        }
+    }
+
+    /// Graba UNA vista de la escena en un objetivo (Scene, Game o
+    /// una vista de portal): pase de color+profundidad con las
+    /// mallas, las superficies de portal y la piel. Extraído de
+    /// `render_views` (bloque Portales) para no triplicar el
+    /// bucle de dibujo; el comportamiento de Scene/Game es el de
+    /// siempre.
+    #[allow(clippy::too_many_arguments)]
+    fn record_view_pass(
+        &self,
+        cmd: vk::CommandBuffer,
+        target: &OffscreenTarget,
+        clear: [f32; 4],
+        meshes: &[MeshDrawItem],
+        skinned: &[SkinnedDrawItem],
+        portal_draws: &[PortalDrawItem],
+        legacy: bool,
+        fallback_triangle: bool,
+    ) {
+        unsafe {
+            // Con post: el 3D va al objetivo HDR y los pipelines son
+            // los de siempre; sin post: directo al LDR con los
+            // gemelos legacy (ACES dentro del PBR).
+            let legacy = !self.post_enabled;
+            let target = if legacy { &self.final_offscreen } else { target };
+            let clear_values = [
+                vk::ClearValue {
+                    color: vk::ClearColorValue {
+                        float32: [0.06, 0.09, 0.14, 1.0],
+                    },
+                },
+                vk::ClearValue {
+                    depth_stencil: vk::ClearDepthStencilValue {
+                        depth: 1.0,
+                        stencil: 0,
+                    },
+                },
+            ];
+
+            let render_pass_begin_info = vk::RenderPassBeginInfo::default()
+                .render_pass(target.render_pass)
+                .framebuffer(target.framebuffer)
+                .render_area(vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent: target.extent,
+                })
+                .clear_values(&clear_values);
+
+            self.device.cmd_begin_render_pass(
+                cmd,
+                &render_pass_begin_info,
+                vk::SubpassContents::INLINE,
+            );
+
+            let viewport = [vk::Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: target.extent.width as f32,
+                height: target.extent.height as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            }];
+            self.device.cmd_set_viewport(cmd, 0, &viewport);
+
+            let scissor = [vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: target.extent,
+            }];
+            self.device.cmd_set_scissor(cmd, 0, &scissor);
+
+            if !meshes.is_empty() || !skinned.is_empty() || !portal_draws.is_empty() {
+                // El pipeline se enlaza por lote: PBR por defecto o el
+                // material de grafo que pida la entidad.
+                let mut bound: *const GraphicsPipeline = std::ptr::null();
+                for (mesh, push_consts, tex_set, shader_name, range) in meshes {
+                    let pipe = self.pipeline_for(shader_name, legacy);
+                    if !std::ptr::eq(bound, pipe) {
+                        self.device.cmd_bind_pipeline(
+                            cmd,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            pipe.pipeline,
+                        );
+                        bound = pipe;
+                    }
+                    if *tex_set != vk::DescriptorSet::null() {
+                        self.device.cmd_bind_descriptor_sets(
+                            cmd,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            pipe.layout,
+                            0,
+                            &[*tex_set],
+                            &[],
+                        );
+                    }
+                    self.bind_graph_globals(cmd, pipe);
+                    self.bind_shadow_set(cmd, pipe);
+                    self.bind_point_lights_set(cmd, pipe);
+                    self.bind_lightmap_sets(cmd, pipe);
+                    let push_bytes = bytemuck::bytes_of(push_consts);
+                    self.device.cmd_push_constants(
+                        cmd,
+                        pipe.layout,
+                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                        0,
+                        push_bytes,
+                    );
+
+                    self.device
+                        .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
+                    self.device
+                        .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
+                    // Rango de índices del lote: (0, total) para mallas
+                    // enteras; un subrango por primitiva en modelos
+                    // glTF con varios materiales.
+                    self.device
+                        .cmd_draw_indexed(cmd, range.1, 1, range.0, 0, 0);
+                }
+                if !portal_draws.is_empty() {
+                    let pipe = if legacy {
+                        &self.portal_pipeline_legacy
+                    } else {
+                        &self.portal_pipeline
+                    };
+                    self.device.cmd_bind_pipeline(
+                        cmd,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        pipe.pipeline,
+                    );
+                    for d in portal_draws {
+                        let set = self.portal_sets[d.texture_index.min(1)];
+                        self.device.cmd_bind_descriptor_sets(
+                            cmd,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            pipe.layout,
+                            4,
+                            &[set],
+                            &[],
+                        );
+                        self.device.cmd_push_constants(
+                            cmd,
+                            pipe.layout,
+                            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                            0,
+                            bytemuck::bytes_of(&d.push),
+                        );
+                        self.device
+                            .cmd_bind_vertex_buffers(cmd, 0, &[d.mesh.vertex_buffer], &[0]);
+                        self.device.cmd_bind_index_buffer(
+                            cmd,
+                            d.mesh.index_buffer,
+                            0,
+                            vk::IndexType::UINT32,
+                        );
+                        self.device
+                            .cmd_draw_indexed(cmd, d.range.1, 1, d.range.0, 0, 0);
+                    }
+                }
+                if !skinned.is_empty() {
+                    self.draw_skinned(cmd, skinned, legacy);
+                }
+            } else {
+                let tri = if legacy { &self.triangle_pipeline_legacy } else { &self.pipeline };
+                self.device
+                    .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, tri.pipeline);
+                self.device.cmd_draw(cmd, 3, 1, 0, 0);
+            }
+
+            self.device.cmd_end_render_pass(cmd);
+        }
+    }
+
     pub fn render_views(
         &mut self,
         queue: vk::Queue,
-        scene_meshes: &[(&GpuMesh, MeshPushConstants)],
-        game_meshes: Option<&[(&GpuMesh, MeshPushConstants)]>,
+        scene_meshes: &[(&GpuMesh, MeshPushConstants, vk::DescriptorSet, Option<String>, (u32, u32))],
+        game_meshes: Option<&[(&GpuMesh, MeshPushConstants, vk::DescriptorSet, Option<String>, (u32, u32))]>,
+        scene_skinned: &[SkinnedDrawItem<'_>],
+        game_skinned: Option<&[SkinnedDrawItem<'_>]>,
+        shadow_casters: Option<&ShadowCasters<'_>>,
+        scene_portal_draws: &[PortalDrawItem],
+        game_portal_draws: Option<&[PortalDrawItem]>,
     ) -> Result<(), RendererError> {
         unsafe {
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
             self.device.reset_fences(&[self.fence])?;
+
+            let shadow_params = self.upload_frame_ubos();
 
             let cmd = self.command_buffer;
             let begin_info = vk::CommandBufferBeginInfo::default()
@@ -365,165 +1943,48 @@ impl GlassRenderer {
             self.device.begin_command_buffer(cmd, &begin_info)?;
 
             // --------------------------------------------------------------------
+            // 0. Pase de profundidad del mapa de sombras (antes de las
+            // vistas: el PBR lo muestrea en ambas). Sin proyectores o
+            // con el efecto apagado no se graba.
+            // --------------------------------------------------------------------
+            if let Some(casters) = shadow_casters {
+                self.record_shadow_pass(cmd, casters, shadow_params);
+            }
+
+            // --------------------------------------------------------------------
             // 1. Pass para Scene View (Cámara libre de Edición con Gizmos)
             // --------------------------------------------------------------------
             {
-                let clear_values = [
-                    vk::ClearValue {
-                        color: vk::ClearColorValue {
-                            float32: [0.06, 0.09, 0.14, 1.0],
-                        },
-                    },
-                    vk::ClearValue {
-                        depth_stencil: vk::ClearDepthStencilValue {
-                            depth: 1.0,
-                            stencil: 0,
-                        },
-                    },
-                ];
-
-                let render_pass_begin_info = vk::RenderPassBeginInfo::default()
-                    .render_pass(self.offscreen.render_pass)
-                    .framebuffer(self.offscreen.framebuffer)
-                    .render_area(vk::Rect2D {
-                        offset: vk::Offset2D { x: 0, y: 0 },
-                        extent: self.offscreen.extent,
-                    })
-                    .clear_values(&clear_values);
-
-                self.device.cmd_begin_render_pass(
+                let legacy = !self.post_enabled;
+                let scene_target = if legacy { &self.final_offscreen } else { &self.offscreen };
+                self.record_view_pass(
                     cmd,
-                    &render_pass_begin_info,
-                    vk::SubpassContents::INLINE,
+                    scene_target,
+                    [0.06, 0.09, 0.14, 1.0],
+                    scene_meshes,
+                    scene_skinned,
+                    scene_portal_draws,
+                    legacy,
+                    true,
                 );
-
-                let viewport = [vk::Viewport {
-                    x: 0.0,
-                    y: 0.0,
-                    width: self.offscreen.extent.width as f32,
-                    height: self.offscreen.extent.height as f32,
-                    min_depth: 0.0,
-                    max_depth: 1.0,
-                }];
-                self.device.cmd_set_viewport(cmd, 0, &viewport);
-
-                let scissor = [vk::Rect2D {
-                    offset: vk::Offset2D { x: 0, y: 0 },
-                    extent: self.offscreen.extent,
-                }];
-                self.device.cmd_set_scissor(cmd, 0, &scissor);
-
-                if !scene_meshes.is_empty() {
-                    self.device.cmd_bind_pipeline(
-                        cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        self.pbr_pipeline.pipeline,
-                    );
-
-                    for (mesh, push_consts) in scene_meshes {
-                        let push_bytes = bytemuck::bytes_of(push_consts);
-                        self.device.cmd_push_constants(
-                            cmd,
-                            self.pbr_pipeline.layout,
-                            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                            0,
-                            push_bytes,
-                        );
-
-                        self.device
-                            .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
-                        self.device
-                            .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
-                        self.device
-                            .cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
-                    }
-                } else {
-                    self.device
-                        .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline.pipeline);
-                    self.device.cmd_draw(cmd, 3, 1, 0, 0);
-                }
-
-                self.device.cmd_end_render_pass(cmd);
             }
 
             // --------------------------------------------------------------------
             // 2. Pass para Game View (Cámara activa Main Camera del juego)
             // --------------------------------------------------------------------
             {
-                let clear_values = [
-                    vk::ClearValue {
-                        color: vk::ClearColorValue {
-                            float32: [0.02, 0.02, 0.03, 1.0],
-                        },
-                    },
-                    vk::ClearValue {
-                        depth_stencil: vk::ClearDepthStencilValue {
-                            depth: 1.0,
-                            stencil: 0,
-                        },
-                    },
-                ];
-
-                let render_pass_begin_info = vk::RenderPassBeginInfo::default()
-                    .render_pass(self.game_offscreen.render_pass)
-                    .framebuffer(self.game_offscreen.framebuffer)
-                    .render_area(vk::Rect2D {
-                        offset: vk::Offset2D { x: 0, y: 0 },
-                        extent: self.game_offscreen.extent,
-                    })
-                    .clear_values(&clear_values);
-
-                self.device.cmd_begin_render_pass(
+                let legacy = !self.post_enabled;
+                let game_target = if legacy { &self.final_game_offscreen } else { &self.game_offscreen };
+                self.record_view_pass(
                     cmd,
-                    &render_pass_begin_info,
-                    vk::SubpassContents::INLINE,
+                    game_target,
+                    [0.02, 0.02, 0.03, 1.0],
+                    game_meshes.unwrap_or(&[]),
+                    game_skinned.unwrap_or(&[]),
+                    game_portal_draws.unwrap_or(&[]),
+                    legacy,
+                    false,
                 );
-
-                let viewport = [vk::Viewport {
-                    x: 0.0,
-                    y: 0.0,
-                    width: self.game_offscreen.extent.width as f32,
-                    height: self.game_offscreen.extent.height as f32,
-                    min_depth: 0.0,
-                    max_depth: 1.0,
-                }];
-                self.device.cmd_set_viewport(cmd, 0, &viewport);
-
-                let scissor = [vk::Rect2D {
-                    offset: vk::Offset2D { x: 0, y: 0 },
-                    extent: self.game_offscreen.extent,
-                }];
-                self.device.cmd_set_scissor(cmd, 0, &scissor);
-
-                if let Some(meshes) = game_meshes {
-                    if !meshes.is_empty() {
-                        self.device.cmd_bind_pipeline(
-                            cmd,
-                            vk::PipelineBindPoint::GRAPHICS,
-                            self.pbr_pipeline.pipeline,
-                        );
-
-                        for (mesh, push_consts) in meshes {
-                            let push_bytes = bytemuck::bytes_of(push_consts);
-                            self.device.cmd_push_constants(
-                                cmd,
-                                self.pbr_pipeline.layout,
-                                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                                0,
-                                push_bytes,
-                            );
-
-                            self.device
-                                .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
-                            self.device
-                                .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
-                            self.device
-                                .cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
-                        }
-                    }
-                }
-
-                self.device.cmd_end_render_pass(cmd);
             }
 
             self.device.end_command_buffer(cmd)?;
@@ -534,6 +1995,50 @@ impl GlassRenderer {
             self.device.queue_submit(queue, &submit_info, self.fence)?;
         }
 
+        Ok(())
+    }
+
+    /// Renderiza las dos vistas de portal (bloque Portales):
+    /// la escena desde las cámaras virtuales de cada portal de
+    /// la pareja, a `portal_targets`. Sin post y SIN superficies
+    /// de portal dentro (recursión 0 en v1: un portal no se ve a
+    /// sí mismo ni al otro en su propia vista). Debe llamarse
+    /// ANTES de `render_views`, que muestrea estas texturas; la
+    /// disciplina de fence es la misma (serie por frame).
+    pub fn render_portal_views(
+        &mut self,
+        queue: vk::Queue,
+        view_a: (&[MeshDrawItem], &[SkinnedDrawItem]),
+        view_b: (&[MeshDrawItem], &[SkinnedDrawItem]),
+        shadow_casters: Option<&ShadowCasters<'_>>,
+    ) -> Result<(), RendererError> {
+        unsafe {
+            self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
+            self.device.reset_fences(&[self.fence])?;
+            let shadow_params = self.upload_frame_ubos();
+
+            let cmd = self.command_buffer;
+            let begin_info = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            self.device.begin_command_buffer(cmd, &begin_info)?;
+
+            if let Some(casters) = shadow_casters {
+                self.record_shadow_pass(cmd, casters, shadow_params);
+            }
+
+            let clear = [0.06, 0.09, 0.14, 1.0];
+            // Se clona la referencia al objetivo para no pelear
+            // con el préstamo de &self de record_view_pass.
+            let target_a = &self.portal_targets[0];
+            self.record_view_pass(cmd, target_a, clear, view_a.0, view_a.1, &[], false, false);
+            let target_b = &self.portal_targets[1];
+            self.record_view_pass(cmd, target_b, clear, view_b.0, view_b.1, &[], false, false);
+
+            self.device.end_command_buffer(cmd)?;
+            let command_buffers = [cmd];
+            let submit_info = [vk::SubmitInfo::default().command_buffers(&command_buffers)];
+            self.device.queue_submit(queue, &submit_info, self.fence)?;
+        }
         Ok(())
     }
 
@@ -551,11 +2056,11 @@ impl GlassRenderer {
         queue: vk::Queue,
         meshes: &[(&GpuMesh, [f32; 16])],
     ) -> Result<(), RendererError> {
-        let pc_list: Vec<(&GpuMesh, MeshPushConstants)> = meshes
+        let pc_list: Vec<(&GpuMesh, MeshPushConstants, vk::DescriptorSet, Option<String>, (u32, u32))> = meshes
             .iter()
-            .map(|(m, mvp)| (*m, MeshPushConstants::new(*mvp)))
+            .map(|(m, mvp)| (*m, MeshPushConstants::new(*mvp), self.fallback_set, None, (0, m.index_count)))
             .collect();
-        self.render_views(queue, &pc_list, None)
+        self.render_views(queue, &pc_list, None, &[], None, None, &[], None)
     }
 
     /// Renderiza la escena 3D a la textura offscreen desacoplada (con soporte opcional de malla 3D indexada)
@@ -574,6 +2079,171 @@ impl GlassRenderer {
         self.render_offscreen_mesh(queue, None)
     }
 
+    /// Métricas de la fuente de la UI, para que la app construya los
+    /// lotes del Canvas (`UiBatch`) con el mismo atlas que muestrea el
+    /// pase 2D.
+    pub fn ui_font(&self) -> &FontAtlas {
+        self.ui.font()
+    }
+
+    /// Ejecuta la cadena de post-procesado sobre una vista (bright-pass
+    /// + blur + pasada final con ACES y viñeta) y deja el resultado en
+    /// su objetivo LDR de presentación. Misma disciplina de
+    /// sincronización serializada que el resto del renderer (fence
+    /// compartido, un solo command buffer). Sin post activo
+    /// (GLASS_POST=0) no hace nada: en ese modo `render_views` ya
+    /// dibujó el 3D directamente en el objetivo LDR.
+    pub fn render_post(
+        &mut self,
+        queue: vk::Queue,
+        view: PostView,
+    ) -> Result<(), RendererError> {
+        if !self.post_enabled {
+            return Ok(());
+        }
+        let settings = self.post_settings;
+        unsafe {
+            self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
+            self.device.reset_fences(&[self.fence])?;
+
+            let cmd = self.command_buffer;
+            let begin_info = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            self.device.begin_command_buffer(cmd, &begin_info)?;
+
+            match view {
+                PostView::Scene => {
+                    let (src, dst) = (&self.offscreen, &self.final_offscreen);
+                    self.post.record(&self.device, cmd, src, dst, &settings)?;
+                }
+                PostView::Game => {
+                    let (src, dst) = (&self.game_offscreen, &self.final_game_offscreen);
+                    self.post.record(&self.device, cmd, src, dst, &settings)?;
+                }
+            }
+
+            self.device.end_command_buffer(cmd)?;
+            let command_buffers = [cmd];
+            let submit_info = [vk::SubmitInfo::default().command_buffers(&command_buffers)];
+            self.device.queue_submit(queue, &submit_info, self.fence)?;
+        }
+        Ok(())
+    }
+
+    /// Dibuja el lote de UI del Canvas sobre la textura offscreen (la que
+    /// presenta el blit del standalone), DESPUÉS del 3D y con la misma
+    /// disciplina de sincronización serializada del resto del renderer:
+    /// espera el fence compartido, graba en el command buffer único y
+    /// envía señalándolo. Quien llame después (el blit) volverá a esperar
+    /// ese mismo fence antes de leer la imagen.
+    pub fn render_ui_overlay(
+        &mut self,
+        queue: vk::Queue,
+        segments: &[UiSegment],
+    ) -> Result<(), RendererError> {
+        if segments.iter().all(|s| s.batch.is_empty()) {
+            return Ok(());
+        }
+        unsafe {
+            self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
+            self.device.reset_fences(&[self.fence])?;
+
+            let cmd = self.command_buffer;
+            let begin_info = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            self.device.begin_command_buffer(cmd, &begin_info)?;
+
+            // Segmentos en orden de pintor; cada pase de render es
+            // LOAD/STORE, así que encadenan sobre el mismo target.
+            for seg in segments {
+                if seg.batch.is_empty() {
+                    continue;
+                }
+                let target = &self.final_offscreen;
+                match &seg.atlas {
+                    UiAtlasKind::Font => self.ui.record(cmd, target, &seg.batch),
+                    UiAtlasKind::Image => {
+                        if let Some(ui_img) = &mut self.ui_images {
+                            ui_img.record(cmd, target, &seg.batch);
+                        }
+                    }
+                    UiAtlasKind::FontNamed(name) => {
+                        if let Some(pass) = self.ui_named_fonts.get_mut(name) {
+                            pass.record(cmd, target, &seg.batch);
+                        }
+                    }
+                }
+            }
+
+            self.device.end_command_buffer(cmd)?;
+
+            let command_buffers = [cmd];
+            let submit_info = [vk::SubmitInfo::default().command_buffers(&command_buffers)];
+            self.device.queue_submit(queue, &submit_info, self.fence)?;
+        }
+        Ok(())
+    }
+
+    /// Sube el atlas de imágenes del Canvas (UI v2) y crea su pase
+    /// 2D, sustituyendo el anterior si lo había. `rgba` es el
+    /// atlas cuadrado empaquetado por `pack_ui_image_atlas`.
+    pub fn set_ui_image_atlas(
+        &mut self,
+        queue: vk::Queue,
+        rgba: Vec<u8>,
+        size: u32,
+    ) -> Result<(), RendererError> {
+        if let Some(mut old) = self.ui_images.take() {
+            old.destroy(&mut *self.allocator.lock().unwrap());
+        }
+        let renderer = UiRenderer::new_for_texture(
+            self.device.clone(),
+            &mut *self.allocator.lock().unwrap(),
+            queue,
+            self.command_pool,
+            rgba,
+            size,
+        )?;
+        self.ui_images = Some(renderer);
+        Ok(())
+    }
+
+    /// Crea el pase 2D de una fuente con nombre (assets/fonts) si
+    /// aún no existe; si ya existe, no hace nada. Los bytes son el
+    /// .ttf completo.
+    pub fn ensure_named_font(
+        &mut self,
+        queue: vk::Queue,
+        name: &str,
+        font_bytes: &[u8],
+    ) -> Result<(), RendererError> {
+        if self.ui_named_fonts.contains_key(name) {
+            return Ok(());
+        }
+        let renderer = UiRenderer::new_with_font_bytes(
+            self.device.clone(),
+            &mut *self.allocator.lock().unwrap(),
+            queue,
+            self.command_pool,
+            font_bytes,
+        )?;
+        self.ui_named_fonts.insert(name.to_string(), renderer);
+        Ok(())
+    }
+
+    /// ¿Ya existe el pase de esta fuente con nombre?
+    pub fn has_named_font(&self, name: &str) -> bool {
+        self.ui_named_fonts.contains_key(name)
+    }
+
+    /// Descarta el pase de imágenes del Canvas (la escena nueva no
+    /// usa elementos Imagen).
+    pub fn clear_ui_image_atlas(&mut self) {
+        if let Some(mut old) = self.ui_images.take() {
+            old.destroy(&mut *self.allocator.lock().unwrap());
+        }
+    }
+
     /// Presenta la textura offscreen directamente sobre una imagen del Swapchain mediante hardware blit.
     /// Utilizado en modo Standalone (runtime de juego) para máximo rendimiento sin overhead de UI.
     pub fn blit_offscreen_to_swapchain(
@@ -582,7 +2252,7 @@ impl GlassRenderer {
         image_index: u32,
     ) -> Result<(), RendererError> {
         let swapchain_image = self.swapchain.images[image_index as usize];
-        let offscreen_image = self.offscreen.color_image;
+        let offscreen_image = self.final_offscreen.color_image;
 
         unsafe {
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
@@ -648,8 +2318,8 @@ impl GlassRenderer {
                 .src_offsets([
                     vk::Offset3D { x: 0, y: 0, z: 0 },
                     vk::Offset3D {
-                        x: self.offscreen.extent.width as i32,
-                        y: self.offscreen.extent.height as i32,
+                        x: self.final_offscreen.extent.width as i32,
+                        y: self.final_offscreen.extent.height as i32,
                         z: 1,
                     },
                 ])
@@ -726,7 +2396,7 @@ impl GlassRenderer {
 
             let wait_semaphores = [self.image_available_semaphore];
             let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-            let signal_semaphores = [self.render_finished_semaphore];
+            let signal_semaphores = [self.render_finished_for(image_index)];
             let command_buffers = [cmd];
 
             let submit_info = [vk::SubmitInfo::default()
@@ -752,13 +2422,33 @@ impl Drop for GlassRenderer {
             self.device
                 .destroy_render_pass(self.swapchain_render_pass, None);
             self.device.destroy_semaphore(self.image_available_semaphore, None);
-            self.device.destroy_semaphore(self.render_finished_semaphore, None);
+            for semaphore in self.render_finished_semaphores.drain(..) {
+                self.device.destroy_semaphore(semaphore, None);
+            }
             self.device.destroy_fence(self.fence, None);
             self.device.destroy_command_pool(self.command_pool, None);
+            self.device.destroy_descriptor_pool(self.joints_pool, None);
         }
+        self.ui.destroy(&mut *self.allocator.lock().unwrap());
+        if let Some(ui_img) = &mut self.ui_images {
+            ui_img.destroy(&mut *self.allocator.lock().unwrap());
+        }
+        for pass in self.ui_named_fonts.values_mut() {
+            pass.destroy(&mut *self.allocator.lock().unwrap());
+        }
+        self.post
+            .destroy(&self.device, &mut *self.allocator.lock().unwrap());
+        self.shadow.destroy_with_device(
+            &self.device,
+            &mut *self.allocator.lock().unwrap(),
+        );
         self.offscreen
             .destroy(&mut *self.allocator.lock().unwrap());
         self.game_offscreen
+            .destroy(&mut *self.allocator.lock().unwrap());
+        self.final_offscreen
+            .destroy(&mut *self.allocator.lock().unwrap());
+        self.final_game_offscreen
             .destroy(&mut *self.allocator.lock().unwrap());
     }
 }
@@ -771,7 +2461,7 @@ mod push_constant_contract_tests {
     /// Los offsets que los cuatro shaders GLSL documentan en sus comentarios.
     /// Si alguien reordena o añade un campo en Rust sin tocar el GLSL, este test
     /// falla aquí en vez de producir geometría deformada silenciosa en pantalla.
-    const GLSL_OFFSETS: [(&str, usize, usize); 7] = [
+    const GLSL_OFFSETS: [(&str, usize, usize); 8] = [
         ("mvp", 0, 64),
         ("model", 64, 64),
         ("light_dir", 128, 16),
@@ -779,11 +2469,12 @@ mod push_constant_contract_tests {
         ("material_params", 160, 16),
         ("object_color", 176, 16),
         ("camera_pos", 192, 16),
+        ("lm_params", 208, 16),
     ];
 
     #[test]
     fn offsets_coinciden_con_glsl() {
-        let reales: [(&str, usize, usize); 7] = [
+        let reales: [(&str, usize, usize); 8] = [
             (
                 "mvp",
                 offset_of!(MeshPushConstants, mvp),
@@ -819,18 +2510,23 @@ mod push_constant_contract_tests {
                 offset_of!(MeshPushConstants, camera_pos),
                 std::mem::size_of::<[f32; 4]>(),
             ),
+            (
+                "lm_params",
+                offset_of!(MeshPushConstants, lm_params),
+                std::mem::size_of::<[f32; 4]>(),
+            ),
         ];
         assert_eq!(reales, GLSL_OFFSETS, "El layout de MeshPushConstants ya no coincide con el bloque push_constant de los shaders .vert/.frag");
     }
 
     #[test]
     fn tamano_y_alineacion_son_los_esperados() {
-        assert_eq!(MESH_PUSH_CONSTANTS_SIZE, 208);
+        assert_eq!(MESH_PUSH_CONSTANTS_SIZE, 256);
         assert_eq!(std::mem::align_of::<MeshPushConstants>(), 4);
         // Todos los offsets deben caer en múltiplo de 16 para respetar std140.
         for (nombre, off, tam) in GLSL_OFFSETS {
             assert_eq!(off % 16, 0, "campo '{nombre}' no está alineado a 16 bytes");
-            assert!(off + tam <= 208, "campo '{nombre}' desborda los 208 bytes");
+            assert!(off + tam <= 256, "campo '{nombre}' desborda los 256 bytes");
         }
     }
 
@@ -848,10 +2544,41 @@ mod push_constant_contract_tests {
     }
 
     #[test]
-    fn bytemuck_serializa_exactamente_208_bytes() {
+    fn bytemuck_serializa_exactamente_256_bytes() {
         let pc = MeshPushConstants::default();
         let bytes = bytemuck::bytes_of(&pc);
-        assert_eq!(bytes.len(), 208);
+        assert_eq!(bytes.len(), 256);
         assert_eq!(bytes.len(), MESH_PUSH_CONSTANTS_SIZE as usize);
+    }
+}
+
+#[cfg(test)]
+mod point_lights_ubo_tests {
+    use super::*;
+    use std::mem::offset_of;
+
+    #[test]
+    fn point_lights_ubo_respeta_std140() {
+        assert_eq!(offset_of!(PointLightsUbo, pos_range), 0);
+        assert_eq!(offset_of!(PointLightsUbo, color_intensity), 128);
+        assert_eq!(offset_of!(PointLightsUbo, count), 256);
+        assert_eq!(offset_of!(PointLightsUbo, _pad), 260);
+        assert_eq!(std::mem::size_of::<PointLightsUbo>(), 272);
+        assert_eq!(POINT_LIGHTS_UBO_SIZE, 272);
+    }
+
+    #[test]
+    fn point_lights_default_no_ilumina() {
+        let ubo = PointLightsUbo::default();
+        assert_eq!(ubo.count, 0);
+        assert_eq!(ubo.pos_range, [[0.0; 4]; MAX_POINT_LIGHTS]);
+        assert_eq!(ubo.color_intensity, [[0.0; 4]; MAX_POINT_LIGHTS]);
+    }
+
+    #[test]
+    fn point_lights_bytemuck_serializa_272_bytes() {
+        let ubo = PointLightsUbo::default();
+        assert_eq!(bytemuck::bytes_of(&ubo).len(), 272);
+        assert_eq!(bytemuck::bytes_of(&ubo).len(), POINT_LIGHTS_UBO_SIZE as usize);
     }
 }

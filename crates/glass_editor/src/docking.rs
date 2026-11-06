@@ -1,8 +1,9 @@
 use crate::panels::{
     ConsolePanel, CoordSpace, GizmoMode, HierarchyPanel, InspectorPanel, PivotMode, PlayState,
-    ViewportPanel,
+    ProjectPanel, ShaderGraphEditorPanel, ViewportPanel,
 };
 use egui_dock::{DockArea, DockState, NodeIndex, TabViewer};
+use glass_core::SceneManager;
 use glass_mcp::SceneState;
 use std::sync::{Arc, Mutex};
 
@@ -14,6 +15,7 @@ pub enum EditorTab {
     Inspector,
     Console,
     Project,
+    ShaderGraph,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,20 +31,31 @@ pub struct EditorDockingLayout {
     pub viewport: ViewportPanel,
     pub inspector: InspectorPanel,
     pub console: ConsolePanel,
+    /// Panel «Proyecto» con organización de assets estilo Unity
+    /// (crear, renombrar, mover y mandar a papelera). Sustituye al
+    /// navegador plano y de sólo lectura que vivía en ConsolePanel.
+    pub project: ProjectPanel,
+    pub shader_graph: ShaderGraphEditorPanel,
     pub dock_state: DockState<EditorTab>,
     pub current_preset: LayoutPreset,
     pub request_launcher: bool,
     pub request_build_and_run: bool,
     pub request_build_settings: bool,
     pub show_project_settings_dialog: bool,
+/// Copia editable de los ejes del Input Manager; None = aún no cargada en este diálogo.
+pub input_axes_edit: Option<Vec<glass_scripting::input_axes::InputAxisDef>>,
     pub project_settings: glass_core::ProjectSettings,
     pub status_message: Option<(String, std::time::Instant)>,
+    /// Diálogo "Save Scene As" (equivalente al de Unity).
+    pub show_save_as_dialog: bool,
+    pub save_as_name: String,
 }
 
 impl Default for EditorDockingLayout {
     fn default() -> Self {
         Self::new()
     }
+
 }
 
 impl EditorDockingLayout {
@@ -52,12 +65,17 @@ impl EditorDockingLayout {
             viewport: ViewportPanel::default(),
             inspector: InspectorPanel::new(),
             console: ConsolePanel::default(),
+            project: ProjectPanel::new(),
+            shader_graph: ShaderGraphEditorPanel::new(),
             dock_state: DockState::new(vec![EditorTab::SceneView, EditorTab::GameView]),
             current_preset: LayoutPreset::Default,
             request_launcher: false,
             request_build_and_run: false,
             request_build_settings: false,
             show_project_settings_dialog: false,
+            input_axes_edit: None,
+            show_save_as_dialog: false,
+            save_as_name: String::new(),
             project_settings: glass_core::ProjectSettings::load_or_default("project.json"),
             status_message: None,
         };
@@ -80,7 +98,7 @@ impl EditorDockingLayout {
                 surface.split_below(
                     NodeIndex::root(),
                     0.72,
-                    vec![EditorTab::Console, EditorTab::Project],
+                    vec![EditorTab::Console, EditorTab::Project, EditorTab::ShaderGraph],
                 );
                 surface.split_right(
                     NodeIndex::root(),
@@ -129,13 +147,121 @@ impl EditorDockingLayout {
         }
     }
 
+    /// Guarda la escena activa en la ruta que dicta el `SceneManager`.
+    ///
+    /// Antes había tres copias del literal `"assets/scenes/SampleScene.scene.json"`,
+    /// así que guardar cualquier otra escena pisaba siempre la primera y lo que
+    /// se escribía en disco no coincidía con el nombre que reportaba el puente.
+    /// Ahora la ruta sale de `SceneManager::save_key()`, que conoce la clave de
+    /// asset de la escena cargada; `Save Scene As` sólo la deriva de un nombre.
+    fn save_scene_to(
+        &mut self,
+        scene_state: &Arc<Mutex<SceneState>>,
+        scene_manager: &Arc<Mutex<SceneManager>>,
+        save_as: Option<&str>,
+    ) {
+        let ahora = || std::time::Instant::now();
+
+        // Se bloquea primero el gestor y después la escena: es el mismo orden
+        // que usa `apply_pending_scene_load` en el bucle principal, así que no
+        // puede formarse un abrazo mortal entre ambos candados.
+        let Ok(mut manager) = scene_manager.lock() else {
+            self.status_message = Some(("SceneManager bloqueado por un hilo en pánico".into(), ahora()));
+            return;
+        };
+        let key = match save_as {
+            Some(name) => glass_core::scenes::scene_key_for_name(name),
+            None => manager.save_key(),
+        };
+        let path = match manager.vfs().resolve(&key) {
+            Ok(path) => path,
+            Err(e) => {
+                self.status_message = Some((format!("Ruta de escena inválida: {e}"), ahora()));
+                return;
+            }
+        };
+        let Ok(scene) = scene_state.lock() else {
+            self.status_message = Some(("SceneState bloqueado; no se guardó nada".into(), ahora()));
+            return;
+        };
+
+        let mensaje = match scene.save_to_json(&path.to_string_lossy()) {
+            Ok(()) => {
+                if save_as.is_some() {
+                    // La escena pasa a "ser" ese archivo: el siguiente Ctrl+S
+                    // reescribe esta clave en lugar de volver a preguntar.
+                    let nombre = glass_core::scenes::short_scene_name(&key);
+                    manager.set_active_name(&nombre);
+                }
+                format!("Escena guardada en {key}")
+            }
+            Err(e) => format!("No se pudo guardar {key}: {e}"),
+        };
+        drop(scene);
+        drop(manager);
+        self.status_message = Some((mensaje, ahora()));
+    }
+
+    /// Menú de escenas del proyecto, con la activa marcada.
+    ///
+    /// Sólo **encola** la carga: el motor la aplica al final del frame en
+    /// `GlassEngineApp::apply_pending_scene_load`, igual que un
+    /// `UnityEngine.SceneManagement.SceneManager.LoadScene` desde C#.
+    fn scene_switcher_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        scene_manager: &Arc<Mutex<SceneManager>>,
+    ) {
+        let (disponibles, activa) = match scene_manager.lock() {
+            Ok(m) => (m.available_scenes(), m.active_scene_name().to_string()),
+            Err(_) => (Vec::new(), "?".to_string()),
+        };
+
+        if disponibles.is_empty() {
+            ui.label("No hay escenas en assets/scenes/");
+            return;
+        }
+
+        for nombre in disponibles {
+            let etiqueta = if nombre == activa {
+                format!("✔ {nombre}")
+            } else {
+                nombre.clone()
+            };
+            if ui.button(etiqueta).clicked() {
+                let mensaje = match scene_manager.lock() {
+                    Ok(mut m) => match m.request_load(&nombre) {
+                        Ok(key) => format!("Carga encolada: {key} (se aplica al final del frame)"),
+                        Err(e) => format!("No se pudo cargar '{nombre}': {e}"),
+                    },
+                    Err(_) => "SceneManager bloqueado por un hilo en pánico".to_string(),
+                };
+                self.status_message = Some((mensaje, std::time::Instant::now()));
+                ui.close();
+            }
+        }
+    }
+
     pub fn render(
         &mut self,
         ui: &mut egui::Ui,
         scene_texture_id: Option<egui::TextureId>,
         game_texture_id: Option<egui::TextureId>,
         scene_state: &Arc<Mutex<SceneState>>,
+        scene_manager: &Arc<Mutex<SceneManager>>,
     ) {
+        // El editor trabaja en tema oscuro (el Launcher, en claro): cada
+        // modo fija sus visuales al empezar a dibujarse.
+        ui.ctx().set_visuals(crate::unity_visuals());
+        // Espaciado compacto estilo Unity (la Style se hereda de
+        // los Visuals; solo se toca el espaciado entre widgets).
+        {
+            let s = ui.style_mut();
+            s.spacing.item_spacing = egui::vec2(6.0, 3.0);
+            s.spacing.button_padding = egui::vec2(8.0, 3.0);
+            s.spacing.indent = 14.0;
+        }
+
         let mut selected_id = self.hierarchy.selected_entity;
 
         // --- 0. ATAJOS DE TECLADO GLOBALES ESTILO UNITY ---
@@ -155,10 +281,7 @@ impl EditorDockingLayout {
             };
         }
         if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
-            if let Ok(sc) = scene_state.lock() {
-                let _ = sc.save_to_json("assets/scenes/SampleScene.scene.json");
-            }
-            self.status_message = Some(("Escena guardada en assets/scenes/SampleScene.scene.json".into(), std::time::Instant::now()));
+            self.save_scene_to(scene_state, scene_manager, None);
         }
 
         // --- 1. BARRA DE MENÚS PRINCIPAL ESTILO UNITY / UNREAL ---
@@ -176,19 +299,20 @@ impl EditorDockingLayout {
                     ui.close();
                 }
                 if ui.button("💾 Save Scene\tCtrl+S").clicked() {
-                    if let Ok(sc) = scene_state.lock() {
-                        let _ = sc.save_to_json("assets/scenes/SampleScene.scene.json");
-                    }
-                    self.status_message = Some(("Escena guardada en assets/scenes/SampleScene.scene.json".into(), std::time::Instant::now()));
+                    self.save_scene_to(scene_state, scene_manager, None);
                     ui.close();
                 }
                 if ui.button("💾 Save Scene As...").clicked() {
-                    if let Ok(sc) = scene_state.lock() {
-                        let _ = sc.save_to_json("assets/scenes/BuildScene.scene.json");
-                    }
-                    self.status_message = Some(("Escena guardada en assets/scenes/BuildScene.scene.json".into(), std::time::Instant::now()));
+                    self.save_as_name = match scene_manager.lock() {
+                        Ok(m) => m.active_scene_name().to_string(),
+                        Err(_) => "SampleScene".to_string(),
+                    };
+                    self.show_save_as_dialog = true;
                     ui.close();
                 }
+                ui.menu_button("📂 Open Scene", |ui| {
+                    self.scene_switcher_menu(ui, scene_manager);
+                });
                 ui.separator();
                 if ui.button("⚙ Build Settings...\tCtrl+Shift+B").clicked() {
                     self.request_build_settings = true;
@@ -208,6 +332,16 @@ impl EditorDockingLayout {
                     self.request_launcher = true;
                     ui.close();
                 }
+            });
+
+            // Selector de escena activa, como la barra de herramientas de Unity:
+            // muestra el nombre actual y permite cambiar sin abrir el menú File.
+            let activa_actual = match scene_manager.lock() {
+                Ok(m) => m.active_scene_name().to_string(),
+                Err(_) => "?".to_string(),
+            };
+            ui.menu_button(format!("🎬 {activa_actual}"), |ui| {
+                self.scene_switcher_menu(ui, scene_manager);
             });
 
             ui.menu_button("Edit", |ui| {
@@ -346,6 +480,13 @@ impl EditorDockingLayout {
                     if ui.button("● Sphere").clicked() {
                         if let Ok(mut sc) = scene_state.lock() {
                             let id = sc.create_entity("Sphere".into(), vec!["Transform".into(), "MeshRenderer".into(), "RigidBody".into(), "Collider".into()]);
+                            // La primitiva integrada, como en el preset
+                            // de la jerarquía (antes dibujaba el cubo).
+                            if let Some(ent) = sc.get_entity_mut(id) {
+                                if let Some(m) = &mut ent.mesh {
+                                    m.model = "sphere".into();
+                                }
+                            }
                             self.hierarchy.selected_entity = Some(id);
                         }
                         ui.close();
@@ -353,6 +494,13 @@ impl EditorDockingLayout {
                     if ui.button("▬ Plane").clicked() {
                         if let Ok(mut sc) = scene_state.lock() {
                             let id = sc.create_entity("Plane".into(), vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()]);
+                            // La primitiva integrada, como en el preset de
+                            // la jerarquía (antes esto dibujaba el cubo).
+                            if let Some(ent) = sc.get_entity_mut(id) {
+                                if let Some(m) = &mut ent.mesh {
+                                    m.model = "plane".into();
+                                }
+                            }
                             self.hierarchy.selected_entity = Some(id);
                         }
                         ui.close();
@@ -360,6 +508,13 @@ impl EditorDockingLayout {
                     if ui.button("▮ Cylinder").clicked() {
                         if let Ok(mut sc) = scene_state.lock() {
                             let id = sc.create_entity("Cylinder".into(), vec!["Transform".into(), "MeshRenderer".into(), "RigidBody".into(), "Collider".into()]);
+                            // La primitiva integrada, como en el preset
+                            // de la jerarquía (antes dibujaba el cubo).
+                            if let Some(ent) = sc.get_entity_mut(id) {
+                                if let Some(m) = &mut ent.mesh {
+                                    m.model = "cylinder".into();
+                                }
+                            }
                             self.hierarchy.selected_entity = Some(id);
                         }
                         ui.close();
@@ -635,6 +790,8 @@ impl EditorDockingLayout {
             viewport: &mut self.viewport,
             inspector: &mut self.inspector,
             console: &mut self.console,
+            project: &mut self.project,
+            shader_graph: &mut self.shader_graph,
             scene_texture_id,
             game_texture_id,
             selected_entity_id: &mut selected_id,
@@ -643,6 +800,45 @@ impl EditorDockingLayout {
 
         DockArea::new(&mut self.dock_state)
             .show_inside(ui, &mut tab_viewer);
+
+        // --- PENDIENTES DEL PANEL «PROYECTO» ---
+        // El ProjectPanel no carga escenas ni instancia prefabs por su
+        // cuenta: deja la ruta en un campo público y aquí se aplica, con
+        // la misma vía que usan el menú de escenas y el menú
+        // Assets → Instantiate Prefab.
+        if let Some(ruta) = self.project.pending_scene_load.take() {
+            let archivo = ruta
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let nombre = archivo
+                .strip_suffix(".scene.json")
+                .unwrap_or(archivo.as_str())
+                .to_string();
+            let mensaje = match scene_manager.lock() {
+                Ok(mut m) => match m.request_load(&nombre) {
+                    Ok(key) => format!("Carga encolada: {key} (se aplica al final del frame)"),
+                    Err(e) => format!("No se pudo cargar '{}': {e}", ruta.display()),
+                },
+                Err(_) => "SceneManager bloqueado por un hilo en pánico".to_string(),
+            };
+            self.status_message = Some((mensaje, std::time::Instant::now()));
+        }
+
+        if let Some(ruta) = self.project.pending_prefab_instantiate.take() {
+            let mensaje = match glass_core::Prefab::load_from_file(&ruta) {
+                Ok(prefab) => match scene_state.lock() {
+                    Ok(mut state) => {
+                        let id = state.instantiate_prefab(&prefab, None, Some([0.0, 1.0, 0.0]));
+                        self.hierarchy.selected_entity = Some(id);
+                        format!("Prefab instanciado: {} (entidad {id})", ruta.display())
+                    }
+                    Err(_) => "SceneState bloqueado; no se instanció nada".to_string(),
+                },
+                Err(e) => format!("No se pudo cargar el prefab '{}': {e}", ruta.display()),
+            };
+            self.status_message = Some((mensaje, std::time::Instant::now()));
+        }
 
         // Sincronizar selección de entidad de vuelta a la jerarquía
         if selected_id != self.hierarchy.selected_entity {
@@ -676,6 +872,7 @@ impl EditorDockingLayout {
                         ui.label("Default Scene: ");
                         ui.text_edit_singleline(&mut self.project_settings.default_scene);
                     });
+                    self.input_manager_section(ui);
                     ui.separator();
                     ui.horizontal(|ui| {
                         if ui.button("💾 Guardar").clicked() {
@@ -690,6 +887,37 @@ impl EditorDockingLayout {
                 });
             if !open {
                 self.show_project_settings_dialog = false;
+            }
+        }
+
+        if self.show_save_as_dialog {
+            let mut open = true;
+            egui::Window::new("💾 Save Scene As")
+                .open(&mut open)
+                .resizable(false)
+                .default_width(380.0)
+                .show(ui.ctx(), |ui| {
+                    ui.heading("Guardar escena como");
+                    ui.add_space(6.0);
+                    ui.label("Se escribe en assets/scenes/<nombre>.scene.json");
+                    ui.horizontal(|ui| {
+                        ui.label("Nombre:  ");
+                        ui.text_edit_singleline(&mut self.save_as_name);
+                    });
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.button("💾 Guardar").clicked() {
+                            let nombre = self.save_as_name.clone();
+                            self.save_scene_to(scene_state, scene_manager, Some(&nombre));
+                            self.show_save_as_dialog = false;
+                        }
+                        if ui.button("Cancelar").clicked() {
+                            self.show_save_as_dialog = false;
+                        }
+                    });
+                });
+            if !open {
+                self.show_save_as_dialog = false;
             }
         }
 
@@ -725,6 +953,146 @@ impl EditorDockingLayout {
             }
         }
     }
+
+    /// Dibuja la sección del Input Manager dentro del diálogo de Project Settings.
+        pub fn input_manager_section(&mut self, ui: &mut egui::Ui) {
+            ui.separator();
+            ui.heading("🎮 Input Manager");
+            ui.label(
+                egui::RichText::new(
+                    "Ejes y botones de assets/input_axes.json. Guardar aplica los cambios al momento, también en Play.",
+                )
+                .small(),
+            );
+
+            // Carga perezosa de la copia editable desde disco (o valores por defecto)
+            if self.input_axes_edit.is_none() {
+                #[derive(serde::Deserialize)]
+                struct InputAxesFile {
+                    axes: Vec<glass_scripting::input_axes::InputAxisDef>,
+                }
+                let cargados = std::fs::read_to_string("assets/input_axes.json")
+                    .ok()
+                    .and_then(|txt| serde_json::from_str::<InputAxesFile>(&txt).ok())
+                    .map(|f| f.axes)
+                    .filter(|ejes| !ejes.is_empty());
+                self.input_axes_edit =
+                    Some(cargados.unwrap_or_else(glass_scripting::input_axes::default_input_axes));
+            }
+
+            // Índice a borrar tras dibujar la lista (evita préstamos dobles)
+            let mut borrar: Option<usize> = None;
+
+            {
+                let ejes = self.input_axes_edit.as_mut().unwrap();
+                egui::ScrollArea::vertical()
+                    .max_height(280.0)
+                    .show(ui, |ui| {
+                        let total = ejes.len();
+                        for i in 0..total {
+                            let eje = &mut ejes[i];
+                            egui::CollapsingHeader::new(format!("{} · {}", i, eje.name))
+                                .id_salt(format!("eje_{i}"))
+                                .show(ui, |ui| {
+                                    // Nombre + borrar
+                                    ui.horizontal(|ui| {
+                                        ui.label("Name:");
+                                        ui.text_edit_singleline(&mut eje.name);
+                                        if ui.button("🗑").clicked() {
+                                            borrar = Some(i);
+                                        }
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Positive:");
+                                        ui.text_edit_singleline(&mut eje.positive);
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Negative:");
+                                        ui.text_edit_singleline(&mut eje.negative);
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Alt Positive:");
+                                        ui.text_edit_singleline(&mut eje.alt_positive);
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Alt Negative:");
+                                        ui.text_edit_singleline(&mut eje.alt_negative);
+                                    });
+                                    // Valores numéricos
+                                    ui.horizontal(|ui| {
+                                        ui.label("Gravity:");
+                                        ui.add(
+                                            egui::DragValue::new(&mut eje.gravity)
+                                                .speed(0.05)
+                                                .range(0.0..=10000.0),
+                                        );
+                                        ui.label("Sensitivity:");
+                                        ui.add(
+                                            egui::DragValue::new(&mut eje.sensitivity)
+                                                .speed(0.05)
+                                                .range(0.0..=10000.0),
+                                        );
+                                        ui.label("Dead:");
+                                        ui.add(
+                                            egui::DragValue::new(&mut eje.dead)
+                                                .speed(0.001)
+                                                .range(0.0..=1.0),
+                                        );
+                                    });
+                                    // Flags
+                                    ui.horizontal(|ui| {
+                                        ui.checkbox(&mut eje.snap, "Snap");
+                                        ui.checkbox(&mut eje.invert, "Invert");
+                                    });
+                                });
+                        }
+                    });
+            }
+
+            // Aplicar borrado pendiente tras el bucle
+            if let Some(i) = borrar {
+                if let Some(ejes) = self.input_axes_edit.as_mut() {
+                    if i < ejes.len() {
+                        ejes.remove(i);
+                    }
+                }
+            }
+
+            // Botonera inferior: añadir / guardar
+            ui.horizontal(|ui| {
+                if ui.button("➕ Añadir eje").clicked() {
+                    if let Some(ejes) = self.input_axes_edit.as_mut() {
+                        ejes.push(glass_scripting::input_axes::InputAxisDef::button(
+                            "NuevoEje",
+                            "space",
+                            "",
+                        ));
+                    }
+                }
+                if ui.button("💾 Guardar ejes").clicked() {
+                    #[derive(serde::Serialize)]
+                    struct InputAxesOut<'a> {
+                        axes: &'a [glass_scripting::input_axes::InputAxisDef],
+                    }
+                    let resultado: Result<(), String> = (|| {
+                        let ejes = self.input_axes_edit.as_ref().ok_or("sin ejes")?;
+                        std::fs::create_dir_all("assets").map_err(|e| e.to_string())?;
+                        let out = InputAxesOut { axes: ejes.as_slice() };
+                        let txt =
+                            serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?;
+                        std::fs::write("assets/input_axes.json", txt).map_err(|e| e.to_string())?;
+                        Ok(())
+                    })();
+                    self.status_message = Some((
+                        match resultado {
+                            Ok(_) => "Input Manager: ejes guardados".to_string(),
+                            Err(_) => "Input Manager: ERROR guardando ejes".to_string(),
+                        },
+                        std::time::Instant::now(),
+                    ));
+                }
+            });
+        }
 }
 
 struct EditorTabViewer<'a> {
@@ -732,10 +1100,13 @@ struct EditorTabViewer<'a> {
     viewport: &'a mut ViewportPanel,
     inspector: &'a mut InspectorPanel,
     console: &'a mut ConsolePanel,
+    project: &'a mut ProjectPanel,
+    shader_graph: &'a mut ShaderGraphEditorPanel,
     scene_texture_id: Option<egui::TextureId>,
     game_texture_id: Option<egui::TextureId>,
     selected_entity_id: &'a mut Option<u64>,
     scene_state: &'a Arc<Mutex<SceneState>>,
+
 }
 
 impl<'a> TabViewer for EditorTabViewer<'a> {
@@ -753,6 +1124,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             EditorTab::Inspector => "🔍 Inspector".into(),
             EditorTab::Console => "📟 Consola".into(),
             EditorTab::Project => "📁 Proyecto / Assets".into(),
+            EditorTab::ShaderGraph => "🎨 Grafo de Shaders".into(),
         }
     }
 
@@ -774,7 +1146,12 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 self.console.render_console_only(ui);
             }
             EditorTab::Project => {
-                self.console.render_project_only(ui);
+                // El panel gestiona su propio estado de navegación; sólo deja
+                // en `pending_*` lo que el editor debe aplicar fuera de él.
+                self.project.render(ui);
+            }
+            EditorTab::ShaderGraph => {
+                self.shader_graph.render(ui);
             }
         }
     }

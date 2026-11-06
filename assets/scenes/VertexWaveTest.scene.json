@@ -1,0 +1,258 @@
+[
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": {
+   "far_clip": 1000.0,
+   "fov": 60.0,
+   "is_main": true,
+   "near_clip": 0.1
+  },
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": null,
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "id": 1,
+  "name": "Main Camera",
+  "tag": "MainCamera",
+  "components": [
+   "Transform",
+   "Camera"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    2.0,
+    8.6
+   ],
+   "rotation": [
+    -14.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.98,
+    0.92
+   ],
+   "intensity": 1.0,
+   "light_type": "Directional",
+   "range": 10.0
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "id": 2,
+  "name": "Directional Light",
+  "tag": "Untagged",
+  "components": [
+   "Transform",
+   "Light"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    10.0,
+    0.0
+   ],
+   "rotation": [
+    -50.0,
+    30.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.4,
+    0.45,
+    0.4
+   ],
+   "model": "",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "id": 3,
+  "name": "Suelo",
+  "tag": "Default",
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -1.1,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    26.0,
+    1.0,
+    16.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.2,
+    0.5,
+    0.9
+   ],
+   "model": "plane",
+   "shader": "graph:olas_prueba",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "id": 4,
+  "name": "Plano Ondulado",
+  "tag": "Default",
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.9,
+    0.55,
+    0.2
+   ],
+   "model": "",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "id": 5,
+  "name": "Testigo",
+  "tag": "Default",
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    4.6,
+    0.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  }
+ }
+]

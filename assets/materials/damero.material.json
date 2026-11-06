@@ -1,0 +1,11 @@
+{
+  "albedo": [1.0, 1.0, 1.0, 1.0],
+  "texture": "textures/checker.png",
+  "metallic": 0.0,
+  "roughness": 0.8,
+  "emissive": [0.0, 0.0, 0.0],
+  "emissive_intensity": 0.0,
+  "tiling": [3.0, 3.0],
+  "offset": [0.0, 0.0],
+  "transparent": false
+}

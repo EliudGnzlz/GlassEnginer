@@ -574,36 +574,28 @@ pub fn draw_camera_gizmo(
     // Posición y orientación en mundo: un gizmo de cámara hijo debe dibujarse
     // donde la cámara está realmente, no donde su transform local dice.
     let pos = glass_core::mat4_translation(*world);
-    let rot = glass_core::quat_to_euler_deg(glass_core::mat4_to_quat(*world));
 
-    let rx = rot[0].to_radians();
-    let ry = rot[1].to_radians();
-    let rz = rot[2].to_radians();
-
-    let (sx, cx) = (rx.sin(), rx.cos());
-    let (sy, cy) = (ry.sin(), ry.cos());
-
-    // Vector forward hacia el contenido de la escena (-Z base con rotación Pitch y Yaw)
-    let fwd = [sy * cx, -sx, -cy * cx];
-    let mut right = [cy, 0.0, sy];
-    let mut up = [sy * sx, cx, -cy * sx];
-
-    // Aplicar Roll (rotación en Z) sobre los ejes right y up si es diferente de cero
-    if rz.abs() > 0.0001 {
-        let (sz, cz) = (rz.sin(), rz.cos());
-        let r_rolled = [
-            right[0] * cz + up[0] * sz,
-            right[1] * cz + up[1] * sz,
-            right[2] * cz + up[2] * sz,
-        ];
-        let u_rolled = [
-            -right[0] * sz + up[0] * cz,
-            -right[1] * sz + up[1] * cz,
-            -right[2] * sz + up[2] * cz,
-        ];
-        right = r_rolled;
-        up = u_rolled;
+    // Base de la cámara leída directamente de las columnas de su matriz de
+    // mundo: es la misma orientación que usan el renderer, el gizmo de
+    // transform y el bounding box, así el frustum no puede divergir de la
+    // entidad. Antes se reconstruía desde los ángulos Euler con las fórmulas
+    // de `camera_view_matrix` (glass_app), cuyos signos de pitch/yaw son los
+    // opuestos a la convención del motor (R = Rz*Ry*Rx en glass_core::math):
+    // con yaw de 90° el frustum apuntaba 180° al revés y con pitch+yaw
+    // combinados quedaba torcido respecto a la entidad (la "deformación").
+    // Las columnas se normalizan para descartar la escala del transform.
+    fn eje_normalizado(v: [f32; 3], respaldo: [f32; 3]) -> [f32; 3] {
+        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if len > 1.0e-8 {
+            [v[0] / len, v[1] / len, v[2] / len]
+        } else {
+            respaldo
+        }
     }
+    let right = eje_normalizado([world[0], world[1], world[2]], [1.0, 0.0, 0.0]);
+    let up = eje_normalizado([world[4], world[5], world[6]], [0.0, 1.0, 0.0]);
+    let back = eje_normalizado([world[8], world[9], world[10]], [0.0, 0.0, 1.0]);
+    let fwd = [-back[0], -back[1], -back[2]];
 
     let fov_rad = cam_entity.camera.as_ref().map(|c| c.fov).unwrap_or(60.0).to_radians();
     let aspect = 16.0 / 9.0;
@@ -762,16 +754,15 @@ pub fn draw_light_gizmo(
     is_selected: bool,
 ) -> Option<Rect> {
     let pos = glass_core::mat4_translation(*world);
-    let rot = glass_core::quat_to_euler_deg(glass_core::mat4_to_quat(*world));
 
-    let rx = rot[0].to_radians();
-    let ry = rot[1].to_radians();
-
-    let (sx, cx) = (rx.sin(), rx.cos());
-    let (sy, cy) = (ry.sin(), ry.cos());
-
-    // Vector de emisión de la luz hacia la escena (hacia el suelo cuando rx > 0)
-    let ray_dir = [sy * cx, -sx, -cy * cx];
+    // Dirección de emisión = forward de la entidad (-columna 2 de su matriz
+    // de mundo), la misma convención que el sombreado y que el gizmo de
+    // cámara. Antes se reconstruía desde Euler con los signos de pitch/yaw
+    // opuestos a la convención del motor y los rayos no coincidían con la
+    // luz real de la escena.
+    let back = [world[8], world[9], world[10]];
+    let bl = (back[0]*back[0] + back[1]*back[1] + back[2]*back[2]).sqrt().max(0.001);
+    let ray_dir = [-back[0] / bl, -back[1] / bl, -back[2] / bl];
     let len = (ray_dir[0]*ray_dir[0] + ray_dir[1]*ray_dir[1] + ray_dir[2]*ray_dir[2]).sqrt().max(0.001);
     let l_dir = [ray_dir[0] / len, ray_dir[1] / len, ray_dir[2] / len];
 

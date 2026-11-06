@@ -1,0 +1,1 @@
+Grafo transparente: ver "transparent" en assets/shader_graphs/espuma.graph.json y el nodo RadialUv. La presencia de este fichero hace que load_graph_materials cree su pipeline con mezcla alfa y sin escritura de profundidad.

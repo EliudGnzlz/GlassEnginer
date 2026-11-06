@@ -1,0 +1,1317 @@
+[
+ {
+  "id": 100,
+  "active": true,
+  "name": "Main Camera",
+  "tag": "MainCamera",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "Camera"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    1.6,
+    3.5
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": {
+   "fov": 60.0,
+   "near_clip": 0.1,
+   "far_clip": 1000.0,
+   "is_main": true
+  },
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 101,
+  "active": true,
+  "name": "Directional Light",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "Light"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    10.0,
+    0.0
+   ],
+   "rotation": [
+    -50.0,
+    30.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": {
+   "light_type": "Directional",
+   "color": [
+    1.0,
+    0.98,
+    0.92
+   ],
+   "intensity": 1.0,
+   "range": 10.0
+  },
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 102,
+  "active": true,
+  "name": "Suelo",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -0.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    8.0,
+    0.5,
+    13.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.35,
+    0.38,
+    0.42
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 103,
+  "active": true,
+  "name": "Alfombra Sala 1",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.02,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    3.0,
+    0.02,
+    3.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.15,
+    0.35,
+    0.85
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 104,
+  "active": true,
+  "name": "Alfombra Sala 2",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.02,
+    -6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    3.0,
+    0.02,
+    3.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.85,
+    0.55,
+    0.1
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 105,
+  "active": true,
+  "name": "Muro Izquierdo",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -3.35,
+    2.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    2.65,
+    2.0,
+    0.12
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.55,
+    0.53,
+    0.5
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 106,
+  "active": true,
+  "name": "Muro Derecho",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    3.35,
+    2.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    2.65,
+    2.0,
+    0.12
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.55,
+    0.53,
+    0.5
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 107,
+  "active": true,
+  "name": "Dintel",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    3.1,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.7,
+    0.9,
+    0.12
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.55,
+    0.53,
+    0.5
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 108,
+  "active": true,
+  "name": "Fondo Sala 1",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    2.0,
+    12.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    8.0,
+    2.0,
+    0.2
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.4,
+    0.42,
+    0.48
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 109,
+  "active": true,
+  "name": "Fondo Sala 2",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    2.0,
+    -12.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    8.0,
+    2.0,
+    0.2
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.48,
+    0.42,
+    0.4
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 110,
+  "active": true,
+  "name": "Lateral E1",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -8.2,
+    2.0,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.2,
+    2.0,
+    6.2
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.44,
+    0.44,
+    0.46
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 111,
+  "active": true,
+  "name": "Lateral E2",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    8.2,
+    2.0,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.2,
+    2.0,
+    6.2
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.44,
+    0.44,
+    0.46
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 112,
+  "active": true,
+  "name": "Lateral O1",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -8.2,
+    2.0,
+    -6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.2,
+    2.0,
+    6.2
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.46,
+    0.44,
+    0.44
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 113,
+  "active": true,
+  "name": "Lateral O2",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    8.2,
+    2.0,
+    -6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.2,
+    2.0,
+    6.2
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.46,
+    0.44,
+    0.44
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 114,
+  "active": true,
+  "name": "Portal A",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    1.1,
+    0.1
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.6,
+    1.1,
+    0.025
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.05,
+    0.05,
+    0.08
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": [],
+  "portal": {
+   "pair": "sala",
+   "width": 1.2,
+   "height": 2.2
+  }
+ },
+ {
+  "id": 115,
+  "active": true,
+  "name": "Portal B",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    1.1,
+    -0.1
+   ],
+   "rotation": [
+    0.0,
+    180.0,
+    0.0
+   ],
+   "scale": [
+    0.6,
+    1.1,
+    0.025
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.05,
+    0.05,
+    0.08
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": [],
+  "portal": {
+   "pair": "sala",
+   "width": 1.2,
+   "height": 2.2
+  }
+ },
+ {
+  "id": 116,
+  "active": true,
+  "name": "Cubo Rojo Sala 2",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.9,
+    0.6,
+    -5.5
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.6,
+    0.6,
+    0.6
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.9,
+    0.12,
+    0.1
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 117,
+  "active": true,
+  "name": "Esfera Verde Sala 2",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -1.4,
+    0.7,
+    -7.5
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.4,
+    1.4,
+    1.4
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.15,
+    0.85,
+    0.3
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "sphere"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 118,
+  "active": true,
+  "name": "Oro Sala 2",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -0.6,
+    0.5,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    0.8,
+    0.3
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "sphere",
+   "material": "oro"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 119,
+  "active": true,
+  "name": "Cubo Cian Sala 1",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -1.6,
+    0.6,
+    5.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.6,
+    0.6,
+    0.6
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.1,
+    0.8,
+    0.9
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ }
+]

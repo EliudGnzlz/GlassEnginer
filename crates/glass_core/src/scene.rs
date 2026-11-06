@@ -93,6 +93,17 @@ pub struct MeshData {
     pub color: [f32; 3],
     pub wireframe: bool,
     pub shader: String,
+    /// Nombre del modelo en el AssetCache (la clave es el nombre del .glb
+    /// sin extensión, p. ej. "cube"). Vacío = la malla por defecto ("cube").
+    /// Antes este campo no existía: el bucle de render dibujaba el cubo para
+    /// TODAS las entidades y los modelos importados nunca llegaban a pantalla.
+    #[serde(default)]
+    pub model: String,
+/// Nombre del activo de material en `assets/materials/`
+    /// (sin extensión; "" = sin material asignado: mandan el
+    /// color de la entidad y los valores históricos).
+    #[serde(default)]
+    pub material: String,
 }
 
 impl Default for MeshData {
@@ -100,7 +111,9 @@ impl Default for MeshData {
         Self {
             color: [0.0, 0.8, 0.9],
             wireframe: false,
+            model: String::new(),
             shader: "triangle.vert.spv".into(),
+            material: String::new(),
         }
     }
 }
@@ -131,9 +144,22 @@ impl Default for PhysicsData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScriptComponentData {
     pub class_name: String,
+    /// Con `#[serde(default)]`: una escena cuyo script_data solo trae
+    /// class_name debe cargar igual (antes tumbaba la escena entera).
+    #[serde(default = "default_move_speed")]
     pub move_speed: f32,
+    #[serde(default = "default_jump_velocity")]
     pub jump_velocity: f32,
+    #[serde(default)]
     pub auto_demo: bool,
+}
+
+fn default_move_speed() -> f32 {
+    3.8
+}
+
+fn default_jump_velocity() -> f32 {
+    7.2
 }
 
 impl Default for ScriptComponentData {
@@ -242,11 +268,29 @@ impl Default for RectTransformData {
     }
 }
 
+/// Fuente por defecto de un texto de UI (el DejaVu incrustado).
+fn default_ui_font() -> String {
+    "default".into()
+}
+
+/// Alineación por defecto de un texto de UI.
+fn default_ui_align() -> String {
+    "Left".into()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UITextData {
     pub text: String,
     pub font_size: f32,
     pub color: [f32; 4],
+    /// Nombre de la fuente: un .ttf de assets/fonts/ sin extensión,
+    /// o "default" (el DejaVu incrustado). Las escenas antiguas no
+    /// traen el campo: el default serde lo rellena.
+    #[serde(default = "default_ui_font")]
+    pub font: String,
+    /// "Left" | "Center" | "Right".
+    #[serde(default = "default_ui_align")]
+    pub align: String,
 }
 
 impl Default for UITextData {
@@ -255,6 +299,8 @@ impl Default for UITextData {
             text: "Texto UI".into(),
             font_size: 18.0,
             color: [1.0, 1.0, 1.0, 1.0],
+            font: "default".into(),
+            align: "Left".into(),
         }
     }
 }
@@ -274,6 +320,222 @@ impl Default for UIButtonData {
             on_click_action: "".into(),
         }
     }
+}
+
+/// Elemento Imagen del Canvas (v2): muestra un asset de imagen
+/// dentro de su RectTransform, con tinte multiplicativo.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UIImageData {
+    /// Ruta del asset relativa a assets/, p. ej.
+    /// "textures/icono.png"; vacío = sin imagen (no se dibuja).
+    pub sprite: String,
+    pub color: [f32; 4],
+    /// true = encajar la imagen conservando su proporción dentro
+    /// del rect (letterbox); false = estirar al rect completo.
+    pub preserve_aspect: bool,
+}
+
+impl Default for UIImageData {
+    fn default() -> Self {
+        Self {
+            sprite: String::new(),
+            color: [1.0, 1.0, 1.0, 1.0],
+            preserve_aspect: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UIDragData {
+    /// true = el elemento se puede arrastrar con el ratón.
+    pub draggable: bool,
+    /// true = el elemento recibe sueltas (casillas de inventario).
+    pub accepts_drop: bool,
+    /// Método del script de ESTA entidad al empezar el arrastre.
+    pub on_begin_drag: String,
+    /// Método del script de ESTA entidad al terminar SU arrastre
+    /// (se haya soltado sobre un destino o no).
+    pub on_drag_end: String,
+    /// Método del script de ESTA entidad cuando algo se suelta
+    /// sobre ella (solo si accepts_drop).
+    pub on_drop: String,
+}
+
+impl Default for UIDragData {
+    fn default() -> Self {
+        Self {
+            draggable: false,
+            accepts_drop: false,
+            on_begin_drag: String::new(),
+            on_drag_end: String::new(),
+            on_drop: String::new(),
+        }
+    }
+}
+
+/// Activo de material estilo Unity (Canvas no: materiales 3D,
+/// bloque «Materiales v1»): vive en
+/// `assets/materials/<nombre>.material.json` y una entidad lo
+/// referencia con `MeshData.material`. Sustituye por completo a
+/// los parámetros por defecto (y a los del glTF) de la entidad.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaterialData {
+    /// Color albedo (rgba); la componente a es la opacidad.
+    #[serde(default = "default_material_albedo")]
+    pub albedo: [f32; 4],
+    /// Textura base: ruta relativa a `assets/` ("" = sin textura,
+    /// se muestrea el blanco 1×1).
+    #[serde(default)]
+    pub texture: String,
+    #[serde(default)]
+    pub metallic: f32,
+    /// 0.45 es el histórico del motor cuando no hay material.
+    #[serde(default = "default_material_roughness")]
+    pub roughness: f32,
+    /// Color emisivo (rgb); se suma tal cual × intensidad (HDR:
+    /// con intensidad > 1 alimenta el bloom del post-procesado).
+    #[serde(default)]
+    pub emissive: [f32; 3],
+    #[serde(default)]
+    pub emissive_intensity: f32,
+    /// Repeticiones de la UV (tiling de Unity).
+    #[serde(default = "default_material_tiling")]
+    pub tiling: [f32; 2],
+    /// Desplazamiento de la UV.
+    #[serde(default)]
+    pub offset: [f32; 2],
+    /// true = pipeline transparente (mezcla por alfa, sin
+    /// escritura de profundidad).
+    #[serde(default)]
+    pub transparent: bool,
+}
+
+/// Albedo por defecto: blanco opaco.
+fn default_material_albedo() -> [f32; 4] {
+    [1.0, 1.0, 1.0, 1.0]
+}
+
+/// Rugosidad histórica del motor (0.45).
+fn default_material_roughness() -> f32 {
+    0.45
+}
+
+/// Tiling por defecto: sin repetición.
+fn default_material_tiling() -> [f32; 2] {
+    [1.0, 1.0]
+}
+
+impl Default for MaterialData {
+    fn default() -> Self {
+        // Coherente con las funciones `default_*`: no usar
+        // `#[derive(Default)]` porque `roughness` y `tiling`
+        // no son ceros.
+        Self {
+            albedo: default_material_albedo(),
+            texture: String::new(),
+            metallic: 0.0,
+            roughness: default_material_roughness(),
+            emissive: [0.0, 0.0, 0.0],
+            emissive_intensity: 0.0,
+            tiling: default_material_tiling(),
+            offset: [0.0, 0.0],
+            transparent: false,
+        }
+    }
+}
+
+/// Componente de animación de una entidad con modelo con piel (skinning).
+/// Es deliberadamente mínimo: qué clip suena, a qué velocidad y si está
+/// sonando. El modelo sale de `MeshData.model` y los clips, del .glb
+/// importado; el tiempo del clip único NO vive aquí (es estado de runtime
+/// de la app), pero la máquina de estados sí guarda el suyo en campos
+/// `#[serde(skip)]` (nunca se serializan). Un `clip` vacío significa
+/// «el primer clip del modelo». Los scripts lo controlan con
+/// `Animator.Play("nombre")` (puente `animator_play`), como en Unity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnimatorData {
+    pub clip: String,
+    pub speed: f32,
+    pub playing: bool,
+
+    /// Nombre del controlador en `assets/animators/`. Vacío = sin controlador
+    /// (comportamiento clásico de un único clip; camino intacto).
+    #[serde(default)]
+    pub controller: String,
+
+    // --- Estado de runtime de la máquina (NO se serializa) ---
+    /// Estado actual del controlador.
+    #[serde(skip)]
+    pub current_state: String,
+    /// Tiempo acumulado (s) dentro del estado actual.
+    #[serde(skip)]
+    pub state_time: f32,
+    /// Estado origen de un fundido en curso, si lo hay.
+    #[serde(skip)]
+    pub fade_from_state: Option<String>,
+    /// Tiempo del estado origen durante el fundido.
+    #[serde(skip)]
+    pub fade_from_time: f32,
+    /// Duración total del fundido (s).
+    #[serde(skip)]
+    pub fade_duration: f32,
+    /// Tiempo transcurrido del fundido (s).
+    #[serde(skip)]
+    pub fade_elapsed: f32,
+    /// Valores de los parámetros (bool/trigger como 0..1).
+    #[serde(skip)]
+    pub params: std::collections::HashMap<String, f32>,
+    /// Petición pendiente de salto de estado (Play/CrossFade con controlador):
+    /// (nombre_estado, duración_fundido). La consume `advance`.
+    #[serde(skip)]
+    pub pending_play: Option<(String, f32)>,
+    /// Petición pendiente de CrossFade libre sin controlador:
+    /// (clip_destino, duración). La consume el bucle de dibujo.
+    #[serde(skip)]
+    pub pending_free_crossfade: Option<(String, f32)>,
+}
+
+impl Default for AnimatorData {
+    fn default() -> Self {
+        Self {
+            clip: String::new(),
+            speed: 1.0,
+            playing: true,
+            controller: String::new(),
+            current_state: String::new(),
+            state_time: 0.0,
+            fade_from_state: None,
+            fade_from_time: 0.0,
+            fade_duration: 0.0,
+            fade_elapsed: 0.0,
+            params: std::collections::HashMap::new(),
+            pending_play: None,
+            pending_free_crossfade: None,
+        }
+    }
+}
+
+/// Resuelve un `RectTransformData` a píxeles de pantalla: devuelve
+/// `[x, y, ancho, alto]` con el origen arriba a la izquierda e Y hacia
+/// abajo, para una pantalla de `screen_w` × `screen_h` píxeles.
+///
+/// Es LA MISMA fórmula que usa la vista de juego del editor (egui) en
+/// `render_in_game_canvas_ui`, para que el Canvas se vea idéntico dentro
+/// del editor y en el juego standalone: el ancla se interpreta en
+/// convención Unity (Y hacia arriba, de ahí el `1.0 - anchor_min[1]`),
+/// la posición usa el `size_delta` sin clamar y el tamaño dibujado se
+/// clampa a un mínimo de 10 px por eje, igual que allí.
+///
+/// No compone jerarquías: cada entidad se resuelve contra la pantalla
+/// completa, que es también lo que hace hoy el editor.
+pub fn resolve_ui_rect(rt: &RectTransformData, screen_w: f32, screen_h: f32) -> [f32; 4] {
+    let anchor_x = screen_w * rt.anchor_min[0];
+    let anchor_y = screen_h * (1.0 - rt.anchor_min[1]);
+    let x = anchor_x + rt.anchored_position[0] - rt.size_delta[0] * rt.pivot[0];
+    let y = anchor_y - rt.anchored_position[1] - rt.size_delta[1] * (1.0 - rt.pivot[1]);
+    let w = rt.size_delta[0].max(10.0);
+    let h = rt.size_delta[1].max(10.0);
+    [x, y, w, h]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -297,6 +559,24 @@ pub struct EntityData {
     pub rect_transform: Option<RectTransformData>,
     pub ui_text: Option<UITextData>,
     pub ui_button: Option<UIButtonData>,
+    /// Elemento Imagen del Canvas (v2). `#[serde(default)]`: las
+    /// escenas anteriores a la UI v2 no traen el campo.
+    #[serde(default)]
+    pub ui_image: Option<UIImageData>,
+/// Drag & drop de UI (Canvas v2). `#[serde(default)]`: las
+    /// escenas anteriores no traen el campo.
+    #[serde(default)]
+    pub ui_drag: Option<UIDragData>,
+    /// Animación de la entidad (skinning). `#[serde(default)]` mantiene
+    /// cargables las escenas escritas antes de este campo: sin él, deserializar
+    /// un .scene.json antiguo fallaría por campo ausente.
+    #[serde(default)]
+    pub animator: Option<AnimatorData>,
+    /// Portal (bloque Portales): la entidad es la boca de un
+    /// portal enlazado con la otra del mismo `pair`.
+    /// `#[serde(default)]`: las escenas anteriores no lo traen.
+    #[serde(default)]
+    pub portal: Option<crate::portal::PortalData>,
     pub parent: Option<u64>,
     pub children: Vec<u64>,
 }
@@ -367,6 +647,11 @@ impl EntityData {
         } else {
             None
         };
+        let animator = if components.iter().any(|c| c == "Animator") {
+            Some(AnimatorData::default())
+        } else {
+            None
+        };
         let tag = if name.contains("Player") {
             "Player".into()
         } else if name.contains("Camera") {
@@ -395,6 +680,10 @@ impl EntityData {
             rect_transform,
             ui_text,
             ui_button,
+            ui_image: None,
+            ui_drag: None,
+            portal: None,
+            animator,
             parent: None,
             children: Vec::new(),
         }
@@ -851,6 +1140,8 @@ impl SceneState {
                     color,
                     wireframe: wireframe.unwrap_or(false),
                     shader: "triangle.vert.spv".into(),
+                    model: String::new(),
+                    material: String::new(),
                 });
             }
             true
@@ -895,13 +1186,24 @@ impl SceneState {
         std::fs::write(path, json)
     }
 
+    /// Sustituye por completo el conjunto de entidades de la escena.
+    ///
+    /// ITERACIÓN 5 — es el **único** punto donde el mundo se reemplaza de golpe.
+    /// Tanto `load_from_json` como el `SceneManager` pasan por aquí, de modo que
+    /// la invariante de `next_entity_id` (siempre mayor que cualquier id vivo,
+    /// para que una entidad nueva no colisione con una cargada de disco) se
+    /// mantiene en un solo sitio y no puede divergir entre ambos caminos.
+    pub fn replace_entities(&mut self, entities: Vec<EntityData>) {
+        self.entities = entities;
+        self.next_entity_id = self.entities.iter().map(|e| e.id).max().unwrap_or(0) + 1;
+    }
+
     /// Carga entidades desde un archivo JSON reemplazando la escena actual
     pub fn load_from_json(&mut self, path: &str) -> std::io::Result<()> {
         let json = std::fs::read_to_string(path)?;
         let entities: Vec<EntityData> = serde_json::from_str(&json)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        self.entities = entities;
-        self.next_entity_id = self.entities.iter().map(|e| e.id).max().unwrap_or(0) + 1;
+        self.replace_entities(entities);
         Ok(())
     }
 
@@ -968,6 +1270,79 @@ impl SceneState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_ui_rect_esquina_inferior_izquierda_sample_scene() {
+        // El «Score HUD Text» de SampleScene/Nivel2: ancla y pivote en la
+        // esquina inferior izquierda (convención Unity), desplazamiento
+        // [20, 20] y tamaño [250, 40]. En pantalla de 1280×720 debe quedar
+        // a 20 px del borde izquierdo y a 20 px del borde inferior.
+        let rt = RectTransformData {
+            anchored_position: [20.0, 20.0],
+            size_delta: [250.0, 40.0],
+            anchor_min: [0.0, 0.0],
+            anchor_max: [0.0, 0.0],
+            pivot: [0.0, 0.0],
+        };
+        let r = resolve_ui_rect(&rt, 1280.0, 720.0);
+        assert_eq!(r, [20.0, 660.0, 250.0, 40.0]);
+    }
+
+    #[test]
+    fn resolve_ui_rect_centrado_por_defecto() {
+        // El RectTransform por defecto (ancla y pivote al centro,
+        // posición [0,0], tamaño [160,40]) queda centrado en pantalla.
+        let rt = RectTransformData::default();
+        let r = resolve_ui_rect(&rt, 1280.0, 720.0);
+        assert_eq!(r, [560.0, 340.0, 160.0, 40.0]);
+    }
+
+    #[test]
+    fn ui_text_antiguo_sin_fuente_ni_alineacion_deserializa() {
+        // Las escenas previas a la UI v2 no traen font/align.
+        let t: UITextData = serde_json::from_str(
+            r#"{"text":"Hola","font_size":20.0,"color":[1.0,1.0,1.0,1.0]}"#,
+        )
+        .unwrap();
+        assert_eq!(t.font, "default");
+        assert_eq!(t.align, "Left");
+    }
+
+    #[test]
+    fn entidad_antigua_sin_ui_image_y_roundtrip_imagen() {
+        let mut e = EntityData::new(9, "Icono".into(), vec!["RectTransform".into()]);
+        let v = serde_json::to_value(&e).unwrap();
+        let mut obj = v.as_object().unwrap().clone();
+        obj.remove("ui_image");
+        let old: EntityData =
+            serde_json::from_value(serde_json::Value::Object(obj)).unwrap();
+        assert!(old.ui_image.is_none());
+        e.ui_image = Some(UIImageData {
+            sprite: "textures/icono.png".into(),
+            ..Default::default()
+        });
+        let back: EntityData =
+            serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
+        assert_eq!(
+            back.ui_image.unwrap().sprite,
+            "textures/icono.png"
+        );
+    }
+
+    #[test]
+    fn resolve_ui_rect_tamano_minimo_y_ancla_superior() {
+        // Tamaños por debajo de 10 px se claman como en el editor, y la
+        // posición se calcula con el tamaño SIN clamar (paridad exacta).
+        let rt = RectTransformData {
+            anchored_position: [20.0, 20.0],
+            size_delta: [4.0, 4.0],
+            anchor_min: [0.0, 1.0],
+            anchor_max: [0.0, 1.0],
+            pivot: [0.0, 1.0],
+        };
+        let r = resolve_ui_rect(&rt, 1280.0, 720.0);
+        assert_eq!(r, [20.0, -20.0, 10.0, 10.0]);
+    }
 
     #[test]
     fn test_reparenting_and_hierarchy() {
@@ -1408,5 +1783,77 @@ mod tests {
         let b = back.rotation_quat();
         let dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
         assert!((dot.abs() - 1.0).abs() < 1.0e-6, "dot = {dot}");
+    }
+}
+
+#[cfg(test)]
+mod tests_material {
+    use super::*;
+
+    /// 1) JSON parcial: los campos ausentes caen en sus defaults.
+    #[test]
+    fn serde_parcial_usa_defaults() {
+        let json = r#"{"albedo":[1.0,0.5,0.25,1.0],"metallic":1.0}"#;
+        let m: MaterialData = serde_json::from_str(json).unwrap();
+
+        assert_eq!(m.albedo, [1.0, 0.5, 0.25, 1.0]);
+        assert_eq!(m.metallic, 1.0);
+        // Campos no informados: defaults del motor.
+        assert_eq!(m.roughness, 0.45);
+        assert_eq!(m.tiling, [1.0, 1.0]);
+        assert!(!m.transparent);
+        assert_eq!(m.texture, "");
+        assert_eq!(m.emissive, [0.0, 0.0, 0.0]);
+        assert_eq!(m.emissive_intensity, 0.0);
+        assert_eq!(m.offset, [0.0, 0.0]);
+    }
+
+    /// 2) Roundtrip completo con todos los campos no-default.
+    #[test]
+    fn roundtrip_completo() {
+        let original = MaterialData {
+            albedo: [0.2, 0.4, 0.6, 0.8],
+            texture: "materials/madera.png".to_string(),
+            metallic: 0.9,
+            roughness: 0.15,
+            emissive: [0.1, 0.2, 0.3],
+            emissive_intensity: 2.5,
+            tiling: [3.0, 4.0],
+            offset: [0.25, 0.75],
+            transparent: true,
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let recuperado: MaterialData = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(recuperado.albedo, original.albedo);
+        assert_eq!(recuperado.texture, original.texture);
+        assert_eq!(recuperado.metallic, original.metallic);
+        assert_eq!(recuperado.roughness, original.roughness);
+        assert_eq!(recuperado.emissive, original.emissive);
+        assert_eq!(recuperado.emissive_intensity, original.emissive_intensity);
+        assert_eq!(recuperado.tiling, original.tiling);
+        assert_eq!(recuperado.offset, original.offset);
+        assert!(recuperado.transparent);
+    }
+
+    /// 3) Escena antigua: `MeshData` sin el campo `material`
+    /// debe deserializar con `material == ""`.
+    #[test]
+    fn meshdata_antiguo_sin_material() {
+        // `color`, `wireframe` y `shader` no tienen default, así
+        // que deben aparecer; `model` y `material` sí lo tienen.
+        let json = r#"{
+            "color": [1.0, 0.0, 0.0],
+            "wireframe": false,
+            "shader": "standard"
+        }"#;
+        let mesh: MeshData = serde_json::from_str(json).unwrap();
+
+        assert_eq!(mesh.material, "");
+        assert_eq!(mesh.model, "");
+        assert_eq!(mesh.shader, "standard");
+        assert_eq!(mesh.color, [1.0, 0.0, 0.0]);
+        assert!(!mesh.wireframe);
     }
 }

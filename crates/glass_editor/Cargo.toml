@@ -17,5 +17,7 @@ egui.workspace = true
 egui-winit.workspace = true
 egui-ash-renderer.workspace = true
 log.workspace = true
+image.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 egui_dock = "0.21.1"

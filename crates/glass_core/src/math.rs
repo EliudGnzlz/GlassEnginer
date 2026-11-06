@@ -126,6 +126,45 @@ pub fn quat_normalize(q: [f32; 4]) -> [f32; 4] {
     [q[0] * inv, q[1] * inv, q[2] * inv, q[3] * inv]
 }
 
+/// Spherical linear interpolation between two quaternions `[x, y, z, w]`,
+/// always along the SHORT arc: if the dot product is negative, `b` is
+/// negated first (q and -q are the same rotation; without the flip the
+/// interpolation takes the long way around and animations visibly detour).
+/// Near-parallel inputs fall back to normalized lerp to avoid dividing by
+/// sin(theta) ≈ 0. Used by the animation sampler (skinning block).
+pub fn quat_slerp(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    let a = quat_normalize(a);
+    let mut b = quat_normalize(b);
+    let mut cos_theta = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+    // Epsilon: con claves casi ortogonales (giro de ~180 grados) el signo
+    // del producto punto es ruido de coma flotante (cos(pi/2) en f32 da
+    // -4,4e-8) y decidiría el sentido del giro al azar; solo se niega con
+    // un margen claro, y cerca de 180 ambos arcos son equivalentes salvo
+    // el hemisferio que traen las claves, que es la intención autorada.
+    if cos_theta < -1.0e-6 {
+        b = [-b[0], -b[1], -b[2], -b[3]];
+        cos_theta = -cos_theta;
+    }
+    if cos_theta > 1.0 - 1.0e-6 {
+        return quat_normalize([
+            a[0] + t * (b[0] - a[0]),
+            a[1] + t * (b[1] - a[1]),
+            a[2] + t * (b[2] - a[2]),
+            a[3] + t * (b[3] - a[3]),
+        ]);
+    }
+    let theta = cos_theta.acos();
+    let sin_theta = theta.sin();
+    let wa = ((1.0 - t) * theta).sin() / sin_theta;
+    let wb = (t * theta).sin() / sin_theta;
+    quat_normalize([
+        wa * a[0] + wb * b[0],
+        wa * a[1] + wb * b[1],
+        wa * a[2] + wb * b[2],
+        wa * a[3] + wb * b[3],
+    ])
+}
+
 /// Builds the upper-left 3x3 rotation matrix (row-major) for a quaternion.
 ///
 /// Exposed so the renderer can build a model matrix straight from the physics
@@ -419,6 +458,97 @@ pub fn mat4_inverse_affine(m: [f32; 16]) -> Option<[f32; 16]> {
         i02, i12, i22, 0.0, //
         it0, it1, it2, 1.0,
     ])
+}
+
+/// Vista-proyección ortográfica de la luz direccional para el mapa de
+/// sombras (bloque de gráficos: sombras + post). Función pura, sin GPU.
+///
+/// - La caja mira desde `center - L * back` hacia `center`, con
+///   semiextensión `half_extent` en X e Y del espacio de luz; el rango de
+///   profundidad cubre de `-front` (detrás del centro) a `back` (hacia la
+///   luz) medido sobre el eje de vista.
+/// - **Snap a téxeles**: el centro, expresado en espacio de luz, se
+///   redondea a múltiplos del tamaño de téxel (`2*half_extent/resolution`)
+///   en X e Y, y el desplazamiento se deshace en espacio de mundo. Así la
+///   retícula del mapa no se desliza bajo la cámara y las sombras no
+///   «hierven» al moverla (la técnica estándar de los motores con una
+///   sola cascada).
+/// - La Y se invierte en la proyección, como en la perspectiva de la app
+///   (NDC de Vulkan), y la profundidad queda en [0, 1] con el convenio
+///   diestro de la casa (la cámara mira hacia -Z en su espacio).
+pub fn directional_shadow_vp(
+    center: [f32; 3],
+    light_dir_to_sun: [f32; 3],
+    half_extent: f32,
+    resolution: u32,
+    back: f32,
+    front: f32,
+) -> [f32; 16] {
+    let l_len = (light_dir_to_sun[0] * light_dir_to_sun[0]
+        + light_dir_to_sun[1] * light_dir_to_sun[1]
+        + light_dir_to_sun[2] * light_dir_to_sun[2])
+        .sqrt()
+        .max(1.0e-6);
+    let l = [
+        light_dir_to_sun[0] / l_len,
+        light_dir_to_sun[1] / l_len,
+        light_dir_to_sun[2] / l_len,
+    ];
+    // Dirección de vista de la luz: del sol hacia la escena (-L).
+    let f = [-l[0], -l[1], -l[2]];
+    let up = if l[1].abs() > 0.99 { [0.0, 0.0, -1.0] } else { [0.0, 1.0, 0.0] };
+    let r_raw = cross(f, up);
+    let r_len = (r_raw[0] * r_raw[0] + r_raw[1] * r_raw[1] + r_raw[2] * r_raw[2])
+        .sqrt()
+        .max(1.0e-6);
+    let r = [r_raw[0] / r_len, r_raw[1] / r_len, r_raw[2] / r_len];
+    let u = cross(r, f);
+
+    // Ojo de la luz: hacia el sol desde el centro (+L * back), mirando a
+    // lo largo de f. Vista diestra espejo de la `look_at` de la app
+    // (filas r, u, -f).
+    let eye = [
+        center[0] + l[0] * back,
+        center[1] + l[1] * back,
+        center[2] + l[2] * back,
+    ];
+    let mut tx = -(r[0] * eye[0] + r[1] * eye[1] + r[2] * eye[2]);
+    let mut ty = -(u[0] * eye[0] + u[1] * eye[1] + u[2] * eye[2]);
+    let tz = f[0] * eye[0] + f[1] * eye[1] + f[2] * eye[2];
+    // SNAP A TÉXELES: el centro, en espacio de vista de la luz, cae en
+    // (r·center + tx, u·center + ty) — en general NO es (0,0), porque la
+    // rotación mezcla las coordenadas del mundo. El muestreo del mapa
+    // usa esas coordenadas de vista, así que son ELLAS las que hay que
+    // anclar a la retícula: se desplaza la traslación lo justo para que
+    // la posición del centro en vista sea un múltiplo exacto del téxel.
+    // Al mover la cámara, el origen del mapa salta entonces de téxel en
+    // téxel en vez de deslizarse, y las sombras no hierven.
+    let texel = 2.0 * half_extent / resolution.max(1) as f32;
+    let cx = r[0] * center[0] + r[1] * center[1] + r[2] * center[2] + tx;
+    let cy = u[0] * center[0] + u[1] * center[1] + u[2] * center[2] + ty;
+    tx += (cx / texel).round() * texel - cx;
+    ty += (cy / texel).round() * texel - cy;
+    let view: [f32; 16] = [
+        r[0], u[0], -f[0], 0.0,
+        r[1], u[1], -f[1], 0.0,
+        r[2], u[2], -f[2], 0.0,
+        tx, ty, tz, 1.0,
+    ];
+    // Ortográfica con depth [0,1], Y invertida (NDC de Vulkan) y w = 1
+    // (sin división perspectiva). Un punto a distancia `d` del ojo tiene
+    // z_vista = -d y clip_z = d / (back + front): el centro (d = back)
+    // da back/(back+front), el fondo de la caja da 1.
+    let far = back + front;
+    let ortho: [f32; 16] = [
+        1.0 / half_extent, 0.0, 0.0, 0.0,
+        0.0, -1.0 / half_extent, 0.0, 0.0,
+        0.0, 0.0, -1.0 / far, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ];
+    // La traslación X/Y de la ortográfica es cero: la caja está centrada
+    // en el origen del espacio de vista por construcción (x = x_vista /
+    // half_extent).
+    mat4_mul(ortho, view)
 }
 
 fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -799,5 +929,55 @@ mod tests {
 
         let t = mat4_translation(m);
         assert!(approx_eq(t[0], 2.0) && approx_eq(t[1], 3.0) && approx_eq(t[2], 4.0));
+    }
+    #[test]
+    fn shadow_vp_centro_queda_en_el_centro_del_mapa() {
+        // Sol cenital: L = +Y. El centro de la caja debe proyectar al
+        // centro del mapa (uv 0,5, 0,5) y a una profundidad intermedia.
+        let vp = directional_shadow_vp([10.0, 0.0, -4.0], [0.0, 1.0, 0.0], 25.0, 2048, 60.0, 60.0);
+        let c = mat4_transform_point(vp, [10.0, 0.0, -4.0]);
+        // Con snap, el centro cae dentro de MEDIO téxel del centro del
+        // mapa (téxel NDC = 2/2048 ≈ 0,00098), no en el centro exacto.
+        assert!(c[0].abs() < 6.0e-4 && c[1].abs() < 6.0e-4, "centro NDC = {c:?}");
+        assert!(c[2] > 0.0 && c[2] < 1.0, "profundidad del centro = {}", c[2]);
+    }
+
+    #[test]
+    fn shadow_vp_el_borde_de_la_caja_es_el_borde_del_mapa() {
+        // Desplazar el centro 25 m (la semiextensión) contra el eje X de
+        // luz debe llevar el NDC a ±1 en ese eje.
+        let vp = directional_shadow_vp([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 25.0, 2048, 60.0, 60.0);
+        let p = mat4_transform_point(vp, [25.0, 0.0, 0.0]);
+        assert!((p[0].abs() - 1.0).abs() < 1.0e-3, "borde NDC.x = {}", p[0]);
+        let q = mat4_transform_point(vp, [0.0, 0.0, 25.0]);
+        assert!((q[1].abs() - 1.0).abs() < 1.0e-3, "borde NDC.y = {}", q[1]);
+    }
+
+    #[test]
+    fn shadow_vp_snap_mantiene_el_centro_en_un_texel_exacto() {
+        // Con snap, el centro proyectado en UV debe caer en un múltiplo
+        // exacto del téxel (el origen del mapa se mueve con la retícula).
+        for centro in [[0.13, 0.0, -0.71], [3.7, 1.0, 2.9], [-11.31, 0.0, 8.47]] {
+            let vp = directional_shadow_vp(centro, [0.35, 0.8, 0.49], 25.0, 2048, 60.0, 60.0);
+            let c = mat4_transform_point(vp, centro);
+            let texel_uv = 1.0 / 2048.0;
+            let u = c[0] * 0.5 + 0.5;
+            let v = c[1] * 0.5 + 0.5;
+            let ru = (u / texel_uv).round() * texel_uv;
+            let rv = (v / texel_uv).round() * texel_uv;
+            assert!((u - ru).abs() < 1.0e-4, "u no alineada a téxel: {u} vs {ru}");
+            assert!((v - rv).abs() < 1.0e-4, "v no alineada a téxel: {v} vs {rv}");
+        }
+    }
+
+    #[test]
+    fn shadow_vp_la_geometria_hacia_el_sol_esta_mas_cerca() {
+        // Subir un punto hacia el sol (a lo largo de +L) debe ACERCARLO
+        // al ojo de la luz: menor profundidad NDC que el punto en el suelo.
+        let l = [0.3, 0.85, 0.43];
+        let vp = directional_shadow_vp([0.0, 0.0, 0.0], l, 25.0, 2048, 60.0, 60.0);
+        let suelo = mat4_transform_point(vp, [2.0, 0.0, 2.0]);
+        let alto = mat4_transform_point(vp, [2.0 + l[0] * 5.0, l[1] * 5.0, 2.0 + l[2] * 5.0]);
+        assert!(alto[2] < suelo[2], "alto {} !< suelo {}", alto[2], suelo[2]);
     }
 }

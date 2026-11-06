@@ -1,5 +1,6 @@
 use egui::{Color32, RichText, Stroke, Ui, Vec2};
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMode {
@@ -20,6 +21,39 @@ impl ProjectTemplate {
             Self::Platformer3D => "3D Platformer (Rapier3D + CoreCLR)",
             Self::PhysicsSandbox => "3D Physics Playground (Rapier3D)",
             Self::EmptyScene => "Empty 3D Scene (Escena Vacía)",
+        }
+    }
+
+    /// Nombre corto para la tarjeta de plantilla, como en el Hub viejo.
+    pub fn short_name(&self) -> &'static str {
+        match self {
+            Self::Platformer3D => "Plataformas 3D",
+            Self::PhysicsSandbox => "Físicas 3D",
+            Self::EmptyScene => "Escena vacía",
+        }
+    }
+
+    pub fn short_desc(&self) -> &'static str {
+        match self {
+            Self::Platformer3D => "Personaje 3D con físicas y script C#.",
+            Self::PhysicsSandbox => "Cubos rígidos: fricción y rebote.",
+            Self::EmptyScene => "Escena 3D limpia: cámara y luz solar.",
+        }
+    }
+
+    pub fn glyph(&self) -> &'static str {
+        match self {
+            Self::Platformer3D => "🧊",
+            Self::PhysicsSandbox => "🎲",
+            Self::EmptyScene => "⬜",
+        }
+    }
+
+    pub fn tile_color(&self) -> Color32 {
+        match self {
+            Self::Platformer3D => Color32::from_rgb(33, 150, 243),
+            Self::PhysicsSandbox => Color32::from_rgb(255, 140, 0),
+            Self::EmptyScene => Color32::from_rgb(130, 140, 150),
         }
     }
 }
@@ -49,30 +83,175 @@ pub enum LauncherTab {
     Projects,
     Samples,
     Learn,
+    Community,
+    Installs,
 }
 
+/// El Launcher, con el aspecto del Hub VIEJO de Unity (el de la captura de
+/// 2019 que guarda el usuario): tema CLARO (fondo blanco/gris muy claro,
+/// acentos azules), navegación a la izquierda (Proyectos, Ejemplos,
+/// Aprender, Comunidad, Instalaciones) y contenido a la derecha.
+/// Los proyectos se muestran en CUADRÍCULA de tarjetas, cada una con la
+/// imagen de su escena y el nombre debajo, para ubicarlos de un vistazo:
+/// si la carpeta del proyecto trae un `thumbnail.png` se usa esa imagen;
+/// si no, se genera un mosaico de color con la inicial.
+///
+/// Crear un proyecto NO abre ninguna ventana emergente: es una vista más
+/// del Launcher (plantillas a la izquierda, ajustes a la derecha, como el
+/// diálogo clásico pero integrado en la página).
+///
+/// Regla del proyecto: el Launcher es SIEMPRE offline. Las dos únicas
+/// secciones que usarán internet cuando exista el repositorio oficial son
+/// Instalaciones (descargar el motor y sus actualizaciones) y Comunidad
+/// (compartir creaciones, shaders, mapas y juegos). Hoy ambas muestran su
+/// estado real: todavía no hay repositorio en línea, así que sus botones de
+/// red están deshabilitados y el resto del Launcher funciona sin conexión.
 pub struct LauncherPanel {
     pub active_tab: LauncherTab,
     pub search_filter: String,
-    pub show_new_modal: bool,
+    /// Vista integrada de creación de proyecto (sustituye al antiguo
+    /// formulario emergente dentro de la pestaña Proyectos).
+    pub creating_project: bool,
     pub new_name: String,
     pub new_path: String,
     pub new_template: ProjectTemplate,
     pub status_message: Option<String>,
+    /// Miniaturas ya intentadas por proyecto: `Some` si el `thumbnail.png`
+    /// se cargó, `None` si no existe o no se pudo leer (no se reintenta).
+    thumb_cache: HashMap<String, Option<egui::TextureHandle>>,
+}
+
+fn default_projects_dir() -> PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join("GlassProjects")
 }
 
 impl Default for LauncherPanel {
     fn default() -> Self {
+        let name = "MyGlassGame".to_string();
+        let path = default_projects_dir().join(&name);
         Self {
-            active_tab: LauncherTab::Samples, // Mostrar directamente ejemplos y escena actual
+            // Como el Hub viejo: se abre en la lista de proyectos.
+            active_tab: LauncherTab::Projects,
             search_filter: String::new(),
-            show_new_modal: false,
-            new_name: "MyGlassGame".into(),
-            new_path: "/home/d3/Documentos/GlassProjects/MyGlassGame".into(),
+            creating_project: false,
+            new_name: name,
+            new_path: path.to_string_lossy().into_owned(),
             new_template: ProjectTemplate::Platformer3D,
             status_message: None,
+            thumb_cache: HashMap::new(),
         }
     }
+}
+
+// Paleta clara del Hub viejo: blancos y grises muy claros, texto oscuro y
+// el azul de Unity para selección y botones principales.
+const ACCENT: Color32 = Color32::from_rgb(33, 150, 243);
+const ACCENT_DARK: Color32 = Color32::from_rgb(21, 101, 192);
+const SIDEBAR_BG: Color32 = Color32::from_rgb(250, 250, 251);
+const CONTENT_BG: Color32 = Color32::from_rgb(242, 243, 245);
+const CARD_BG: Color32 = Color32::WHITE;
+const CARD_STROKE: Color32 = Color32::from_rgb(211, 213, 217);
+const SELECTED_BG: Color32 = Color32::from_rgb(224, 240, 254);
+const TEXT_MAIN: Color32 = Color32::from_rgb(33, 36, 41);
+const TEXT_DIM: Color32 = Color32::from_rgb(106, 111, 121);
+const OK_GREEN: Color32 = Color32::from_rgb(43, 140, 62);
+
+/// Visuales claros que el Launcher impone mientras está en pantalla (el
+/// editor fija los oscuros por su cuenta al dibujarse).
+fn launcher_visuals() -> egui::Visuals {
+    let mut v = egui::Visuals::light();
+    v.panel_fill = CONTENT_BG;
+    v.window_fill = CARD_BG;
+    v.extreme_bg_color = CARD_BG;
+    v.faint_bg_color = Color32::from_rgb(243, 244, 246);
+    v.selection.bg_fill = ACCENT;
+    v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+    v.hyperlink_color = ACCENT_DARK;
+    v
+}
+
+/// Paleta de mosaicos generados para proyectos sin `thumbnail.png`: el
+/// color sale del nombre, así cada proyecto mantiene siempre el suyo.
+const TILE_PALETTE: [Color32; 8] = [
+    Color32::from_rgb(33, 150, 243),
+    Color32::from_rgb(0, 172, 160),
+    Color32::from_rgb(255, 140, 0),
+    Color32::from_rgb(140, 100, 220),
+    Color32::from_rgb(230, 80, 120),
+    Color32::from_rgb(90, 180, 90),
+    Color32::from_rgb(0, 150, 200),
+    Color32::from_rgb(255, 110, 90),
+];
+
+fn tile_color_for(name: &str) -> Color32 {
+    let mut h: u32 = 0;
+    for b in name.bytes() {
+        h = h.wrapping_mul(31).wrapping_add(b as u32);
+    }
+    TILE_PALETTE[(h as usize) % TILE_PALETTE.len()]
+}
+
+/// Parte un texto en dos líneas de como mucho `max_chars` caracteres la
+/// primera; el resto va a la segunda (para las tarjetas de plantilla).
+fn wrap_two_lines(text: &str, max_chars: usize) -> (String, String) {
+    let mut line1 = String::new();
+    let mut line2 = String::new();
+    for word in text.split_whitespace() {
+        let fits_first = line2.is_empty()
+            && (line1.is_empty()
+                || line1.chars().count() + 1 + word.chars().count() <= max_chars);
+        let target = if fits_first { &mut line1 } else { &mut line2 };
+        if !target.is_empty() {
+            target.push(' ');
+        }
+        target.push_str(word);
+    }
+    (line1, line2)
+}
+
+/// Recorta un texto a `max` caracteres con puntos suspensivos (para que
+/// los nombres largos no se salgan de su tarjeta).
+fn truncate_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+fn initial_of(name: &str) -> String {
+    name.chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_uppercase().collect())
+        .unwrap_or_else(|| "?".to_string())
+}
+
+/// Dibuja el mosaico generado de un proyecto: fondo de su color, una franja
+/// inferior algo más oscura y la inicial en blanco. Es la miniatura de
+/// reserva cuando el proyecto no trae imagen propia.
+fn paint_generated_tile(painter: &egui::Painter, rect: egui::Rect, name: &str) {
+    let base = tile_color_for(name);
+    painter.rect_filled(rect, 4.0, base);
+    let band = egui::Rect::from_min_max(
+        egui::pos2(rect.min.x, rect.max.y - rect.height() * 0.30),
+        rect.max,
+    );
+    painter.rect_filled(
+        band,
+        4.0,
+        Color32::from_rgba_unmultiplied(0, 0, 0, 36),
+    );
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        initial_of(name),
+        egui::FontId::proportional(30.0),
+        Color32::WHITE,
+    );
 }
 
 impl LauncherPanel {
@@ -81,301 +260,557 @@ impl LauncherPanel {
     }
 
     pub fn render(&mut self, ui: &mut Ui) -> Option<LauncherAction> {
+        // El Launcher es claro como el Hub viejo; el editor, oscuro.
+        ui.ctx().set_visuals(launcher_visuals());
         let mut action: Option<LauncherAction> = None;
 
-        // Fondo y estilo general de Launcher estilo Unity Hub
-        egui::Frame::new()
-            .fill(Color32::from_rgb(20, 22, 28))
+        // Paneles reales a pantalla completa: la barra lateral y el
+        // contenido ocupan toda la ventana, sin zonas sin pintar.
+        egui::Panel::left("glass_launcher_sidebar")
+            .resizable(false)
+            .exact_size(204.0)
+            .frame(egui::Frame::new().fill(SIDEBAR_BG))
             .show(ui, |ui| {
+                ui.add_space(18.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    ui.label(RichText::new("🧊 GlassEnginer").size(19.0).strong().color(TEXT_MAIN));
+                });
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    ui.label(RichText::new("HUB").size(11.0).strong().color(ACCENT));
+                });
                 ui.add_space(20.0);
 
-                // --- HEADER DEL LAUNCHER ---
-                ui.horizontal(|ui| {
-                    ui.add_space(32.0);
-                    ui.label(RichText::new("🧊 GlassEngine Hub").size(26.0).strong().color(Color32::WHITE));
-                    ui.add_space(10.0);
-                    ui.label(RichText::new("v0.1.0 • Vulkan 1.3 • CoreCLR 8.0").size(12.0).color(Color32::from_rgb(0, 190, 255)));
-                });
-
-                ui.add_space(12.0);
-
-                // --- BARRA DE NAVEGACIÓN DE PESTAÑAS ---
-                ui.horizontal(|ui| {
-                    ui.add_space(32.0);
-                    ui.spacing_mut().item_spacing.x = 12.0;
-
-                    let tab_btn = |ui: &mut Ui, tab: LauncherTab, icon: &str, label: &str, cur: LauncherTab| -> bool {
-                        let selected = cur == tab;
-                        let text = format!("{icon} {label}");
-                        let rt = if selected {
-                            RichText::new(text).size(15.0).strong().color(Color32::from_rgb(80, 210, 255))
-                        } else {
-                            RichText::new(text).size(15.0).color(Color32::LIGHT_GRAY)
-                        };
-                        ui.selectable_label(selected, rt).clicked()
-                    };
-
-                    if tab_btn(ui, LauncherTab::Samples, "✨", "Escenas de Ejemplo", self.active_tab) {
-                        self.active_tab = LauncherTab::Samples;
-                    }
-                    if tab_btn(ui, LauncherTab::Projects, "📁", "Proyectos", self.active_tab) {
-                        self.active_tab = LauncherTab::Projects;
-                    }
-                    if tab_btn(ui, LauncherTab::Learn, "📚", "Guía y Atajos", self.active_tab) {
-                        self.active_tab = LauncherTab::Learn;
-                    }
-                });
-
+                self.menu_item(ui, LauncherTab::Projects, "📁", "Proyectos");
+                self.menu_item(ui, LauncherTab::Samples, "✨", "Ejemplos");
+                self.menu_item(ui, LauncherTab::Learn, "📚", "Aprender");
                 ui.add_space(10.0);
-                ui.separator();
-                ui.add_space(16.0);
+                self.menu_item(ui, LauncherTab::Community, "🌐", "Comunidad");
+                self.menu_item(ui, LauncherTab::Installs, "⬇", "Instalaciones");
 
-                // --- CONTENIDO DE LA PESTAÑA SELECCIONADA ---
+                // Pie anclado al fondo de la ventana.
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    ui.add_space(14.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+                        // El Hub trabaja en local: sin cuentas ni nube.
+                        ui.label(RichText::new("● Modo local (sin conexión)").size(11.0).color(OK_GREEN));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+                        ui.label(RichText::new("v0.1.0-alpha • Vulkan 1.3").size(11.0).color(TEXT_DIM));
+                    });
+                    ui.add_space(8.0);
+                    ui.separator();
+                });
+            });
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(CONTENT_BG))
+            .show(ui, |ui| {
+                ui.add_space(16.0);
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.add_space(32.0);
+                        ui.add_space(24.0);
                         ui.vertical(|ui| {
-                            match self.active_tab {
-                                LauncherTab::Samples => {
-                                    self.render_samples_tab(ui, &mut action);
-                                }
-                                LauncherTab::Projects => {
-                                    self.render_projects_tab(ui, &mut action);
-                                }
-                                LauncherTab::Learn => {
-                                    self.render_learn_tab(ui);
+                            if self.creating_project {
+                                self.render_create_view(ui, &mut action);
+                            } else {
+                                match self.active_tab {
+                                    LauncherTab::Projects => self.render_projects_tab(ui, &mut action),
+                                    LauncherTab::Samples => self.render_samples_tab(ui, &mut action),
+                                    LauncherTab::Learn => self.render_learn_tab(ui),
+                                    LauncherTab::Community => self.render_community_tab(ui),
+                                    LauncherTab::Installs => self.render_installs_tab(ui),
                                 }
                             }
                         });
-                        ui.add_space(32.0);
+                        ui.add_space(24.0);
                     });
                 });
+                ui.add_space(16.0);
             });
 
         action
     }
 
-    fn render_samples_tab(&mut self, ui: &mut Ui, action: &mut Option<LauncherAction>) {
-        ui.label(RichText::new("Escenas y Plantillas de Ejemplo").size(18.0).strong().color(Color32::WHITE));
-        ui.label(RichText::new("Selecciona una escena preconfigurada para abrir inmediatamente en el Editor de GlassEngine.").size(12.0).color(Color32::GRAY));
-        ui.add_space(16.0);
-
-        // Tarjeta 1: Nuestra Escena Actual de Prueba (Platformer 3D)
-        Self::render_card(
-            ui,
-            "★ 3D Platformer & Physics Demo (Escena de Prueba)",
-            "Escena completa con plataformas 3D escalables, cuerpo rígido dinámico Rapier3D, script C# PlayerController (.NET CoreCLR), audio interactivo Kira y shader PBR con luz solar.",
-            "▶ Abrir Escena de Prueba",
-            Color32::from_rgb(0, 160, 255),
-            || {
-                *action = Some(LauncherAction::LoadSampleScene(SampleScenePreset::PlatformerDemo));
-            },
-        );
-
-        ui.add_space(14.0);
-
-        // Tarjeta 2: Physics Playground (Rapier3D)
-        Self::render_card(
-            ui,
-            "🎲 Physics Playground (Rapier3D)",
-            "Simulación de múltiples cubos rígidos apilados, cajas dinámicas con colisiones Cuboid vs Cuboid, parámetros de fricción y coeficiente de restitución (rebote).",
-            "▶ Cargar Física 3D",
-            Color32::from_rgb(255, 140, 0),
-            || {
-                *action = Some(LauncherAction::LoadSampleScene(SampleScenePreset::PhysicsPlayground));
-            },
-        );
-
-        ui.add_space(14.0);
-
-        // Tarjeta 3: Audio & Dynamic Lighting Showcase
-        Self::render_card(
-            ui,
-            "💡 Audio & Dynamic Lighting Showcase",
-            "Demostración de fuentes de luz direccional y puntual con Gizmos 3D de alcance y orientación solar, acompañada de clips de audio y transformadas espaciales.",
-            "▶ Cargar Iluminación & Audio",
-            Color32::from_rgb(220, 200, 40),
-            || {
-                *action = Some(LauncherAction::LoadSampleScene(SampleScenePreset::AudioLightingShowcase));
-            },
-        );
-
-        ui.add_space(14.0);
-
-        // Tarjeta 4: Full Game Showcase (Plataformas, Monedas, Canvas UI, Meta)
-        Self::render_card(
-            ui,
-            "🏆 Complete 3D Game Showcase (Juego Completo)",
-            "Juego 3D completo de inicio a fin: jugador físico Rapier3D, cámara orbital suave, plataformas multi-nivel, gemas/monedas recolectables con audio 3D, HUD Canvas en pantalla (Score & Timer) y meta final.",
-            "▶ Cargar Juego Completo",
-            Color32::from_rgb(140, 230, 80),
-            || {
-                *action = Some(LauncherAction::LoadSampleScene(SampleScenePreset::FullSampleGame));
-            },
-        );
-    }
-
-    fn render_projects_tab(&mut self, ui: &mut Ui, action: &mut Option<LauncherAction>) {
+    fn menu_item(&mut self, ui: &mut Ui, tab: LauncherTab, icon: &str, label: &str) {
+        let selected = self.active_tab == tab && !self.creating_project;
+        let text = RichText::new(format!("{icon}  {label}"))
+            .size(14.0)
+            .color(if selected { ACCENT_DARK } else { TEXT_MAIN });
+        let text = if selected { text.strong() } else { text };
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Proyectos Recientes").size(18.0).strong().color(Color32::WHITE));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(RichText::new("➕ Nuevo Proyecto").size(14.0).strong()).clicked() {
-                    self.show_new_modal = !self.show_new_modal;
-                }
-                if ui.button(RichText::new("📂 Abrir Existente...").size(14.0)).clicked() {
-                    *action = Some(LauncherAction::OpenDefaultScene);
+            ui.add_space(10.0);
+            let fill = if selected { SELECTED_BG } else { Color32::TRANSPARENT };
+            let mut clicked = false;
+            egui::Frame::new().fill(fill).corner_radius(4.0).show(ui, |ui| {
+                ui.set_min_width(176.0);
+                if ui.selectable_label(selected, text).clicked() {
+                    clicked = true;
                 }
             });
+            if clicked {
+                // Navegar por la barra lateral abandona la vista de creación.
+                self.creating_project = false;
+                self.active_tab = tab;
+            }
         });
+        ui.add_space(2.0);
+    }
 
-        ui.add_space(12.0);
+    fn tab_title(ui: &mut Ui, title: &str, subtitle: &str) {
+        ui.label(RichText::new(title).size(20.0).strong().color(TEXT_MAIN));
+        ui.label(RichText::new(subtitle).size(12.0).color(TEXT_DIM));
+        ui.add_space(14.0);
+    }
 
-        // Modal / Formulario para crear un nuevo proyecto
-        if self.show_new_modal {
-            egui::Frame::canvas(ui.style())
-                .fill(Color32::from_rgb(28, 32, 42))
-                .stroke(Stroke::new(1.0, Color32::from_rgb(0, 160, 255)))
-                .corner_radius(6.0)
-                .show(ui, |ui| {
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        ui.add_space(12.0);
-                        ui.vertical(|ui| {
-                            ui.label(RichText::new("Crear Nuevo Proyecto en GlassEngine").size(15.0).strong().color(Color32::WHITE));
-                            ui.add_space(8.0);
+    /// Botón principal azul, como el NEW/CREATE del Hub viejo.
+    fn primary_button(ui: &mut Ui, label: &str, size: Vec2) -> egui::Response {
+        ui.add_sized(
+            size,
+            egui::Button::new(RichText::new(label).size(13.0).strong().color(Color32::WHITE)).fill(ACCENT),
+        )
+    }
 
-                            ui.horizontal(|ui| {
-                                ui.label("Nombre del Proyecto:");
-                                ui.text_edit_singleline(&mut self.new_name);
-                            });
-
-                            ui.horizontal(|ui| {
-                                ui.label("Ruta en Disco:");
-                                ui.text_edit_singleline(&mut self.new_path);
-                            });
-
-                            ui.horizontal(|ui| {
-                                ui.label("Plantilla Inicial:");
-                                egui::ComboBox::from_id_salt("template_combo")
-                                    .selected_text(self.new_template.display_name())
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(&mut self.new_template, ProjectTemplate::Platformer3D, ProjectTemplate::Platformer3D.display_name());
-                                        ui.selectable_value(&mut self.new_template, ProjectTemplate::PhysicsSandbox, ProjectTemplate::PhysicsSandbox.display_name());
-                                        ui.selectable_value(&mut self.new_template, ProjectTemplate::EmptyScene, ProjectTemplate::EmptyScene.display_name());
-                                    });
-                            });
-
-                            ui.add_space(8.0);
-                            ui.horizontal(|ui| {
-                                if ui.button(RichText::new("✓ Crear y Abrir en Editor").strong().color(Color32::from_rgb(80, 240, 120))).clicked() {
-                                    *action = Some(LauncherAction::CreateProject {
-                                        name: self.new_name.clone(),
-                                        path: PathBuf::from(&self.new_path),
-                                        template: self.new_template,
-                                    });
-                                    self.show_new_modal = false;
-                                }
-                                if ui.button("Cancelar").clicked() {
-                                    self.show_new_modal = false;
-                                }
-                            });
-                        });
-                        ui.add_space(12.0);
-                    });
-                    ui.add_space(8.0);
+    /// Pinta la miniatura de un proyecto en `rect`: su `thumbnail.png` si
+    /// la carpeta lo trae; si no, el mosaico generado con su inicial.
+    fn paint_thumbnail(&mut self, ui: &Ui, rect: egui::Rect, name: &str, dir: &Path) {
+        let key = dir.to_string_lossy().into_owned();
+        if !self.thumb_cache.contains_key(&key) {
+            let tex = std::fs::read(dir.join("thumbnail.png"))
+                .ok()
+                .and_then(|bytes| image::load_from_memory(&bytes).ok())
+                .map(|img| {
+                    let rgba = img.to_rgba8();
+                    let (w, h) = rgba.dimensions();
+                    let color = egui::ColorImage::from_rgba_unmultiplied(
+                        [w as usize, h as usize],
+                        &rgba,
+                    );
+                    ui.ctx().load_texture(
+                        format!("project_thumb_{key}"),
+                        color,
+                        egui::TextureOptions::LINEAR,
+                    )
                 });
-            ui.add_space(14.0);
+            self.thumb_cache.insert(key.clone(), tex);
         }
-
-        // Proyecto predeterminado del motor
-        Self::render_card(
-            ui,
-            "📁 GlassEngine Workspace Demo",
-            "/home/d3/Documentos/GlassEnginer (Proyecto Activo • Vulkan Offscreen Multi-View)",
-            "▶ Abrir en Editor",
-            Color32::from_rgb(0, 200, 160),
-            || {
-                *action = Some(LauncherAction::OpenDefaultScene);
-            },
+        match self.thumb_cache.get(&key).and_then(|t| t.as_ref()) {
+            Some(tex) => {
+                ui.painter().image(
+                    tex.id(),
+                    rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            }
+            None => paint_generated_tile(ui.painter(), rect, name),
+        }
+        // Borde del mosaico, para que la miniatura se lea como tarjeta.
+        ui.painter().rect_stroke(
+            rect,
+            4.0,
+            Stroke::new(1.0, CARD_STROKE),
+            egui::StrokeKind::Inside,
         );
     }
 
-    fn render_learn_tab(&mut self, ui: &mut Ui) {
-        ui.label(RichText::new("Guía de Inicio Rápido & Atajos de GlassEngine").size(18.0).strong().color(Color32::WHITE));
-        ui.add_space(12.0);
+    /// Tarjeta de proyecto para la cuadrícula: imagen de la escena arriba
+    /// y el nombre debajo, para ubicar cada proyecto de un vistazo. Un clic
+    /// en la tarjeta lo abre en el editor.
+    fn project_card(
+        &mut self,
+        ui: &mut Ui,
+        name: &str,
+        desc: &str,
+        dir: &Path,
+        action: &mut Option<LauncherAction>,
+    ) {
+        let size = Vec2::new(232.0, 178.0);
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        let painter = ui.painter();
+        painter.rect_filled(rect, 6.0, CARD_BG);
+        let stroke = if response.hovered() {
+            Stroke::new(1.5, ACCENT)
+        } else {
+            Stroke::new(1.0, CARD_STROKE)
+        };
+        painter.rect_stroke(rect, 6.0, stroke, egui::StrokeKind::Inside);
 
-        egui::Frame::canvas(ui.style())
-            .fill(Color32::from_rgb(26, 28, 36))
-            .corner_radius(6.0)
-            .show(ui, |ui| {
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(16.0);
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("🎮 Atajos en Ventana de Escena (Scene View)").size(15.0).strong().color(Color32::from_rgb(0, 190, 255)));
-                        ui.label("• [ Q ] Herramienta Mano: Desplazamiento libre (Pan) con clic y arrastre.");
-                        ui.label("• [ W ] Herramienta Mover: Gizmo 3D de traslación en ejes X, Y, Z.");
-                        ui.label("• [ E ] Herramienta Rotar: Anillos orbitales 3D para orientar el GameObject.");
-                        ui.label("• [ R ] Herramienta Escalar: Cubos ancla en extremos para redimensionar mallas.");
-                        ui.label("• [ Clic Izquierdo ]: Selección precisa de GameObjects, Cámaras y Luces mediante Raycasting.");
-                        ui.label("• [ Clic Derecho ]: Órbita 3D de la cámara de edición.");
-                        ui.label("• [ Rueda del Ratón ]: Zoom fluido hacia el punto de enfoque.");
-                        ui.label("• [ Delete ]: Eliminar el GameObject seleccionado.");
+        // Imagen de la escena, ocupando la parte alta de la tarjeta.
+        let img_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.min.x + 8.0, rect.min.y + 8.0),
+            egui::pos2(rect.max.x - 8.0, rect.min.y + 124.0),
+        );
+        self.paint_thumbnail(ui, img_rect, name, dir);
 
-                        ui.add_space(10.0);
-                        ui.label(RichText::new("🌿 Jerarquía estilo Unity (Hierarchy)").size(15.0).strong().color(Color32::from_rgb(0, 190, 255)));
-                        ui.label("• Arrastrar al centro de un objeto: Anida el objeto dentro de ese padre (Parenting).");
-                        ui.label("• Arrastrar al borde superior / inferior: Reordena con línea azul de inserción.");
-                        ui.label("• Arrastrar al fondo vacío: Desemparenta el objeto a la raíz.");
-                        ui.label("• Clic derecho en cualquier fila: Menú contextual completo de creación, duplicación y emparentado.");
+        // Nombre y detalle bajo la imagen.
+        painter.text(
+            egui::pos2(rect.min.x + 10.0, rect.min.y + 141.0),
+            egui::Align2::LEFT_CENTER,
+            truncate_chars(name, 30),
+            egui::FontId::proportional(14.0),
+            TEXT_MAIN,
+        );
+        painter.text(
+            egui::pos2(rect.min.x + 10.0, rect.min.y + 160.0),
+            egui::Align2::LEFT_CENTER,
+            truncate_chars(desc, 38),
+            egui::FontId::proportional(10.5),
+            TEXT_DIM,
+        );
 
-                        ui.add_space(10.0);
-                        ui.label(RichText::new("📜 Scripting C# (.NET CoreCLR)").size(15.0).strong().color(Color32::from_rgb(0, 190, 255)));
-                        ui.label("• Clases derivadas de GlassBehaviour con métodos Awake(), Update(), OnCollisionEnter().");
-                        ui.label("• Variables públicas editables en vivo desde el Inspector.");
-                    });
-                    ui.add_space(16.0);
-                });
-                ui.add_space(12.0);
-            });
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if response.clicked() {
+            *action = Some(LauncherAction::OpenDefaultScene);
+        }
     }
 
-    fn render_card<F: FnOnce()>(
-        ui: &mut Ui,
-        title: &str,
-        desc: &str,
-        btn_label: &str,
-        accent_color: Color32,
-        on_click: F,
-    ) {
-        let _full_width = ui.available_width().max(300.0);
-        egui::Frame::canvas(ui.style())
-            .fill(Color32::from_rgb(26, 29, 38))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(45, 50, 65)))
-            .corner_radius(6.0)
+    /// Fila de lista estilo Hub viejo: nombre, descripción/ruta y un botón.
+    fn render_row<F: FnOnce()>(ui: &mut Ui, title: &str, desc: &str, btn_label: &str, accent: Color32, on_click: F) {
+        egui::Frame::new()
+            .fill(CARD_BG)
+            .stroke(Stroke::new(1.0, CARD_STROKE))
+            .corner_radius(4.0)
             .show(ui, |ui| {
-                ui.add_space(12.0);
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    ui.add_space(14.0);
-                    // Barra de color acento lateral izquierda
-                    let (bar_rect, _) = ui.allocate_exact_size(Vec2::new(4.0, 56.0), egui::Sense::hover());
-                    ui.painter().rect_filled(bar_rect, 2.0, accent_color);
+                    ui.add_space(12.0);
+                    let (bar_rect, _) = ui.allocate_exact_size(Vec2::new(4.0, 40.0), egui::Sense::hover());
+                    ui.painter().rect_filled(bar_rect, 2.0, accent);
                     ui.add_space(10.0);
-
                     ui.vertical(|ui| {
-                        ui.label(RichText::new(title).size(15.0).strong().color(Color32::WHITE));
-                        ui.add_space(4.0);
-                        ui.label(RichText::new(desc).size(12.0).color(Color32::from_rgb(180, 185, 195)));
+                        ui.label(RichText::new(title).size(14.0).strong().color(TEXT_MAIN));
+                        ui.label(RichText::new(desc).size(11.5).color(TEXT_DIM));
                     });
-
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(14.0);
-                        if ui.add_sized(Vec2::new(160.0, 32.0), egui::Button::new(RichText::new(btn_label).size(13.0).strong().color(Color32::WHITE))).clicked() {
+                        ui.add_space(12.0);
+                        if ui.add_sized(Vec2::new(130.0, 28.0), egui::Button::new(RichText::new(btn_label).size(12.5).strong())).clicked() {
                             on_click();
                         }
                     });
                 });
+                ui.add_space(8.0);
+            });
+    }
+
+    fn render_samples_tab(&mut self, ui: &mut Ui, action: &mut Option<LauncherAction>) {
+        Self::tab_title(ui, "Ejemplos", "Escenas de ejemplo incluidas con el motor. Se abren al momento en el editor, sin descargar nada.");
+        Self::render_row(ui, "★ 3D Platformer & Physics Demo (Escena de Prueba)",
+            "Plataformas 3D, cuerpo rígido Rapier3D, script C# PlayerController (CoreCLR), audio Kira y shader PBR con luz solar.",
+            "▶ Abrir", ACCENT,
+            || *action = Some(LauncherAction::LoadSampleScene(SampleScenePreset::PlatformerDemo)));
+        ui.add_space(8.0);
+        Self::render_row(ui, "🎲 Physics Playground (Rapier3D)",
+            "Cubos rígidos apilados, colisiones Cuboid, fricción y restitución (rebote) ajustables.",
+            "▶ Abrir", Color32::from_rgb(255, 140, 0),
+            || *action = Some(LauncherAction::LoadSampleScene(SampleScenePreset::PhysicsPlayground)));
+        ui.add_space(8.0);
+        Self::render_row(ui, "💡 Audio & Dynamic Lighting Showcase",
+            "Luz direccional y puntual con gizmos de alcance y orientación, clips de audio y transformadas espaciales.",
+            "▶ Abrir", Color32::from_rgb(220, 180, 30),
+            || *action = Some(LauncherAction::LoadSampleScene(SampleScenePreset::AudioLightingShowcase)));
+        ui.add_space(8.0);
+        Self::render_row(ui, "🏆 Complete 3D Game Showcase (Juego Completo)",
+            "Juego completo: jugador físico, cámara orbital, plataformas, gemas recolectables con audio 3D, HUD Canvas (Score & Timer) y meta.",
+            "▶ Abrir", Color32::from_rgb(90, 180, 60),
+            || *action = Some(LauncherAction::LoadSampleScene(SampleScenePreset::FullSampleGame)));
+    }
+
+    fn render_projects_tab(&mut self, ui: &mut Ui, action: &mut Option<LauncherAction>) {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(RichText::new("Proyectos").size(20.0).strong().color(TEXT_MAIN));
+                ui.label(RichText::new("Tus proyectos de GlassEnginer en este equipo.").size(12.0).color(TEXT_DIM));
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Como en el Hub viejo: NEW en azul, ADD/Abrir en claro.
+                if Self::primary_button(ui, "➕ Nuevo", Vec2::new(110.0, 30.0)).clicked() {
+                    self.creating_project = true;
+                }
+                if ui.add_sized(Vec2::new(110.0, 30.0), egui::Button::new(RichText::new("📂 Abrir").size(13.0))).clicked() {
+                    *action = Some(LauncherAction::OpenDefaultScene);
+                }
+            });
+        });
+        ui.add_space(10.0);
+
+        // Buscador (como en el Hub viejo: filtra la lista al escribir).
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("🔎").size(13.0).color(TEXT_DIM));
+            ui.add_sized(Vec2::new(280.0, 24.0), egui::TextEdit::singleline(&mut self.search_filter).hint_text("Buscar proyectos…"));
+        });
+        ui.add_space(12.0);
+
+        // Cuadrícula de proyectos: cada uno en su cuadro, con la imagen de
+        // su escena y el nombre debajo (hoy: el proyecto de trabajo del
+        // motor; su carpeta es el directorio desde el que se lanza el Hub).
+        let filter = self.search_filter.to_lowercase();
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let projects: [(&str, &str, PathBuf); 1] = [(
+            "GlassEnginer",
+            "Proyecto del motor • En este equipo",
+            cwd,
+        )];
+        let mut shown = 0;
+        ui.spacing_mut().item_spacing = egui::vec2(14.0, 14.0);
+        ui.horizontal_wrapped(|ui| {
+            for (name, desc, dir) in &projects {
+                if !filter.is_empty() && !name.to_lowercase().contains(&filter) {
+                    continue;
+                }
+                shown += 1;
+                self.project_card(ui, name, desc, dir, action);
+            }
+        });
+        if shown == 0 {
+            ui.label(RichText::new("Ningún proyecto coincide con la búsqueda.").size(12.0).color(TEXT_DIM));
+        }
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new("Consejo: deja un archivo thumbnail.png en la carpeta de un proyecto y el Hub lo usará como miniatura.")
+                .size(11.5)
+                .color(TEXT_DIM),
+        );
+    }
+
+    /// Vista integrada de creación: el diálogo clásico del Hub viejo
+    /// (plantillas a la izquierda, ajustes a la derecha) convertido en una
+    /// página del Launcher, SIN ventana emergente.
+    fn render_create_view(&mut self, ui: &mut Ui, action: &mut Option<LauncherAction>) {
+        ui.label(RichText::new("Crear un proyecto nuevo").size(20.0).strong().color(TEXT_MAIN));
+        ui.label(
+            RichText::new("GlassEnginer v0.1.0-alpha • Todo se crea en tu equipo, sin conexión.")
+                .size(12.0)
+                .color(TEXT_DIM),
+        );
+        ui.add_space(16.0);
+
+        ui.horizontal_top(|ui| {
+            // ----- Plantillas (izquierda) -----
+            ui.vertical(|ui| {
+                ui.label(RichText::new("Plantillas").size(14.0).strong().color(TEXT_MAIN));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    for template in [
+                        ProjectTemplate::Platformer3D,
+                        ProjectTemplate::PhysicsSandbox,
+                        ProjectTemplate::EmptyScene,
+                    ] {
+                        self.template_card(ui, template);
+                        ui.add_space(10.0);
+                    }
+                });
+                ui.add_space(10.0);
+                ui.label(
+                    RichText::new(self.new_template.display_name()).size(12.0).color(TEXT_DIM),
+                );
+            });
+
+            ui.add_space(28.0);
+
+            // ----- Ajustes (derecha) -----
+            ui.vertical(|ui| {
+                ui.label(RichText::new("Ajustes").size(14.0).strong().color(TEXT_MAIN));
+                ui.add_space(8.0);
+                ui.label(RichText::new("Nombre del proyecto *").size(12.0).color(ACCENT_DARK));
+                ui.add_sized(Vec2::new(300.0, 26.0), egui::TextEdit::singleline(&mut self.new_name));
+                ui.add_space(10.0);
+                ui.label(RichText::new("Ubicación *").size(12.0).color(ACCENT_DARK));
+                ui.add_sized(Vec2::new(300.0, 26.0), egui::TextEdit::singleline(&mut self.new_path));
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new("La carpeta del proyecto se crea en esa ubicación.")
+                        .size(11.5)
+                        .color(TEXT_DIM),
+                );
+                ui.add_space(16.0);
+                ui.label(RichText::new("Así se verá en tu lista de proyectos:").size(12.0).color(TEXT_DIM));
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let (rect, _) = ui.allocate_exact_size(Vec2::new(104.0, 66.0), egui::Sense::hover());
+                    let preview_name = if self.new_name.trim().is_empty() {
+                        "Sin nombre"
+                    } else {
+                        self.new_name.trim()
+                    };
+                    paint_generated_tile(ui.painter(), rect, preview_name);
+                    ui.add_space(10.0);
+                    ui.vertical(|ui| {
+                        ui.add_space(10.0);
+                        ui.label(RichText::new(preview_name).size(14.0).strong().color(TEXT_MAIN));
+                        ui.label(RichText::new(self.new_template.short_name()).size(11.5).color(TEXT_DIM));
+                    });
+                });
+            });
+        });
+
+        ui.add_space(22.0);
+        ui.separator();
+        ui.add_space(12.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let name_ok = !self.new_name.trim().is_empty();
+            let create = ui.add_enabled_ui(name_ok, |ui| {
+                Self::primary_button(ui, "Crear proyecto", Vec2::new(150.0, 32.0))
+            });
+            if create.inner.clicked() {
+                *action = Some(LauncherAction::CreateProject {
+                    name: self.new_name.clone(),
+                    path: PathBuf::from(&self.new_path),
+                    template: self.new_template,
+                });
+                self.creating_project = false;
+            }
+            if ui.add_sized(Vec2::new(110.0, 32.0), egui::Button::new(RichText::new("Cancelar").size(13.0))).clicked() {
+                self.creating_project = false;
+            }
+        });
+    }
+
+    /// Tarjeta de plantilla seleccionable: mosaico con su glifo, nombre y
+    /// una línea de descripción, como las del Hub viejo.
+    fn template_card(&mut self, ui: &mut Ui, template: ProjectTemplate) {
+        let size = Vec2::new(168.0, 138.0);
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        let selected = self.new_template == template;
+        let painter = ui.painter();
+        let fill = if selected { SELECTED_BG } else { CARD_BG };
+        painter.rect_filled(rect, 6.0, fill);
+        let stroke = if selected {
+            Stroke::new(2.0, ACCENT)
+        } else if response.hovered() {
+            Stroke::new(1.0, ACCENT_DARK)
+        } else {
+            Stroke::new(1.0, CARD_STROKE)
+        };
+        painter.rect_stroke(rect, 6.0, stroke, egui::StrokeKind::Inside);
+
+        // Mosaico superior con el glifo de la plantilla.
+        let tile = egui::Rect::from_min_max(
+            egui::pos2(rect.min.x + 10.0, rect.min.y + 10.0),
+            egui::pos2(rect.max.x - 10.0, rect.min.y + 74.0),
+        );
+        painter.rect_filled(tile, 4.0, template.tile_color());
+        painter.text(
+            tile.center(),
+            egui::Align2::CENTER_CENTER,
+            template.glyph(),
+            egui::FontId::proportional(30.0),
+            Color32::WHITE,
+        );
+        painter.text(
+            egui::pos2(rect.center().x, rect.min.y + 92.0),
+            egui::Align2::CENTER_CENTER,
+            template.short_name(),
+            egui::FontId::proportional(13.5),
+            TEXT_MAIN,
+        );
+        // Descripción corta en dos líneas como máximo, centrada.
+        let (line1, line2) = wrap_two_lines(template.short_desc(), 25);
+        painter.text(
+            egui::pos2(rect.center().x, rect.min.y + 110.0),
+            egui::Align2::CENTER_CENTER,
+            line1,
+            egui::FontId::proportional(10.0),
+            TEXT_DIM,
+        );
+        if !line2.is_empty() {
+            painter.text(
+                egui::pos2(rect.center().x, rect.min.y + 123.0),
+                egui::Align2::CENTER_CENTER,
+                line2,
+                egui::FontId::proportional(10.0),
+                TEXT_DIM,
+            );
+        }
+
+        if response.clicked() {
+            self.new_template = template;
+        }
+    }
+
+    fn render_learn_tab(&mut self, ui: &mut Ui) {
+        Self::tab_title(ui, "Aprender", "Guía de inicio rápido y atajos del editor. Todo este contenido viene con el motor: no hace falta conexión.");
+        egui::Frame::new()
+            .fill(CARD_BG)
+            .stroke(Stroke::new(1.0, CARD_STROKE))
+            .corner_radius(6.0)
+            .show(ui, |ui| {
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("🎮 Atajos en la vista de escena").size(15.0).strong().color(ACCENT_DARK));
+                        ui.label("• [ Q ] Herramienta Mano: desplazamiento libre (Pan) con clic y arrastre.");
+                        ui.label("• [ W ] Herramienta Mover: gizmo 3D de traslación en ejes X, Y, Z.");
+                        ui.label("• [ E ] Herramienta Rotar: anillos orbitales para orientar el objeto.");
+                        ui.label("• [ R ] Herramienta Escalar: anclas en los extremos para redimensionar.");
+                        ui.label("• [ Clic izquierdo ]: selección de objetos, cámaras y luces por raycasting.");
+                        ui.label("• [ Clic derecho ]: órbita 3D de la cámara de edición.");
+                        ui.label("• [ Rueda del ratón ]: zoom hacia el punto de enfoque.");
+                        ui.label("• [ Delete ]: eliminar el objeto seleccionado.");
+                        ui.add_space(10.0);
+                        ui.label(RichText::new("🌿 Jerarquía estilo Unity").size(15.0).strong().color(ACCENT_DARK));
+                        ui.label("• Arrastrar al centro de un objeto: anidarlo dentro de ese padre.");
+                        ui.label("• Arrastrar al borde superior/inferior: reordenar con línea de inserción.");
+                        ui.label("• Arrastrar al fondo vacío: desemparentar a la raíz.");
+                        ui.label("• Clic derecho en una fila: menú contextual de creación y duplicado.");
+                        ui.add_space(10.0);
+                        ui.label(RichText::new("📜 Scripting C# (.NET CoreCLR)").size(15.0).strong().color(ACCENT_DARK));
+                        ui.label("• Clases derivadas de GlassBehaviour con Awake(), Update(), OnCollisionEnter().");
+                        ui.label("• Variables públicas editables en vivo desde el Inspector.");
+                        ui.label("• Y con el MCP nativo, una IA puede trabajar el proyecto directamente.");
+                    });
+                    ui.add_space(16.0);
+                });
                 ui.add_space(12.0);
             });
+    }
+
+    fn render_community_tab(&mut self, ui: &mut Ui) {
+        Self::tab_title(ui, "Comunidad", "El rincón para compartir lo que la gente crea con GlassEnginer.");
+        egui::Frame::new()
+            .fill(CARD_BG)
+            .stroke(Stroke::new(1.0, CARD_STROKE))
+            .corner_radius(6.0)
+            .show(ui, |ui| {
+                ui.add_space(16.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("🌐 Todavía no hay comunidad en línea").size(15.0).strong().color(TEXT_MAIN));
+                        ui.add_space(6.0);
+                        ui.label(RichText::new("Aquí podrás subir y descargar creaciones de otros usuarios: juegos, mapas, shaders del grafo (como los prefabricados de agua o láser) y proyectos de ejemplo.").size(12.5).color(TEXT_DIM));
+                        ui.add_space(6.0);
+                        ui.label(RichText::new("El Launcher trabaja siempre sin conexión; esta sección y la de Instalaciones serán las únicas que usen internet, y solo cuando el repositorio oficial del motor esté publicado.").size(12.5).color(TEXT_DIM));
+                        ui.add_space(12.0);
+                        // Sin repositorio en línea, el botón queda deshabilitado:
+                        // nada de prometer una red que aún no existe.
+                        ui.add_enabled(false, egui::Button::new(RichText::new("Explorar la comunidad (próximamente)").size(13.0)));
+                    });
+                    ui.add_space(16.0);
+                });
+                ui.add_space(16.0);
+            });
+    }
+
+    fn render_installs_tab(&mut self, ui: &mut Ui) {
+        Self::tab_title(ui, "Instalaciones", "Versiones del motor en este equipo. Desde aquí se descargará el motor y sus actualizaciones cuando el repositorio oficial esté en línea.");
+        Self::render_row(ui, "🧊 GlassEnginer v0.1.0-alpha",
+            "Instalada • Esta copia del motor (Vulkan 1.3, Rapier3D, Kira, CoreCLR 8)",
+            "✓ En uso", OK_GREEN,
+            || {});
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            // Igual que en Comunidad: sin repositorio publicado, no hay
+            // comprobación de actualizaciones que ofrecer.
+            ui.add_enabled(false, egui::Button::new(RichText::new("⬇ Buscar actualizaciones (próximamente)").size(13.0)));
+        });
+        ui.add_space(8.0);
+        ui.label(RichText::new("El plan de distribución: el Launcher se baja de GitHub y desde esta sección descarga el motor completo con sus ejemplos.").size(12.0).color(TEXT_DIM));
     }
 }

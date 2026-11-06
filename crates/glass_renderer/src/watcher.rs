@@ -53,8 +53,13 @@ impl AssetWatcher {
         for path in event.paths {
             if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
                 match ext {
-                    "blend" => {
-                        log::info!("Detectado cambio en archivo Blender: {:?}", path);
+                    // El FBX entra por el mismo puente que el .blend: Blender
+                    // lo importa de forma nativa y lo exporta a .glb, que es
+                    // el formato que el motor carga. Así el FBX tiene recarga
+                    // en caliente igual que el .blend, sin un importador
+                    // binario propio que mantener.
+                    "blend" | "fbx" => {
+                        log::info!("Detectado cambio en archivo de modelo (blend/fbx): {:?}", path);
                         let glb_path = path.with_extension("glb");
                         let input_path = path.clone();
                         let tx_clone = tx.clone();

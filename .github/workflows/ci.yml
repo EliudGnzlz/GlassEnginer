@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: Build y tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Instalar .NET 8 (SDK para compilar la parte C#)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Dependencias de sistema (Vulkan, X11/xkbcommon, ALSA, render por software)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvulkan-dev \
+            mesa-vulkan-drivers \
+            libxkbcommon-dev \
+            libxkbcommon-x11-0 \
+            libx11-dev \
+            libxcb1-dev \
+            libwayland-dev \
+            libasound2-dev \
+            pkg-config \
+            xvfb
+
+      - name: Localizar el ICD de lavapipe (el nombre varía según la versión de Mesa)
+        run: echo "VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)" >> "$GITHUB_ENV"
+
+      - name: Cache de cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build del workspace (editor)
+        run: cargo build --workspace --locked
+
+      - name: Build del juego puro (sin editor)
+        run: cargo build -p glass_app --no-default-features --locked
+
+      - name: Build de la parte C# (GlassEngine.Core)
+        run: dotnet build managed/GlassEngine.Core/GlassEngine.Core.csproj
+
+      - name: Tests del workspace
+        # xvfb + lavapipe: los tests que tocan Vulkan corren headless con el
+        # ICD de software de Mesa localizado en el paso anterior.
+        run: xvfb-run -a cargo test --workspace --locked

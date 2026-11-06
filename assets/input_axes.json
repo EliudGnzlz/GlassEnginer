@@ -1,0 +1,100 @@
+{
+ "axes": [
+  {
+   "name": "Horizontal",
+   "positive": "d",
+   "negative": "a",
+   "alt_positive": "right",
+   "alt_negative": "left",
+   "gravity": 3.0,
+   "dead": 0.001,
+   "sensitivity": 3.0,
+   "snap": false,
+   "invert": false
+  },
+  {
+   "name": "Vertical",
+   "positive": "w",
+   "negative": "s",
+   "alt_positive": "up",
+   "alt_negative": "down",
+   "gravity": 3.0,
+   "dead": 0.001,
+   "sensitivity": 3.0,
+   "snap": false,
+   "invert": false
+  },
+  {
+   "name": "Jump",
+   "positive": "space",
+   "negative": "",
+   "alt_positive": "",
+   "alt_negative": "",
+   "gravity": 1000.0,
+   "dead": 0.001,
+   "sensitivity": 1000.0,
+   "snap": false,
+   "invert": false
+  },
+  {
+   "name": "Fire1",
+   "positive": "mouse0",
+   "negative": "",
+   "alt_positive": "ctrl_left",
+   "alt_negative": "",
+   "gravity": 1000.0,
+   "dead": 0.001,
+   "sensitivity": 1000.0,
+   "snap": false,
+   "invert": false
+  },
+  {
+   "name": "Fire2",
+   "positive": "mouse1",
+   "negative": "",
+   "alt_positive": "",
+   "alt_negative": "",
+   "gravity": 1000.0,
+   "dead": 0.001,
+   "sensitivity": 1000.0,
+   "snap": false,
+   "invert": false
+  },
+  {
+   "name": "Fire3",
+   "positive": "mouse2",
+   "negative": "",
+   "alt_positive": "",
+   "alt_negative": "",
+   "gravity": 1000.0,
+   "dead": 0.001,
+   "sensitivity": 1000.0,
+   "snap": false,
+   "invert": false
+  },
+  {
+   "name": "Submit",
+   "positive": "return",
+   "negative": "",
+   "alt_positive": "",
+   "alt_negative": "",
+   "gravity": 1000.0,
+   "dead": 0.001,
+   "sensitivity": 1000.0,
+   "snap": false,
+   "invert": false
+  },
+  {
+   "name": "Cancel",
+   "positive": "escape",
+   "negative": "",
+   "alt_positive": "",
+   "alt_negative": "",
+   "gravity": 1000.0,
+   "dead": 0.001,
+   "sensitivity": 1000.0,
+   "snap": false,
+   "invert": false
+  }
+ ]
+}

@@ -1,0 +1,1103 @@
+[
+ {
+  "id": 1,
+  "active": true,
+  "name": "Main Camera",
+  "tag": "MainCamera",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "Camera"
+  ],
+  "transform": {
+   "position": [
+    3.5,
+    3.2,
+    9.5
+   ],
+   "rotation": [
+    -10.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": {
+   "fov": 60.0,
+   "near_clip": 0.1,
+   "far_clip": 1000.0,
+   "is_main": true
+  },
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 2,
+  "active": true,
+  "name": "Directional Light",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "Light"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    10.0,
+    0.0
+   ],
+   "rotation": [
+    -50.0,
+    30.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": {
+   "light_type": "Directional",
+   "color": [
+    1.0,
+    0.98,
+    0.92
+   ],
+   "intensity": 1.0,
+   "range": 10.0
+  },
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 3,
+  "active": true,
+  "name": "Static Floor",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    3.5,
+    -0.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    30.0,
+    1.0,
+    30.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.2,
+    0.55,
+    0.25
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 4,
+  "active": true,
+  "name": "Platform Tier 1",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    3.0,
+    0.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    2.0,
+    1.0,
+    2.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.85,
+    0.65,
+    0.2
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.0,
+    0.5,
+    1.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 5,
+  "active": true,
+  "name": "Platform Tier 2",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    6.0,
+    1.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    2.0,
+    1.0,
+    2.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.9,
+    0.35,
+    0.2
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.0,
+    0.5,
+    1.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 6,
+  "active": true,
+  "name": "Goal Platform (Finish)",
+  "tag": "Goal",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "AudioSource"
+  ],
+  "transform": {
+   "position": [
+    8.5,
+    2.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    2.0,
+    1.0,
+    2.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.1,
+    0.9,
+    0.3
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.0,
+    0.5,
+    1.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": {
+   "clip_name": "beep_880",
+   "volume": 1.0,
+   "pitch": 2.0,
+   "is_playing": false
+  },
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 7,
+  "active": true,
+  "name": "Coin Gem 1",
+  "tag": "Coin",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "AudioSource"
+  ],
+  "transform": {
+   "position": [
+    3.0,
+    1.8,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    45.0,
+    0.0
+   ],
+   "scale": [
+    0.5,
+    0.5,
+    0.5
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    0.84,
+    0.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": {
+   "clip_name": "beep_880",
+   "volume": 1.0,
+   "pitch": 1.4,
+   "is_playing": false
+  },
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 8,
+  "active": true,
+  "name": "Coin Gem 2",
+  "tag": "Coin",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "AudioSource"
+  ],
+  "transform": {
+   "position": [
+    6.0,
+    2.8,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    45.0,
+    0.0
+   ],
+   "scale": [
+    0.5,
+    0.5,
+    0.5
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    0.84,
+    0.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": {
+   "clip_name": "beep_880",
+   "volume": 1.0,
+   "pitch": 1.6,
+   "is_playing": false
+  },
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 9,
+  "active": true,
+  "name": "Player Hero 3D",
+  "tag": "Player",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody",
+   "Collider",
+   "Script",
+   "AudioSource"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.1,
+    0.75,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.PlayerController",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.PlayerController",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Dynamic",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.5,
+    0.5,
+    0.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": {
+   "clip_name": "beep_440",
+   "volume": 0.8,
+   "pitch": 1.0,
+   "is_playing": false
+  },
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 10,
+  "active": true,
+  "name": "HUD Canvas",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Canvas"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": {
+   "render_mode": "ScreenSpaceOverlay",
+   "reference_resolution": [
+    1920.0,
+    1080.0
+   ],
+   "match_width_or_height": 0.5
+  },
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    1920.0,
+    1080.0
+   ],
+   "anchor_min": [
+    0.0,
+    0.0
+   ],
+   "anchor_max": [
+    1.0,
+    1.0
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": [
+   20,
+   21,
+   22,
+   23,
+   24
+  ]
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "components": [
+   "RectTransform",
+   "Text"
+  ],
+  "id": 20,
+  "is_static": false,
+  "layer": "Default",
+  "light": null,
+  "mesh": null,
+  "name": "Titulo Inventario",
+  "parent": 10,
+  "physics": null,
+  "rect_transform": {
+   "anchored_position": [
+    0,
+    -280
+   ],
+   "size_delta": [
+    500,
+    50
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "script": null,
+  "script_data": null,
+  "tag": "Untagged",
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "ui_text": {
+   "text": "INVENTARIO \u2014 arrastra el objeto a otra casilla",
+   "font_size": 26,
+   "color": [
+    1,
+    1,
+    1,
+    1
+   ],
+   "font": "default",
+   "align": "Center"
+  },
+  "ui_image": null,
+  "ui_drag": null
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "components": [
+   "RectTransform",
+   "Button",
+   "Text",
+   "DragDrop",
+   "Script"
+  ],
+  "id": 21,
+  "is_static": false,
+  "layer": "Default",
+  "light": null,
+  "mesh": null,
+  "name": "Casilla 1",
+  "parent": 10,
+  "physics": null,
+  "rect_transform": {
+   "anchored_position": [
+    -140,
+    0
+   ],
+   "size_delta": [
+    110,
+    110
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "script": "GlassEngine.Core.Scripts.InventorySlotLogger",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.InventorySlotLogger",
+   "move_speed": 5.0,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "tag": "Untagged",
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": {
+   "interactable": true,
+   "target_graphic_color": [
+    0.16,
+    0.18,
+    0.22,
+    1.0
+   ],
+   "on_click_action": ""
+  },
+  "ui_text": {
+   "text": "1",
+   "font_size": 30,
+   "color": [
+    0.7,
+    0.75,
+    0.85,
+    1.0
+   ],
+   "font": "default",
+   "align": "Center"
+  },
+  "ui_image": null,
+  "ui_drag": {
+   "draggable": false,
+   "accepts_drop": true,
+   "on_begin_drag": "",
+   "on_drag_end": "",
+   "on_drop": "OnSlotDrop"
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "components": [
+   "RectTransform",
+   "Button",
+   "Text",
+   "DragDrop",
+   "Script"
+  ],
+  "id": 22,
+  "is_static": false,
+  "layer": "Default",
+  "light": null,
+  "mesh": null,
+  "name": "Casilla 2",
+  "parent": 10,
+  "physics": null,
+  "rect_transform": {
+   "anchored_position": [
+    0,
+    0
+   ],
+   "size_delta": [
+    110,
+    110
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "script": "GlassEngine.Core.Scripts.InventorySlotLogger",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.InventorySlotLogger",
+   "move_speed": 5.0,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "tag": "Untagged",
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": {
+   "interactable": true,
+   "target_graphic_color": [
+    0.16,
+    0.18,
+    0.22,
+    1.0
+   ],
+   "on_click_action": ""
+  },
+  "ui_text": {
+   "text": "2",
+   "font_size": 30,
+   "color": [
+    0.7,
+    0.75,
+    0.85,
+    1.0
+   ],
+   "font": "default",
+   "align": "Center"
+  },
+  "ui_image": null,
+  "ui_drag": {
+   "draggable": false,
+   "accepts_drop": true,
+   "on_begin_drag": "",
+   "on_drag_end": "",
+   "on_drop": "OnSlotDrop"
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "components": [
+   "RectTransform",
+   "Button",
+   "Text",
+   "DragDrop",
+   "Script"
+  ],
+  "id": 23,
+  "is_static": false,
+  "layer": "Default",
+  "light": null,
+  "mesh": null,
+  "name": "Casilla 3",
+  "parent": 10,
+  "physics": null,
+  "rect_transform": {
+   "anchored_position": [
+    140,
+    0
+   ],
+   "size_delta": [
+    110,
+    110
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "script": "GlassEngine.Core.Scripts.InventorySlotLogger",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.InventorySlotLogger",
+   "move_speed": 5.0,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "tag": "Untagged",
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": {
+   "interactable": true,
+   "target_graphic_color": [
+    0.16,
+    0.18,
+    0.22,
+    1.0
+   ],
+   "on_click_action": ""
+  },
+  "ui_text": {
+   "text": "3",
+   "font_size": 30,
+   "color": [
+    0.7,
+    0.75,
+    0.85,
+    1.0
+   ],
+   "font": "default",
+   "align": "Center"
+  },
+  "ui_image": null,
+  "ui_drag": {
+   "draggable": false,
+   "accepts_drop": true,
+   "on_begin_drag": "",
+   "on_drag_end": "",
+   "on_drop": "OnSlotDrop"
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "components": [
+   "RectTransform",
+   "Image",
+   "DragDrop",
+   "Script"
+  ],
+  "id": 24,
+  "is_static": false,
+  "layer": "Default",
+  "light": null,
+  "mesh": null,
+  "name": "Objeto Arrastrable",
+  "parent": 10,
+  "physics": null,
+  "rect_transform": {
+   "anchored_position": [
+    -140,
+    0
+   ],
+   "size_delta": [
+    90,
+    90
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "script": "GlassEngine.Core.Scripts.InventoryItemLogger",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.InventoryItemLogger",
+   "move_speed": 5.0,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "tag": "Untagged",
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "ui_text": null,
+  "ui_image": {
+   "sprite": "textures/test_icon.png",
+   "color": [
+    1,
+    1,
+    1,
+    1
+   ],
+   "preserve_aspect": false
+  },
+  "ui_drag": {
+   "draggable": true,
+   "accepts_drop": false,
+   "on_begin_drag": "OnItemBegin",
+   "on_drag_end": "OnItemEnd",
+   "on_drop": ""
+  }
+ }
+]

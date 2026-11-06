@@ -2,10 +2,14 @@ pub mod console;
 pub mod gizmo_3d;
 pub mod hierarchy;
 pub mod inspector;
+pub mod project;
+pub mod shader_graph;
 pub mod viewport;
 
 pub use console::ConsolePanel;
+pub use shader_graph::ShaderGraphEditorPanel;
 pub use gizmo_3d::GizmoAxis;
 pub use hierarchy::{EntityPreset, HierarchyPanel};
 pub use inspector::InspectorPanel;
+pub use project::ProjectPanel;
 pub use viewport::{CoordSpace, GameResolution, GizmoMode, PivotMode, PlayState, ViewportPanel, ViewportTab};

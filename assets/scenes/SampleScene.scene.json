@@ -11,9 +11,21 @@
       "Camera"
     ],
     "transform": {
-      "position": [3.5, 3.2, 9.5],
-      "rotation": [10.0, 0.0, 0.0],
-      "scale": [1.0, 1.0, 1.0]
+      "position": [
+        3.5,
+        3.2,
+        9.5
+      ],
+      "rotation": [
+        -10.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
     },
     "mesh": null,
     "script": null,
@@ -46,9 +58,21 @@
       "Light"
     ],
     "transform": {
-      "position": [0.0, 10.0, 0.0],
-      "rotation": [50.0, -30.0, 0.0],
-      "scale": [1.0, 1.0, 1.0]
+      "position": [
+        0.0,
+        10.0,
+        0.0
+      ],
+      "rotation": [
+        -50.0,
+        30.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
     },
     "mesh": null,
     "script": null,
@@ -58,7 +82,11 @@
     "camera": null,
     "light": {
       "light_type": "Directional",
-      "color": [1.0, 0.98, 0.92],
+      "color": [
+        1.0,
+        0.98,
+        0.92
+      ],
       "intensity": 1.0,
       "range": 10.0
     },
@@ -82,12 +110,28 @@
       "StaticCollider"
     ],
     "transform": {
-      "position": [3.5, -0.5, 0.0],
-      "rotation": [0.0, 0.0, 0.0],
-      "scale": [30.0, 1.0, 30.0]
+      "position": [
+        3.5,
+        -0.5,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        30.0,
+        1.0,
+        30.0
+      ]
     },
     "mesh": {
-      "color": [0.2, 0.55, 0.25],
+      "color": [
+        0.2,
+        0.55,
+        0.25
+      ],
       "wireframe": false,
       "shader": "pbr.vert.spv"
     },
@@ -98,8 +142,16 @@
       "mass": 0.0,
       "friction": 0.7,
       "restitution": 0.05,
-      "box_extents": [15.0, 0.5, 15.0],
-      "linear_velocity": [0.0, 0.0, 0.0]
+      "box_extents": [
+        15.0,
+        0.5,
+        15.0
+      ],
+      "linear_velocity": [
+        0.0,
+        0.0,
+        0.0
+      ]
     },
     "audio": null,
     "camera": null,
@@ -124,12 +176,28 @@
       "StaticCollider"
     ],
     "transform": {
-      "position": [3.0, 0.5, 0.0],
-      "rotation": [0.0, 0.0, 0.0],
-      "scale": [2.0, 1.0, 2.0]
+      "position": [
+        3.0,
+        0.5,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        2.0,
+        1.0,
+        2.0
+      ]
     },
     "mesh": {
-      "color": [0.85, 0.65, 0.2],
+      "color": [
+        0.85,
+        0.65,
+        0.2
+      ],
       "wireframe": false,
       "shader": "pbr.vert.spv"
     },
@@ -140,8 +208,16 @@
       "mass": 0.0,
       "friction": 0.7,
       "restitution": 0.05,
-      "box_extents": [1.0, 0.5, 1.0],
-      "linear_velocity": [0.0, 0.0, 0.0]
+      "box_extents": [
+        1.0,
+        0.5,
+        1.0
+      ],
+      "linear_velocity": [
+        0.0,
+        0.0,
+        0.0
+      ]
     },
     "audio": null,
     "camera": null,
@@ -166,12 +242,28 @@
       "StaticCollider"
     ],
     "transform": {
-      "position": [6.0, 1.5, 0.0],
-      "rotation": [0.0, 0.0, 0.0],
-      "scale": [2.0, 1.0, 2.0]
+      "position": [
+        6.0,
+        1.5,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        2.0,
+        1.0,
+        2.0
+      ]
     },
     "mesh": {
-      "color": [0.9, 0.35, 0.2],
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
       "wireframe": false,
       "shader": "pbr.vert.spv"
     },
@@ -182,8 +274,16 @@
       "mass": 0.0,
       "friction": 0.7,
       "restitution": 0.05,
-      "box_extents": [1.0, 0.5, 1.0],
-      "linear_velocity": [0.0, 0.0, 0.0]
+      "box_extents": [
+        1.0,
+        0.5,
+        1.0
+      ],
+      "linear_velocity": [
+        0.0,
+        0.0,
+        0.0
+      ]
     },
     "audio": null,
     "camera": null,
@@ -209,12 +309,28 @@
       "AudioSource"
     ],
     "transform": {
-      "position": [8.5, 2.5, 0.0],
-      "rotation": [0.0, 0.0, 0.0],
-      "scale": [2.0, 1.0, 2.0]
+      "position": [
+        8.5,
+        2.5,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        2.0,
+        1.0,
+        2.0
+      ]
     },
     "mesh": {
-      "color": [0.1, 0.9, 0.3],
+      "color": [
+        0.1,
+        0.9,
+        0.3
+      ],
       "wireframe": false,
       "shader": "pbr.vert.spv"
     },
@@ -225,8 +341,16 @@
       "mass": 0.0,
       "friction": 0.7,
       "restitution": 0.05,
-      "box_extents": [1.0, 0.5, 1.0],
-      "linear_velocity": [0.0, 0.0, 0.0]
+      "box_extents": [
+        1.0,
+        0.5,
+        1.0
+      ],
+      "linear_velocity": [
+        0.0,
+        0.0,
+        0.0
+      ]
     },
     "audio": {
       "clip_name": "beep_880",
@@ -256,12 +380,28 @@
       "AudioSource"
     ],
     "transform": {
-      "position": [3.0, 1.8, 0.0],
-      "rotation": [0.0, 45.0, 0.0],
-      "scale": [0.5, 0.5, 0.5]
+      "position": [
+        3.0,
+        1.8,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        45.0,
+        0.0
+      ],
+      "scale": [
+        0.5,
+        0.5,
+        0.5
+      ]
     },
     "mesh": {
-      "color": [1.0, 0.84, 0.0],
+      "color": [
+        1.0,
+        0.84,
+        0.0
+      ],
       "wireframe": false,
       "shader": "pbr.vert.spv"
     },
@@ -296,12 +436,28 @@
       "AudioSource"
     ],
     "transform": {
-      "position": [6.0, 2.8, 0.0],
-      "rotation": [0.0, 45.0, 0.0],
-      "scale": [0.5, 0.5, 0.5]
+      "position": [
+        6.0,
+        2.8,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        45.0,
+        0.0
+      ],
+      "scale": [
+        0.5,
+        0.5,
+        0.5
+      ]
     },
     "mesh": {
-      "color": [1.0, 0.84, 0.0],
+      "color": [
+        1.0,
+        0.84,
+        0.0
+      ],
       "wireframe": false,
       "shader": "pbr.vert.spv"
     },
@@ -339,12 +495,28 @@
       "AudioSource"
     ],
     "transform": {
-      "position": [0.0, 0.5, 0.0],
-      "rotation": [0.0, 0.0, 0.0],
-      "scale": [1.0, 1.0, 1.0]
+      "position": [
+        0.0,
+        0.5,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
     },
     "mesh": {
-      "color": [0.1, 0.75, 1.0],
+      "color": [
+        0.1,
+        0.75,
+        1.0
+      ],
       "wireframe": false,
       "shader": "pbr.vert.spv"
     },
@@ -360,8 +532,16 @@
       "mass": 1.0,
       "friction": 0.7,
       "restitution": 0.05,
-      "box_extents": [0.5, 0.5, 0.5],
-      "linear_velocity": [0.0, 0.0, 0.0]
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0.0,
+        0.0,
+        0.0
+      ]
     },
     "audio": {
       "clip_name": "beep_440",
@@ -391,9 +571,21 @@
       "Canvas"
     ],
     "transform": {
-      "position": [0.0, 0.0, 0.0],
-      "rotation": [0.0, 0.0, 0.0],
-      "scale": [1.0, 1.0, 1.0]
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
     },
     "mesh": null,
     "script": null,
@@ -404,15 +596,33 @@
     "light": null,
     "canvas": {
       "render_mode": "ScreenSpaceOverlay",
-      "reference_resolution": [1920.0, 1080.0],
+      "reference_resolution": [
+        1920.0,
+        1080.0
+      ],
       "match_width_or_height": 0.5
     },
     "rect_transform": {
-      "anchored_position": [0.0, 0.0],
-      "size_delta": [1920.0, 1080.0],
-      "anchor_min": [0.0, 0.0],
-      "anchor_max": [1.0, 1.0],
-      "pivot": [0.5, 0.5]
+      "anchored_position": [
+        0.0,
+        0.0
+      ],
+      "size_delta": [
+        1920.0,
+        1080.0
+      ],
+      "anchor_min": [
+        0.0,
+        0.0
+      ],
+      "anchor_max": [
+        1.0,
+        1.0
+      ],
+      "pivot": [
+        0.5,
+        0.5
+      ]
     },
     "ui_text": null,
     "ui_button": null,
@@ -434,9 +644,21 @@
       "Text"
     ],
     "transform": {
-      "position": [0.0, 0.0, 0.0],
-      "rotation": [0.0, 0.0, 0.0],
-      "scale": [1.0, 1.0, 1.0]
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
     },
     "mesh": null,
     "script": null,
@@ -447,16 +669,36 @@
     "light": null,
     "canvas": null,
     "rect_transform": {
-      "anchored_position": [20.0, 20.0],
-      "size_delta": [250.0, 40.0],
-      "anchor_min": [0.0, 0.0],
-      "anchor_max": [0.0, 0.0],
-      "pivot": [0.0, 0.0]
+      "anchored_position": [
+        20.0,
+        20.0
+      ],
+      "size_delta": [
+        250.0,
+        40.0
+      ],
+      "anchor_min": [
+        0.0,
+        0.0
+      ],
+      "anchor_max": [
+        0.0,
+        0.0
+      ],
+      "pivot": [
+        0.0,
+        0.0
+      ]
     },
     "ui_text": {
       "text": "Score: 0 / 100 pts",
       "font_size": 22.0,
-      "color": [1.0, 0.9, 0.2, 1.0]
+      "color": [
+        1.0,
+        0.9,
+        0.2,
+        1.0
+      ]
     },
     "ui_button": null,
     "parent": 10,

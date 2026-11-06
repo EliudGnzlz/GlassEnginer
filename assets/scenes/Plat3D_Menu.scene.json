@@ -1,0 +1,747 @@
+[
+ {
+  "id": 1,
+  "active": true,
+  "name": "Camara",
+  "tag": "MainCamera",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "Camera"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    3.4,
+    10.5
+   ],
+   "rotation": [
+    -12.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": {
+   "fov": 60.0,
+   "near_clip": 0.1,
+   "far_clip": 1000.0,
+   "is_main": true
+  },
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 2,
+  "active": true,
+  "name": "Luz Direccional",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "Light"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    10.0,
+    0.0
+   ],
+   "rotation": [
+    -50.0,
+    30.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": {
+   "light_type": "Directional",
+   "color": [
+    1.0,
+    0.98,
+    0.92
+   ],
+   "intensity": 1.0,
+   "range": 10.0
+  },
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 3,
+  "active": true,
+  "name": "Musica",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": "GlassEngine.Core.Scripts.Plat3DMusic",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DMusic",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 100,
+  "active": true,
+  "name": "Suelo",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -0.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    16.0,
+    1.0,
+    12.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.35,
+    0.65,
+    0.3
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    8.0,
+    0.5,
+    6.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 101,
+  "active": true,
+  "name": "Cubo Jugador",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.15,
+    0.6,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 102,
+  "active": true,
+  "name": "Cubo Enemigo",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    -3.5,
+    0.5,
+    -1.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.85,
+    0.2,
+    0.2
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 103,
+  "active": true,
+  "name": "Baliza Meta",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    3.5,
+    1.1,
+    -2.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.6,
+    2.2,
+    1.6
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    0.8,
+    0.15
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 10,
+  "active": true,
+  "name": "Canvas",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Canvas"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": {
+   "render_mode": "ScreenSpaceOverlay",
+   "reference_resolution": [
+    1920.0,
+    1080.0
+   ],
+   "match_width_or_height": 0.5
+  },
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    1920.0,
+    1080.0
+   ],
+   "anchor_min": [
+    0.0,
+    0.0
+   ],
+   "anchor_max": [
+    1.0,
+    1.0
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": [
+   11,
+   12,
+   13,
+   14
+  ]
+ },
+ {
+  "id": 11,
+  "active": true,
+  "name": "Titulo",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    -70.0
+   ],
+   "size_delta": [
+    900.0,
+    100.0
+   ],
+   "anchor_min": [
+    0.5,
+    1.0
+   ],
+   "anchor_max": [
+    0.5,
+    1.0
+   ],
+   "pivot": [
+    0.5,
+    1.0
+   ]
+  },
+  "ui_text": {
+   "text": "PLAT3D",
+   "font_size": 64.0,
+   "color": [
+    1.0,
+    0.85,
+    0.2,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "parent": 10,
+  "children": []
+ },
+ {
+  "id": 12,
+  "active": true,
+  "name": "Subtitulo",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    -185.0
+   ],
+   "size_delta": [
+    900.0,
+    40.0
+   ],
+   "anchor_min": [
+    0.5,
+    1.0
+   ],
+   "anchor_max": [
+    0.5,
+    1.0
+   ],
+   "pivot": [
+    0.5,
+    1.0
+   ]
+  },
+  "ui_text": {
+   "text": "Un plataformas 3D hecho con GlassEnginer",
+   "font_size": 22.0,
+   "color": [
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "parent": 10,
+  "children": []
+ },
+ {
+  "id": 13,
+  "active": true,
+  "name": "Boton JUGAR",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Button",
+   "Text",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": "GlassEngine.Core.Scripts.Plat3DMenuButtons",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DMenuButtons",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    -10.0
+   ],
+   "size_delta": [
+    300.0,
+    70.0
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": {
+   "text": "JUGAR",
+   "font_size": 30.0,
+   "color": [
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": {
+   "interactable": true,
+   "target_graphic_color": [
+    0.2,
+    0.65,
+    0.3,
+    1.0
+   ],
+   "on_click_action": "PlayGame"
+  },
+  "parent": 10,
+  "children": []
+ },
+ {
+  "id": 14,
+  "active": true,
+  "name": "Controles",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    26.0
+   ],
+   "size_delta": [
+    1150.0,
+    34.0
+   ],
+   "anchor_min": [
+    0.5,
+    0.0
+   ],
+   "anchor_max": [
+    0.5,
+    0.0
+   ],
+   "pivot": [
+    0.5,
+    0.0
+   ]
+  },
+  "ui_text": {
+   "text": "WASD mover - Espacio saltar - Clic espada - Shift proyectil - V camara 1a/3a persona",
+   "font_size": 18.0,
+   "color": [
+    0.85,
+    0.85,
+    0.85,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "parent": 10,
+  "children": []
+ }
+]

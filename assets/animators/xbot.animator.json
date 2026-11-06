@@ -1,0 +1,14 @@
+{
+  "parameters": [
+    { "name": "walk", "kind": "bool", "default": 0.0 }
+  ],
+  "states": [
+    { "name": "Idle", "clip": "Idle", "speed": 1.0, "loop": true },
+    { "name": "Walk", "clip": "Walk", "speed": 1.0, "loop": true }
+  ],
+  "transitions": [
+    { "from": "Idle", "to": "Walk", "conditions": [ { "param": "walk", "op": "eq", "value": 1.0 } ], "fade": 0.3 },
+    { "from": "Walk", "to": "Idle", "conditions": [ { "param": "walk", "op": "eq", "value": 0.0 } ], "fade": 0.3 }
+  ],
+  "default_state": "Idle"
+}

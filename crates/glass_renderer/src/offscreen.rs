@@ -33,8 +33,23 @@ impl OffscreenTarget {
         width: u32,
         height: u32,
     ) -> Result<Self, OffscreenError> {
+        Self::with_format(device, allocator, width, height, vk::Format::R8G8B8A8_UNORM)
+    }
+
+    /// Igual que `new` pero con el formato de color elegido por el
+    /// llamante. El bloque de gráficos (sombras + post) crea los
+    /// objetivos de escena en `R16G16B16A16_SFLOAT` (lineal HDR, para
+    /// que el bloom trabaje sobre brillos reales y el ACES viva en la
+    /// pasada final) y los objetivos de presentación en el UNORM de
+    /// siempre. El pase de profundidad no cambia (D32).
+    pub fn with_format(
+        device: Arc<ash::Device>,
+        allocator: &mut Allocator,
+        width: u32,
+        height: u32,
+        color_format: vk::Format,
+    ) -> Result<Self, OffscreenError> {
         let extent = vk::Extent2D { width, height };
-        let color_format = vk::Format::R8G8B8A8_UNORM;
         let depth_format = vk::Format::D32_SFLOAT;
 
         // 1. Textura de Color Offscreen (Muestreable por UI / egui)

@@ -1,0 +1,4058 @@
+[
+ {
+  "id": 1,
+  "active": true,
+  "name": "Camara",
+  "tag": "MainCamera",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "Camera",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    26.0,
+    11.4,
+    10.2
+   ],
+   "rotation": [
+    -34.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": "GlassEngine.Core.Scripts.Plat3DCameraFollow",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DCameraFollow",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": {
+   "fov": 60.0,
+   "near_clip": 0.1,
+   "far_clip": 1000.0,
+   "is_main": true
+  },
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 2,
+  "active": true,
+  "name": "Luz Direccional",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "Light"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    10.0,
+    0.0
+   ],
+   "rotation": [
+    -50.0,
+    30.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": {
+   "light_type": "Directional",
+   "color": [
+    1.0,
+    0.98,
+    0.92
+   ],
+   "intensity": 1.0,
+   "range": 10.0
+  },
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 3,
+  "active": true,
+  "name": "Musica",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": "GlassEngine.Core.Scripts.Plat3DMusic",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DMusic",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 10,
+  "active": true,
+  "name": "Jugador",
+  "tag": "Player",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody",
+   "Collider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    26.0,
+    4.25,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.15,
+    0.6,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DPlayerController",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DPlayerController",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Dynamic",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.5,
+    0.5,
+    0.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 20,
+  "active": true,
+  "name": "Proyectil 1",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -4.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.44,
+    0.44,
+    0.44
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    0.55,
+    0.1
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DProjectile",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DProjectile",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 21,
+  "active": true,
+  "name": "Proyectil 2",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -4.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.44,
+    0.44,
+    0.44
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    0.55,
+    0.1
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DProjectile",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DProjectile",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 22,
+  "active": true,
+  "name": "Proyectil 3",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -4.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.44,
+    0.44,
+    0.44
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    0.55,
+    0.1
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DProjectile",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DProjectile",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 23,
+  "active": true,
+  "name": "Proyectil 4",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -4.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.44,
+    0.44,
+    0.44
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    0.55,
+    0.1
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DProjectile",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DProjectile",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 24,
+  "active": true,
+  "name": "Proyectil 5",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -4.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.44,
+    0.44,
+    0.44
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    0.55,
+    0.1
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DProjectile",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DProjectile",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 25,
+  "active": true,
+  "name": "Proyectil 6",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -4.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.44,
+    0.44,
+    0.44
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    0.55,
+    0.1
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DProjectile",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DProjectile",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 30,
+  "active": true,
+  "name": "Barra de Vida Fondo",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    26.0,
+    5.7,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.7,
+    0.26,
+    0.08
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.12,
+    0.12,
+    0.14
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DHealthBar",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DHealthBar",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 31,
+  "active": true,
+  "name": "Barra de Vida Relleno",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    26.0,
+    5.7,
+    0.06
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.55,
+    0.17,
+    0.08
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.25,
+    0.9,
+    0.3
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DHealthFill",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DHealthFill",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 40,
+  "active": true,
+  "name": "Meta",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    104.3,
+    12.7,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1.6,
+    2.2,
+    1.6
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    0.8,
+    0.15
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DGoal",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DGoal",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 50,
+  "active": true,
+  "name": "Canvas",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Canvas"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": {
+   "render_mode": "ScreenSpaceOverlay",
+   "reference_resolution": [
+    1920.0,
+    1080.0
+   ],
+   "match_width_or_height": 0.5
+  },
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    1920.0,
+    1080.0
+   ],
+   "anchor_min": [
+    0.0,
+    0.0
+   ],
+   "anchor_max": [
+    1.0,
+    1.0
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": [
+   51,
+   52,
+   53
+  ]
+ },
+ {
+  "id": 51,
+  "active": true,
+  "name": "Titulo",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    20.0,
+    20.0
+   ],
+   "size_delta": [
+    700.0,
+    40.0
+   ],
+   "anchor_min": [
+    0.0,
+    0.0
+   ],
+   "anchor_max": [
+    0.0,
+    0.0
+   ],
+   "pivot": [
+    0.0,
+    0.0
+   ]
+  },
+  "ui_text": {
+   "text": "NIVEL 2 - EL LAGO",
+   "font_size": 26.0,
+   "color": [
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "parent": 50,
+  "children": []
+ },
+ {
+  "id": 52,
+  "active": true,
+  "name": "Instrucciones",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    20.0,
+    -52.0
+   ],
+   "size_delta": [
+    1250.0,
+    34.0
+   ],
+   "anchor_min": [
+    0.0,
+    1.0
+   ],
+   "anchor_max": [
+    0.0,
+    1.0
+   ],
+   "pivot": [
+    0.0,
+    1.0
+   ]
+  },
+  "ui_text": {
+   "text": "WASD mover - Espacio saltar - Clic espada - Shift proyectil - V camara - Cruza el lago en la barca",
+   "font_size": 19.0,
+   "color": [
+    0.9,
+    0.9,
+    0.9,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "parent": 50,
+  "children": []
+ },
+ {
+  "id": 53,
+  "active": true,
+  "name": "Aviso",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    20.0,
+    64.0
+   ],
+   "size_delta": [
+    700.0,
+    34.0
+   ],
+   "anchor_min": [
+    0.0,
+    0.0
+   ],
+   "anchor_max": [
+    0.0,
+    0.0
+   ],
+   "pivot": [
+    0.0,
+    0.0
+   ]
+  },
+  "ui_text": {
+   "text": "Vida: barra sobre el jugador - Si caes al agua, te ahogas",
+   "font_size": 19.0,
+   "color": [
+    0.6,
+    1.0,
+    0.6,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "parent": 50,
+  "children": []
+ },
+ {
+  "id": 60,
+  "active": true,
+  "name": "Agua",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    37.5,
+    0.3,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    15.0,
+    1.0,
+    9.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.15,
+    0.4,
+    0.8
+   ],
+   "wireframe": false,
+   "shader": "graph:agua",
+   "model": "plane"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DWaterZone",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DWaterZone",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 61,
+  "active": true,
+  "name": "Espuma",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    37.5,
+    0.36,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    0.07,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "graph:espuma"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DSplash",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DSplash",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 70,
+  "active": true,
+  "name": "Estela 1",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    37.5,
+    -3.0,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    0.001,
+    0.07,
+    0.001
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "graph:espuma"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DWakeRing",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DWakeRing",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 71,
+  "active": true,
+  "name": "Estela 2",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    37.5,
+    -3.0,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    0.001,
+    0.07,
+    0.001
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "graph:espuma"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DWakeRing",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DWakeRing",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 72,
+  "active": true,
+  "name": "Estela 3",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    37.5,
+    -3.0,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    0.001,
+    0.07,
+    0.001
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "graph:espuma"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DWakeRing",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DWakeRing",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 73,
+  "active": true,
+  "name": "Estela 4",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    37.5,
+    -3.0,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    0.001,
+    0.07,
+    0.001
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "graph:espuma"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DWakeRing",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DWakeRing",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 74,
+  "active": true,
+  "name": "Estela 5",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    37.5,
+    -3.0,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    0.001,
+    0.07,
+    0.001
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "graph:espuma"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DWakeRing",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DWakeRing",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 75,
+  "active": true,
+  "name": "Estela 6",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    37.5,
+    -3.0,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    0.001,
+    0.07,
+    0.001
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "graph:espuma"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DWakeRing",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DWakeRing",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 76,
+  "active": true,
+  "name": "Estela 7",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    37.5,
+    -3.0,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    0.001,
+    0.07,
+    0.001
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "graph:espuma"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DWakeRing",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DWakeRing",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 77,
+  "active": true,
+  "name": "Estela 8",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    37.5,
+    -3.0,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    0.001,
+    0.07,
+    0.001
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "graph:espuma"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DWakeRing",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DWakeRing",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 100,
+  "active": true,
+  "name": "Suelo Oeste",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    11.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    38.0,
+    1.0,
+    5.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.42,
+    0.55,
+    0.38
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    19.0,
+    0.5,
+    2.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 101,
+  "active": true,
+  "name": "Orilla Oeste",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    27.0,
+    3.35,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    6.0,
+    0.5,
+    5.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.5,
+    0.62,
+    0.45
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    3.0,
+    0.25,
+    2.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 102,
+  "active": true,
+  "name": "Orilla Este",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    48.5,
+    3.35,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    7.0,
+    0.5,
+    5.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.5,
+    0.62,
+    0.45
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    3.5,
+    0.25,
+    2.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 103,
+  "active": true,
+  "name": "Muelle Este",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    45.9,
+    1.35,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    2.4,
+    0.5,
+    3.4
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.52,
+    0.54,
+    0.5
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.2,
+    0.25,
+    1.7
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 104,
+  "active": true,
+  "name": "Suelo Este",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    80.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    56.0,
+    1.0,
+    5.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.42,
+    0.55,
+    0.38
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    28.0,
+    0.5,
+    2.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 105,
+  "active": true,
+  "name": "C1-1",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.5,
+    1.05,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    2.6,
+    0.5,
+    3.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.62,
+    0.5,
+    0.34
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.3,
+    0.25,
+    1.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 106,
+  "active": true,
+  "name": "C1-2",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    6.9,
+    1.9500000000000002,
+    -1.4
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    2.6,
+    0.5,
+    3.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.62,
+    0.5,
+    0.34
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.3,
+    0.25,
+    1.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 107,
+  "active": true,
+  "name": "C1-3",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    13.3,
+    2.85,
+    1.4
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    2.6,
+    0.5,
+    3.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.62,
+    0.5,
+    0.34
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.3,
+    0.25,
+    1.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 108,
+  "active": true,
+  "name": "Cubierta Tanque",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    19.8,
+    3.35,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    5.6,
+    0.5,
+    4.6
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.5,
+    0.62,
+    0.45
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    2.8,
+    0.25,
+    2.3
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 109,
+  "active": true,
+  "name": "Enemigo Tanque",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody",
+   "Collider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    19.8,
+    4.1,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.55,
+    0.1,
+    0.35
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DEnemyTank",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DEnemyTank",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Kinematic",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.5,
+    0.5,
+    0.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 110,
+  "active": true,
+  "name": "Pinchos Cubierta Tanque",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    21.8,
+    3.66,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1.6,
+    0.12,
+    4.6
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.25,
+    0.25,
+    0.28
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DSpikes",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DSpikes",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.8,
+    0.06,
+    2.3
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 111,
+  "active": true,
+  "name": "Torre Lago",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    26.0,
+    4.85,
+    -1.2
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    2.6,
+    0.5,
+    3.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.45,
+    0.5,
+    0.62
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.3,
+    0.25,
+    1.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 112,
+  "active": true,
+  "name": "Cima Lago",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    31.6,
+    6.35,
+    0.8
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    3.4,
+    0.5,
+    3.6
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.45,
+    0.5,
+    0.62
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.7,
+    0.25,
+    1.8
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 113,
+  "active": true,
+  "name": "Descenso Lago 1",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    37.6,
+    4.95,
+    -0.8
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    2.4,
+    0.5,
+    3.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.52,
+    0.54,
+    0.5
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.2,
+    0.25,
+    1.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 114,
+  "active": true,
+  "name": "Descenso Lago 2",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    43.6,
+    3.55,
+    0.8
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    2.4,
+    0.5,
+    3.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.52,
+    0.54,
+    0.5
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.2,
+    0.25,
+    1.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 115,
+  "active": true,
+  "name": "Barca",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody",
+   "Collider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    37.5,
+    0.55,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    4.2,
+    0.5,
+    3.2
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.9,
+    0.6,
+    0.2
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DBoat",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DBoat",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Kinematic",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    2.1,
+    0.25,
+    1.6
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 116,
+  "active": true,
+  "name": "Enemigo Orilla",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody",
+   "Collider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    27.0,
+    4.1,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.95,
+    0.45,
+    0.1
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DEnemyFast",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DEnemyFast",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Kinematic",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.5,
+    0.5,
+    0.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 117,
+  "active": true,
+  "name": "C2-1",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    54.6,
+    4.45,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    2.4,
+    0.5,
+    3.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.62,
+    0.5,
+    0.34
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.2,
+    0.25,
+    1.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 118,
+  "active": true,
+  "name": "C2-2",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    61.4,
+    5.55,
+    -1.4
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    2.4,
+    0.5,
+    3.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.62,
+    0.5,
+    0.34
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.2,
+    0.25,
+    1.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 119,
+  "active": true,
+  "name": "C2-3",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    68.2,
+    6.65,
+    1.4
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    2.4,
+    0.5,
+    3.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.62,
+    0.5,
+    0.34
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.2,
+    0.25,
+    1.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 120,
+  "active": true,
+  "name": "C2-4",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    75.0,
+    7.75,
+    -1.4
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    2.4,
+    0.5,
+    3.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.62,
+    0.5,
+    0.34
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.2,
+    0.25,
+    1.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 121,
+  "active": true,
+  "name": "Movil Larga C2",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody",
+   "Collider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    82.6,
+    7.75,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    3.0,
+    0.5,
+    3.5
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.9,
+    0.6,
+    0.2
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DMovingPlatformLong",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DMovingPlatformLong",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Kinematic",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.5,
+    0.25,
+    1.75
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 122,
+  "active": true,
+  "name": "C2-5",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    90.2,
+    8.35,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    2.6,
+    0.5,
+    3.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.62,
+    0.5,
+    0.34
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.3,
+    0.25,
+    1.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 123,
+  "active": true,
+  "name": "Movil Vertical Final",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody",
+   "Collider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    96.4,
+    9.85,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    3.0,
+    0.5,
+    3.5
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.9,
+    0.6,
+    0.2
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DMovingPlatformVertical",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DMovingPlatformVertical",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Kinematic",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.5,
+    0.25,
+    1.75
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 124,
+  "active": true,
+  "name": "Cubierta Final",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    103.0,
+    11.35,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    5.6,
+    0.5,
+    4.6
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.5,
+    0.62,
+    0.45
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    2.8,
+    0.25,
+    2.3
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 125,
+  "active": true,
+  "name": "Enemigo Final",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody",
+   "Collider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    103.0,
+    12.1,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.95,
+    0.45,
+    0.1
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DEnemyFast",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DEnemyFast",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Kinematic",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.5,
+    0.5,
+    0.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 126,
+  "active": true,
+  "name": "Enemigo Suelo Este",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody",
+   "Collider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    58.0,
+    1.0,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.85,
+    0.2,
+    0.2
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DEnemy",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DEnemy",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Kinematic",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.5,
+    0.5,
+    0.5
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 127,
+  "active": true,
+  "name": "Mirador Oeste",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    10.5,
+    4.35,
+    2.6
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    2.2,
+    0.5,
+    2.2
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.52,
+    0.54,
+    0.5
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.1,
+    0.25,
+    1.1
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 128,
+  "active": true,
+  "name": "Repisa Alta Este",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    85.0,
+    6.55,
+    -2.4
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    2.2,
+    0.5,
+    2.2
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.52,
+    0.54,
+    0.5
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.1,
+    0.25,
+    1.1
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 129,
+  "active": true,
+  "name": "Pinchos C1 Oeste",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    4.5,
+    0.56,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    11.0,
+    0.12,
+    4.6
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.25,
+    0.25,
+    0.28
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DSpikes",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DSpikes",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    5.5,
+    0.06,
+    2.3
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 130,
+  "active": true,
+  "name": "Pinchos C1 Este",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    15.0,
+    0.56,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    10.0,
+    0.12,
+    4.6
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.25,
+    0.25,
+    0.28
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DSpikes",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DSpikes",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    5.0,
+    0.06,
+    2.3
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 131,
+  "active": true,
+  "name": "Pinchos C1 Punta",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    23.5,
+    0.56,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    13.0,
+    0.12,
+    4.6
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.25,
+    0.25,
+    0.28
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DSpikes",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DSpikes",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    6.5,
+    0.06,
+    2.3
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 132,
+  "active": true,
+  "name": "Pinchos C2 A",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    57.0,
+    0.56,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    3.0,
+    0.12,
+    4.6
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.25,
+    0.25,
+    0.28
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DSpikes",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DSpikes",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.5,
+    0.06,
+    2.3
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 133,
+  "active": true,
+  "name": "Pinchos C2 B",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    65.0,
+    0.56,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    12.0,
+    0.12,
+    4.6
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.25,
+    0.25,
+    0.28
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DSpikes",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DSpikes",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    6.0,
+    0.06,
+    2.3
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 134,
+  "active": true,
+  "name": "Pinchos C2 C",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    76.0,
+    0.56,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    10.0,
+    0.12,
+    4.6
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.25,
+    0.25,
+    0.28
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DSpikes",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DSpikes",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    5.0,
+    0.06,
+    2.3
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 135,
+  "active": true,
+  "name": "Pinchos C2 D",
+  "tag": "Default",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    93.0,
+    0.56,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    12.0,
+    0.12,
+    4.6
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.25,
+    0.25,
+    0.28
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "script": "GlassEngine.Core.Scripts.Plat3DSpikes",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Plat3DSpikes",
+   "move_speed": 4.2,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    6.0,
+    0.06,
+    2.3
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ }
+]

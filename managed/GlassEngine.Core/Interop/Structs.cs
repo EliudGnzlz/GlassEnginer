@@ -70,3 +70,30 @@ public struct TransformData
         Scale = new Vector3(1f, 1f, 1f)
     };
 }
+
+/// <summary>
+/// Especificación de spawn de una entidad: el espejo gestionado de
+/// <c>SpawnSpecFfi</c> en Rust (glass_scripting::bindings). El layout
+/// secuencial ES el contrato: punteros primero, el u64 del padre, los
+/// vectores, el i32 de física y el byte de color; cualquier cambio de
+/// orden o de tipo rompe la frontera en silencio, y en Rust hay un test
+/// de offsets que fija el otro lado. Las cadenas viajan como punteros
+/// UTF-8 con NUL (IntPtr.Zero = ausente) y son propiedad del llamante:
+/// el motor las copia durante la llamada.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct SpawnSpecData
+{
+    public IntPtr Name;
+    public IntPtr Model;
+    public IntPtr Script;
+    public ulong ParentId;
+    public Vector3 Position;
+    public Quaternion Rotation;
+    public Vector3 Scale;
+    public Vector3 Color;
+    /// <summary>Ver <c>SpawnPhysicsKind</c>: 0 sin física, 1 estático, 2 dinámico, 3 cinemático.</summary>
+    public int Physics;
+    /// <summary>1 si Color debe aplicarse; 0 deja el color por defecto de la malla.</summary>
+    public byte HasColor;
+}

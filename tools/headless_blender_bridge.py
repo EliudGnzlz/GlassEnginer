@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 skill_headless_blender_bridge: Headless execution of Blender export pipeline.
-Converts .blend to standard .glb and validates binary glTF headers.
+Converts .blend and .fbx to standard .glb and validates binary glTF headers.
 """
 
 import sys
@@ -16,20 +16,32 @@ import sys
 argv = sys.argv
 try:
     idx = argv.index("--") + 1
-    input_blend = argv[idx]
+    input_file = argv[idx]
     output_glb = argv[idx + 1]
 except (ValueError, IndexError):
     print("Error: Argumentos de exportación incorrectos")
     sys.exit(1)
 
-bpy.ops.wm.open_mainfile(filepath=input_blend)
+import os
+ext = os.path.splitext(input_file)[1].lower()
+if ext == ".fbx":
+    # Escena vacía e importar el FBX con el importador de Blender.
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    try:
+        bpy.ops.import_scene.fbx(filepath=input_file)
+    except (AttributeError, RuntimeError):
+        # Blender >= 5: el operador pasó a wm.fbx_import.
+        bpy.ops.wm.fbx_import(filepath=input_file)
+else:
+    bpy.ops.wm.open_mainfile(filepath=input_file)
 bpy.ops.export_scene.gltf(filepath=output_glb, export_format='GLB')
 print(f"Exportado exitosamente: {output_glb}")
 """
 
 def export_blend_to_glb(blend_path, glb_path):
+    # Acepta .blend y .fbx: el script de Blender ramifica por extensión.
     if not os.path.isfile(blend_path):
-        return False, f"Archivo .blend no encontrado: {blend_path}"
+        return False, f"Archivo de modelo no encontrado: {blend_path}"
 
     script_path = "/tmp/glass_blender_export.py"
     with open(script_path, "w", encoding="utf-8") as f:
@@ -57,7 +69,7 @@ def export_blend_to_glb(blend_path, glb_path):
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Uso: headless_blender_bridge.py <input.blend> <output.glb>")
+        print("Uso: headless_blender_bridge.py <input.blend|input.fbx> <output.glb>")
         sys.exit(1)
     ok, msg = export_blend_to_glb(sys.argv[1], sys.argv[2])
     print(msg)

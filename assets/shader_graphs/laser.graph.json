@@ -1,0 +1,281 @@
+{
+ "name": "laser",
+ "nodes": [
+  {
+   "id": 1,
+   "kind": {
+    "kind": "Uv"
+   },
+   "position": [
+    0,
+    0
+   ]
+  },
+  {
+   "id": 2,
+   "kind": {
+    "kind": "Float",
+    "value": -0.5
+   },
+   "position": [
+    60,
+    60
+   ]
+  },
+  {
+   "id": 3,
+   "kind": {
+    "kind": "ChannelR"
+   },
+   "position": [
+    120,
+    0
+   ]
+  },
+  {
+   "id": 4,
+   "kind": {
+    "kind": "Add"
+   },
+   "position": [
+    180,
+    0
+   ]
+  },
+  {
+   "id": 5,
+   "kind": {
+    "kind": "Abs"
+   },
+   "position": [
+    240,
+    0
+   ]
+  },
+  {
+   "id": 6,
+   "kind": {
+    "kind": "Smoothstep",
+    "edge0": 0.0,
+    "edge1": 0.5
+   },
+   "position": [
+    300,
+    0
+   ]
+  },
+  {
+   "id": 7,
+   "kind": {
+    "kind": "OneMinus"
+   },
+   "position": [
+    360,
+    0
+   ]
+  },
+  {
+   "id": 8,
+   "kind": {
+    "kind": "Power",
+    "exponent": 3.0
+   },
+   "position": [
+    420,
+    0
+   ]
+  },
+  {
+   "id": 9,
+   "kind": {
+    "kind": "Color",
+    "rgba": [
+     1.0,
+     0.08,
+     0.05,
+     1.0
+    ]
+   },
+   "position": [
+    420,
+    80
+   ]
+  },
+  {
+   "id": 10,
+   "kind": {
+    "kind": "Color",
+    "rgba": [
+     1.0,
+     0.97,
+     0.92,
+     1.0
+    ]
+   },
+   "position": [
+    480,
+    140
+   ]
+  },
+  {
+   "id": 11,
+   "kind": {
+    "kind": "Mix"
+   },
+   "position": [
+    540,
+    60
+   ]
+  },
+  {
+   "id": 12,
+   "kind": {
+    "kind": "Float",
+    "value": 3.2
+   },
+   "position": [
+    540,
+    140
+   ]
+  },
+  {
+   "id": 13,
+   "kind": {
+    "kind": "Multiply"
+   },
+   "position": [
+    600,
+    120
+   ]
+  },
+  {
+   "id": 14,
+   "kind": {
+    "kind": "Float",
+    "value": 0.8
+   },
+   "position": [
+    600,
+    200
+   ]
+  },
+  {
+   "id": 15,
+   "kind": {
+    "kind": "Add"
+   },
+   "position": [
+    660,
+    140
+   ]
+  },
+  {
+   "id": 16,
+   "kind": {
+    "kind": "Multiply"
+   },
+   "position": [
+    720,
+    80
+   ]
+  },
+  {
+   "id": 17,
+   "kind": {
+    "kind": "Output"
+   },
+   "position": [
+    800,
+    80
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "from_node": 1,
+   "to_node": 3,
+   "to_input": "x"
+  },
+  {
+   "from_node": 3,
+   "to_node": 4,
+   "to_input": "a"
+  },
+  {
+   "from_node": 2,
+   "to_node": 4,
+   "to_input": "b"
+  },
+  {
+   "from_node": 4,
+   "to_node": 5,
+   "to_input": "x"
+  },
+  {
+   "from_node": 5,
+   "to_node": 6,
+   "to_input": "x"
+  },
+  {
+   "from_node": 6,
+   "to_node": 7,
+   "to_input": "x"
+  },
+  {
+   "from_node": 7,
+   "to_node": 8,
+   "to_input": "x"
+  },
+  {
+   "from_node": 9,
+   "to_node": 11,
+   "to_input": "a"
+  },
+  {
+   "from_node": 10,
+   "to_node": 11,
+   "to_input": "b"
+  },
+  {
+   "from_node": 8,
+   "to_node": 11,
+   "to_input": "t"
+  },
+  {
+   "from_node": 8,
+   "to_node": 13,
+   "to_input": "a"
+  },
+  {
+   "from_node": 12,
+   "to_node": 13,
+   "to_input": "b"
+  },
+  {
+   "from_node": 14,
+   "to_node": 15,
+   "to_input": "a"
+  },
+  {
+   "from_node": 13,
+   "to_node": 15,
+   "to_input": "b"
+  },
+  {
+   "from_node": 11,
+   "to_node": 16,
+   "to_input": "a"
+  },
+  {
+   "from_node": 15,
+   "to_node": 16,
+   "to_input": "b"
+  },
+  {
+   "from_node": 16,
+   "to_node": 17,
+   "to_input": "color"
+  }
+ ],
+ "transparent": false
+}

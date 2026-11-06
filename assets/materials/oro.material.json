@@ -1,0 +1,11 @@
+{
+  "albedo": [1.0, 0.766, 0.336, 1.0],
+  "texture": "",
+  "metallic": 1.0,
+  "roughness": 0.28,
+  "emissive": [0.0, 0.0, 0.0],
+  "emissive_intensity": 0.0,
+  "tiling": [1.0, 1.0],
+  "offset": [0.0, 0.0],
+  "transparent": false
+}

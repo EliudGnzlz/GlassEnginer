@@ -9,7 +9,6 @@ license.workspace = true
 default = ["editor"]
 editor = [
     "dep:glass_editor",
-    "dep:glass_mcp",
     "dep:egui",
     "dep:egui-winit",
     "dep:egui-ash-renderer",
@@ -22,6 +21,7 @@ glass_scripting.workspace = true
 glass_audio.workspace = true
 glass_physics.workspace = true
 ash.workspace = true
+gpu-allocator.workspace = true
 winit.workspace = true
 libc = "0.2"
 log.workspace = true
@@ -29,7 +29,10 @@ env_logger.workspace = true
 
 # Dependencias opcionales exclusivas del Modo Editor (desactivadas en Standalone Game Runtime)
 glass_editor = { workspace = true, optional = true }
-glass_mcp = { workspace = true, optional = true }
+glass_mcp.workspace = true
 egui = { workspace = true, optional = true }
 egui-winit = { workspace = true, optional = true }
 egui-ash-renderer = { workspace = true, optional = true }
+serde_json.workspace = true
+gilrs = "0.10"
+image.workspace = true

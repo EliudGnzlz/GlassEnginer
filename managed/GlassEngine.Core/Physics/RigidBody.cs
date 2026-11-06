@@ -37,6 +37,21 @@ public sealed class RigidBody
         return RuntimeBridge.AttachSphereCollider(Handle, radius, restitution, friction);
     }
 
+    /// <summary>Cápsula sobre el eje Y: halfHeight = mitad del tramo recto
+    /// (sin casquetes); la altura total es 2·(halfHeight + radius).</summary>
+    public ulong AttachCapsuleCollider(float halfHeight, float radius, float restitution = 0.0f, float friction = 0.5f)
+    {
+        if (!IsValid) return 0;
+        return RuntimeBridge.AttachCapsuleCollider(Handle, halfHeight, radius, restitution, friction);
+    }
+
+    /// <summary>Cilindro sobre el eje Y: halfHeight = mitad de la altura total.</summary>
+    public ulong AttachCylinderCollider(float halfHeight, float radius, float restitution = 0.0f, float friction = 0.5f)
+    {
+        if (!IsValid) return 0;
+        return RuntimeBridge.AttachCylinderCollider(Handle, halfHeight, radius, restitution, friction);
+    }
+
     public bool ApplyImpulse(Vector3 impulse)
     {
         if (!IsValid) return false;

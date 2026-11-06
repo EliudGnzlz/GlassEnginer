@@ -1,16 +1,73 @@
-use crate::mesh::GpuMesh;
+use crate::mesh::{GltfImageData, GltfMaterial, GpuMesh, GpuTexture, MeshLoader, PrimitiveRange};
+use ash::vk;
 use gpu_allocator::vulkan::Allocator;
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 pub struct AssetCache {
     pub meshes: HashMap<String, GpuMesh>,
+    /// Mallas GPU de los modelos CON piel, bajo la misma clave que en
+    /// `meshes`: misma geometría pero con el formato `SkinnedVertex`
+    /// (articulaciones y pesos entrelazados) para el pipeline con piel.
+    /// La entrada de `meshes` se mantiene como respaldo rígido.
+    pub skinned_meshes: HashMap<String, GpuMesh>,
+    /// La piel importada de cada modelo con piel (grafo de nodos,
+    /// articulaciones y matrices inversas de unión), datos CPU.
+    pub skins: HashMap<String, crate::skin::SkinData>,
+    /// Los clips de animación importados de cada modelo con piel.
+    pub animations: HashMap<String, Vec<crate::skin::AnimationClip>>,
+    /// Materiales PBR importados de cada modelo, por la misma clave que
+    /// `meshes`. Datos CPU: el render los lee para los push constants y la
+    /// subida de texturas a GPU.
+    pub materials: HashMap<String, Vec<GltfMaterial>>,
+    /// Material principal (primera primitiva) de cada modelo, si lo tiene.
+    pub primary_materials: HashMap<String, GltfMaterial>,
+    /// Imágenes decodificadas (RGBA8) de cada modelo, para subir a GPU.
+    pub images: HashMap<String, Vec<GltfImageData>>,
+    /// Rangos de índices por primitiva de cada modelo, por la misma clave
+    /// que `meshes`: el bucle de dibujo emite un lote por primitiva, cada
+    /// uno con su material y su textura.
+    pub primitive_ranges: HashMap<String, Vec<PrimitiveRange>>,
+    /// Texturas ya subidas a VRAM, por (clave de modelo, índice de imagen
+    /// dentro del .glb): cada material puede usar una imagen distinta.
+    pub textures: HashMap<(String, usize), GpuTexture>,
+    /// Descriptor set (set 0 del pipeline PBR) por (modelo, imagen).
+    pub texture_sets: HashMap<(String, usize), vk::DescriptorSet>,
+    /// Set de la textura blanca 1×1 por defecto: lo que se enlaza cuando la
+    /// entidad no tiene textura, para que el shader siempre tenga un set
+    /// válido y el color plano se comporte como antes.
+    pub default_set: Option<vk::DescriptorSet>,
+    default_texture: Option<GpuTexture>,
+    sampler: Option<vk::Sampler>,
+    descriptor_pool: Option<vk::DescriptorPool>,
+    /// Último tick en que cada modelo fue dibujado o insertado (para la
+    /// expulsión de ociosos). Mutex interior: marcar uso debe ser posible
+    /// con la caché en lectura compartida durante el bucle de dibujo.
+    last_used: Mutex<HashMap<String, u64>>,
+    /// Contador de frames/ticks del motor para medir la ociosidad.
+    tick: AtomicU64,
 }
 
 impl Default for AssetCache {
     fn default() -> Self {
         Self {
             meshes: HashMap::new(),
+            skinned_meshes: HashMap::new(),
+            skins: HashMap::new(),
+            animations: HashMap::new(),
+            materials: HashMap::new(),
+            primary_materials: HashMap::new(),
+            images: HashMap::new(),
+            primitive_ranges: HashMap::new(),
+            textures: HashMap::new(),
+            texture_sets: HashMap::new(),
+            default_set: None,
+            default_texture: None,
+            sampler: None,
+            descriptor_pool: None,
+            last_used: Mutex::new(HashMap::new()),
+            tick: AtomicU64::new(0),
         }
     }
 }
@@ -35,6 +92,322 @@ impl AssetCache {
         } else {
             log::info!("Malla '{}' registrada en AssetCache", key);
         }
+        self.touch(&key);
+    }
+
+    /// Registra la malla CON PIEL de un modelo (formato `SkinnedVertex`),
+    /// con la misma semántica de reemplazo que `insert_mesh`: la anterior
+    /// se destruye (recarga en caliente de un rig editado en Blender).
+    pub fn insert_skinned_mesh(
+        &mut self,
+        device: &ash::Device,
+        allocator: &mut Allocator,
+        name: impl Into<String>,
+        mesh: GpuMesh,
+    ) {
+        let key = name.into();
+        if let Some(mut old_mesh) = self.skinned_meshes.insert(key.clone(), mesh) {
+            log::info!("Reemplazando malla con piel '{}' en VRAM (Recarga en caliente)", key);
+            old_mesh.destroy(device, allocator);
+        }
+        self.touch(&key);
+    }
+
+    /// Registra la piel y los clips de un modelo importado, bajo la misma
+    /// clave que sus mallas.
+    pub fn insert_skin_data(
+        &mut self,
+        name: impl Into<String>,
+        skin: crate::skin::SkinData,
+        animations: Vec<crate::skin::AnimationClip>,
+    ) {
+        let key = name.into();
+        self.skins.insert(key.clone(), skin);
+        self.animations.insert(key, animations);
+    }
+
+    /// Registra los datos CPU de un modelo importado (materiales e imágenes)
+    /// bajo la misma clave que su malla GPU.
+    pub fn insert_model_data(
+        &mut self,
+        name: impl Into<String>,
+        materials: Vec<GltfMaterial>,
+        primary_material: Option<GltfMaterial>,
+        images: Vec<GltfImageData>,
+        primitive_ranges: Vec<PrimitiveRange>,
+    ) {
+        let key = name.into();
+        if let Some(mat) = primary_material {
+            self.primary_materials.insert(key.clone(), mat);
+        } else {
+            self.primary_materials.remove(&key);
+        }
+        self.materials.insert(key.clone(), materials);
+        self.images.insert(key.clone(), images);
+        self.primitive_ranges.insert(key.clone(), primitive_ranges);
+        self.touch(&key);
+    }
+
+    /// Crea (una sola vez) el sampler y el pool de descriptores compartidos.
+    fn ensure_descriptor_infra(&mut self, device: &ash::Device) {
+        if self.sampler.is_none() {
+            let sampler_info = vk::SamplerCreateInfo::default()
+                .mag_filter(vk::Filter::LINEAR)
+                .min_filter(vk::Filter::LINEAR)
+                // Mip-maps activos: las texturas suben con su cadena
+                // completa (ver MeshLoader::upload_texture_to_gpu) y el
+                // sampler compartido la recorre con filtrado trilineal.
+                // El LOD máximo alto es seguro: cada vista limita los
+                // niveles a los que su imagen realmente tiene.
+                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                .max_lod(16.0)
+                // REPEAT y no CLAMP: el tiling de los materiales
+                // (Materiales v1) multiplica la UV más allá de 1 y
+                // con clamp estiraría el téxel del borde en vez de
+                // repetir. Es además el modo por defecto de glTF
+                // cuando el archivo no declara sampler.
+                .address_mode_u(vk::SamplerAddressMode::REPEAT)
+                .address_mode_v(vk::SamplerAddressMode::REPEAT)
+                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+            self.sampler = unsafe { device.create_sampler(&sampler_info, None).ok() };
+        }
+        if self.descriptor_pool.is_none() {
+            // 1024 sets: con 256, un mundo procedural con muchos modelos
+            // texturizados agotaba el pool y las texturas caían en silencio
+            // a la blanca por defecto (solo quedaba el log de error).
+            let pool_sizes = [vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1024)];
+            let pool_info = vk::DescriptorPoolCreateInfo::default()
+                .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
+                .pool_sizes(&pool_sizes)
+                .max_sets(1024);
+            self.descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None).ok() };
+        }
+    }
+
+    /// Reserva un descriptor set nuevo para `layout` y lo apunta a la vista
+    /// dada con el sampler compartido. Devuelve None si no hay pool.
+    fn allocate_and_write_set(
+        &mut self,
+        device: &ash::Device,
+        layout: vk::DescriptorSetLayout,
+        image_view: vk::ImageView,
+    ) -> Option<vk::DescriptorSet> {
+        let pool = self.descriptor_pool?;
+        let sampler = self.sampler?;
+        let layouts = [layout];
+        let alloc_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(pool)
+            .set_layouts(&layouts);
+        let set = unsafe { device.allocate_descriptor_sets(&alloc_info).ok()?.into_iter().next()? };
+        let image_info = [vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(image_view)
+            .sampler(sampler)];
+        let write = [vk::WriteDescriptorSet::default()
+            .dst_set(set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&image_info)];
+        unsafe { device.update_descriptor_sets(&write, &[]) };
+        Some(set)
+    }
+
+    /// Reapunta un set YA reservado a otra vista (recarga en caliente).
+    fn rewrite_set(&self, device: &ash::Device, set: vk::DescriptorSet, image_view: vk::ImageView) {
+        if let Some(sampler) = self.sampler {
+            let image_info = [vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(image_view)
+                .sampler(sampler)];
+            let write = [vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&image_info)];
+            unsafe { device.update_descriptor_sets(&write, &[]) };
+        }
+    }
+
+    /// Crea la textura blanca 1×1 y su set por defecto (idempotente).
+    pub fn ensure_default_texture(
+        &mut self,
+        device: &ash::Device,
+        allocator: &mut Allocator,
+        queue: vk::Queue,
+        command_pool: vk::CommandPool,
+        set_layout: vk::DescriptorSetLayout,
+    ) {
+        if self.default_set.is_some() {
+            return;
+        }
+        self.ensure_descriptor_infra(device);
+        let white = GltfImageData { width: 1, height: 1, rgba: vec![255, 255, 255, 255] };
+        match MeshLoader::upload_texture_to_gpu(device, allocator, &white, queue, command_pool) {
+            Ok(tex) => {
+                let view = tex.image_view;
+                self.default_texture = Some(tex);
+                self.default_set = self.allocate_and_write_set(device, set_layout, view);
+                if self.default_set.is_none() {
+                    log::error!("AssetCache: sin descriptor para la textura por defecto");
+                }
+            }
+            Err(e) => log::error!("AssetCache: fallo subiendo la textura por defecto: {}", e),
+        }
+    }
+
+    /// Sube una imagen de un modelo (la que referencia un material como
+    /// textura base) y la enlaza en su descriptor set, identificado por
+    /// (modelo, índice de imagen). Si esa imagen ya tenía textura (recarga
+    /// en caliente), libera la anterior y reapunta el MISMO set.
+    pub fn insert_texture(
+        &mut self,
+        device: &ash::Device,
+        allocator: &mut Allocator,
+        queue: vk::Queue,
+        command_pool: vk::CommandPool,
+        set_layout: vk::DescriptorSetLayout,
+        name: impl Into<String>,
+        image_index: usize,
+        img: &GltfImageData,
+    ) {
+        let key = name.into();
+        let tex_key = (key.clone(), image_index);
+        self.ensure_descriptor_infra(device);
+        match MeshLoader::upload_texture_to_gpu(device, allocator, img, queue, command_pool) {
+            Ok(tex) => {
+                let view = tex.image_view;
+                if let Some(mut old) = self.textures.insert(tex_key.clone(), tex) {
+                    old.destroy(device, allocator);
+                }
+                if let Some(&set) = self.texture_sets.get(&tex_key) {
+                    self.rewrite_set(device, set, view);
+                } else if let Some(set) = self.allocate_and_write_set(device, set_layout, view) {
+                    self.texture_sets.insert(tex_key, set);
+                } else {
+                    log::error!(
+                        "AssetCache: sin descriptor para la textura {} de '{}' (pool agotado: {} sets vivos)",
+                        image_index,
+                        key,
+                        self.texture_sets.len()
+                    );
+                }
+                self.touch(&key);
+                log::info!("Textura {} de '{}' registrada en AssetCache", image_index, key);
+            }
+            Err(e) => log::error!("AssetCache: fallo subiendo textura {} de '{}': {}", image_index, key, e),
+        }
+    }
+
+    /// El set a enlazar para dibujar con la imagen `image` de un modelo:
+    /// el suyo si esa imagen está subida; si no, el de la textura blanca
+    /// por defecto (el shader siempre muestrea, así que hace falta un set
+    /// válido en todos los casos).
+    pub fn set_for_image(&self, model: Option<&str>, image: Option<usize>) -> Option<vk::DescriptorSet> {
+        if let (Some(m), Some(i)) = (model, image) {
+            if let Some(set) = self.texture_sets.get(&(m.to_string(), i)) {
+                return Some(*set);
+            }
+        }
+        self.default_set
+    }
+
+    /// Marca un modelo como usado en el tick actual.
+    pub fn touch(&self, name: &str) {
+        let now = self.tick.load(Ordering::Relaxed);
+        if let Ok(mut map) = self.last_used.lock() {
+            map.insert(name.to_string(), now);
+        }
+    }
+
+    /// Avanza el contador de ticks (una vez por frame) y devuelve el nuevo.
+    pub fn advance_tick(&self) -> u64 {
+        self.tick.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Decisión pura de expulsión: modelos con malla en VRAM que llevan más
+    /// de `max_idle_ticks` sin dibujarse ni insertarse, que no estén en
+    /// `protected`. Las primitivas integradas nunca se expulsan: el cubo
+    /// es el respaldo de todas las entidades sin modelo, y el plano, la
+    /// esfera, la cápsula y el cilindro son las otras mallas que el
+    /// motor registra por código, no desde un archivo.
+    pub fn select_evictions(&self, max_idle_ticks: u64, protected: &HashSet<String>) -> Vec<String> {
+        let now = self.tick.load(Ordering::Relaxed);
+        let used = self.last_used.lock().map(|m| m.clone()).unwrap_or_default();
+        // Claves de AMBOS mapas de mallas (rígidas y con piel), sin repetir.
+        let mut keys: Vec<&String> = self.meshes.keys().collect();
+        for k in self.skinned_meshes.keys() {
+            if !self.meshes.contains_key(k) {
+                keys.push(k);
+            }
+        }
+        keys.into_iter()
+            .filter(|k| {
+                !matches!(
+                    k.as_str(),
+                    "cube" | "plane" | "sphere" | "capsule" | "cylinder"
+                )
+            })
+            .filter(|k| !protected.contains(*k))
+            .filter(|k| {
+                let last = used.get(*k).copied().unwrap_or(0);
+                now.saturating_sub(last) > max_idle_ticks
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Expulsa los modelos ociosos: libera malla y textura de VRAM, su
+    /// descriptor set y sus datos CPU. Pensado para el enfoque procedural
+    /// (crear y descartar mundos sin que la caché crezca sin límite).
+    /// Devuelve las claves expulsadas.
+    pub fn evict_idle(
+        &mut self,
+        device: &ash::Device,
+        allocator: &mut Allocator,
+        max_idle_ticks: u64,
+        protected: &HashSet<String>,
+    ) -> Vec<String> {
+        let keys = self.select_evictions(max_idle_ticks, protected);
+        for key in &keys {
+            if let Some(mut mesh) = self.meshes.remove(key) {
+                mesh.destroy(device, allocator);
+            }
+            if let Some(mut mesh) = self.skinned_meshes.remove(key) {
+                mesh.destroy(device, allocator);
+            }
+            self.skins.remove(key);
+            self.animations.remove(key);
+            // Todas las texturas y sets del modelo (una entrada por imagen).
+            let tex_keys: Vec<(String, usize)> = self
+                .textures
+                .keys()
+                .filter(|(m, _)| m == key)
+                .cloned()
+                .collect();
+            for tex_key in tex_keys {
+                if let Some(mut tex) = self.textures.remove(&tex_key) {
+                    tex.destroy(device, allocator);
+                }
+                if let Some(set) = self.texture_sets.remove(&tex_key) {
+                    if let Some(pool) = self.descriptor_pool {
+                        unsafe {
+                            let _ = device.free_descriptor_sets(pool, &[set]);
+                        }
+                    }
+                }
+            }
+            self.materials.remove(key);
+            self.primary_materials.remove(key);
+            self.images.remove(key);
+            self.primitive_ranges.remove(key);
+            if let Ok(mut map) = self.last_used.lock() {
+                map.remove(key);
+            }
+            log::info!("AssetCache: modelo ocioso '{}' expulsado de VRAM", key);
+        }
+        keys
     }
 
     pub fn destroy(&mut self, device: &ash::Device, allocator: &mut Allocator) {
@@ -42,5 +415,85 @@ impl AssetCache {
             log::debug!("Liberando malla '{}' de VRAM", name);
             mesh.destroy(device, allocator);
         }
+        for (name, mut mesh) in self.skinned_meshes.drain() {
+            log::debug!("Liberando malla con piel '{}' de VRAM", name);
+            mesh.destroy(device, allocator);
+        }
+        self.skins.clear();
+        self.animations.clear();
+        for ((name, image_index), mut tex) in self.textures.drain() {
+            log::debug!("Liberando textura {} de '{}' de VRAM", image_index, name);
+            tex.destroy(device, allocator);
+        }
+        if let Some(mut tex) = self.default_texture.take() {
+            tex.destroy(device, allocator);
+        }
+        // El pool libera todos los descriptor sets de golpe.
+        if let Some(pool) = self.descriptor_pool.take() {
+            unsafe { device.destroy_descriptor_pool(pool, None) };
+        }
+        self.texture_sets.clear();
+        self.default_set = None;
+        if let Some(sampler) = self.sampler.take() {
+            unsafe { device.destroy_sampler(sampler, None) };
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fake_mesh() -> GpuMesh {
+        GpuMesh {
+            vertex_buffer: vk::Buffer::null(),
+            vertex_allocation: None,
+            index_buffer: vk::Buffer::null(),
+            index_allocation: None,
+            index_count: 0,
+            vertex_count: 0,
+        }
+    }
+
+    #[test]
+    fn expulsion_respeta_recientes_protegidos_y_al_cubo() {
+        let mut cache = AssetCache::default();
+        cache.meshes.insert("cube".into(), fake_mesh());
+        // Las demás primitivas integradas tampoco se expulsan nunca,
+        // aunque lleven los 1.000 ticks sin usarse y no estén en
+        // `protected`.
+        cache.meshes.insert("plane".into(), fake_mesh());
+        cache.meshes.insert("sphere".into(), fake_mesh());
+        cache.meshes.insert("capsule".into(), fake_mesh());
+        cache.meshes.insert("cylinder".into(), fake_mesh());
+        cache.meshes.insert("viejo".into(), fake_mesh());
+        cache.meshes.insert("reciente".into(), fake_mesh());
+        cache.meshes.insert("protegido".into(), fake_mesh());
+        // Tick 0: se "usa" todo menos "viejo" y "protegido".
+        cache.touch("cube");
+        cache.touch("reciente");
+        cache.touch("protegido");
+        // El tiempo pasa: 1.000 ticks sin usar nada.
+        for _ in 0..1000 {
+            cache.advance_tick();
+        }
+        // "reciente" se vuelve a dibujar en el presente.
+        cache.touch("reciente");
+
+        let protected: HashSet<String> = ["protegido".to_string()].into_iter().collect();
+        let evictions = cache.select_evictions(600, &protected);
+        assert_eq!(evictions, vec!["viejo".to_string()]);
+    }
+
+    #[test]
+    fn sin_ociosidad_no_se_expulsa_nada() {
+        let mut cache = AssetCache::default();
+        cache.meshes.insert("mundo_1".into(), fake_mesh());
+        cache.touch("mundo_1");
+        for _ in 0..10 {
+            cache.advance_tick();
+        }
+        let evictions = cache.select_evictions(600, &HashSet::new());
+        assert!(evictions.is_empty());
     }
 }

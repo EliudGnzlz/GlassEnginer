@@ -1,5 +1,6 @@
 //! glass_mcp: Internal lightweight JSON-RPC MCP server for runtime engine introspection.
 
+pub mod bake;
 pub mod protocol;
 pub mod scene;
 pub mod server;
@@ -126,5 +127,125 @@ mod tests {
         let climb1_req = r#"{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"glass_simulate_player","arguments":{"action":"step_climb","steps":35}}}"#;
         let climb1_resp = server.handle_json(climb1_req).expect("Failed climb 1");
         assert!(climb1_resp.contains("climbed_step1") || climb1_resp.contains("position"));
+    }
+
+    #[test]
+    fn test_mcp_shared_scene_matches_editor_view() {
+        // Réplica del cableado de la app en modo editor: UN
+        // `Arc<Mutex<SceneState>>` y dos consumidores — el servidor MCP
+        // (el hilo stdio) y el "editor" (el otro clon del Arc, que muta
+        // directo como hace glass_editor). Lo que escribe uno lo lee el
+        // otro sin copia intermedia: es la propiedad que define el MCP
+        // sobre la escena viva.
+        let scene = Arc::new(Mutex::new(SceneState::new()));
+        let server = McpServer::new(scene.clone());
+        let editor_side = scene.clone();
+
+        // 1. Escritura por MCP -> visible desde el Arc del "editor".
+        let create_req = r#"{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"glass_create_entity","arguments":{"name":"Entidad MCP Viva","components":["Transform","MeshRenderer"]}}}"#;
+        let create_resp = server.handle_json(create_req).expect("create via MCP");
+        assert!(create_resp.contains("Entidad MCP Viva"));
+        {
+            let s = editor_side.lock().unwrap();
+            let ent = s
+                .entities
+                .iter()
+                .find(|e| e.name == "Entidad MCP Viva")
+                .expect("el editor debe ver la entidad creada por MCP");
+            assert!(ent.components.iter().any(|c| c == "MeshRenderer"));
+        }
+
+        // 2. Escritura directa en el Arc ("editor") -> visible por MCP.
+        let editor_entity_id = {
+            let mut s = editor_side.lock().unwrap();
+            let id = s.create_entity(
+                "Entidad del Editor".into(),
+                vec!["Transform".into(), "MeshRenderer".into()],
+            );
+            assert!(s.modify_transform(id, Some([7.0, 8.0, 9.0]), None, None));
+            id
+        };
+        let hier_req = r#"{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"glass_get_scene_hierarchy"}}"#;
+        let hier_resp = server.handle_json(hier_req).expect("hierarchy via MCP");
+        assert!(
+            hier_resp.contains("Entidad del Editor"),
+            "el MCP debe ver la entidad del editor: {}",
+            hier_resp
+        );
+        assert!(hier_resp.contains("Entidad MCP Viva"));
+
+        // 3. Modificación por MCP de la entidad del "editor" -> el Arc
+        // refleja el cambio.
+        let modify_req = format!(
+            r#"{{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{{"name":"glass_modify_component","arguments":{{"entity_id":{},"position":[1.0,2.0,3.0]}}}}}}"#,
+            editor_entity_id
+        );
+        let modify_resp = server.handle_json(&modify_req).expect("modify via MCP");
+        assert!(modify_resp.contains("modificada con éxito"));
+        let s = editor_side.lock().unwrap();
+        let ent = s.entities.iter().find(|e| e.id == editor_entity_id).unwrap();
+        assert_eq!(ent.transform.position, [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_mcp_shared_scene_concurrent_editor_and_mcp_writes() {
+        use std::collections::HashSet;
+        // El hilo MCP y el "editor" comparten el Mutex de la escena:
+        // escrituras concurrentes no deben interbloquearse ni duplicar
+        // ids (la asignación vive dentro del lock, en `next_entity_id`).
+        let scene = Arc::new(Mutex::new(SceneState::new()));
+        let server = Arc::new(McpServer::new(scene.clone()));
+        let initial = scene.lock().unwrap().entities.len();
+
+        const N: usize = 60; // creadas por MCP desde el hilo secundario
+        const M: usize = 60; // creadas directo en el Arc, hilo principal
+
+        let server_thread = server.clone();
+        let scene_thread_side = scene.clone();
+        // Señal de fin con timeout: si una regresión metiera un deadlock,
+        // el test debe FALLAR con diagnóstico, no colgar la suite entera
+        // en un `join()` sin límite (apunte de revisión externa).
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let mcp_thread = std::thread::spawn(move || {
+            for i in 0..N {
+                let req = format!(
+                    r#"{{"jsonrpc":"2.0","id":{},"method":"tools/call","params":{{"name":"glass_create_entity","arguments":{{"name":"Concurrente MCP {}"}}}}}}"#,
+                    100 + i,
+                    i
+                );
+                let resp = server_thread
+                    .handle_json(&req)
+                    .expect("create concurrente MCP");
+                assert!(resp.contains("Entidad creada exitosamente"), "{}", resp);
+            }
+            // El hilo también lee el Arc directo: sin deadlock cruzado.
+            let _ = scene_thread_side.lock().unwrap().entities.len();
+            let _ = done_tx.send(());
+        });
+
+        // "Editor": escrituras directas y lecturas por MCP entrelazadas,
+        // para forzar contención real sobre el mismo Mutex.
+        for i in 0..M {
+            {
+                let mut s = scene.lock().unwrap();
+                s.create_entity(
+                    format!("Concurrente Editor {}", i),
+                    vec!["Transform".into()],
+                );
+            }
+            let hier_req = r#"{"jsonrpc":"2.0","id":200,"method":"tools/call","params":{"name":"glass_get_scene_hierarchy"}}"#;
+            assert!(server.handle_json(hier_req).is_some());
+        }
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("el hilo MCP no terminó en 60 s: posible deadlock");
+        mcp_thread
+            .join()
+            .expect("el hilo MCP no debe panicar ni interbloquearse");
+
+        let s = scene.lock().unwrap();
+        assert_eq!(s.entities.len(), initial + N + M);
+        let ids: HashSet<u64> = s.entities.iter().map(|e| e.id).collect();
+        assert_eq!(ids.len(), s.entities.len(), "ids duplicados bajo concurrencia");
     }
 }

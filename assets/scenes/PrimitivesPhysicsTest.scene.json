@@ -1,0 +1,419 @@
+[
+    {
+        "active": true,
+        "animator": null,
+        "audio": null,
+        "camera": {
+            "far_clip": 1000.0,
+            "fov": 60.0,
+            "is_main": true,
+            "near_clip": 0.1
+        },
+        "canvas": null,
+        "children": [],
+        "is_static": false,
+        "layer": "Default",
+        "light": null,
+        "mesh": null,
+        "parent": null,
+        "physics": null,
+        "rect_transform": null,
+        "script": null,
+        "script_data": null,
+        "ui_button": null,
+        "ui_text": null,
+        "id": 1,
+        "name": "Main Camera",
+        "tag": "MainCamera",
+        "components": [
+            "Transform",
+            "Camera"
+        ],
+        "transform": {
+            "position": [
+                0.4,
+                2.4,
+                10.5
+            ],
+            "rotation": [
+                -13.0,
+                0.0,
+                0.0
+            ],
+            "scale": [
+                1.0,
+                1.0,
+                1.0
+            ]
+        }
+    },
+    {
+        "active": true,
+        "animator": null,
+        "audio": null,
+        "camera": null,
+        "canvas": null,
+        "children": [],
+        "is_static": false,
+        "layer": "Default",
+        "light": {
+            "color": [
+                1.0,
+                0.98,
+                0.92
+            ],
+            "intensity": 1.0,
+            "light_type": "Directional",
+            "range": 10.0
+        },
+        "mesh": null,
+        "parent": null,
+        "physics": null,
+        "rect_transform": null,
+        "script": null,
+        "script_data": null,
+        "ui_button": null,
+        "ui_text": null,
+        "id": 2,
+        "name": "Directional Light",
+        "tag": "Untagged",
+        "components": [
+            "Transform",
+            "Light"
+        ],
+        "transform": {
+            "position": [
+                0.0,
+                10.0,
+                0.0
+            ],
+            "rotation": [
+                -50.0,
+                30.0,
+                0.0
+            ],
+            "scale": [
+                1.0,
+                1.0,
+                1.0
+            ]
+        }
+    },
+    {
+        "active": true,
+        "animator": null,
+        "audio": null,
+        "camera": null,
+        "canvas": null,
+        "children": [],
+        "is_static": false,
+        "layer": "Default",
+        "light": null,
+        "mesh": {
+            "color": [
+                0.35,
+                0.55,
+                0.35
+            ],
+            "model": "plane",
+            "shader": "pbr.vert.spv",
+            "wireframe": false
+        },
+        "parent": null,
+        "physics": null,
+        "rect_transform": null,
+        "script": null,
+        "script_data": null,
+        "ui_button": null,
+        "ui_text": null,
+        "id": 3,
+        "name": "Suelo Visual",
+        "tag": "Untagged",
+        "components": [
+            "Transform",
+            "MeshRenderer"
+        ],
+        "transform": {
+            "position": [
+                0,
+                0,
+                0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "scale": [
+                30,
+                1,
+                30
+            ]
+        }
+    },
+    {
+        "active": true,
+        "animator": null,
+        "audio": null,
+        "camera": null,
+        "canvas": null,
+        "children": [],
+        "is_static": false,
+        "layer": "Default",
+        "light": null,
+        "mesh": null,
+        "parent": null,
+        "physics": {
+            "body_type": "Static",
+            "mass": 1.0,
+            "friction": 0.1,
+            "restitution": 0.6,
+            "box_extents": [
+                15,
+                0.5,
+                15
+            ],
+            "linear_velocity": [
+                0,
+                0,
+                0
+            ]
+        },
+        "rect_transform": null,
+        "script": null,
+        "script_data": null,
+        "ui_button": null,
+        "ui_text": null,
+        "id": 4,
+        "name": "Suelo Fisico",
+        "tag": "Untagged",
+        "components": [
+            "Transform",
+            "StaticCollider"
+        ],
+        "transform": {
+            "position": [
+                0,
+                -0.5,
+                0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "scale": [
+                1,
+                1,
+                1
+            ]
+        }
+    },
+    {
+        "active": true,
+        "animator": null,
+        "audio": null,
+        "camera": null,
+        "canvas": null,
+        "children": [],
+        "is_static": false,
+        "layer": "Default",
+        "light": null,
+        "mesh": {
+            "color": [
+                0.9,
+                0.4,
+                0.2
+            ],
+            "model": "sphere",
+            "shader": "pbr.vert.spv",
+            "wireframe": false
+        },
+        "parent": null,
+        "physics": {
+            "body_type": "Dynamic",
+            "mass": 1.0,
+            "friction": 0.1,
+            "restitution": 0.6,
+            "box_extents": [
+                0.5,
+                0.5,
+                0.5
+            ],
+            "linear_velocity": [
+                2.2,
+                0,
+                0
+            ]
+        },
+        "rect_transform": null,
+        "script": null,
+        "script_data": null,
+        "ui_button": null,
+        "ui_text": null,
+        "id": 5,
+        "name": "Esfera",
+        "tag": "Untagged",
+        "components": [
+            "Transform",
+            "MeshRenderer",
+            "RigidBody",
+            "Collider"
+        ],
+        "transform": {
+            "position": [
+                -2.2,
+                1.6,
+                0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "scale": [
+                2,
+                2,
+                2
+            ]
+        }
+    },
+    {
+        "active": true,
+        "animator": null,
+        "audio": null,
+        "camera": null,
+        "canvas": null,
+        "children": [],
+        "is_static": false,
+        "layer": "Default",
+        "light": null,
+        "mesh": {
+            "color": [
+                0.3,
+                0.8,
+                0.4
+            ],
+            "model": "capsule",
+            "shader": "pbr.vert.spv",
+            "wireframe": false
+        },
+        "parent": null,
+        "physics": {
+            "body_type": "Dynamic",
+            "mass": 1.0,
+            "friction": 0.1,
+            "restitution": 0.6,
+            "box_extents": [
+                0.5,
+                0.5,
+                0.5
+            ],
+            "linear_velocity": [
+                0,
+                0,
+                0
+            ]
+        },
+        "rect_transform": null,
+        "script": null,
+        "script_data": null,
+        "ui_button": null,
+        "ui_text": null,
+        "id": 6,
+        "name": "Capsula",
+        "tag": "Untagged",
+        "components": [
+            "Transform",
+            "MeshRenderer",
+            "RigidBody",
+            "Collider"
+        ],
+        "transform": {
+            "position": [
+                2.4,
+                2.6,
+                0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "scale": [
+                1,
+                2,
+                1
+            ]
+        }
+    },
+    {
+        "active": true,
+        "animator": null,
+        "audio": null,
+        "camera": null,
+        "canvas": null,
+        "children": [],
+        "is_static": false,
+        "layer": "Default",
+        "light": null,
+        "mesh": {
+            "color": [
+                0.8,
+                0.8,
+                0.2
+            ],
+            "model": "cylinder",
+            "shader": "pbr.vert.spv",
+            "wireframe": false
+        },
+        "parent": null,
+        "physics": {
+            "body_type": "Dynamic",
+            "mass": 1.0,
+            "friction": 0.1,
+            "restitution": 0.6,
+            "box_extents": [
+                0.5,
+                0.5,
+                0.5
+            ],
+            "linear_velocity": [
+                0,
+                0,
+                0
+            ]
+        },
+        "rect_transform": null,
+        "script": null,
+        "script_data": null,
+        "ui_button": null,
+        "ui_text": null,
+        "id": 7,
+        "name": "Cilindro",
+        "tag": "Untagged",
+        "components": [
+            "Transform",
+            "MeshRenderer",
+            "RigidBody",
+            "Collider"
+        ],
+        "transform": {
+            "position": [
+                4.4,
+                1.6,
+                -1.0
+            ],
+            "rotation": [
+                0.0,
+                0.0,
+                0.0
+            ],
+            "scale": [
+                1,
+                1,
+                1
+            ]
+        }
+    }
+]

@@ -1,7 +1,28 @@
 /target
-**/*.spv
-Cargo.lock
 .DS_Store
 
+# Salidas de compilación de C# (el código gestionado sí se versiona)
 **/bin/
 **/obj/
+
+# Paquete generado por el editor (build de juego standalone)
+build/standalone/
+
+# Ejecutables sueltos (el binario se compila desde las fuentes)
+*.exe
+
+# Secretos y configuración local: nunca se publican
+.env
+.env.*
+!.env.example
+
+# Python (tools/)
+__pycache__/
+*.pyc
+
+# Notas sobre decisiones tomadas al preparar la publicación (2026-11-05):
+# - Los .spv de assets/shaders/ NO se ignoran a propósito: son entradas de
+#   compilación (glass_renderer los incrusta con include_bytes!) y sin ellos
+#   un clon limpio no compila.
+# - Cargo.lock SÍ se versiona: es un proyecto de aplicación/binario y el
+#   lockfile garantiza builds y CI reproducibles.
