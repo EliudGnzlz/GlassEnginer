@@ -1301,6 +1301,10 @@ struct GlassEngineApp {
     #[cfg(feature = "editor")]
     pub pending_launcher_action: Option<LauncherAction>,
     pub scene_state: Arc<Mutex<SceneState>>,
+    /// Posiciones de mundo del frame anterior por entidad (bloque
+    /// Portales): el pase de cruce compara el segmento prev->curr de
+    /// cada cuerpo dinámico contra los rectángulos de los portales.
+    pub portal_prev_pos: std::collections::HashMap<u64, [f32; 3]>,
     /// Atlas de imágenes del Canvas (UI v2): clave = sprites de la
     /// escena activa (uno por línea); si cambia, se reconstruye el
     /// mapa y se resube el atlas al renderer.
@@ -1610,6 +1614,7 @@ impl GlassEngineApp {
             #[cfg(feature = "editor")]
             pending_launcher_action: None,
             scene_state,
+            portal_prev_pos: std::collections::HashMap::new(),
             ui_images_key: String::new(),
             ui_images_map: canvas_ui::UiSceneImages::new(),
             ui_font_atlases: std::collections::HashMap::new(),
@@ -2528,6 +2533,9 @@ impl GlassEngineApp {
 
     /// Reconstruye el mundo de Rapier a partir de los componentes `Physics`.
     fn rebuild_physics_from_scene(&mut self) {
+        // Mundo nuevo: las posiciones previas del pase de cruce
+        // pertenecen a la escena anterior.
+        self.portal_prev_pos.clear();
         let world_matrices = {
             let Ok(scene) = self.scene_state.lock() else {
                 return;
@@ -2552,6 +2560,14 @@ impl GlassEngineApp {
             for ent in &scene.entities {
                 let Some(body) = &ent.physics else { continue };
                 if !ent.active {
+                    continue;
+                }
+                // Las superficies de portal no colisionan: son
+                // puertas, no muros. El pase de cruce (tras el paso
+                // de física) mueve los cuerpos dinámicos a través;
+                // con collider, Rapier los detendría justo en el
+                // plano y el segmento nunca cruzaría.
+                if ent.portal.is_some() {
                     continue;
                 }
                 let body_type = match body.body_type.as_str() {
@@ -3119,8 +3135,111 @@ impl GlassEngineApp {
         if simulation_running {
             if let Ok(mut physics) = self.physics_world.lock() {
                 physics.step(0.016667);
-                let sync_transforms = physics.sync_all_transforms();
+                let mut sync_transforms = physics.sync_all_transforms();
                 if let Ok(mut scene) = self.scene_state.lock() {
+                    // --- Cruce de portales: un cuerpo dinámico cuyo
+                    // segmento prev->curr atraviesa el rectángulo de
+                    // un portal sale por su pareja conservando el
+                    // impulso (posición y velocidad transportadas
+                    // con la matriz de pareja). La entrada de
+                    // sincronización se corrige para que la entidad
+                    // aparezca ya al otro lado en este mismo frame.
+                    {
+                        let con_portal: Vec<(u64, String, f32, f32)> = scene
+                            .entities
+                            .iter()
+                            .filter_map(|e| {
+                                e.portal
+                                    .as_ref()
+                                    .map(|p| (e.id, p.pair.clone(), p.width, p.height))
+                            })
+                            .collect();
+                        // (mundo origen, mundo pareja, ancho, alto)
+                        let mut portales: Vec<([f32; 16], [f32; 16], f32, f32)> = Vec::new();
+                        for (id, pair, w, h) in &con_portal {
+                            if let Some((id2, _, _, _)) =
+                                con_portal.iter().find(|(o, p2, _, _)| p2 == pair && o != id)
+                            {
+                                portales.push((
+                                    scene.compute_world_matrix(*id),
+                                    scene.compute_world_matrix(*id2),
+                                    *w,
+                                    *h,
+                                ));
+                            }
+                        }
+                        if !portales.is_empty() {
+                            let mut vivos: std::collections::HashSet<u64> =
+                                std::collections::HashSet::new();
+                            for (entity_id, tf) in sync_transforms.iter_mut() {
+                                vivos.insert(*entity_id);
+                                let curr = tf.position;
+                                let Some(prev) =
+                                    self.portal_prev_pos.get(entity_id).copied()
+                                else {
+                                    continue;
+                                };
+                                let Some(handle) = physics.get_body_by_entity(*entity_id)
+                                else {
+                                    continue;
+                                };
+                                let es_dinamico = physics
+                                    .get_rapier_handle(handle)
+                                    .and_then(|(rh, _)| physics.rigid_body_set.get(rh))
+                                    .map(|b| b.is_dynamic())
+                                    .unwrap_or(false);
+                                if !es_dinamico {
+                                    continue;
+                                }
+                                for (src_w, dst_w, w, h) in &portales {
+                                    if glass_core::portal::crossing_point(prev, curr, *src_w, *w, *h)
+                                        .is_none()
+                                    {
+                                        continue;
+                                    }
+                                    let Some(pair_t) =
+                                        glass_core::portal::pair_transform(*src_w, *dst_w)
+                                    else {
+                                        continue;
+                                    };
+                                    let vel =
+                                        physics.get_linear_velocity(handle).unwrap_or([0.0; 3]);
+                                    let speed = (vel[0] * vel[0]
+                                        + vel[1] * vel[1]
+                                        + vel[2] * vel[2])
+                                        .sqrt();
+                                    let dir =
+                                        glass_core::portal::transport_direction(pair_t, vel);
+                                    let n = glass_core::portal::portal_normal(*dst_w);
+                                    let tp =
+                                        glass_core::portal::transport_point(pair_t, curr);
+                                    // Empuje de salida: 5 cm por la
+                                    // normal frontal de la pareja para
+                                    // no nacer dentro de su plano.
+                                    let new_pos = [
+                                        tp[0] + n[0] * 0.05,
+                                        tp[1] + n[1] * 0.05,
+                                        tp[2] + n[2] * 0.05,
+                                    ];
+                                    let new_vel =
+                                        [dir[0] * speed, dir[1] * speed, dir[2] * speed];
+                                    physics.set_transform(handle, new_pos, tf.rotation);
+                                    physics.set_linear_velocity(handle, new_vel);
+                                    tf.position = new_pos;
+                                    log::info!(
+                                        "Portal: entidad {} cruzó conservando el impulso ({:.1} m/s)",
+                                        entity_id,
+                                        speed
+                                    );
+                                    break;
+                                }
+                            }
+                            for (entity_id, tf) in sync_transforms.iter() {
+                                self.portal_prev_pos.insert(*entity_id, tf.position);
+                            }
+                            self.portal_prev_pos.retain(|id, _| vivos.contains(id));
+                        }
+                    }
                     for (entity_id, tf) in sync_transforms {
                         // Rapier trabaja SIEMPRE en espacio de mundo, pero
                         // `transform.position` es LOCAL (relativo al padre). Escribir

@@ -244,6 +244,51 @@ mod tests {
     }
 
     #[test]
+    fn test_mcp_list_portals() {
+        let scene = Arc::new(Mutex::new(SceneState::new()));
+        let server = McpServer::new(scene.clone());
+
+        // tools/list anuncia la tool del bloque Portales (17 -> 18).
+        let list_resp = server
+            .handle_json(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#)
+            .expect("tools/list");
+        assert!(list_resp.contains("glass_list_portals"), "{}", list_resp);
+
+        // Dos superficies con el mismo pair (la escena base no trae portales).
+        {
+            let mut s = scene.lock().unwrap();
+            let mut a = EntityData::new(50, "Portal A".to_string(), vec!["Transform".into()]);
+            a.transform.position = [0.0, 1.1, 0.1];
+            a.portal = Some(glass_core::portal::PortalData {
+                pair: "sala".to_string(),
+                width: 1.2,
+                height: 2.2,
+            });
+            let mut b = EntityData::new(51, "Portal B".to_string(), vec!["Transform".into()]);
+            b.transform.position = [0.0, 1.1, -0.1];
+            b.portal = Some(glass_core::portal::PortalData {
+                pair: "sala".to_string(),
+                width: 1.2,
+                height: 2.2,
+            });
+            s.entities.push(a);
+            s.entities.push(b);
+        }
+
+        let resp = server
+            .handle_json(r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"glass_list_portals","arguments":{}}}"#)
+            .expect("list portals");
+        // La respuesta escapa las comillas del JSON interno (patrón de la casa).
+        assert!(resp.contains("\\\"count\\\": 2"), "{}", resp);
+        assert!(resp.contains("\\\"entity_id\\\": 50"), "{}", resp);
+        assert!(resp.contains("\\\"entity_id\\\": 51"), "{}", resp);
+        assert!(resp.contains("\\\"partner_id\\\": 51"), "{}", resp);
+        assert!(resp.contains("\\\"partner_id\\\": 50"), "{}", resp);
+        assert!(resp.contains("Portal A"), "{}", resp);
+        assert!(resp.contains("Portal B"), "{}", resp);
+    }
+
+    #[test]
     fn test_mcp_shared_scene_concurrent_editor_and_mcp_writes() {
         use std::collections::HashSet;
         // El hilo MCP y el "editor" comparten el Mutex de la escena:

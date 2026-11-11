@@ -381,6 +381,14 @@ impl McpServer {
                                 "type": "object",
                                 "properties": {}
                             }
+                        },
+                        {
+                            "name": "glass_list_portals",
+                            "description": "Lista las entidades con componente Portal de la escena: su id, nombre, pareja (pair), tamaño y posición, y el id de la entidad pareja con el mismo pair (o null si no tiene pareja en la escena).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
                         }
                     ]
                 }),
@@ -791,6 +799,43 @@ impl McpServer {
                     "physics_colliders": physics_colliders,
                 });
                 let pretty = serde_json::to_string_pretty(&snapshot).unwrap_or_else(|_| snapshot.to_string());
+                McpResponse::success(id, json!({"content":[{"type":"text","text": pretty}]}))
+            }
+
+            // Portales de la escena (bloque Portales): inventario de
+            // superficies con su pareja declarada.
+            "glass_list_portals" => {
+                let mut portals = Vec::new();
+                for entity in scene.entities.iter() {
+                    if let Some(portal) = &entity.portal {
+                        let partner_id = scene
+                            .entities
+                            .iter()
+                            .find(|other| {
+                                other.id != entity.id
+                                    && other
+                                        .portal
+                                        .as_ref()
+                                        .map(|p| p.pair == portal.pair)
+                                        .unwrap_or(false)
+                            })
+                            .map(|other| other.id);
+                        let position = entity.transform.position;
+                        portals.push(json!({
+                            "entity_id": entity.id,
+                            "name": entity.name,
+                            "pair": portal.pair,
+                            "width": portal.width,
+                            "height": portal.height,
+                            "position": [position[0], position[1], position[2]],
+                            "partner_id": partner_id
+                        }));
+                    }
+                }
+                let count = portals.len();
+                let payload = json!({"portals": portals, "count": count});
+                let pretty = serde_json::to_string_pretty(&payload)
+                    .unwrap_or_else(|_| payload.to_string());
                 McpResponse::success(id, json!({"content":[{"type":"text","text": pretty}]}))
             }
 
