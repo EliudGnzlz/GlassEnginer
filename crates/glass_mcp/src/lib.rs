@@ -188,6 +188,62 @@ mod tests {
     }
 
     #[test]
+    fn test_mcp_lote_espacial_y_profiler() {
+        let scene = Arc::new(Mutex::new(SceneState::new()));
+        let server = McpServer::new(scene.clone());
+
+        // (a) tools/list anuncia las tres tools nuevas (14 -> 17).
+        let list_resp = server
+            .handle_json(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#)
+            .expect("tools/list");
+        for nombre in [
+            "glass_batch_spawn_entities",
+            "glass_inspect_spatial",
+            "glass_profiler_snapshot",
+        ] {
+            assert!(list_resp.contains(nombre), "falta {} en tools/list", nombre);
+        }
+
+        // (b) Lote válido: 3 entidades, dos con posición.
+        let batch_req = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"glass_batch_spawn_entities","arguments":{"entities":[{"name":"Lote Cerca","position":[1.0,0.0,0.0]},{"name":"Lote Lejos","position":[3.0,0.0,0.0]},{"name":"Lote Sin Pos"}]}}}"#;
+        let batch_resp = server.handle_json(batch_req).expect("batch spawn");
+        assert!(batch_resp.contains("Creadas 3 entidades"), "{}", batch_resp);
+        assert!(batch_resp.contains("ids asignados: [5, 6, 7]"), "{}", batch_resp);
+        {
+            let s = scene.lock().unwrap();
+            assert_eq!(s.entities.len(), 7);
+            let cerca = s.entities.iter().find(|e| e.name == "Lote Cerca").unwrap();
+            assert_eq!(cerca.transform.position, [1.0, 0.0, 0.0]);
+            let lejos = s.entities.iter().find(|e| e.name == "Lote Lejos").unwrap();
+            assert_eq!(lejos.transform.position, [3.0, 0.0, 0.0]);
+        }
+
+        // (c) Lote inválido (segundo spec sin nombre): error y no se crea nada.
+        let bad_req = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"glass_batch_spawn_entities","arguments":{"entities":[{"name":"Valida"},{"components":["Transform"]}]}}}"#;
+        let bad_resp = server.handle_json(bad_req).expect("batch inválido");
+        assert!(bad_resp.contains("-32602"), "{}", bad_resp);
+        assert_eq!(scene.lock().unwrap().entities.len(), 7);
+
+        // (d) Inspección espacial: radio 2 ve la cercana y no la lejana;
+        //     con limit 1 solo vuelve la más cercana.
+        let insp_req = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"glass_inspect_spatial","arguments":{"center":[0.0,0.0,0.0],"radius":2.0}}}"#;
+        let insp_resp = server.handle_json(insp_req).expect("inspect espacial");
+        assert!(insp_resp.contains("Lote Cerca"), "{}", insp_resp);
+        assert!(!insp_resp.contains("Lote Lejos"), "{}", insp_resp);
+        let lim_req = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"glass_inspect_spatial","arguments":{"center":[0.0,0.0,0.0],"radius":10.0,"limit":1}}}"#;
+        let lim_resp = server.handle_json(lim_req).expect("inspect con límite");
+        // La respuesta JSON-RPC escapa las comillas del JSON interno:
+        // se cuenta la palabra, no el par comilla-nombre.
+        assert_eq!(lim_resp.matches("distance").count(), 1, "{}", lim_resp);
+
+        // (e) Profiler: contadores honestos de la escena de prueba.
+        let prof_req = r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"glass_profiler_snapshot"}}"#;
+        let prof_resp = server.handle_json(prof_req).expect("profiler snapshot");
+        assert!(prof_resp.contains("\\\"entities_total\\\": 7"), "{}", prof_resp);
+        assert!(prof_resp.contains("\\\"physics_bodies\\\": 0"), "{}", prof_resp);
+    }
+
+    #[test]
     fn test_mcp_shared_scene_concurrent_editor_and_mcp_writes() {
         use std::collections::HashSet;
         // El hilo MCP y el "editor" comparten el Mutex de la escena:

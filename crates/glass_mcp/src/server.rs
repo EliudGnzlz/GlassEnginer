@@ -16,6 +16,8 @@ const MAX_ENTITY_NAME_CHARS: usize = 256;
 const MAX_COMPONENTS_PER_CALL: usize = 64;
 const MAX_ENTITIES_PER_SCENE: usize = 10_000;
 const MAX_LINE_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB por línea stdio
+// Tope de entidades admitidas en una sola llamada de glass_batch_spawn_entities.
+const MAX_BATCH_SPAWN: usize = 256;
 
 pub struct McpServer {
     pub scene: Arc<Mutex<SceneState>>,
@@ -309,6 +311,76 @@ impl McpServer {
                                 },
                                 "required": ["entity_id", "text"]
                             }
+                        },
+                        {
+                            "name": "glass_batch_spawn_entities",
+                            "description": "Crea varias entidades en una sola llamada bajo el mismo candado de escena. Valida todas las especificaciones antes de crear: si alguna es inválida o no cabe en la escena, no se crea ninguna.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entities": {
+                                        "type": "array",
+                                        "description": "Especificaciones a crear; no vacío y como máximo 256 elementos.",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "name": {
+                                                    "type": "string",
+                                                    "description": "Nombre de la entidad; obligatorio, no vacío y de hasta 256 caracteres."
+                                                },
+                                                "components": {
+                                                    "type": "array",
+                                                    "items": { "type": "string" },
+                                                    "description": "Componentes iniciales; por defecto [\"Transform\"] y como máximo 64."
+                                                },
+                                                "position": {
+                                                    "type": "array",
+                                                    "items": { "type": "number" },
+                                                    "minItems": 3,
+                                                    "maxItems": 3,
+                                                    "description": "Posición opcional [x, y, z] con valores finitos."
+                                                }
+                                            },
+                                            "required": ["name"]
+                                        }
+                                    }
+                                },
+                                "required": ["entities"]
+                            }
+                        },
+                        {
+                            "name": "glass_inspect_spatial",
+                            "description": "Lista las entidades cuyo transform está dentro de un radio alrededor de un punto, ordenadas por distancia ascendente y truncadas al límite indicado.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "center": {
+                                        "type": "array",
+                                        "items": { "type": "number" },
+                                        "minItems": 3,
+                                        "maxItems": 3,
+                                        "description": "Centro de la consulta [x, y, z] con valores finitos."
+                                    },
+                                    "radius": {
+                                        "type": "number",
+                                        "description": "Radio de búsqueda; finito y mayor que cero."
+                                    },
+                                    "limit": {
+                                        "type": "integer",
+                                        "description": "Número máximo de resultados; por defecto 50 y tope 500.",
+                                        "minimum": 1
+                                    }
+                                },
+                                "required": ["center", "radius"]
+                            }
+                        },
+                        {
+                            "name": "glass_profiler_snapshot",
+                            "description": "Devuelve una foto de los contadores medibles en este servidor (entidades, componentes de datos presentes, siguiente id, flag de shaders y tamaño de los sets físicos). No incluye VRAM ni tiempos de frame: no se miden aquí.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
                         }
                     ]
                 }),
@@ -401,6 +473,325 @@ impl McpServer {
                         ]
                     }),
                 )
+            }
+
+            // Crea N entidades en una sola llamada: valida todo
+            // primero y crea después (un lote inválido no crea nada).
+            "glass_batch_spawn_entities" => {
+                let specs = match args.get("entities").and_then(|v| v.as_array()) {
+                    Some(a) => a,
+                    None => {
+                        return McpResponse::invalid_params(
+                            id,
+                            "glass_batch_spawn_entities requiere 'entities' como array",
+                        )
+                    }
+                };
+                if specs.is_empty() {
+                    return McpResponse::invalid_params(id, "'entities' no puede estar vacío");
+                }
+                if specs.len() > MAX_BATCH_SPAWN {
+                    return McpResponse::invalid_params(
+                        id,
+                        &format!("'entities' supera el máximo de {} elementos", MAX_BATCH_SPAWN),
+                    );
+                }
+
+                // Fase 1: validar todas las especificaciones sin tocar la escena.
+                let mut plan: Vec<(String, Vec<String>, Option<[f32; 3]>)> =
+                    Vec::with_capacity(specs.len());
+                for (i, spec) in specs.iter().enumerate() {
+                    let obj = match spec.as_object() {
+                        Some(o) => o,
+                        None => {
+                            return McpResponse::invalid_params(
+                                id,
+                                &format!("entities[{}] debe ser un objeto", i),
+                            )
+                        }
+                    };
+
+                    let name = match obj.get("name").and_then(|v| v.as_str()) {
+                        Some(n) if !n.trim().is_empty() => n.to_string(),
+                        _ => {
+                            return McpResponse::invalid_params(
+                                id,
+                                &format!(
+                                    "entities[{}].name es obligatorio y no puede estar vacío",
+                                    i
+                                ),
+                            )
+                        }
+                    };
+                    if name.chars().count() > MAX_ENTITY_NAME_CHARS {
+                        return McpResponse::invalid_params(
+                            id,
+                            &format!(
+                                "entities[{}].name supera {} caracteres",
+                                i, MAX_ENTITY_NAME_CHARS
+                            ),
+                        );
+                    }
+
+                    let components = match obj.get("components") {
+                        None => vec!["Transform".to_string()],
+                        Some(v) => {
+                            let arr = match v.as_array() {
+                                Some(a) => a,
+                                None => {
+                                    return McpResponse::invalid_params(
+                                        id,
+                                        &format!(
+                                            "entities[{}].components debe ser un array de strings",
+                                            i
+                                        ),
+                                    )
+                                }
+                            };
+                            let mut out = Vec::with_capacity(arr.len());
+                            for c in arr {
+                                match c.as_str() {
+                                    Some(s) => out.push(s.to_string()),
+                                    None => {
+                                        return McpResponse::invalid_params(
+                                            id,
+                                            &format!(
+                                                "entities[{}].components solo admite strings",
+                                                i
+                                            ),
+                                        )
+                                    }
+                                }
+                            }
+                            out
+                        }
+                    };
+                    if components.len() > MAX_COMPONENTS_PER_CALL {
+                        return McpResponse::invalid_params(
+                            id,
+                            &format!(
+                                "entities[{}].components supera {} elementos",
+                                i, MAX_COMPONENTS_PER_CALL
+                            ),
+                        );
+                    }
+
+                    let position = match obj.get("position") {
+                        None => None,
+                        Some(v) => {
+                            let arr = match v.as_array() {
+                                Some(a) if a.len() == 3 => a,
+                                _ => {
+                                    return McpResponse::invalid_params(
+                                        id,
+                                        &format!("entities[{}].position debe ser [x, y, z]", i),
+                                    )
+                                }
+                            };
+                            let mut p = [0.0f64; 3];
+                            for (k, comp) in arr.iter().enumerate() {
+                                match comp.as_f64() {
+                                    Some(x) if x.is_finite() => p[k] = x,
+                                    _ => {
+                                        return McpResponse::invalid_params(
+                                            id,
+                                            &format!(
+                                                "entities[{}].position[{}] debe ser un número finito",
+                                                i, k
+                                            ),
+                                        )
+                                    }
+                                }
+                            }
+                            Some([p[0] as f32, p[1] as f32, p[2] as f32])
+                        }
+                    };
+
+                    plan.push((name, components, position));
+                }
+
+                // Capacidad de la escena: si no cabe el lote completo, no se crea nada.
+                if scene.entities.len() + plan.len() > MAX_ENTITIES_PER_SCENE {
+                    return McpResponse::error(
+                        id,
+                        -32003,
+                        format!(
+                            "capacidad de escena excedida: {} + {} > {}",
+                            scene.entities.len(),
+                            plan.len(),
+                            MAX_ENTITIES_PER_SCENE
+                        ),
+                    );
+                }
+
+                // Fase 2: crear y aplicar posición.
+                let mut ids: Vec<u64> = Vec::with_capacity(plan.len());
+                for (name, components, position) in plan {
+                    let nuevo_id = scene.create_entity(name, components);
+                    if let Some(p) = position {
+                        scene.modify_transform(nuevo_id, Some(p), None, None);
+                    }
+                    ids.push(nuevo_id);
+                }
+                let ids_txt = ids
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                McpResponse::success(
+                    id,
+                    json!({"content":[{"type":"text","text": format!(
+                        "Creadas {} entidades. ids asignados: [{}]",
+                        ids.len(),
+                        ids_txt
+                    )}]}),
+                )
+            }
+
+            // Entidades cercanas a un punto, ordenadas por distancia ascendente.
+            "glass_inspect_spatial" => {
+                let center = match args.get("center").and_then(|v| v.as_array()) {
+                    Some(a) if a.len() == 3 => {
+                        let mut c = [0.0f64; 3];
+                        for (k, comp) in a.iter().enumerate() {
+                            match comp.as_f64() {
+                                Some(x) if x.is_finite() => c[k] = x,
+                                _ => {
+                                    return McpResponse::invalid_params(
+                                        id,
+                                        &format!("center[{}] debe ser un número finito", k),
+                                    )
+                                }
+                            }
+                        }
+                        c
+                    }
+                    _ => {
+                        return McpResponse::invalid_params(
+                            id,
+                            "glass_inspect_spatial requiere 'center' como [x, y, z] finito",
+                        )
+                    }
+                };
+
+                let radius = match args.get("radius").and_then(|v| v.as_f64()) {
+                    Some(r) if r.is_finite() && r > 0.0 => r,
+                    _ => {
+                        return McpResponse::invalid_params(
+                            id,
+                            "'radius' debe ser un número finito mayor que cero",
+                        )
+                    }
+                };
+
+                let limit = match args.get("limit") {
+                    None => 50usize,
+                    Some(v) => {
+                        let n = match v.as_i64() {
+                            Some(n) => n,
+                            None => {
+                                return McpResponse::invalid_params(
+                                    id,
+                                    "'limit' debe ser un entero",
+                                )
+                            }
+                        };
+                        if n <= 0 {
+                            return McpResponse::invalid_params(
+                                id,
+                                "'limit' debe ser un entero positivo",
+                            );
+                        }
+                        (n as usize).min(500)
+                    }
+                };
+
+                let radio2 = radius * radius;
+                let mut halladas: Vec<(f64, u64, String, [f32; 3])> = Vec::new();
+                for e in &scene.entities {
+                    let p = e.transform.position;
+                    let dx = p[0] as f64 - center[0];
+                    let dy = p[1] as f64 - center[1];
+                    let dz = p[2] as f64 - center[2];
+                    let d2 = dx * dx + dy * dy + dz * dz;
+                    if d2 <= radio2 {
+                        halladas.push((d2.sqrt(), e.id, e.name.clone(), p));
+                    }
+                }
+                let total = halladas.len();
+                halladas.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                halladas.truncate(limit);
+
+                let items: Vec<serde_json::Value> = halladas
+                    .iter()
+                    .map(|(d, eid, nombre, p)| {
+                        json!({
+                            "id": eid,
+                            "name": nombre,
+                            "position": [p[0], p[1], p[2]],
+                            // Distancia con tres decimales: redondeo a milésimas en f64.
+                            "distance": (d * 1000.0).round() / 1000.0,
+                        })
+                    })
+                    .collect();
+                let pretty = serde_json::to_string_pretty(&items).unwrap_or_else(|_| "[]".to_string());
+                let texto = format!(
+                    "Centro: [{}, {}, {}] | Radio: {} | Encontradas: {}\n{}",
+                    center[0], center[1], center[2], radius, total, pretty
+                );
+                McpResponse::success(id, json!({"content":[{"type":"text","text": texto}]}))
+            }
+
+            // Foto honesta de los contadores medibles en este crate
+            // (sin VRAM ni tiempos de frame: no viven aquí).
+            "glass_profiler_snapshot" => {
+                let entities_total = scene.entities.len();
+                let mut entities_with_mesh = 0usize;
+                let mut entities_with_physics = 0usize;
+                let mut entities_with_script = 0usize;
+                for e in &scene.entities {
+                    if e.mesh.is_some() {
+                        entities_with_mesh += 1;
+                    }
+                    if e.physics.is_some() {
+                        entities_with_physics += 1;
+                    }
+                    if e.script.is_some() {
+                        entities_with_script += 1;
+                    }
+                }
+                let next_entity_id = scene.next_entity_id;
+                let shaders_reloaded_flag = scene.shaders_reloaded_flag;
+
+                // Mismo orden establecido que otros brazos: candado
+                // de escena tomado, luego el del mundo físico.
+                let (physics_bodies, physics_colliders) = {
+                    let fisica = self.get_physics();
+                    let mundo = match fisica.lock() {
+                        Ok(w) => w,
+                        Err(_) => {
+                            return McpResponse::error(
+                                id,
+                                -32003,
+                                "no se pudo bloquear el mundo físico",
+                            )
+                        }
+                    };
+                    (mundo.rigid_body_set.len(), mundo.collider_set.len())
+                };
+
+                let snapshot = json!({
+                    "entities_total": entities_total,
+                    "entities_with_mesh": entities_with_mesh,
+                    "entities_with_physics": entities_with_physics,
+                    "entities_with_script": entities_with_script,
+                    "next_entity_id": next_entity_id,
+                    "shaders_reloaded_flag": shaders_reloaded_flag,
+                    "physics_bodies": physics_bodies,
+                    "physics_colliders": physics_colliders,
+                });
+                let pretty = serde_json::to_string_pretty(&snapshot).unwrap_or_else(|_| snapshot.to_string());
+                McpResponse::success(id, json!({"content":[{"type":"text","text": pretty}]}))
             }
 
             "glass_modify_component" => {
