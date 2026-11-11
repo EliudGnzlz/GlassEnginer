@@ -26,3 +26,6 @@ __pycache__/
 #   un clon limpio no compila.
 # - Cargo.lock SÍ se versiona: es un proyecto de aplicación/binario y el
 #   lockfile garantiza builds y CI reproducibles.
+
+# Informes del soak test (se publican como artefacto en CI)
+soak-report/
