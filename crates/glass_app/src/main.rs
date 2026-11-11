@@ -68,11 +68,16 @@ struct SpawnedBodySpec {
     body_type: BodyType,
     position: [f32; 3],
     rotation: [f32; 4],
-    shape: ColliderShape,
     friction: f32,
     restitution: f32,
-    /// Capa, máscara y trigger de la Fase 1, desde el PhysicsData.
-    collider_cfg: ColliderConfig,
+    /// Colliders primitivos resueltos de la Fase 1.5 (forma, config y
+    /// offset local por collider).
+    colliders: Vec<(ColliderShape, ColliderConfig, [f32; 3])>,
+    /// Modo de collider de malla pedido por la escena (Fase 1.5). El
+    /// puente NO tiene la caché de geometría: lo anota para avisar de
+    /// que en spawn en vivo cae a los primitivos resueltos; la carga de
+    /// escena (rebuild) sí lo resuelve de verdad.
+    mesh_collider: glass_core::MeshColliderMode,
 }
 
 impl EngineSceneBridge {
@@ -101,19 +106,16 @@ impl EngineSceneBridge {
         });
         let model = ent.mesh.as_ref().map(|m| m.model.as_str()).unwrap_or("");
         let shape = collider_shape_for_builtin(model, glass_core::mat4_scale(world), body.box_extents);
+        let colliders = colliders_resueltos(body, shape);
         Some(SpawnedBodySpec {
             entity_id: ent.id,
             body_type,
             position: glass_core::mat4_translation(world),
             rotation: glass_core::mat4_to_quat(world),
-            shape,
             friction: body.friction,
             restitution: body.restitution,
-            collider_cfg: ColliderConfig {
-                layer: body.layer,
-                mask: body.collision_mask,
-                is_trigger: body.is_trigger,
-            },
+            colliders,
+            mesh_collider: body.mesh_collider,
         })
     }
 
@@ -129,19 +131,29 @@ impl EngineSceneBridge {
             return;
         }
         let handle = physics.create_rigid_body(spec.entity_id, spec.body_type, spec.position, spec.rotation);
+        if spec.mesh_collider != glass_core::MeshColliderMode::None {
+            log::warn!(
+                "entidad {}: collider de malla ({:?}) pedido por la escena, pero el spawn en vivo no lo resuelve; cae a los primitivos resueltos",
+                spec.entity_id,
+                spec.mesh_collider,
+            );
+        }
         // OJO, orden deliberado: se pasa (friction, restitution) a la
-        // firma (restitution, friction) de `attach_collider`, EL MISMO
-        // cruce histórico de `rebuild_physics_from_scene`. Un spawn y su
-        // gemelo autorado deben comportarse igual; el cruce se paga el
-        // día que se corrija en TODAS las rutas a la vez (deuda
+        // firma (restitution, friction) de `attach_collider_with_config_at`,
+        // EL MISMO cruce histórico de `rebuild_physics_from_scene`. Un
+        // spawn y su gemelo autorado deben comportarse igual; el cruce se
+        // paga el día que se corrija en TODAS las rutas a la vez (deuda
         // registrada en REGISTRO_PRIMITIVAS_COLLIDERS.md).
-        physics.attach_collider_with_config(
-            handle,
-            spec.shape,
-            spec.friction,
-            spec.restitution,
-            spec.collider_cfg,
-        );
+        for (shape, cfg, offset) in spec.colliders {
+            physics.attach_collider_with_config_at(
+                handle,
+                shape,
+                spec.friction,
+                spec.restitution,
+                cfg,
+                offset,
+            );
+        }
     }
 
     /// Retira del mundo vivo el cuerpo (y con él los colliders) de una
@@ -2440,6 +2452,10 @@ impl GlassEngineApp {
                                         model.images.clone(),
                                         model.primitive_ranges.clone(),
                                     );
+                                    // Geometría CPU retenida (Fase 1.5): los
+                                    // colliders de malla la leen al reconstruir
+                                    // la física; sin esto se pierde al subir a GPU.
+                                    cache.insert_geometry(stem, &model);
                                     self.upload_skin_if_any(renderer, vk_ctx, &mut *alloc, &mut *cache, &model, stem);
                                     // Y las texturas GPU de todos los
                                     // materiales: se resuben y los sets del
@@ -2575,16 +2591,16 @@ impl GlassEngineApp {
             scene.compute_world_matrices()
         };
 
-        let mut descriptors: Vec<(
+let mut descriptors: Vec<(
             u64,
             BodyType,
             [f32; 3],
             [f32; 4],
-            ColliderShape,
+            Vec<(ColliderShape, ColliderConfig, [f32; 3])>,
             f32,
             f32,
             [f32; 3],
-            ColliderConfig,
+            Option<(glass_core::MeshColliderMode, String, [f32; 3], bool)>,
         )> = Vec::new();
         {
             let Ok(scene) = self.scene_state.lock() else {
@@ -2630,39 +2646,132 @@ impl GlassEngineApp {
                     glass_core::mat4_scale(world),
                     body.box_extents,
                 );
+let resueltos = colliders_resueltos(body, shape);
+                // Si el cuerpo pide malla real, guardamos los datos para resolverla
+                // tras el bucle de escena (hace falta el AssetCache).
+                let mesh = if body.mesh_collider != glass_core::MeshColliderMode::None {
+                    Some((
+                        body.mesh_collider,
+                        model.to_string(),
+                        glass_core::mat4_scale(world),
+                        body.body_type == "Static",
+                    ))
+                } else {
+                    None
+                };
                 descriptors.push((
                     ent.id,
                     body_type,
                     pos,
                     rot,
-                    shape,
+                    resueltos,
                     body.friction,
                     body.restitution,
                     body.linear_velocity,
-                    ColliderConfig {
-                        layer: body.layer,
-                        mask: body.collision_mask,
-                        is_trigger: body.is_trigger,
-                    },
+                    mesh,
                 ));
             }
         }
+
+// Precargamos las geometrías retenidas que haga falta para armar colliders
+        // de malla real (Convex/TriMesh); si nadie las pide, el mapa queda vacío.
+        let necesita_geometria = descriptors.iter().any(|d| d.8.is_some());
+        let geometrias: std::collections::HashMap<String, (Vec<[f32; 3]>, Vec<u32>)> =
+            if necesita_geometria {
+                match self.asset_cache.read() {
+                    Ok(cache) => cache.geometries.clone(),
+                    Err(_) => {
+                        log::error!("Física: AssetCache envenenado, no hay geometrías para colliders de malla.");
+                        std::collections::HashMap::new()
+                    }
+                }
+            } else {
+                std::collections::HashMap::new()
+            };
 
         let Ok(mut physics) = self.physics_world.lock() else {
             log::error!("Física: candado envenenado, no se reconstruye el mundo.");
             return;
         };
         *physics = PhysicsWorld::new();
-        for (id, body_type, pos, rot, shape, friction, restitution, linvel, cfg) in descriptors {
+        for (id, body_type, pos, rot, resueltos, friction, restitution, linvel, mesh) in descriptors
+        {
             let handle = physics.create_rigid_body(id, body_type, pos, rot);
-            // OJO, orden deliberado: este paso de argumentos lleva
-            // (friction, restitution) desde siempre y todo el
-            // contenido está calibrado con ese cruce respecto a la
-            // firma (restitution, friction) del mundo. Se conserva
-            // EXACTO al pasar al dispatcher: «arreglarlo» aquí
-            // cambiaría el comportamiento físico de todas las
-            // escenas existentes.
-            physics.attach_collider_with_config(handle, shape, friction, restitution, cfg);
+
+            let mut via_mesh = false;
+            if let Some((modo, model_name, escala, es_estatico)) = &mesh {
+                if let Some((vertices, indices)) = geometrias.get(model_name) {
+                    let cfg = resueltos[0].1;
+                    let puntos: Vec<[f32; 3]> = vertices
+                        .iter()
+                        .map(|v| [v[0] * escala[0], v[1] * escala[1], v[2] * escala[2]])
+                        .collect();
+
+                    let attached = match modo {
+                        glass_core::MeshColliderMode::TriMesh if *es_estatico => {
+                            let tris: Vec<[u32; 3]> = indices
+                                .chunks_exact(3)
+                                .map(|c| [c[0], c[1], c[2]])
+                                .collect();
+                            // OJO, orden deliberado: el cruce (friction, restitution)
+                            // se conserva aquí por coherencia con el resto del sitio.
+                            physics.attach_trimesh_collider(
+                                handle,
+                                &puntos,
+                                &tris,
+                                friction,
+                                restitution,
+                                cfg,
+                            )
+                        }
+                        glass_core::MeshColliderMode::TriMesh => {
+                            log::warn!(
+                                "Física: entidad {} pide TriMesh en cuerpo no estático, se degrada a Convex.",
+                                id
+                            );
+                            physics.attach_convex_collider(
+                                handle,
+                                &puntos,
+                                friction,
+                                restitution,
+                                cfg,
+                            )
+                        }
+                        glass_core::MeshColliderMode::Convex => physics.attach_convex_collider(
+                            handle,
+                            &puntos,
+                            friction,
+                            restitution,
+                            cfg,
+                        ),
+                        glass_core::MeshColliderMode::None => None,
+                    };
+
+                    via_mesh = attached.is_some();
+                } else {
+                    log::warn!(
+                        "Física: entidad {} pide collider de malla pero no hay geometría cacheada para el modelo '{}'.",
+                        id,
+                        model_name
+                    );
+                }
+            }
+
+            if !via_mesh {
+                // OJO, orden deliberado: el cruce (friction, restitution) se conserva
+                // para mantener coherencia con el resto del sitio.
+                for (shape, cfg, offset) in resueltos {
+                    physics.attach_collider_with_config_at(
+                        handle,
+                        shape,
+                        friction,
+                        restitution,
+                        cfg,
+                        offset,
+                    );
+                }
+            }
+
             physics.set_linear_velocity(handle, linvel);
         }
         log::info!(
@@ -4951,6 +5060,9 @@ impl ApplicationHandler for GlassEngineApp {
                                     model.images.clone(),
                                     model.primitive_ranges.clone(),
                                 );
+                                // Geometría CPU retenida (Fase 1.5), como en la
+                                // ruta de recarga en caliente.
+                                cache.insert_geometry(stem.clone(), &model);
                                 self.upload_skin_if_any(&renderer, &vk_ctx, &mut *alloc, &mut *cache, &model, &stem);
                                 // Texturas base de TODOS los materiales: una
                                 // subida por cada imagen distinta referenciada,
@@ -6180,6 +6292,42 @@ fn recolectar_luces_puntuales(
 /// callback puede crear o destruir cuerpos. Función libre porque
 /// render_frame retiene préstamos de otros campos (renderer) todo el
 /// cuerpo: recibe los tres campos que toca por referencia disjunta.
+/// Forma del mundo para un ColliderSpec de escena (Fase 1.5).
+fn shape_de_spec(spec: &glass_core::ColliderSpec) -> ColliderShape {
+    match spec.shape.as_str() {
+        "Sphere" => ColliderShape::Ball { radius: spec.size[0].max(0.01) },
+        "Capsule" => ColliderShape::Capsule { half_height: spec.size[0].max(0.0), radius: spec.size[1].max(0.01) },
+        "Cylinder" => ColliderShape::Cylinder { half_height: spec.size[0].max(0.0), radius: spec.size[1].max(0.01) },
+        _ => ColliderShape::Cuboid { half_extents: spec.size },
+    }
+}
+
+/// La lista de colliders primitivos de una entidad (Fase 1.5): si el
+/// PhysicsData trae `colliders`, uno por spec (capa/máscara de la entidad,
+/// trigger DEL SPEC, con su offset); si no, el único collider histórico
+/// inferido de la malla, sin offset.
+fn colliders_resueltos(
+    body: &glass_core::PhysicsData,
+    shape_inferida: ColliderShape,
+) -> Vec<(ColliderShape, ColliderConfig, [f32; 3])> {
+    if body.colliders.is_empty() {
+        vec![(
+            shape_inferida,
+            ColliderConfig { layer: body.layer, mask: body.collision_mask, is_trigger: body.is_trigger },
+            [0.0, 0.0, 0.0],
+        )]
+    } else {
+        body.colliders
+            .iter()
+            .map(|spec| (
+                shape_de_spec(spec),
+                ColliderConfig { layer: body.layer, mask: body.collision_mask, is_trigger: spec.is_trigger },
+                spec.offset,
+            ))
+            .collect()
+    }
+}
+
 fn despachar_eventos_contacto(
     physics_world: &std::sync::Arc<std::sync::Mutex<PhysicsWorld>>,
     script_host: &glass_scripting::ScriptHost,

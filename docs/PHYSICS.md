@@ -211,3 +211,34 @@ La superficie equivalente a `UnityEngine.Physics` llegará en una fase posterior
 
 En la Fase 1, los rayos, barridos y solapes se realizan desde Rust o mediante MCP.
 Los scripts C# reciben eventos de contacto, pero no deben asumir que ya existe una API C# para consultar el mundo.
+
+## Caja de herramientas de colliders (Fase 1.5)
+
+### Colliders primitivos compuestos
+
+El campo `colliders` del physics de una entidad permite combinar varios colliders primitivos en un mismo cuerpo. Cada elemento admite:
+
+- `shape`: `"Box"`, `"Sphere"`, `"Capsule"` o `"Cylinder"`.
+- `size`: dimensiones o parámetros de la forma, según el tipo de primitiva.
+- `offset`: desplazamiento del collider en el espacio local de la entidad.
+- `is_trigger`: marca ese collider concreto como trigger, independientemente de los demás.
+
+La capa y la máscara de colisión se configuran en la entidad mediante `layer` y `collision_mask`, y se aplican al conjunto. Si `colliders` es una lista vacía, se mantiene el comportamiento histórico: el collider se infiere automáticamente a partir de la entidad.
+
+### Colliders de malla
+
+El campo `mesh_collider` selecciona cómo se usa la geometría del modelo:
+
+- `"None"`: no se crea un collider de malla; se usan los primitivos compuestos o el collider inferido.
+- `"Convex"`: construye el casco convexo de la geometría retenida del modelo.
+- `"TriMesh"`: usa la malla exacta, incluidos sus huecos y concavidades. Solo es válido para cuerpos `Static`. En cuerpos dinámicos o kinemáticos se degrada automáticamente a `"Convex"` y se escribe un aviso en el log.
+
+Si el modelo no tiene geometría retenida —por ejemplo, porque es un modelo integrado o no se ha importado— no se puede construir el collider de malla. En ese caso se vuelve a los colliders primitivos y se registra un aviso.
+
+### Geometría retenida
+
+Al importar un modelo, la aplicación conserva sus posiciones e índices en CPU dentro del `AssetCache`. Esta copia es la que permite construir cascos convexos y TriMeshes sin depender de lecturas desde GPU. La geometría CPU se expulsa junto con la malla GPU correspondiente, por lo que no sobrevive a la descarga del asset.
+
+### Límite conocido
+
+La carga de escena resuelve tanto colliders primitivos compuestos como colliders de malla. El spawn en vivo mediante `Instantiate`, sin embargo, actualmente solo resuelve primitivos compuestos: no crea colliders `"Convex"` ni `"TriMesh"` a partir de la malla.

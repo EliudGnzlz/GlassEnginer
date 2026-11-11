@@ -514,6 +514,122 @@ impl PhysicsWorld {
         Some(collider_handle.into_raw_parts().0 as u64)
     }
 
+    /// Igual que `attach_collider_with_config`, pero con un desplazamiento local
+    /// `offset` respecto al origen del cuerpo (el collider se inserta con parent,
+    /// de modo que Rapier interpreta la `translation` como relativa al cuerpo).
+    pub fn attach_collider_with_config_at(
+        &mut self,
+        body_handle: BodyHandle,
+        shape: ColliderShape,
+        restitution: f32,
+        friction: f32,
+        cfg: ColliderConfig,
+        offset: [f32; 3],
+    ) -> Option<ColliderHandle> {
+        // El cuerpo debe existir; si no, no hay nada que hacer.
+        let &(rapier_handle, _) = self.body_map.get(&body_handle)?;
+
+        // Builder según la forma geométrica.
+        let builder = match shape {
+            ColliderShape::Cuboid { half_extents } => {
+                ColliderBuilder::cuboid(half_extents[0], half_extents[1], half_extents[2])
+            }
+            ColliderShape::Ball { radius } => ColliderBuilder::ball(radius),
+            ColliderShape::Capsule {
+                half_height,
+                radius,
+            } => ColliderBuilder::capsule_y(half_height, radius),
+            ColliderShape::Cylinder {
+                half_height,
+                radius,
+            } => ColliderBuilder::cylinder(half_height, radius),
+        }
+        .restitution(restitution)
+        .friction(friction)
+        // Offset relativo al cuerpo padre (se respeta al usar insert_with_parent).
+        .translation(vector![offset[0], offset[1], offset[2]]);
+
+        let collider = apply_config(builder, cfg).build();
+        let collider_handle =
+            self.collider_set
+                .insert_with_parent(collider, rapier_handle, &mut self.rigid_body_set);
+        Some(collider_handle.into_raw_parts().0 as u64)
+    }
+
+    /// Añade un collider de malla triangular (trimesh) al cuerpo indicado.
+    /// La malla es estática en el espacio local del cuerpo (no hay offset:
+    /// los vértices vienen ya en coordenadas locales del cuerpo).
+    pub fn attach_trimesh_collider(
+        &mut self,
+        body_handle: BodyHandle,
+        vertices: &[[f32; 3]],
+        indices: &[[u32; 3]],
+        restitution: f32,
+        friction: f32,
+        cfg: ColliderConfig,
+    ) -> Option<ColliderHandle> {
+        // El cuerpo debe existir.
+        let &(rapier_handle, _) = self.body_map.get(&body_handle)?;
+
+        // Validación previa OBLIGATORIA: parry 0.18 no devuelve Err ante
+        // índices fuera de rango — indexa los vértices al reconstruir su
+        // QBVH y entra en pánico. Sin esta guarda, una malla corrupta
+        // tumbaría el motor en vez de devolver None.
+        if vertices.is_empty() || indices.is_empty() {
+            return None;
+        }
+        let n_vertices = vertices.len() as u32;
+        if indices.iter().flatten().any(|&i| i >= n_vertices) {
+            return None;
+        }
+        if vertices.iter().flatten().any(|c| !c.is_finite()) {
+            return None;
+        }
+        // Una malla cuyos triángulos son TODOS degenerados (índices
+        // repetidos o área cero) no colisiona con nada útil: se rechaza
+        // entera. Los triángulos degenerados sueltos dentro de una malla
+        // válida se dejan pasar (Rapier los tolera).
+        let algun_triangulo_util = indices.iter().any(|t| {
+            if t[0] == t[1] || t[1] == t[2] || t[0] == t[2] {
+                return false;
+            }
+            let a = vertices[t[0] as usize];
+            let b = vertices[t[1] as usize];
+            let c = vertices[t[2] as usize];
+            let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let cruz = [
+                ab[1] * ac[2] - ab[2] * ac[1],
+                ab[2] * ac[0] - ab[0] * ac[2],
+                ab[0] * ac[1] - ab[1] * ac[0],
+            ];
+            cruz.iter().map(|v| v * v).sum::<f32>() > 1e-12
+        });
+        if !algun_triangulo_util {
+            return None;
+        }
+
+        // Conversión a los tipos de Rapier.
+        let puntos: Vec<Point<f32>> = vertices
+            .iter()
+            .map(|v| Point::new(v[0], v[1], v[2]))
+            .collect();
+        let triangulos: Vec<[u32; 3]> = indices.to_vec();
+
+        // `trimesh` devuelve Result; este método devuelve Option -> .ok()?
+        // (malla degenerada, índices fuera de rango, etc. -> None, sin pánico).
+        let builder = ColliderBuilder::trimesh(puntos, triangulos)
+            .ok()?
+            .restitution(restitution)
+            .friction(friction);
+
+        let collider = apply_config(builder, cfg).build();
+        let collider_handle =
+            self.collider_set
+                .insert_with_parent(collider, rapier_handle, &mut self.rigid_body_set);
+        Some(collider_handle.into_raw_parts().0 as u64)
+    }
+
     /// Gets the current transform of a rigid body.
     pub fn get_transform(&self, body_handle: BodyHandle) -> Option<TransformFfi> {
         let &(rapier_handle, _) = self.body_map.get(&body_handle)?;
@@ -1399,5 +1515,259 @@ fn convex_hull_sostiene_como_caja() {
 
 
 
+
+    // ------------------------------------------------------------------
+    // Helpers DS-1.5a
+    // ------------------------------------------------------------------
+
+    /// Crea un cuerpo con la API de Fase 1. Los dinámicos van con rotaciones
+    /// bloqueadas y damping 1.5 para que caigan frenados (lo aplica
+    /// create_rigid_body a todo dinámico del mundo).
+    fn crear_cuerpo(
+        world: &mut PhysicsWorld,
+        entidad: u64,
+        dinamico: bool,
+        pos: [f32; 3],
+    ) -> BodyHandle {
+        world.create_rigid_body(
+            entidad,
+            if dinamico { BodyType::Dynamic } else { BodyType::Static },
+            pos,
+            [0.0, 0.0, 0.0, 1.0],
+        )
+    }
+
+    /// Lanza un rayo y devuelve la entidad impactada (si la hay).
+    fn rayo_entidad(
+        world: &mut PhysicsWorld,
+        origen: [f32; 3],
+        dir: [f32; 3],
+        max_dist: f32,
+    ) -> Option<u64> {
+        world
+            .cast_ray(origen, dir, max_dist, 0)
+            .map(|hit| hit.entity_id)
+    }
+
+    /// Añade a `verts`/`idx` una caja alineada a ejes: 8 vértices y 12 triángulos.
+    fn anadir_caja(
+        min: [f32; 3],
+        max: [f32; 3],
+        verts: &mut Vec<[f32; 3]>,
+        idx: &mut Vec<[u32; 3]>,
+    ) {
+        let base = verts.len() as u32;
+        verts.extend_from_slice(&[
+            [min[0], min[1], min[2]], // 0
+            [max[0], min[1], min[2]], // 1
+            [max[0], max[1], min[2]], // 2
+            [min[0], max[1], min[2]], // 3
+            [min[0], min[1], max[2]], // 4
+            [max[0], min[1], max[2]], // 5
+            [max[0], max[1], max[2]], // 6
+            [min[0], max[1], max[2]], // 7
+        ]);
+        let caras: [[u32; 3]; 12] = [
+            [0, 2, 1],
+            [0, 3, 2], // -Z
+            [4, 5, 6],
+            [4, 6, 7], // +Z
+            [0, 4, 7],
+            [0, 7, 3], // -X
+            [1, 2, 6],
+            [1, 6, 5], // +X
+            [0, 1, 5],
+            [0, 5, 4], // -Y
+            [3, 7, 6],
+            [3, 6, 2], // +Y
+        ];
+        for c in caras {
+            idx.push([base + c[0], base + c[1], base + c[2]]);
+        }
+    }
+
+    /// Canal en U abierto por arriba, a lo largo de Z:
+    /// fondo x[-1.2,1.2] y[-0.2,0] + paredes x[±1.0,±1.2] y[0,1], z[-2,2].
+    /// 24 vértices y 36 triángulos en total.
+    fn canal_en_u() -> (Vec<[f32; 3]>, Vec<[u32; 3]>) {
+        let mut verts = Vec::with_capacity(24);
+        let mut idx = Vec::with_capacity(36);
+        // Fondo
+        anadir_caja([-1.2, -0.2, -2.0], [1.2, 0.0, 2.0], &mut verts, &mut idx);
+        // Pared izquierda
+        anadir_caja([-1.2, 0.0, -2.0], [-1.0, 1.0, 2.0], &mut verts, &mut idx);
+        // Pared derecha
+        anadir_caja([1.0, 0.0, -2.0], [1.2, 1.0, 2.0], &mut verts, &mut idx);
+        assert_eq!(verts.len(), 24);
+        assert_eq!(idx.len(), 36);
+        (verts, idx)
+    }
+
+    // ------------------------------------------------------------------
+    // Tests DS-1.5a
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn offset_dos_esferas_reposa_y_rayo_localiza() {
+        let mut world = PhysicsWorld::new();
+
+        // Suelo estático: caja half [10, 0.5, 10] en y = -0.5 (superficie en y = 0).
+        let suelo = crear_cuerpo(&mut world, 1, false, [0.0, -0.5, 0.0]);
+        world
+            .attach_collider_with_config(
+                suelo,
+                ColliderShape::Cuboid {
+                    half_extents: [10.0, 0.5, 10.0],
+                },
+                0.0,
+                0.8,
+                ColliderConfig::default(),
+            )
+            .expect("collider del suelo");
+
+        // Cuerpo dinámico con DOS esferas desplazadas en x.
+        let esfera = crear_cuerpo(&mut world, 2, true, [0.0, 3.0, 0.0]);
+        world
+            .attach_collider_with_config_at(
+                esfera,
+                ColliderShape::Ball { radius: 0.5 },
+                0.0,
+                0.8,
+                ColliderConfig::default(),
+                [-1.2, 0.0, 0.0],
+            )
+            .expect("esfera izquierda");
+        world
+            .attach_collider_with_config_at(
+                esfera,
+                ColliderShape::Ball { radius: 0.5 },
+                0.0,
+                0.8,
+                ColliderConfig::default(),
+                [1.2, 0.0, 0.0],
+            )
+            .expect("esfera derecha");
+
+        for _ in 0..300 {
+            world.step(1.0 / 60.0);
+        }
+
+        // Reposa apoyado en ambas esferas: centro a y ≈ 0.5.
+        let y = world.get_transform(esfera).unwrap().position[1];
+        assert!((y - 0.5).abs() < 0.1, "y del cuerpo = {y}");
+
+        // Rayo por el centro: pasa entre las dos esferas, NO toca la entidad 2.
+        let central = rayo_entidad(&mut world, [0.0, 5.0, 0.0], [0.0, -1.0, 0.0], 10.0);
+        assert_ne!(central, Some(2), "el rayo central tocó las esferas: {central:?}");
+
+        // Rayo sobre la esfera derecha: SÍ toca la entidad 2.
+        let lateral = rayo_entidad(&mut world, [1.2, 5.0, 0.0], [0.0, -1.0, 0.0], 10.0);
+        assert_eq!(lateral, Some(2), "el rayo lateral no tocó las esferas: {lateral:?}");
+    }
+
+    #[test]
+    fn trimesh_canal_recibe_esfera_en_el_fondo() {
+        let mut world = PhysicsWorld::new();
+
+        let (verts, idx) = canal_en_u();
+
+        // Canal estático (UN solo cuerpo con el trimesh completo).
+        let canal = crear_cuerpo(&mut world, 1, false, [0.0, 0.0, 0.0]);
+        world
+            .attach_trimesh_collider(canal, &verts, &idx, 0.0, 0.8, ColliderConfig::default())
+            .expect("trimesh del canal");
+
+        // Esfera dinámica que debe caer DENTRO del canal.
+        let esfera = crear_cuerpo(&mut world, 2, true, [0.0, 3.0, 0.0]);
+        world
+            .attach_collider_with_config(
+                esfera,
+                ColliderShape::Ball { radius: 0.4 },
+                0.0,
+                0.8,
+                ColliderConfig::default(),
+            )
+            .expect("esfera");
+
+        for _ in 0..300 {
+            world.step(1.0 / 60.0);
+        }
+
+        let pos = world.get_transform(esfera).unwrap().position;
+        assert!((pos[1] - 0.4).abs() < 0.1, "la esfera no reposa en el fondo: y = {}", pos[1]);
+        assert!(pos[0].abs() < 0.3, "la esfera se salió del canal: x = {}", pos[0]);
+    }
+
+    #[test]
+    fn hull_del_canal_deja_la_esfera_sobre_el_borde() {
+        let mut world = PhysicsWorld::new();
+
+        let (verts, _idx) = canal_en_u();
+
+        // Mismo canal, pero como nube de puntos convexa: el hull cierra la boca a y = 1.
+        let canal = crear_cuerpo(&mut world, 1, false, [0.0, 0.0, 0.0]);
+        world
+            .attach_convex_collider(canal, &verts, 0.0, 0.8, ColliderConfig::default())
+            .expect("hull del canal");
+
+        let esfera = crear_cuerpo(&mut world, 2, true, [0.0, 3.0, 0.0]);
+        world
+            .attach_collider_with_config(
+                esfera,
+                ColliderShape::Ball { radius: 0.4 },
+                0.0,
+                0.8,
+                ColliderConfig::default(),
+            )
+            .expect("esfera");
+
+        for _ in 0..300 {
+            world.step(1.0 / 60.0);
+        }
+
+        // Contraste clave: con hull la esfera NO entra, reposa sobre la tapa a y ≈ 1.4.
+        let pos = world.get_transform(esfera).unwrap().position;
+        assert!(
+            (pos[1] - 1.4).abs() < 0.15,
+            "la esfera no reposa sobre el hull: y = {}",
+            pos[1]
+        );
+    }
+
+    #[test]
+    fn trimesh_degenerado_devuelve_none() {
+        let mut world = PhysicsWorld::new();
+
+        let cuerpo = crear_cuerpo(&mut world, 1, false, [0.0, 0.0, 0.0]);
+
+        // Índices que referencian vértices inexistentes -> Err en Rapier -> None.
+        let verts = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ];
+        let idx = vec![[0u32, 1u32, 7u32]];
+
+        let resultado =
+            world.attach_trimesh_collider(cuerpo, &verts, &idx, 0.0, 0.8, ColliderConfig::default());
+        assert!(resultado.is_none(), "un trimesh inválido debe devolver None");
+
+        // Caso adicional: todos los vértices idénticos (malla degenerada).
+        let verts_rep = vec![
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+        ];
+        let idx_rep = vec![[0u32, 1u32, 2u32]];
+        let resultado_rep = world.attach_trimesh_collider(
+            cuerpo,
+            &verts_rep,
+            &idx_rep,
+            0.0,
+            0.8,
+            ColliderConfig::default(),
+        );
+        assert!(resultado_rep.is_none(), "una malla degenerada debe devolver None");
+    }
 
 }

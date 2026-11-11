@@ -25,8 +25,8 @@ pub use math::{
 pub use prefab::Prefab;
 pub use project::ProjectSettings;
 pub use scene::{
-    resolve_ui_rect, AudioSourceData, CameraData, CanvasData, EntityData, LightData,
-    MaterialData, MeshData,
+    resolve_ui_rect, AudioSourceData, CameraData, CanvasData, ColliderSpec, EntityData, LightData,
+    MaterialData, MeshColliderMode, MeshData,
     PhysicsData, RectTransformData, SceneState, ScriptComponentData, TransformData, UIButtonData,
     UITextData,
     UIImageData,

@@ -6,6 +6,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 pub struct AssetCache {
+/// Geometría CPU retenida de cada modelo importado (posiciones e
+    /// índices, misma clave que `meshes`): la física la necesita para los
+    /// colliders de malla de la Fase 1.5; sin esta copia, el LoadedModel
+    /// se descarta tras la subida a GPU y la malla sería irrecuperable.
+    pub geometries: HashMap<String, (Vec<[f32; 3]>, Vec<u32>)>,
+
     pub meshes: HashMap<String, GpuMesh>,
     /// Mallas GPU de los modelos CON piel, bajo la misma clave que en
     /// `meshes`: misma geometría pero con el formato `SkinnedVertex`
@@ -52,6 +58,7 @@ pub struct AssetCache {
 impl Default for AssetCache {
     fn default() -> Self {
         Self {
+            geometries: HashMap::new(),
             meshes: HashMap::new(),
             skinned_meshes: HashMap::new(),
             skins: HashMap::new(),
@@ -75,6 +82,21 @@ impl Default for AssetCache {
 impl AssetCache {
     pub fn new() -> Arc<RwLock<Self>> {
         Arc::new(RwLock::new(Self::default()))
+    }
+
+/// Retiene la geometría CPU de un modelo importado (la llama la app
+    /// justo tras cargarlo, con la misma clave/stem que insert_mesh).
+    pub fn insert_geometry(&mut self, name: impl Into<String>, model: &crate::mesh::LoadedModel) {
+        let positions: Vec<[f32; 3]> = model.vertices.iter().map(|v| v.position).collect();
+        self.geometries.insert(name.into(), (positions, model.indices.clone()));
+        // (no tocar touch(): la geometría sigue el ciclo de vida del modelo;
+        // si la entrada GPU se expulsa por inactividad, la geometría debe
+        // expulsarse en el mismo sitio: ver evict_idle.)
+    }
+
+    /// Geometría retenida de un modelo, si la hay.
+    pub fn geometry(&self, name: &str) -> Option<&(Vec<[f32; 3]>, Vec<u32>)> {
+        self.geometries.get(name)
     }
 
     pub fn insert_mesh(
@@ -371,6 +393,7 @@ impl AssetCache {
     ) -> Vec<String> {
         let keys = self.select_evictions(max_idle_ticks, protected);
         for key in &keys {
+            self.geometries.remove(key);
             if let Some(mut mesh) = self.meshes.remove(key) {
                 mesh.destroy(device, allocator);
             }

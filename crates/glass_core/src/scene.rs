@@ -123,6 +123,39 @@ fn default_collision_mask() -> u32 {
     u32::MAX
 }
 
+/// Un collider primitivo compuesto de la caja de herramientas (Fase 1.5):
+/// una entidad puede llevar varios, cada uno con su desplazamiento local
+/// respecto al cuerpo. La capa y la máscara salen del PhysicsData de la
+/// entidad; el trigger es por collider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColliderSpec {
+    /// "Box" | "Sphere" | "Capsule" | "Cylinder" (otro valor = Box).
+    pub shape: String,
+    /// Box: half_extents · Sphere: [radio, 0, 0] ·
+    /// Capsule/Cylinder: [half_height, radio, 0].
+    pub size: [f32; 3],
+    /// Desplazamiento local del collider respecto al origen del cuerpo.
+    #[serde(default)]
+    pub offset: [f32; 3],
+    /// true = este collider es sensor (los demás pueden ser sólidos).
+    #[serde(default)]
+    pub is_trigger: bool,
+}
+
+/// Modo de collider de malla (Fase 1.5): None = camino histórico (primitiva
+/// inferida o lista `colliders`); Convex = casco convexo de la geometría
+/// del modelo; TriMesh = malla triangular exacta (SOLO estáticos: en un
+/// cuerpo no estático la app lo degrada a Convex, como en Unity).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum MeshColliderMode {
+    #[default]
+    None,
+    Convex,
+    TriMesh,
+}
+
+// Dentro de PhysicsData, tras is_trigger:
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhysicsData {
     pub body_type: String, // "Dynamic", "Static", "Kinematic"
@@ -142,6 +175,13 @@ pub struct PhysicsData {
     /// Si es true, el collider es sensor (trigger): detecta sin bloquear.
     #[serde(default)]
     pub is_trigger: bool,
+    /// Colliders primitivos compuestos (Fase 1.5). Vacío = camino
+    /// histórico de un solo collider inferido de la malla.
+    #[serde(default)]
+    pub colliders: Vec<ColliderSpec>,
+    /// Collider de malla sobre la geometría del modelo (Fase 1.5).
+    #[serde(default)]
+    pub mesh_collider: MeshColliderMode,
 }
 
 impl Default for PhysicsData {
@@ -156,6 +196,8 @@ impl Default for PhysicsData {
             layer: 0,
             collision_mask: u32::MAX,
             is_trigger: false,
+            colliders: Vec::new(),
+            mesh_collider: MeshColliderMode::None,
         }
     }
 }
@@ -630,6 +672,8 @@ impl EntityData {
                 layer: 0,
                 collision_mask: u32::MAX,
                 is_trigger: false,
+                colliders: Vec::new(),
+                mesh_collider: MeshColliderMode::None,
             })
         } else {
             None
