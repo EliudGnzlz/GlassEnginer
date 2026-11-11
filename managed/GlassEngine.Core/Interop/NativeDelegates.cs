@@ -10,6 +10,12 @@ public delegate int GetTransformDelegate(ulong entityId, out TransformData trans
 public delegate int SetTransformDelegate(ulong entityId, ref TransformData transform);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int GetTransformsBatchDelegate(IntPtr ids, IntPtr data, int cap);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetTransformsBatchDelegate(IntPtr ids, IntPtr data, int count);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate void LogMessageDelegate(int level, IntPtr utf8Message);
 
 // ---------------------------------------------------------------------------

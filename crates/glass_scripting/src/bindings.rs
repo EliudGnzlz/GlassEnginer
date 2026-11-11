@@ -68,6 +68,73 @@ pub unsafe extern "C" fn set_transform(entity_id: u64, input: *const TransformFf
     }
 }
 
+/// Exporta el lote COMPLETO de transforms en un solo cruce FFI.
+///
+/// `ids` y `data` son arrays paralelos cuyo tamaño en elementos es
+/// `cap`. Se sigue el patrón de consulta de la casa (igual que
+/// `copy_str_to_buf`):
+///   * Si `cap == 0` o cualquiera de los dos punteros es nulo → modo
+///     consulta: se devuelve N (total de entidades con transform)
+///     SIN tocar los buffers. Un puntero nulo en consulta NUNCA es
+///     error.
+///   * Si no → se copian `min(cap, N)` pares y se devuelve N, para
+///     que C# pueda comparar N con su capacidad y reintentar con un
+///     buffer mayor.
+pub unsafe extern "C" fn get_transforms_batch(
+    ids: *mut u64,
+    data: *mut TransformFfi,
+    cap: usize,
+) -> i32 {
+    let lote = crate::bridge::read_all_transforms();
+    let total = lote.len();
+
+    // Modo consulta: sólo se informa del tamaño necesario.
+    if ids.is_null() || data.is_null() || cap == 0 {
+        return total as i32;
+    }
+
+    // Copia parcial acotada por la capacidad del llamante.
+    let a_copiar = total.min(cap);
+    for (i, (id, transform)) in lote.iter().take(a_copiar).enumerate() {
+        unsafe {
+            *ids.add(i) = *id;
+            *data.add(i) = *transform;
+        }
+    }
+
+    total as i32
+}
+
+/// Aplica un lote de transforms venido de C# en un solo cruce FFI.
+///
+/// `ids` y `data` son arrays paralelos de `count` elementos.
+/// `count == 0` es una llamada vacía legítima (devuelve 0); un
+/// puntero nulo con `count > 0` es fallo de contrato y devuelve
+/// `BRIDGE_ERR_NULL_PTR`. Devuelve cuántos pares se aplicaron: un
+/// id desconocido o muerto no aborta el resto del lote.
+pub unsafe extern "C" fn set_transforms_batch(
+    ids: *const u64,
+    data: *const TransformFfi,
+    count: usize,
+) -> i32 {
+    if count == 0 {
+        return 0;
+    }
+    if ids.is_null() || data.is_null() {
+        return BRIDGE_ERR_NULL_PTR;
+    }
+
+    let mut aplicados: i32 = 0;
+    for i in 0..count {
+        let (id, transform) = unsafe { (*ids.add(i), *data.add(i)) };
+        if crate::bridge::write_entity_transform(id, transform) {
+            aplicados += 1;
+        }
+    }
+
+    aplicados
+}
+
 /// Native callback invoked by C# to pipe logs directly into Rust log subsystem.
 pub unsafe extern "C" fn log_message(level: i32, msg: *const c_char) {
     if msg.is_null() {
@@ -931,6 +998,15 @@ mod tests {
             true
         }
 
+        /// El lote del puente falso: la única entidad que conoce (la
+        /// 7) y solo si ya tiene transformada guardada.
+        fn all_transforms(&self) -> Vec<(u64, TransformFfi)> {
+            match *self.almacen.lock().unwrap_or_else(|e| e.into_inner()) {
+                Some(t) => vec![(7, t)],
+                None => Vec::new(),
+            }
+        }
+
         fn request_scene_load(&self, name: &str) -> Result<(), SceneLoadRejection> {
             if name == self.acepta {
                 Ok(())
@@ -1059,6 +1135,73 @@ mod tests {
         let rc = unsafe { get_transform(999, &mut no_tocada as *mut TransformFfi) };
         assert_eq!(rc, BRIDGE_ERR_NOT_FOUND);
         assert_eq!(no_tocada.position, [9.0; 3], "el buffer no debe modificarse");
+
+        restore();
+    }
+
+    /// El lote completo por FFI: consulta de tamaño, lectura del
+    /// lote, devolución modificada y lectura por la vía individual.
+    #[test]
+    fn lote_transforms_round_trip_por_ffi() {
+        let _g = install_fake();
+
+        let original = TransformFfi {
+            position: [4.0, 5.0, 6.0],
+            rotation: [0.1, 0.2, 0.3, 0.9],
+            scale: [2.0, 2.0, 2.0],
+        };
+        assert_eq!(
+            unsafe { set_transform(7, &original as *const TransformFfi) },
+            BRIDGE_OK
+        );
+
+        // 1) Consulta: cap == 0 devuelve el total sin tocar punteros.
+        let total = unsafe {
+            get_transforms_batch(std::ptr::null_mut(), std::ptr::null_mut(), 0)
+        };
+        assert_eq!(total, 1, "el puente falso solo conoce la entidad 7");
+
+        // 2) Lectura real del lote.
+        let mut ids: [u64; 4] = [0; 4];
+        let mut data: [TransformFfi; 4] = [TransformFfi {
+            position: [0.0; 3],
+            rotation: [0.0; 4],
+            scale: [0.0; 3],
+        }; 4];
+        let total = unsafe {
+            get_transforms_batch(ids.as_mut_ptr(), data.as_mut_ptr(), ids.len())
+        };
+        assert_eq!(total, 1);
+        assert_eq!(ids[0], 7);
+        assert_eq!(data[0], original);
+
+        // 3) Devolución del lote con la posición movida.
+        data[0].position = [40.0, 50.0, 60.0];
+        let aplicados = unsafe { set_transforms_batch(ids.as_ptr(), data.as_ptr(), 1) };
+        assert_eq!(aplicados, 1);
+
+        // 4) Lo escrito se ve por la vía de una sola entidad.
+        let mut leido = TransformFfi {
+            position: [0.0; 3],
+            rotation: [0.0; 4],
+            scale: [0.0; 3],
+        };
+        assert_eq!(
+            unsafe { get_transform(7, &mut leido as *mut TransformFfi) },
+            BRIDGE_OK
+        );
+        assert_eq!(leido, data[0]);
+
+        // 5) Contrato: puntero nulo con count > 0 es error; count
+        //    == 0 es llamada vacía legítima.
+        assert_eq!(
+            unsafe { set_transforms_batch(std::ptr::null(), data.as_ptr(), 1) },
+            BRIDGE_ERR_NULL_PTR
+        );
+        assert_eq!(
+            unsafe { set_transforms_batch(ids.as_ptr(), data.as_ptr(), 0) },
+            0
+        );
 
         restore();
     }

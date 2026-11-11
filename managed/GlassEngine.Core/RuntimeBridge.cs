@@ -52,6 +52,33 @@ public static class RuntimeBridge
 
     private static readonly Dictionary<int, GlassBehaviour> _instances = new();
     private static int _nextHandle = 1;
+
+    // Lote de transforms (bloque «FFI por lotes»): los dos exports
+    // que Rust entrega con InitTransformBatchBridge. Con ellos, el
+    // tick trabaja sobre TransformCache (una lectura y una
+    // escritura por frame) en vez de cruzar la frontera por acceso.
+    private static GetTransformsBatchDelegate? _getTransformsBatch;
+    private static SetTransformsBatchDelegate? _setTransformsBatch;
+
+    public static bool TransformBatchAvailable =>
+        _getTransformsBatch != null && _setTransformsBatch != null;
+
+    [UnmanagedCallersOnly(EntryPoint = "InitTransformBatchBridge")]
+    public static void InitTransformBatchBridge(IntPtr getFn, IntPtr setFn)
+    {
+        _getTransformsBatch = Marshal.GetDelegateForFunctionPointer<GetTransformsBatchDelegate>(getFn);
+        _setTransformsBatch = Marshal.GetDelegateForFunctionPointer<SetTransformsBatchDelegate>(setFn);
+    }
+
+    public static int GetTransformsBatch(IntPtr ids, IntPtr data, int cap)
+    {
+        return _getTransformsBatch?.Invoke(ids, data, cap) ?? -1;
+    }
+
+    public static int SetTransformsBatch(IntPtr ids, IntPtr data, int count)
+    {
+        return _setTransformsBatch?.Invoke(ids, data, count) ?? -1;
+    }
     private static readonly object _sync = new();
 
     // Caché de resolución de tipos, con negativos memorizados: sin ella, cada
@@ -1163,6 +1190,83 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         catch (Exception ex)
         {
             Log(4, $"Error ejecutando Update en script handle {handle}: {ex.Message}");
+        }
+    }
+
+    private const float FixedStep = 1f / 60f;
+    private static float _fixedAccumulator;
+
+    /// Tick completo de scripts en UNA llamada por frame (bloque
+    /// «FFI por lotes»): Rust llama aquí en lugar de llamar
+    /// UpdateScriptInstance por instancia. Se abre la caché de
+    /// transforms del frame, se despachan los pasos fijos
+    /// (FixedUpdate, que hasta este bloque nadie llamaba) y los
+    /// Update sobre una foto de las instancias, y al salir se
+    /// vuelcan los transforms sucios de vuelta a Rust en un solo
+    /// cruce. Las instancias creadas a mitad de tick entran en el
+    /// siguiente frame.
+    [UnmanagedCallersOnly(EntryPoint = "TickAllScripts")]
+    public static void TickAllScripts(float deltaTime)
+    {
+        TransformCache.BeginFrame();
+
+        try
+        {
+            KeyValuePair<int, GlassBehaviour>[] instances;
+            lock (_sync)
+            {
+                instances = new KeyValuePair<int, GlassBehaviour>[_instances.Count];
+                int i = 0;
+                foreach (KeyValuePair<int, GlassBehaviour> instance in _instances)
+                {
+                    instances[i++] = instance;
+                }
+            }
+
+            _fixedAccumulator += deltaTime;
+            int pasos = 0;
+
+            // Los pasos fijos van antes de Update y se limitan a 3
+            // para evitar la espiral de retraso.
+            while (_fixedAccumulator >= FixedStep && pasos < 3)
+            {
+                foreach (KeyValuePair<int, GlassBehaviour> instance in instances)
+                {
+                    try
+                    {
+                        instance.Value.FixedUpdate();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log(4, $"Error ejecutando FixedUpdate en script handle {instance.Key}: {ex.Message}");
+                    }
+                }
+
+                _fixedAccumulator -= FixedStep;
+                pasos++;
+            }
+
+            if (pasos == 3 && _fixedAccumulator >= FixedStep)
+            {
+                _fixedAccumulator %= FixedStep;
+            }
+
+            foreach (KeyValuePair<int, GlassBehaviour> instance in instances)
+            {
+                try
+                {
+                    instance.Value.StartIfNeeded();
+                    instance.Value.Update(deltaTime);
+                }
+                catch (Exception ex)
+                {
+                    Log(4, $"Error ejecutando Update en script handle {instance.Key}: {ex.Message}");
+                }
+            }
+        }
+        finally
+        {
+            TransformCache.Flush();
         }
     }
 

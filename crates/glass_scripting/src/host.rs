@@ -169,6 +169,15 @@ type DestroyScriptInstanceFn = unsafe extern "system" fn(i32);
 /// método nombrado se invocó; códigos negativos según el motivo (ver
 /// `RuntimeBridge.InvokeButtonClick` en el lado C#).
 type InvokeButtonClickFn = unsafe extern "system" fn(u64, *const c_char) -> i32;
+/// Tick gestionado por lotes (bloque «FFI por lotes»): una sola
+/// llamada por frame para todos los scripts; el gestionado itera
+/// sus instancias y trabaja sobre la caché de transforms del frame.
+type TickAllScriptsFn = unsafe extern "system" fn(f32);
+/// Init dedicado del lote de transforms (patrón de la casa: Init
+/// nuevo y separado; nunca se toca un Init existente). Recibe los
+/// dos punteros que C# usará para pedir y devolver el lote completo
+/// de transforms en un solo cruce.
+type InitTransformBatchBridgeFn = unsafe extern "system" fn(*const c_void, *const c_void);
 
 pub struct ScriptHost {
     pub is_initialized: bool,
@@ -177,6 +186,9 @@ pub struct ScriptHost {
     update_instance_fn: Option<UpdateScriptInstanceFn>,
     destroy_instance_fn: Option<DestroyScriptInstanceFn>,
     invoke_click_fn: Option<InvokeButtonClickFn>,
+    /// Si existe, `update_all` hace UNA llamada gestionada por
+    /// frame en lugar de una por instancia activa.
+    tick_all_fn: Option<TickAllScriptsFn>,
     active_instances: HashMap<i32, (u64, String)>, // handle -> (entity_id, script_name)
 }
 
@@ -189,6 +201,7 @@ impl ScriptHost {
             update_instance_fn: None,
             destroy_instance_fn: None,
             invoke_click_fn: None,
+            tick_all_fn: None,
             active_instances: HashMap::new(),
         }
     }
@@ -591,6 +604,45 @@ impl ScriptHost {
             );
         }
 
+        // Tick por lotes e Init del lote de transforms (bloque «FFI
+        // por lotes»): resolución tolerante como el resto de
+        // opcionales. Un ensamblado anterior a este bloque no los
+        // exporta y el motor arranca igual con el bucle por
+        // instancia y el FFI de transform por entidad.
+        let tick_all_fn = loader
+            .get_function_with_unmanaged_callers_only::<TickAllScriptsFn>(
+                bridge_type,
+                pdcstr!("TickAllScripts"),
+            )
+            .ok();
+        if tick_all_fn.is_none() {
+            log::warn!(
+                "El ensamblado managed no exporta TickAllScripts: se mantiene \
+                 el tick por instancia (¿GlassEngine.Core.dll desactualizado?)."
+            );
+        }
+        let init_transform_batch_fn = loader
+            .get_function_with_unmanaged_callers_only::<InitTransformBatchBridgeFn>(
+                bridge_type,
+                pdcstr!("InitTransformBatchBridge"),
+            )
+            .ok();
+        match init_transform_batch_fn {
+            Some(init_fn) => unsafe {
+                init_fn(
+                    crate::bindings::get_transforms_batch as *const c_void,
+                    crate::bindings::set_transforms_batch as *const c_void,
+                );
+            },
+            None => {
+                log::warn!(
+                    "El ensamblado managed no exporta InitTransformBatchBridge: \
+                     el lote de transforms queda inactivo."
+                );
+            }
+        }
+
+        self.tick_all_fn = tick_all_fn.map(|f| *f);
         self.invoke_click_fn = invoke_click_fn.map(|f| *f);
         self.create_instance_fn = Some(*create_fn);
         self.update_instance_fn = Some(*update_fn);
@@ -632,7 +684,18 @@ impl ScriptHost {
     }
 
     /// Dispatches an Update tick for all registered active script instances.
+    ///
+    /// Camino nuevo (bloque «FFI por lotes»): si el gestionado
+    /// exporta `TickAllScripts`, UNA sola llamada por frame y C#
+    /// itera sus instancias trabajando sobre la caché de transforms
+    /// del frame. Si no, el bucle clásico por instancia.
     pub fn update_all(&self, delta_time: f32) {
+        if let Some(tick_all_fn) = self.tick_all_fn {
+            unsafe {
+                tick_all_fn(delta_time);
+            }
+            return;
+        }
         if let Some(update_fn) = self.update_instance_fn {
             for &handle in self.active_instances.keys() {
                 unsafe {

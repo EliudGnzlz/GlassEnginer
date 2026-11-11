@@ -15,6 +15,13 @@ public abstract class GlassBehaviour
 
     public virtual void Update(float deltaTime) { }
 
+    /// Paso fijo (1/60 s, con acumulador): lo despacha
+    /// <c>RuntimeBridge.TickAllScripts</c> antes de Update desde el
+    /// bloque «FFI por lotes». Antes de ese bloque la jerarquía que
+    /// el motor ticka no tenía este gancho (solo existía en la
+    /// fachada <c>MonoBehaviour</c>, que no es la que se ticka).
+    public virtual void FixedUpdate() { }
+
     public virtual void OnDestroy() { }
 
     internal void StartIfNeeded()

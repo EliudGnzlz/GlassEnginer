@@ -355,16 +355,30 @@ namespace UnityEngine
 
     public class Transform : Component
     {
+        // Durante el tick (bloque «FFI por lotes») estas tres
+        // propiedades trabajan sobre la caché del frame: leer y
+        // escribir no cruza la frontera. Fuera del tick, o si la
+        // entidad no está en la caché (p. ej. creada a mitad de
+        // frame), se usa la ruta FFI clásica por entidad, con los
+        // mismos valores de reserva de siempre.
         public Vector3 position
         {
             get
             {
+                if (TransformCache.TryRead(EntityId, out TransformData tc))
+                    return tc.Position;
                 if (RuntimeBridge.GetTransform(EntityId, out TransformData t) == 0)
                     return t.Position;
                 return Vector3.zero;
             }
             set
             {
+                if (TransformCache.TryRead(EntityId, out TransformData tc))
+                {
+                    tc.Position = value;
+                    TransformCache.Write(EntityId, tc);
+                    return;
+                }
                 if (RuntimeBridge.GetTransform(EntityId, out TransformData t) == 0)
                 {
                     t.Position = value;
@@ -377,12 +391,20 @@ namespace UnityEngine
         {
             get
             {
+                if (TransformCache.TryRead(EntityId, out TransformData tc))
+                    return tc.Rotation;
                 if (RuntimeBridge.GetTransform(EntityId, out TransformData t) == 0)
                     return t.Rotation;
                 return Quaternion.identity;
             }
             set
             {
+                if (TransformCache.TryRead(EntityId, out TransformData tc))
+                {
+                    tc.Rotation = value;
+                    TransformCache.Write(EntityId, tc);
+                    return;
+                }
                 if (RuntimeBridge.GetTransform(EntityId, out TransformData t) == 0)
                 {
                     t.Rotation = value;
@@ -395,12 +417,20 @@ namespace UnityEngine
         {
             get
             {
+                if (TransformCache.TryRead(EntityId, out TransformData tc))
+                    return tc.Scale;
                 if (RuntimeBridge.GetTransform(EntityId, out TransformData t) == 0)
                     return t.Scale;
                 return Vector3.one;
             }
             set
             {
+                if (TransformCache.TryRead(EntityId, out TransformData tc))
+                {
+                    tc.Scale = value;
+                    TransformCache.Write(EntityId, tc);
+                    return;
+                }
                 if (RuntimeBridge.GetTransform(EntityId, out TransformData t) == 0)
                 {
                     t.Scale = value;

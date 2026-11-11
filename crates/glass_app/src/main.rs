@@ -172,6 +172,32 @@ impl SceneBridge for EngineSceneBridge {
         }
     }
 
+    /// Todos los transforms de la escena de una vez (bloque «FFI por
+    /// lotes»): la misma conversión que `get_transform` (Euler de la
+    /// escena -> cuaternión de la frontera) pero con UNA sola
+    /// adquisición del candado y un solo recorrido, para que C# pueda
+    /// cachear el frame entero con un único cruce FFI.
+    fn all_transforms(&self) -> Vec<(u64, TransformFfi)> {
+        let state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        state
+            .entities
+            .iter()
+            .map(|ent| {
+                (
+                    ent.id,
+                    TransformFfi {
+                        position: ent.transform.position,
+                        rotation: ent.transform.rotation_quat(),
+                        scale: ent.transform.scale,
+                    },
+                )
+            })
+            .collect()
+    }
+
     fn request_scene_load(&self, name: &str) -> Result<(), SceneLoadRejection> {
         let mut manager = self
             .scene_manager

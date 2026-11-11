@@ -257,6 +257,18 @@ pub trait SceneBridge: Send + Sync + 'static {
         None
     }
 
+    /// Devuelve TODOS los pares (entity_id, transform) de la escena
+    /// en una sola lectura.
+    ///
+    /// El host lo usa para cruzar la frontera FFI una única vez por
+    /// frame en lugar de N veces (ver `get_transforms_batch`). El
+    /// default vacío es deliberado: un puente que no soporte lotes
+    /// simplemente reporta N = 0 y C# cae al camino de una entidad
+    /// por llamada, sin romper nada.
+    fn all_transforms(&self) -> Vec<(u64, TransformFfi)> {
+        Vec::new()
+    }
+
     /// (cuerpos, colliders) del mundo físico vivo, o `None` sin puente.
     /// Son los conteos del propio Rapier (`RigidBodySet::len` /
     /// `ColliderSet::len` a través de `PhysicsWorld`), no una
@@ -304,6 +316,21 @@ pub(crate) fn write_entity_transform(entity_id: u64, transform: TransformFfi) ->
         cell.set_transform(entity_id, transform)
     } else {
         false
+    }
+}
+
+/// Lee el lote completo de transforms de la escena activa.
+///
+/// Análoga a `read_entity_transform`, pero devuelve todos los pares
+/// con una sola toma del candado del puente. Si el puente no está
+/// registrado o el candado está envenenado se devuelve un vector
+/// vacío: el lote vacío es un estado válido, no un error (el
+/// contrato FFI sólo distingue tamaños, no fallos de lectura).
+pub(crate) fn read_all_transforms() -> Vec<(u64, TransformFfi)> {
+    if let Ok(cell) = get_bridge_cell().read() {
+        cell.all_transforms()
+    } else {
+        Vec::new()
     }
 }
 
