@@ -22,6 +22,24 @@ public abstract class GlassBehaviour
     /// fachada <c>MonoBehaviour</c>, que no es la que se ticka).
     public virtual void FixedUpdate() { }
 
+    /// <summary>Un collider no-trigger de esta entidad empieza a tocar otro.</summary>
+    public virtual void OnCollisionEnter(Collision collision) { }
+
+    /// <summary>Cada frame mientras dos colliders no-trigger siguen en contacto.</summary>
+    public virtual void OnCollisionStay(Collision collision) { }
+
+    /// <summary>Dos colliders no-trigger dejan de tocarse.</summary>
+    public virtual void OnCollisionExit(Collision collision) { }
+
+    /// <summary>Otro collider empieza a solapar el trigger de esta entidad.</summary>
+    public virtual void OnTriggerEnter(Collision collision) { }
+
+    /// <summary>Cada frame mientras otro collider sigue dentro del trigger.</summary>
+    public virtual void OnTriggerStay(Collision collision) { }
+
+    /// <summary>Otro collider deja de solapar el trigger de esta entidad.</summary>
+    public virtual void OnTriggerExit(Collision collision) { }
+
     public virtual void OnDestroy() { }
 
     internal void StartIfNeeded()

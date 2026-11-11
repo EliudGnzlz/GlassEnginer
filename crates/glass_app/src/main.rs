@@ -6,7 +6,7 @@ use egui_ash_renderer::allocator::GpuAllocator;
 #[cfg(feature = "editor")]
 use egui_winit::State as EguiWinitState;
 use glass_audio::{register_global_audio_system, AudioSystem};
-use glass_physics::{collider_shape_for_builtin, register_global_physics_world, BodyType, ColliderShape, PhysicsWorld};
+use glass_physics::{collider_shape_for_builtin, register_global_physics_world, BodyType, ColliderConfig, ColliderShape, ContactKind, PhysicsWorld};
 use glass_core::{GlassWindow, SceneManager, SceneState, WindowConfig};
 #[cfg(feature = "editor")]
 use glass_editor::{
@@ -71,6 +71,8 @@ struct SpawnedBodySpec {
     shape: ColliderShape,
     friction: f32,
     restitution: f32,
+    /// Capa, máscara y trigger de la Fase 1, desde el PhysicsData.
+    collider_cfg: ColliderConfig,
 }
 
 impl EngineSceneBridge {
@@ -107,6 +109,11 @@ impl EngineSceneBridge {
             shape,
             friction: body.friction,
             restitution: body.restitution,
+            collider_cfg: ColliderConfig {
+                layer: body.layer,
+                mask: body.collision_mask,
+                is_trigger: body.is_trigger,
+            },
         })
     }
 
@@ -128,7 +135,13 @@ impl EngineSceneBridge {
         // gemelo autorado deben comportarse igual; el cruce se paga el
         // día que se corrija en TODAS las rutas a la vez (deuda
         // registrada en REGISTRO_PRIMITIVAS_COLLIDERS.md).
-        physics.attach_collider(handle, spec.shape, spec.friction, spec.restitution);
+        physics.attach_collider_with_config(
+            handle,
+            spec.shape,
+            spec.friction,
+            spec.restitution,
+            spec.collider_cfg,
+        );
     }
 
     /// Retira del mundo vivo el cuerpo (y con él los colliders) de una
@@ -1415,6 +1428,9 @@ struct GlassEngineApp {
     /// Contador de frames del perfilado (Fase 0): la memoria del allocator
     /// GPU se muestrea cada 120 frames, no en cada uno.
     profile_frame: u64,
+    /// Pares de contacto activos del frame anterior (Fase 1): con los de
+    /// este frame se derivan los eventos Stay a C#.
+    prev_contact_pairs: std::collections::HashSet<(u64, u64)>,
 }
 
 impl Drop for GlassEngineApp {
@@ -1680,6 +1696,7 @@ impl GlassEngineApp {
             retired_joint_buffers: Vec::new(),
             player_body_handle: None,
             profile_frame: 0,
+            prev_contact_pairs: std::collections::HashSet::new(),
         }
     }
 
@@ -2567,6 +2584,7 @@ impl GlassEngineApp {
             f32,
             f32,
             [f32; 3],
+            ColliderConfig,
         )> = Vec::new();
         {
             let Ok(scene) = self.scene_state.lock() else {
@@ -2621,6 +2639,11 @@ impl GlassEngineApp {
                     body.friction,
                     body.restitution,
                     body.linear_velocity,
+                    ColliderConfig {
+                        layer: body.layer,
+                        mask: body.collision_mask,
+                        is_trigger: body.is_trigger,
+                    },
                 ));
             }
         }
@@ -2630,7 +2653,7 @@ impl GlassEngineApp {
             return;
         };
         *physics = PhysicsWorld::new();
-        for (id, body_type, pos, rot, shape, friction, restitution, linvel) in descriptors {
+        for (id, body_type, pos, rot, shape, friction, restitution, linvel, cfg) in descriptors {
             let handle = physics.create_rigid_body(id, body_type, pos, rot);
             // OJO, orden deliberado: este paso de argumentos lleva
             // (friction, restitution) desde siempre y todo el
@@ -2639,7 +2662,7 @@ impl GlassEngineApp {
             // EXACTO al pasar al dispatcher: «arreglarlo» aquí
             // cambiaría el comportamiento físico de todas las
             // escenas existentes.
-            physics.attach_collider(handle, shape, friction, restitution);
+            physics.attach_collider_with_config(handle, shape, friction, restitution, cfg);
             physics.set_linear_velocity(handle, linvel);
         }
         log::info!(
@@ -3327,6 +3350,17 @@ impl GlassEngineApp {
         }
 
         profile_physics_us = profile_t_physics.elapsed().as_micros() as u64;
+
+        // Fase 1: entregar los eventos de contacto del paso a los scripts
+        // C# (el lock de física ya se soltó dentro del bloque anterior).
+        // Función libre por la misma razón que registrar_muestra_frame:
+        // render_frame retiene &mut del renderer durante todo el cuerpo.
+        despachar_eventos_contacto(
+            &self.physics_world,
+            &self.script_host,
+            &mut self.prev_contact_pairs,
+            &self.scene_state,
+        );
 
         // Inicio de la fase RENDER del perfilado (portal/views/post/offscreen
         // y, en standalone, el overlay del Canvas).
@@ -6139,6 +6173,66 @@ fn recolectar_luces_puntuales(
 
 /// Registro de la muestra de frame de la Fase 0: alimenta el registro global
 /// de `glass_core::profiling` y, cada 120 frames, muestrea la memoria del
+/// Drena los eventos de contacto del mundo y los despacha a los scripts
+/// de AMBAS entidades del par (Enter/Exit directos del mundo; Stay
+/// derivado de los pares activos que ya lo estaban el frame anterior y no
+/// acaban de entrar). El lock de física se suelta ANTES de despachar: un
+/// callback puede crear o destruir cuerpos. Función libre porque
+/// render_frame retiene préstamos de otros campos (renderer) todo el
+/// cuerpo: recibe los tres campos que toca por referencia disjunta.
+fn despachar_eventos_contacto(
+    physics_world: &std::sync::Arc<std::sync::Mutex<PhysicsWorld>>,
+    script_host: &glass_scripting::ScriptHost,
+    prev_contact_pairs: &mut std::collections::HashSet<(u64, u64)>,
+    scene_state: &Arc<Mutex<SceneState>>,
+) {
+    let (events, active_pairs) = {
+        let Ok(mut physics) = physics_world.lock() else {
+            return;
+        };
+        (
+            physics.drain_contact_events(),
+            physics.contact_pairs(),
+        )
+    };
+    if events.is_empty() && active_pairs.is_empty() && prev_contact_pairs.is_empty() {
+        return;
+    }
+    // Nombres de escena por id: el Collision gestionado debe nombrar a la
+    // OTRA entidad de verdad, no «Entity». Se construye solo cuando hay
+    // algo que despachar.
+    let nombres: std::collections::HashMap<u64, String> = match scene_state.lock() {
+        Ok(scene) => scene
+            .entities
+            .iter()
+            .map(|e| (e.id, e.name.clone()))
+            .collect(),
+        Err(_) => Default::default(),
+    };
+    let nombre = |id: u64| nombres.get(&id).map(String::as_str).unwrap_or("Entity");
+    let mut entered: std::collections::HashSet<(u64, u64)> = Default::default();
+    for event in &events {
+        let kind = match event.kind {
+            ContactKind::Enter => 0,
+            ContactKind::Exit => 2,
+        };
+        script_host.dispatch_contact_event(event.a, event.b, kind, event.is_trigger, nombre(event.b));
+        script_host.dispatch_contact_event(event.b, event.a, kind, event.is_trigger, nombre(event.a));
+        if event.kind == ContactKind::Enter {
+            entered.insert((event.a, event.b));
+        }
+    }
+    let mut active_set: std::collections::HashSet<(u64, u64)> = Default::default();
+    for (a, b, is_trigger) in &active_pairs {
+        active_set.insert((*a, *b));
+        if prev_contact_pairs.contains(&(*a, *b)) && !entered.contains(&(*a, *b)) {
+            script_host.dispatch_contact_event(*a, *b, 1, *is_trigger, nombre(*b));
+            script_host.dispatch_contact_event(*b, *a, 1, *is_trigger, nombre(*a));
+        }
+    }
+    *prev_contact_pairs = active_set;
+}
+
 /// allocator GPU (generate_report recorre las asignaciones: no es gratis).
 fn registrar_muestra_frame(
     contador: &mut u64,

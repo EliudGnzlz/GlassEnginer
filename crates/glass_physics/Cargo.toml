@@ -11,6 +11,7 @@ log.workspace = true
 thiserror.workspace = true
 rapier3d.workspace = true
 crossbeam-queue.workspace = true
+crossbeam.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

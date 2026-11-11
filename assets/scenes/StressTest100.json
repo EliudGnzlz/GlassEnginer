@@ -1,0 +1,7270 @@
+[
+  {
+    "id": 1,
+    "active": true,
+    "name": "Cámara",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "Camera"
+    ],
+    "transform": {
+      "position": [
+        0,
+        26,
+        30
+      ],
+      "rotation": [
+        -50,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": null,
+    "script": null,
+    "script_data": null,
+    "physics": null,
+    "audio": null,
+    "camera": {
+      "fov": 60.0,
+      "near_clip": 0.1,
+      "far_clip": 1000.0,
+      "is_main": true
+    },
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 2,
+    "active": true,
+    "name": "Luz direccional",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "Light"
+    ],
+    "transform": {
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        -58,
+        -22,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": null,
+    "script": null,
+    "script_data": null,
+    "physics": null,
+    "audio": null,
+    "camera": null,
+    "light": {
+      "light_type": "Directional",
+      "color": [
+        1,
+        1,
+        1
+      ],
+      "intensity": 1.0,
+      "range": 10.0
+    },
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 3,
+    "active": true,
+    "name": "Suelo",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": true,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "StaticCollider"
+    ],
+    "transform": {
+      "position": [
+        0,
+        -0.5,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        60,
+        1,
+        60
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.25,
+        0.27,
+        0.3
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Static",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        30,
+        0.5,
+        30
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 4,
+    "active": true,
+    "name": "Cuerpo 001",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -7.2,
+        3.0,
+        -7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 5,
+    "active": true,
+    "name": "Cuerpo 002",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -5.6,
+        3.0,
+        -7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 6,
+    "active": true,
+    "name": "Cuerpo 003",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -4.0,
+        3.0,
+        -7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 7,
+    "active": true,
+    "name": "Cuerpo 004",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -2.3999999999999995,
+        3.0,
+        -7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 8,
+    "active": true,
+    "name": "Cuerpo 005",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -0.7999999999999998,
+        3.0,
+        -7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 9,
+    "active": true,
+    "name": "Cuerpo 006",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        0.7999999999999998,
+        3.0,
+        -7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 10,
+    "active": true,
+    "name": "Cuerpo 007",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        2.4000000000000012,
+        3.0,
+        -7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 11,
+    "active": true,
+    "name": "Cuerpo 008",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        4.000000000000001,
+        3.0,
+        -7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 12,
+    "active": true,
+    "name": "Cuerpo 009",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        5.6000000000000005,
+        3.0,
+        -7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 13,
+    "active": true,
+    "name": "Cuerpo 010",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        7.2,
+        3.0,
+        -7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 14,
+    "active": true,
+    "name": "Cuerpo 011",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -7.2,
+        4.3,
+        -5.6
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 15,
+    "active": true,
+    "name": "Cuerpo 012",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -5.6,
+        4.3,
+        -5.6
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 16,
+    "active": true,
+    "name": "Cuerpo 013",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -4.0,
+        4.3,
+        -5.6
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 17,
+    "active": true,
+    "name": "Cuerpo 014",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -2.3999999999999995,
+        4.3,
+        -5.6
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 18,
+    "active": true,
+    "name": "Cuerpo 015",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -0.7999999999999998,
+        4.3,
+        -5.6
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 19,
+    "active": true,
+    "name": "Cuerpo 016",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        0.7999999999999998,
+        4.3,
+        -5.6
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 20,
+    "active": true,
+    "name": "Cuerpo 017",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        2.4000000000000012,
+        4.3,
+        -5.6
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 21,
+    "active": true,
+    "name": "Cuerpo 018",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        4.000000000000001,
+        4.3,
+        -5.6
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 22,
+    "active": true,
+    "name": "Cuerpo 019",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        5.6000000000000005,
+        4.3,
+        -5.6
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 23,
+    "active": true,
+    "name": "Cuerpo 020",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        7.2,
+        4.3,
+        -5.6
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 24,
+    "active": true,
+    "name": "Cuerpo 021",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -7.2,
+        5.6,
+        -4.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 25,
+    "active": true,
+    "name": "Cuerpo 022",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -5.6,
+        5.6,
+        -4.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 26,
+    "active": true,
+    "name": "Cuerpo 023",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -4.0,
+        5.6,
+        -4.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 27,
+    "active": true,
+    "name": "Cuerpo 024",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -2.3999999999999995,
+        5.6,
+        -4.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 28,
+    "active": true,
+    "name": "Cuerpo 025",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -0.7999999999999998,
+        5.6,
+        -4.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 29,
+    "active": true,
+    "name": "Cuerpo 026",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        0.7999999999999998,
+        5.6,
+        -4.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 30,
+    "active": true,
+    "name": "Cuerpo 027",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        2.4000000000000012,
+        5.6,
+        -4.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 31,
+    "active": true,
+    "name": "Cuerpo 028",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        4.000000000000001,
+        5.6,
+        -4.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 32,
+    "active": true,
+    "name": "Cuerpo 029",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        5.6000000000000005,
+        5.6,
+        -4.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 33,
+    "active": true,
+    "name": "Cuerpo 030",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        7.2,
+        5.6,
+        -4.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 34,
+    "active": true,
+    "name": "Cuerpo 031",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -7.2,
+        6.9,
+        -2.3999999999999995
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 35,
+    "active": true,
+    "name": "Cuerpo 032",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -5.6,
+        6.9,
+        -2.3999999999999995
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 36,
+    "active": true,
+    "name": "Cuerpo 033",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -4.0,
+        6.9,
+        -2.3999999999999995
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 37,
+    "active": true,
+    "name": "Cuerpo 034",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -2.3999999999999995,
+        6.9,
+        -2.3999999999999995
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 38,
+    "active": true,
+    "name": "Cuerpo 035",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -0.7999999999999998,
+        6.9,
+        -2.3999999999999995
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 39,
+    "active": true,
+    "name": "Cuerpo 036",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        0.7999999999999998,
+        6.9,
+        -2.3999999999999995
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 40,
+    "active": true,
+    "name": "Cuerpo 037",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        2.4000000000000012,
+        6.9,
+        -2.3999999999999995
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 41,
+    "active": true,
+    "name": "Cuerpo 038",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        4.000000000000001,
+        6.9,
+        -2.3999999999999995
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 42,
+    "active": true,
+    "name": "Cuerpo 039",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        5.6000000000000005,
+        6.9,
+        -2.3999999999999995
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 43,
+    "active": true,
+    "name": "Cuerpo 040",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        7.2,
+        6.9,
+        -2.3999999999999995
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 44,
+    "active": true,
+    "name": "Cuerpo 041",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -7.2,
+        8.2,
+        -0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 45,
+    "active": true,
+    "name": "Cuerpo 042",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -5.6,
+        8.2,
+        -0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 46,
+    "active": true,
+    "name": "Cuerpo 043",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -4.0,
+        8.2,
+        -0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 47,
+    "active": true,
+    "name": "Cuerpo 044",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -2.3999999999999995,
+        8.2,
+        -0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 48,
+    "active": true,
+    "name": "Cuerpo 045",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -0.7999999999999998,
+        8.2,
+        -0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 49,
+    "active": true,
+    "name": "Cuerpo 046",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        0.7999999999999998,
+        8.2,
+        -0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 50,
+    "active": true,
+    "name": "Cuerpo 047",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        2.4000000000000012,
+        8.2,
+        -0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 51,
+    "active": true,
+    "name": "Cuerpo 048",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        4.000000000000001,
+        8.2,
+        -0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 52,
+    "active": true,
+    "name": "Cuerpo 049",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        5.6000000000000005,
+        8.2,
+        -0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 53,
+    "active": true,
+    "name": "Cuerpo 050",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        7.2,
+        8.2,
+        -0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 54,
+    "active": true,
+    "name": "Cuerpo 051",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -7.2,
+        3.0,
+        0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 55,
+    "active": true,
+    "name": "Cuerpo 052",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -5.6,
+        3.0,
+        0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 56,
+    "active": true,
+    "name": "Cuerpo 053",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -4.0,
+        3.0,
+        0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 57,
+    "active": true,
+    "name": "Cuerpo 054",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -2.3999999999999995,
+        3.0,
+        0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 58,
+    "active": true,
+    "name": "Cuerpo 055",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -0.7999999999999998,
+        3.0,
+        0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 59,
+    "active": true,
+    "name": "Cuerpo 056",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        0.7999999999999998,
+        3.0,
+        0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 60,
+    "active": true,
+    "name": "Cuerpo 057",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        2.4000000000000012,
+        3.0,
+        0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 61,
+    "active": true,
+    "name": "Cuerpo 058",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        4.000000000000001,
+        3.0,
+        0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 62,
+    "active": true,
+    "name": "Cuerpo 059",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        5.6000000000000005,
+        3.0,
+        0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 63,
+    "active": true,
+    "name": "Cuerpo 060",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        7.2,
+        3.0,
+        0.7999999999999998
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 64,
+    "active": true,
+    "name": "Cuerpo 061",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -7.2,
+        4.3,
+        2.4000000000000012
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 65,
+    "active": true,
+    "name": "Cuerpo 062",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -5.6,
+        4.3,
+        2.4000000000000012
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 66,
+    "active": true,
+    "name": "Cuerpo 063",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -4.0,
+        4.3,
+        2.4000000000000012
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 67,
+    "active": true,
+    "name": "Cuerpo 064",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -2.3999999999999995,
+        4.3,
+        2.4000000000000012
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 68,
+    "active": true,
+    "name": "Cuerpo 065",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -0.7999999999999998,
+        4.3,
+        2.4000000000000012
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 69,
+    "active": true,
+    "name": "Cuerpo 066",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        0.7999999999999998,
+        4.3,
+        2.4000000000000012
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 70,
+    "active": true,
+    "name": "Cuerpo 067",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        2.4000000000000012,
+        4.3,
+        2.4000000000000012
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 71,
+    "active": true,
+    "name": "Cuerpo 068",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        4.000000000000001,
+        4.3,
+        2.4000000000000012
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 72,
+    "active": true,
+    "name": "Cuerpo 069",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        5.6000000000000005,
+        4.3,
+        2.4000000000000012
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 73,
+    "active": true,
+    "name": "Cuerpo 070",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        7.2,
+        4.3,
+        2.4000000000000012
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 74,
+    "active": true,
+    "name": "Cuerpo 071",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -7.2,
+        5.6,
+        4.000000000000001
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 75,
+    "active": true,
+    "name": "Cuerpo 072",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -5.6,
+        5.6,
+        4.000000000000001
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 76,
+    "active": true,
+    "name": "Cuerpo 073",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -4.0,
+        5.6,
+        4.000000000000001
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 77,
+    "active": true,
+    "name": "Cuerpo 074",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -2.3999999999999995,
+        5.6,
+        4.000000000000001
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 78,
+    "active": true,
+    "name": "Cuerpo 075",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -0.7999999999999998,
+        5.6,
+        4.000000000000001
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 79,
+    "active": true,
+    "name": "Cuerpo 076",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        0.7999999999999998,
+        5.6,
+        4.000000000000001
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 80,
+    "active": true,
+    "name": "Cuerpo 077",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        2.4000000000000012,
+        5.6,
+        4.000000000000001
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 81,
+    "active": true,
+    "name": "Cuerpo 078",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        4.000000000000001,
+        5.6,
+        4.000000000000001
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 82,
+    "active": true,
+    "name": "Cuerpo 079",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        5.6000000000000005,
+        5.6,
+        4.000000000000001
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 83,
+    "active": true,
+    "name": "Cuerpo 080",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        7.2,
+        5.6,
+        4.000000000000001
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 84,
+    "active": true,
+    "name": "Cuerpo 081",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -7.2,
+        6.9,
+        5.6000000000000005
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 85,
+    "active": true,
+    "name": "Cuerpo 082",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -5.6,
+        6.9,
+        5.6000000000000005
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 86,
+    "active": true,
+    "name": "Cuerpo 083",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -4.0,
+        6.9,
+        5.6000000000000005
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 87,
+    "active": true,
+    "name": "Cuerpo 084",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -2.3999999999999995,
+        6.9,
+        5.6000000000000005
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 88,
+    "active": true,
+    "name": "Cuerpo 085",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -0.7999999999999998,
+        6.9,
+        5.6000000000000005
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 89,
+    "active": true,
+    "name": "Cuerpo 086",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        0.7999999999999998,
+        6.9,
+        5.6000000000000005
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 90,
+    "active": true,
+    "name": "Cuerpo 087",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        2.4000000000000012,
+        6.9,
+        5.6000000000000005
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 91,
+    "active": true,
+    "name": "Cuerpo 088",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        4.000000000000001,
+        6.9,
+        5.6000000000000005
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 92,
+    "active": true,
+    "name": "Cuerpo 089",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        5.6000000000000005,
+        6.9,
+        5.6000000000000005
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 93,
+    "active": true,
+    "name": "Cuerpo 090",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        7.2,
+        6.9,
+        5.6000000000000005
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 94,
+    "active": true,
+    "name": "Cuerpo 091",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -7.2,
+        8.2,
+        7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 95,
+    "active": true,
+    "name": "Cuerpo 092",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -5.6,
+        8.2,
+        7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 96,
+    "active": true,
+    "name": "Cuerpo 093",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -4.0,
+        8.2,
+        7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 97,
+    "active": true,
+    "name": "Cuerpo 094",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -2.3999999999999995,
+        8.2,
+        7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 98,
+    "active": true,
+    "name": "Cuerpo 095",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        -0.7999999999999998,
+        8.2,
+        7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 99,
+    "active": true,
+    "name": "Cuerpo 096",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        0.7999999999999998,
+        8.2,
+        7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 100,
+    "active": true,
+    "name": "Cuerpo 097",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        2.4000000000000012,
+        8.2,
+        7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 101,
+    "active": true,
+    "name": "Cuerpo 098",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        4.000000000000001,
+        8.2,
+        7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 102,
+    "active": true,
+    "name": "Cuerpo 099",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        5.6000000000000005,
+        8.2,
+        7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.9,
+        0.35,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "sphere"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 103,
+    "active": true,
+    "name": "Cuerpo 100",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody",
+      "Collider"
+    ],
+    "transform": {
+      "position": [
+        7.2,
+        8.2,
+        7.2
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.2,
+        0.55,
+        0.9
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Dynamic",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  }
+]

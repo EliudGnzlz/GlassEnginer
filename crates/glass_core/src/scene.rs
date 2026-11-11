@@ -118,6 +118,11 @@ impl Default for MeshData {
     }
 }
 
+/// Default de `PhysicsData::collision_mask`: todas las capas.
+fn default_collision_mask() -> u32 {
+    u32::MAX
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhysicsData {
     pub body_type: String, // "Dynamic", "Static", "Kinematic"
@@ -126,6 +131,17 @@ pub struct PhysicsData {
     pub restitution: f32,
     pub box_extents: [f32; 3],
     pub linear_velocity: [f32; 3],
+    /// Capa de colisión (0..31): el collider pertenece a esta capa y
+    /// colisiona según su máscara. Fase 1.
+    #[serde(default)]
+    pub layer: u8,
+    /// Máscara de colisión: capas contra las que colisiona (bit a bit).
+    /// Default u32::MAX (todas) vía función porque el default del tipo es 0.
+    #[serde(default = "default_collision_mask")]
+    pub collision_mask: u32,
+    /// Si es true, el collider es sensor (trigger): detecta sin bloquear.
+    #[serde(default)]
+    pub is_trigger: bool,
 }
 
 impl Default for PhysicsData {
@@ -137,6 +153,9 @@ impl Default for PhysicsData {
             restitution: 0.05,
             box_extents: [0.5, 0.5, 0.5],
             linear_velocity: [0.0, 0.0, 0.0],
+            layer: 0,
+            collision_mask: u32::MAX,
+            is_trigger: false,
         }
     }
 }
@@ -608,6 +627,9 @@ impl EntityData {
                 restitution: 0.05,
                 box_extents: [0.5, 0.5, 0.5],
                 linear_velocity: [0.0, 0.0, 0.0],
+                layer: 0,
+                collision_mask: u32::MAX,
+                is_trigger: false,
             })
         } else {
             None

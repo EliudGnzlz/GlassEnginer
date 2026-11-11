@@ -173,6 +173,8 @@ type InvokeButtonClickFn = unsafe extern "system" fn(u64, *const c_char) -> i32;
 /// llamada por frame para todos los scripts; el gestionado itera
 /// sus instancias y trabaja sobre la caché de transforms del frame.
 type TickAllScriptsFn = unsafe extern "system" fn(f32);
+/// Export managed de la Fase 1: (entidad, otra entidad, kind, es_trigger).
+type DispatchContactEventFn = unsafe extern "system" fn(u64, u64, i32, i32, *const std::ffi::c_char);
 /// Init dedicado del lote de transforms (patrón de la casa: Init
 /// nuevo y separado; nunca se toca un Init existente). Recibe los
 /// dos punteros que C# usará para pedir y devolver el lote completo
@@ -189,6 +191,7 @@ pub struct ScriptHost {
     /// Si existe, `update_all` hace UNA llamada gestionada por
     /// frame en lugar de una por instancia activa.
     tick_all_fn: Option<TickAllScriptsFn>,
+    contact_event_fn: Option<DispatchContactEventFn>,
     active_instances: HashMap<i32, (u64, String)>, // handle -> (entity_id, script_name)
 }
 
@@ -202,6 +205,7 @@ impl ScriptHost {
             destroy_instance_fn: None,
             invoke_click_fn: None,
             tick_all_fn: None,
+            contact_event_fn: None,
             active_instances: HashMap::new(),
         }
     }
@@ -642,6 +646,22 @@ impl ScriptHost {
             }
         }
 
+        // Eventos de contacto (Fase 1): resolución tolerante — un
+        // ensamblado anterior no exporta DispatchContactEvent y el motor
+        // arranca igual, simplemente sin callbacks de contacto.
+        let contact_event_fn = loader
+            .get_function_with_unmanaged_callers_only::<DispatchContactEventFn>(
+                bridge_type,
+                pdcstr!("DispatchContactEvent"),
+            )
+            .ok();
+        if contact_event_fn.is_none() {
+            log::warn!(
+                "El ensamblado managed no exporta DispatchContactEvent: los \
+                 callbacks OnCollision*/OnTrigger* quedan inactivos."
+            );
+        }
+        self.contact_event_fn = contact_event_fn.map(|f| *f);
         self.tick_all_fn = tick_all_fn.map(|f| *f);
         self.invoke_click_fn = invoke_click_fn.map(|f| *f);
         self.create_instance_fn = Some(*create_fn);
@@ -702,6 +722,29 @@ impl ScriptHost {
                     update_fn(handle, delta_time);
                 }
             }
+        }
+    }
+
+    /// Entrega un evento de contacto a los scripts de UNA entidad (la
+    /// otra va como «other», con su nombre de escena para que el
+    /// `Collision.gameObject` gestionado nazca con el nombre real).
+    /// kind: 0 = Enter, 1 = Stay, 2 = Exit.
+    /// Devuelve false si el ensamblado no exporta DispatchContactEvent.
+    pub fn dispatch_contact_event(
+        &self,
+        entity_id: u64,
+        other_entity_id: u64,
+        kind: i32,
+        is_trigger: bool,
+        other_name: &str,
+    ) -> bool {
+        match self.contact_event_fn {
+            Some(f) => {
+                let name_c = std::ffi::CString::new(other_name).unwrap_or_default();
+                unsafe { f(entity_id, other_entity_id, kind, is_trigger as i32, name_c.as_ptr()) };
+                true
+            }
+            None => false,
         }
     }
 

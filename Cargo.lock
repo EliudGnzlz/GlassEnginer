@@ -1620,6 +1620,7 @@ dependencies = [
 name = "glass_physics"
 version = "0.1.0"
 dependencies = [
+ "crossbeam",
  "crossbeam-queue",
  "env_logger",
  "glass_core",

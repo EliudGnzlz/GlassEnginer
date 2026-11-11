@@ -405,6 +405,35 @@ impl McpServer {
                                 "type": "object",
                                 "properties": {}
                             }
+                        },
+                        {
+                            "name": "glass_physics_cast",
+                            "description": "Lanza una consulta física contra el mundo vivo (Fase 1): rayo, barrido de esfera o de cápsula con máscara de capas, u overlap de esfera/caja. Devuelve el primer impacto o las entidades solapadas.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "kind": {"type": "string", "enum": ["ray", "sphere", "capsule", "overlap_sphere", "overlap_box"]},
+                                    "origin": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "description": "Origen del barrido o centro del overlap [x, y, z]."},
+                                    "direction": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "description": "Dirección del barrido (ray/sphere/capsule)."},
+                                    "radius": {"type": "number", "description": "Radio (sphere/capsule/overlap_sphere)."},
+                                    "half_height": {"type": "number", "description": "Mitad del tramo recto (capsule)."},
+                                    "half_extents": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "description": "Semiejes de la caja (overlap_box)."},
+                                    "max_dist": {"type": "number", "default": 100.0},
+                                    "mask": {"type": "integer", "default": u32::MAX, "description": "Máscara de capas visibles para la consulta."},
+                                    "exclude_entity": {"type": "integer", "default": 0}
+                                },
+                                "required": ["kind", "origin"]
+                            }
+                        },
+                        {
+                            "name": "glass_list_contact_events",
+                            "description": "Pares de contacto activos y últimos eventos Enter/Exit del mundo físico vivo (Fase 1), con el contador de substeps.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "limit": {"type": "integer", "default": 32, "description": "Máximo de eventos recientes a devolver."}
+                                }
+                            }
                         }
                     ]
                 }),
@@ -884,6 +913,97 @@ impl McpServer {
                     "gpu": serde_json::to_value(&gpu).unwrap_or(serde_json::Value::Null)
                 });
                 let texto = serde_json::to_string_pretty(&datos).unwrap_or_default();
+                McpResponse::success(id, json!({"content": [{"type": "text", "text": texto}]}))
+            }
+            "glass_physics_cast" => {
+                let v3 = |v: &serde_json::Value| -> Option<[f32; 3]> {
+                    let a = v.as_array()?;
+                    if a.len() != 3 {
+                        return None;
+                    }
+                    Some([
+                        a[0].as_f64()? as f32,
+                        a[1].as_f64()? as f32,
+                        a[2].as_f64()? as f32,
+                    ])
+                };
+                let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+                let Some(origin) = v3(&args["origin"]) else {
+                    return McpResponse::error(id, -32602, "glass_physics_cast: 'origin' debe ser [x, y, z]".to_string());
+                };
+                let max_dist = args.get("max_dist").and_then(|v| v.as_f64()).unwrap_or(100.0) as f32;
+                let mask = args.get("mask").and_then(|v| v.as_u64()).unwrap_or(u32::MAX as u64) as u32;
+                let exclude = args.get("exclude_entity").and_then(|v| v.as_u64()).unwrap_or(0);
+                let physics = self.get_physics();
+                let mut physics = match physics.lock() {
+                    Ok(g) => g,
+                    Err(e) => return McpResponse::error(id, -32000, format!("Mutex poison error: {}", e)),
+                };
+                let hit_json = |entity_id: u64, point: [f32; 3], normal: [f32; 3], distance: f32| {
+                    json!({"entity_id": entity_id, "point": point, "normal": normal, "distance": distance})
+                };
+                let payload = match kind {
+                    "ray" => {
+                        let Some(dir) = v3(&args["direction"]) else {
+                            return McpResponse::error(id, -32602, "glass_physics_cast: 'direction' requerida para kind=ray".to_string());
+                        };
+                        let hit = physics.cast_ray_masked(origin, dir, max_dist, mask, exclude);
+                        json!({"hit": hit.map(|h| hit_json(h.entity_id, h.point, h.normal, h.distance))})
+                    }
+                    "sphere" => {
+                        let Some(dir) = v3(&args["direction"]) else {
+                            return McpResponse::error(id, -32602, "glass_physics_cast: 'direction' requerida para kind=sphere".to_string());
+                        };
+                        let radius = args.get("radius").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                        let hit = physics.cast_sphere(origin, radius, dir, max_dist, mask, exclude);
+                        json!({"hit": hit.map(|h| hit_json(h.entity_id, h.point, h.normal, h.distance))})
+                    }
+                    "capsule" => {
+                        let Some(dir) = v3(&args["direction"]) else {
+                            return McpResponse::error(id, -32602, "glass_physics_cast: 'direction' requerida para kind=capsule".to_string());
+                        };
+                        let half_height = args.get("half_height").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                        let radius = args.get("radius").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                        let hit = physics.cast_capsule(origin, half_height, radius, dir, max_dist, mask, exclude);
+                        json!({"hit": hit.map(|h| hit_json(h.entity_id, h.point, h.normal, h.distance))})
+                    }
+                    "overlap_sphere" => {
+                        let radius = args.get("radius").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                        let entities = physics.overlap_sphere(origin, radius, mask, exclude);
+                        json!({"entities": entities, "count": entities.len()})
+                    }
+                    "overlap_box" => {
+                        let Some(half) = v3(&args["half_extents"]) else {
+                            return McpResponse::error(id, -32602, "glass_physics_cast: 'half_extents' requerido para kind=overlap_box".to_string());
+                        };
+                        let entities = physics.overlap_box(origin, half, mask, exclude);
+                        json!({"entities": entities, "count": entities.len()})
+                    }
+                    other => {
+                        return McpResponse::error(id, -32602, format!("glass_physics_cast: kind no válido: {other}"));
+                    }
+                };
+                let texto = serde_json::to_string_pretty(&payload).unwrap_or_default();
+                McpResponse::success(id, json!({"content": [{"type": "text", "text": texto}]}))
+            }
+            "glass_list_contact_events" => {
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(32) as usize;
+                let physics = self.get_physics();
+                let physics = match physics.lock() {
+                    Ok(g) => g,
+                    Err(e) => return McpResponse::error(id, -32000, format!("Mutex poison error: {}", e)),
+                };
+                let active_pairs: Vec<_> = physics
+                    .contact_pairs()
+                    .into_iter()
+                    .map(|(a, b, is_trigger)| json!({"a": a, "b": b, "is_trigger": is_trigger}))
+                    .collect();
+                let payload = json!({
+                    "active_pairs": active_pairs,
+                    "recent_events": physics.recent_contact_events(limit),
+                    "step_count": physics.step_count(),
+                });
+                let texto = serde_json::to_string_pretty(&payload).unwrap_or_default();
                 McpResponse::success(id, json!({"content": [{"type": "text", "text": texto}]}))
             }
 

@@ -288,7 +288,34 @@ mod tests {
         assert!(resp.contains("Portal B"), "{}", resp);
     }
 
-    #[test]
+        #[test]
+    fn test_mcp_physics_cast_y_contact_events() {
+        let scene = Arc::new(Mutex::new(SceneState::new()));
+        let server = McpServer::new(scene.clone());
+
+        // tools/list anuncia las tools de la Fase 1 (20 -> 22).
+        let list_resp = server
+            .handle_json(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#)
+            .expect("tools/list");
+        assert!(list_resp.contains("glass_physics_cast"), "{}", list_resp);
+        assert!(list_resp.contains("glass_list_contact_events"), "{}", list_resp);
+
+        // Contactos: sin mundo vivo con cuerpos, la estructura llega vacía.
+        let resp = server
+            .handle_json(r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"glass_list_contact_events","arguments":{}}}"#)
+            .expect("contact events");
+        assert!(resp.contains("\\\"active_pairs\\\""), "{}", resp);
+        assert!(resp.contains("\\\"recent_events\\\""), "{}", resp);
+        assert!(resp.contains("\\\"step_count\\\""), "{}", resp);
+
+        // Cast sin mundo poblado: hit null, sin error de despacho.
+        let resp = server
+            .handle_json(r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"glass_physics_cast","arguments":{"kind":"ray","origin":[0,5,0],"direction":[0,-1,0]}}}"#)
+            .expect("physics cast");
+        assert!(resp.contains("\\\"hit\\\": null"), "{}", resp);
+    }
+
+#[test]
     fn test_mcp_frame_timing_y_memory_stats() {
         let scene = Arc::new(Mutex::new(SceneState::new()));
         let server = McpServer::new(scene.clone());

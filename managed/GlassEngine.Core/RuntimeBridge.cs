@@ -1356,6 +1356,62 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         }
     }
 
+    /// <summary>
+    /// Entrega un evento de contacto a la instancia de script de entityId
+    /// (Fase 1). kind: 0 = Enter, 1 = Stay, 2 = Exit; isTrigger: 0/1.
+    /// Sin instancia en la entidad no hace nada (no es un error). Las
+    /// excepciones del callback se capturan y se registran: un script roto
+    /// no debe tumbar el motor.
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "DispatchContactEvent")]
+    public static void DispatchContactEvent(ulong entityId, ulong otherEntityId, int kind, int isTrigger, IntPtr otherNamePtr)
+    {
+        GlassBehaviour? instance = null;
+        lock (_sync)
+        {
+            foreach (var inst in _instances.Values)
+            {
+                if (inst.EntityId == entityId)
+                {
+                    instance = inst;
+                    break;
+                }
+            }
+        }
+        if (instance is null)
+        {
+            return;
+        }
+        bool trigger = isTrigger != 0;
+        string otherName = otherNamePtr == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(otherNamePtr);
+        var collision = new Collision(otherEntityId, trigger, otherName);
+        try
+        {
+            switch (kind)
+            {
+                case 0:
+                    if (trigger) instance.OnTriggerEnter(collision);
+                    else instance.OnCollisionEnter(collision);
+                    break;
+                case 1:
+                    if (trigger) instance.OnTriggerStay(collision);
+                    else instance.OnCollisionStay(collision);
+                    break;
+                case 2:
+                    if (trigger) instance.OnTriggerExit(collision);
+                    else instance.OnCollisionExit(collision);
+                    break;
+                default:
+                    Log(3, $"[RuntimeBridge] DispatchContactEvent: kind fuera de rango ({kind})");
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log(4, $"[{instance.GetType().Name}] Excepción en callback de contacto: {ex}");
+        }
+    }
+
     private static Type? ResolveType(string typeName)
     {
         lock (_sync)

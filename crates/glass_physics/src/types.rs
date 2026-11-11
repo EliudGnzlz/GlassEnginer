@@ -218,3 +218,47 @@ mod tests {
         );
     }
 }
+
+/// Configuración de grupos y sensor de un collider (Fase 1): capa propia
+/// (0..31), máscara de capas con las que interactúa y si es trigger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ColliderConfig {
+    pub layer: u8,
+    pub mask: u32,
+    pub is_trigger: bool,
+}
+
+impl Default for ColliderConfig {
+    fn default() -> Self {
+        Self {
+            layer: 0,
+            mask: u32::MAX,
+            is_trigger: false,
+        }
+    }
+}
+
+/// Tipo de evento de contacto/intersección entre dos entidades.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ContactKind {
+    /// El par entró en contacto o intersección.
+    Enter,
+    /// El par dejó de estar en contacto o intersección.
+    Exit,
+}
+
+/// Evento de contacto entre dos entidades, generado por el mundo físico
+/// desde los CollisionEvent de Rapier. El par va ordenado (a < b); Stay no
+/// es un evento: se deriva comparando `contact_pairs()` entre frames.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ContactEvent {
+    /// Entidad menor del par.
+    pub a: u64,
+    /// Entidad mayor del par.
+    pub b: u64,
+    pub kind: ContactKind,
+    /// true si alguno de los colliders del par es sensor (trigger).
+    pub is_trigger: bool,
+    /// Substep del mundo en el que ocurrió.
+    pub step: u64,
+}
