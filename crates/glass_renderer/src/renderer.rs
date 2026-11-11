@@ -3,7 +3,7 @@ use crate::mesh::GpuMesh;
 use crate::offscreen::OffscreenTarget;
 use crate::pipeline::GraphicsPipeline;
 use crate::swapchain::SwapchainContext;
-use crate::ui::{FontAtlas, UiAtlasKind, UiBatch, UiRenderer, UiSegment};
+use crate::ui::{FontAtlas, UiAtlasKind, UiRenderer, UiSegment};
 use ash::vk;
 use gpu_allocator::vulkan::{
     Allocation, AllocationCreateDesc, AllocationScheme, Allocator, AllocatorCreateDesc,
@@ -408,7 +408,9 @@ pub struct GlassRenderer {
     lm_data_mapped: *mut u8,
     /// Muestreador propio del atlas (lineal, clamp).
     lm_sampler: vk::Sampler,
-    /// La textura 1×1 negra por defecto (se conserva viva siempre).
+    /// La textura 1×1 negra por defecto: nadie la lee por el campo, pero
+    /// conservarla viva es su función (el set por defecto la muestrea).
+    #[allow(dead_code)]
     lm_default_texture: Option<crate::mesh::GpuTexture>,
     /// El atlas publicado por `set_lightmap`, si lo hay.
     lm_atlas_texture: Option<crate::mesh::GpuTexture>,
@@ -437,6 +439,17 @@ pub struct GlassRenderer {
     /// dibujos de ese camino no enlazan set (camino de deuda ya documentado
     /// en `render_offscreen_scene`).
     pub fallback_set: vk::DescriptorSet,
+    /// Pool de queries de timestamp para medir la duración del pase principal
+    /// (`render_views`). VK_NULL_HANDLE si el dispositivo o la familia gráfica
+    /// no admiten timestamps: la telemetría queda desactivada sin tocar el render.
+    /// En esta fase SOLO se mide `render_views`; portal/post/ui quedan fuera.
+    timestamp_pool: vk::QueryPool,
+    /// Periodo de los timestamps en ns/tick (`limits.timestamp_period`).
+    timestamp_period: f32,
+    /// Última duración medida del pase principal, en microsegundos.
+    gpu_render_us: Option<u64>,
+    /// Hay una query escrita en un frame en vuelo pendiente de leer.
+    timestamp_pending: bool,
 }
 
 fn create_swapchain_render_pass(
@@ -1020,6 +1033,33 @@ impl GlassRenderer {
             command_pool,
         )?;
 
+        // 6d. Query pool de timestamps para la telemetría del pase principal.
+        // Si la familia gráfica no admite timestamps (valid_bits = 0) o el
+        // periodo es 0, se deja el handle nulo y la medición se desactiva.
+        let queue_family_props = unsafe {
+            context
+                .instance
+                .get_physical_device_queue_family_properties(context.physical_device)
+        };
+        let timestamp_valid_bits = queue_family_props
+            .get(context.queue_families.graphics_family as usize)
+            .map(|props| props.timestamp_valid_bits)
+            .unwrap_or(0);
+        let timestamp_period = context.physical_device_properties.limits.timestamp_period;
+        let timestamp_pool = if timestamp_valid_bits > 0 && timestamp_period > 0.0 {
+            let pool_info = vk::QueryPoolCreateInfo::default()
+                .query_type(vk::QueryType::TIMESTAMP)
+                .query_count(2);
+            unsafe { device.create_query_pool(&pool_info, None)? }
+        } else {
+            log::warn!(
+                "Timestamps GPU no admitidos (valid_bits={}, period={}); telemetría GPU desactivada",
+                timestamp_valid_bits,
+                timestamp_period
+            );
+            vk::QueryPool::null()
+        };
+
         // 7. Sincronización
         let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
         let fence = unsafe { device.create_fence(&fence_info, None)? };
@@ -1113,7 +1153,18 @@ impl GlassRenderer {
             image_available_semaphore,
             render_finished_semaphores,
             fallback_set: vk::DescriptorSet::null(),
+            timestamp_pool,
+            timestamp_period,
+            gpu_render_us: None,
+            timestamp_pending: false,
         })
+    }
+
+    /// Duración del último pase principal (`render_views`) medida con
+    /// timestamps GPU, en microsegundos. `None` si el dispositivo no admite
+    /// timestamps o si aún no se ha leído ninguna medición.
+    pub fn last_gpu_render_us(&self) -> Option<u64> {
+        self.gpu_render_us
     }
 
     pub fn render_finished_for(&self, image_index: u32) -> vk::Semaphore {
@@ -1761,12 +1812,16 @@ impl GlassRenderer {
         &self,
         cmd: vk::CommandBuffer,
         target: &OffscreenTarget,
-        clear: [f32; 4],
+        // `_clear` y `_fallback_triangle` quedan de la extracción del bloque
+        // Portales: el pase usa hoy el clear fijo y dibuja el triángulo de
+        // respaldo siempre que no haya mallas; se conservan en la firma para
+        // no tocar a los llamadores en esta fase.
+        _clear: [f32; 4],
         meshes: &[MeshDrawItem],
         skinned: &[SkinnedDrawItem],
         portal_draws: &[PortalDrawItem],
-        legacy: bool,
-        fallback_triangle: bool,
+        _legacy: bool,
+        _fallback_triangle: bool,
     ) {
         unsafe {
             // Con post: el 3D va al objetivo HDR y los pipelines son
@@ -1935,12 +1990,40 @@ impl GlassRenderer {
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
             self.device.reset_fences(&[self.fence])?;
 
+            // Lectura de la query del frame anterior: el fence ya garantizó
+            // que ese trabajo terminó, así que WAIT no bloquea. La telemetría
+            // nunca rompe el render: un error del driver descarta la medición.
+            if self.timestamp_pending {
+                self.timestamp_pending = false;
+                if self.timestamp_pool != vk::QueryPool::null() {
+                    let mut ticks = [0u64; 2];
+                    let flags = vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT;
+                    match self.device.get_query_pool_results(self.timestamp_pool, 0, &mut ticks, flags) {
+                        Ok(()) => {
+                            let delta_ticks = ticks[1].saturating_sub(ticks[0]);
+                            self.gpu_render_us = Some(
+                                (delta_ticks as f64 * self.timestamp_period as f64 / 1000.0).round() as u64,
+                            );
+                        }
+                        Err(err) => {
+                            log::warn!("Fallo leyendo la query de timestamps GPU: {:?}", err);
+                        }
+                    }
+                }
+            }
+
             let shadow_params = self.upload_frame_ubos();
 
             let cmd = self.command_buffer;
             let begin_info = vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
             self.device.begin_command_buffer(cmd, &begin_info)?;
+
+            // Reset del pool y timestamp inicial (TOP_OF_PIPE) del pase.
+            if self.timestamp_pool != vk::QueryPool::null() {
+                self.device.cmd_reset_query_pool(cmd, self.timestamp_pool, 0, 2);
+                self.device.cmd_write_timestamp(cmd, vk::PipelineStageFlags::TOP_OF_PIPE, self.timestamp_pool, 0);
+            }
 
             // --------------------------------------------------------------------
             // 0. Pase de profundidad del mapa de sombras (antes de las
@@ -1987,12 +2070,22 @@ impl GlassRenderer {
                 );
             }
 
+            // Timestamp final del pase principal (BOTTOM_OF_PIPE).
+            if self.timestamp_pool != vk::QueryPool::null() {
+                self.device.cmd_write_timestamp(cmd, vk::PipelineStageFlags::BOTTOM_OF_PIPE, self.timestamp_pool, 1);
+            }
+
             self.device.end_command_buffer(cmd)?;
 
             let command_buffers = [cmd];
             let submit_info = [vk::SubmitInfo::default().command_buffers(&command_buffers)];
 
             self.device.queue_submit(queue, &submit_info, self.fence)?;
+            // El trabajo quedó en vuelo: su query se lee al inicio del
+            // próximo render_views, tras esperar este mismo fence.
+            if self.timestamp_pool != vk::QueryPool::null() {
+                self.timestamp_pending = true;
+            }
         }
 
         Ok(())
@@ -2426,6 +2519,9 @@ impl Drop for GlassRenderer {
                 self.device.destroy_semaphore(semaphore, None);
             }
             self.device.destroy_fence(self.fence, None);
+            if self.timestamp_pool != vk::QueryPool::null() {
+                self.device.destroy_query_pool(self.timestamp_pool, None);
+            }
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_descriptor_pool(self.joints_pool, None);
         }

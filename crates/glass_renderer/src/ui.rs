@@ -405,7 +405,7 @@ impl UiRenderer {
             // --- 1. Atlas a VRAM (mismo patrón de subida en un envío que
             // las texturas glTF de mesh.rs, sin mip-maps) ---
             let byte_size = font.pixels.len() as u64;
-            let (stage_buf, mut stage_alloc) = create_ui_buffer(
+            let (stage_buf, stage_alloc) = create_ui_buffer(
                 &device,
                 allocator,
                 byte_size,

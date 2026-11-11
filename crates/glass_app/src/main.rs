@@ -1412,6 +1412,9 @@ struct GlassEngineApp {
     retired_joint_buffers: Vec<glass_renderer::JointBuffer>,
     /// Handle del RigidBody del jugador en Rapier3D (para aplicar fuerzas/impulsos).
     player_body_handle: Option<glass_physics::BodyHandle>,
+    /// Contador de frames del perfilado (Fase 0): la memoria del allocator
+    /// GPU se muestrea cada 120 frames, no en cada uno.
+    profile_frame: u64,
 }
 
 impl Drop for GlassEngineApp {
@@ -1676,6 +1679,7 @@ impl GlassEngineApp {
             last_anim_instant: Instant::now(),
             retired_joint_buffers: Vec::new(),
             player_body_handle: None,
+            profile_frame: 0,
         }
     }
 
@@ -2116,6 +2120,9 @@ impl GlassEngineApp {
         }
     }
 
+    // Solo se invoca desde el Launcher (feature editor); en el binario de
+    // juego queda sin llamadores a propósito.
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
     pub fn setup_physics_playground_scene(&mut self) {
         let (floor_id, dynamic_ids) = {
             let mut state = self.scene_state.lock().unwrap();
@@ -2190,6 +2197,9 @@ impl GlassEngineApp {
         self.player_script_handle = None;
     }
 
+    // Solo se invoca desde el Launcher (feature editor); en el binario de
+    // juego queda sin llamadores a propósito.
+    #[cfg_attr(not(feature = "editor"), allow(dead_code))]
     pub fn setup_audio_lighting_scene(&mut self) {
         let floor_id = {
             let mut state = self.scene_state.lock().unwrap();
@@ -2497,6 +2507,11 @@ impl GlassEngineApp {
                     loaded.asset_key
                 );
 
+                // 0b. Gestos del Canvas a medias fuera: el botón memorizado
+                // y la sesión de arrastre pertenecen a la escena anterior.
+                self.button_click_tracker.cancel();
+                self.ui_drag_session = None;
+
                 // 1. Fuera las instancias de la escena anterior.
                 self.player_script_handle = None;
                 self.player_body_handle = None;
@@ -2741,6 +2756,14 @@ impl GlassEngineApp {
         }
 
         self.check_asset_reloads();
+
+        // Cronómetro raíz del frame y acumuladores de fase (Fase 0).
+        let profile_t0 = Instant::now();
+        let mut profile_update_us = 0u64;
+        // Physics y render se asignan una sola vez y sin condición antes de
+        // cualquier registro de muestra: inicialización diferida (sin mut).
+        let profile_physics_us: u64;
+        let profile_render_us: u64;
 
         #[cfg(feature = "editor")]
         if let Some(action) = self.pending_launcher_action.take() {
@@ -3128,8 +3151,13 @@ impl GlassEngineApp {
                     self.player_body_handle = physics.get_body_by_entity(entity_id);
                 }
             }
+            let profile_t_upd = Instant::now();
             self.script_host.update_all(0.016667);
+            profile_update_us = profile_t_upd.elapsed().as_micros() as u64;
         }
+
+        // Inicio de la fase PHYSICS del perfilado (incluye la rama de edición).
+        let profile_t_physics = Instant::now();
 
         // 3. Simular paso de física Rapier3D o sincronizar transform en modo edición
         if simulation_running {
@@ -3298,6 +3326,12 @@ impl GlassEngineApp {
             }
         }
 
+        profile_physics_us = profile_t_physics.elapsed().as_micros() as u64;
+
+        // Inicio de la fase RENDER del perfilado (portal/views/post/offscreen
+        // y, en standalone, el overlay del Canvas).
+        let profile_t_render = Instant::now();
+
         // 4. Renderizar geometría 3D a las texturas offscreen en VRAM (Scene View y Game View independientes)
         // `eye_scene` / `eye_game_opt` son las posiciones de cámara en mundo. El
         // fragment shader las necesita para construir el vector de vista real (V),
@@ -3371,7 +3405,9 @@ impl GlassEngineApp {
         #[cfg(not(feature = "editor"))]
         let (vp_scene, vp_game_opt, light_dir, light_color, eye_scene, eye_game_opt) = {
             let (vp_g, ld, lc, eye_g) = if let Ok(scene) = self.scene_state.lock() {
-                let mut eye_c: Option<[f32; 4]> = None;
+                // Ambas ramas asignan una sola vez antes de leer:
+                // inicialización diferida (sin mut).
+                let eye_c: Option<[f32; 4]>;
                 let vp_g = if let Some(cam) = scene.active_camera() {
                     let cp = cam.transform.position;
                     eye_c = Some([cp[0], cp[1], cp[2], 1.0]);
@@ -4236,6 +4272,8 @@ impl GlassEngineApp {
         }
         drop(cache);
 
+        profile_render_us = profile_t_render.elapsed().as_micros() as u64;
+
         // Modo Standalone: Hardware Blit directo de VRAM al Swapchain (Cero egui/MCP overhead)
         #[cfg(feature = "editor")]
         let render_standalone = self.is_standalone;
@@ -4358,6 +4396,8 @@ impl GlassEngineApp {
         }
 
         if render_standalone {
+            // Inicio de la fase PRESENT (acquire + blit + present + wait).
+            let profile_t_present = Instant::now();
             let (image_index, _suboptimal) = match renderer
                 .swapchain
                 .acquire_next_image(renderer.image_available_semaphore)
@@ -4392,6 +4432,18 @@ impl GlassEngineApp {
                 let _ = vk_ctx.device.queue_wait_idle(vk_ctx.present_queue);
             }
 
+            // Muestra del frame (Fase 0): los retornos tempranos por resize
+            // dentro del present no llegan aquí y no registran muestra.
+            registrar_muestra_frame(
+                &mut self.profile_frame,
+                Some(renderer),
+                profile_t0,
+                profile_update_us,
+                profile_physics_us,
+                profile_render_us,
+                profile_t_present.elapsed().as_micros() as u64,
+            );
+
             // Carga de escena diferida (la «3.b» de la ruta del editor):
             // la rama standalone devolvía el control aquí sin mirar nunca
             // las peticiones de `SceneManager.LoadScene` de los scripts,
@@ -4405,6 +4457,10 @@ impl GlassEngineApp {
         }
 
         // Modo Editor: Renderizar interfaz de usuario egui sobre el RenderPass del Swapchain
+        // Inicio de la fase PRESENT del editor (egui + present del swapchain).
+        let profile_t_present = Instant::now();
+        // Sin la feature editor nadie lo pone a true: el mut solo se usa ahí.
+        #[cfg_attr(not(feature = "editor"), allow(unused_mut))]
         let mut request_build = false;
         #[cfg(feature = "editor")]
         {
@@ -4441,6 +4497,55 @@ impl GlassEngineApp {
                             scene_manager,
                         );
                     }
+                }
+                // Overlay de frametime (Fase 0): se lee del registro global
+                // en cada repaint, sin estado nuevo en la app. Solo editor.
+                if app_mode == AppMode::Editor {
+                    let snap = glass_core::profiling::frame_timing_snapshot();
+                    egui::Window::new("Frametime")
+                        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 8.0))
+                        .resizable(false)
+                        .show(ui.ctx(), |ui| {
+                            for (nombre, fase) in [
+                                ("Total", &snap.total),
+                                ("Update", &snap.update),
+                                ("Physics", &snap.physics),
+                                ("Render", &snap.render),
+                                ("Present", &snap.present),
+                            ] {
+                                ui.monospace(format!(
+                                    "{:<8} avg {:6.2} ms  p95 {:6.2} ms",
+                                    nombre,
+                                    fase.avg_us / 1000.0,
+                                    fase.p95_us / 1000.0,
+                                ));
+                            }
+                            if snap.gpu_samples > 0 {
+                                ui.monospace(format!(
+                                    "{:<8} avg {:6.2} ms  p95 {:6.2} ms",
+                                    "GPU",
+                                    snap.gpu_render.avg_us / 1000.0,
+                                    snap.gpu_render.p95_us / 1000.0,
+                                ));
+                            } else {
+                                ui.monospace("GPU      sin datos");
+                            }
+                            let mem = glass_core::profiling::process_memory_snapshot();
+                            let rss_txt = match mem.rss_bytes {
+                                Some(b) => format!("RSS {:.1} MiB", b as f64 / 1_048_576.0),
+                                None => "RSS n/d".to_string(),
+                            };
+                            let linea = match glass_core::profiling::gpu_memory_snapshot() {
+                                Some(g) => format!(
+                                    "{} · GPU {:.0}/{:.0} MiB",
+                                    rss_txt,
+                                    g.allocated_bytes as f64 / 1_048_576.0,
+                                    g.capacity_bytes as f64 / 1_048_576.0,
+                                ),
+                                None => rss_txt,
+                            };
+                            ui.monospace(linea);
+                        });
                 }
             });
             egui_winit.handle_platform_output(&window.inner, full_output.platform_output);
@@ -4574,6 +4679,21 @@ impl GlassEngineApp {
                 }
             }
         }
+
+        // Muestra del frame (Fase 0): se registra AQUÍ, antes de la carga
+        // diferida, porque `renderer` (préstamo de `self.renderer`) deja de
+        // usarse en este punto y `apply_pending_scene_load` pide `&mut self`
+        // entero. Los retornos tempranos por resize dentro del present del
+        // editor no llegan aquí y no registran muestra.
+        registrar_muestra_frame(
+            &mut self.profile_frame,
+            Some(renderer),
+            profile_t0,
+            profile_update_us,
+            profile_physics_us,
+            profile_render_us,
+            profile_t_present.elapsed().as_micros() as u64,
+        );
 
         // 3.b Carga de escena diferida.
         //
@@ -6015,6 +6135,40 @@ fn recolectar_luces_puntuales(
     }
     ubo.count = n as u32;
     ubo
+}
+
+/// Registro de la muestra de frame de la Fase 0: alimenta el registro global
+/// de `glass_core::profiling` y, cada 120 frames, muestrea la memoria del
+/// allocator GPU (generate_report recorre las asignaciones: no es gratis).
+fn registrar_muestra_frame(
+    contador: &mut u64,
+    renderer: Option<&GlassRenderer>,
+    t0: Instant,
+    update_us: u64,
+    physics_us: u64,
+    render_us: u64,
+    present_us: u64,
+) {
+    *contador += 1;
+    if *contador % 120 == 0 {
+        if let Some(r) = renderer {
+            if let Ok(alloc) = r.allocator.lock() {
+                let report = alloc.generate_report();
+                glass_core::profiling::record_gpu_memory(
+                    report.total_allocated_bytes,
+                    report.total_capacity_bytes,
+                );
+            }
+        }
+    }
+    glass_core::profiling::record_frame_timing(glass_core::profiling::FramePhaseSample {
+        update_us,
+        physics_us,
+        render_us,
+        present_us,
+        total_us: t0.elapsed().as_micros() as u64,
+        gpu_render_us: renderer.and_then(|r| r.last_gpu_render_us()),
+    });
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

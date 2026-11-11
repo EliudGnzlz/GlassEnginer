@@ -716,6 +716,9 @@ mod tests_img3 {
 
 pub struct DragSession {
     pub entity_id: u64,
+    /// Nombre de la entidad arrastrada: viaja con la sesión para registro
+    /// y depuración; la lógica de arrastre no lo necesita.
+    #[allow(dead_code)]
     pub name: String,
     pub begin_action: String,
     pub end_action: String,
@@ -782,6 +785,9 @@ impl DragSession {
 
 pub struct DropHit {
     pub entity_id: u64,
+    /// Nombre de la casilla destino: viaja con el acierto para registro
+    /// y depuración; la lógica de suelta no lo necesita.
+    #[allow(dead_code)]
     pub name: String,
     pub anchored: [f32; 2],
     pub drop_action: String,

@@ -289,6 +289,39 @@ mod tests {
     }
 
     #[test]
+    fn test_mcp_frame_timing_y_memory_stats() {
+        let scene = Arc::new(Mutex::new(SceneState::new()));
+        let server = McpServer::new(scene.clone());
+
+        // tools/list anuncia las tools de la Fase 0 (18 -> 20).
+        let list_resp = server
+            .handle_json(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#)
+            .expect("tools/list");
+        assert!(list_resp.contains("glass_frame_timing"), "{}", list_resp);
+        assert!(list_resp.contains("glass_memory_stats"), "{}", list_resp);
+
+        // Sin motor en el proceso puede no haber muestras (otro test del
+        // mismo binario sí registra): lo que no debe faltar es la estructura,
+        // y si samples es 0, la nota que lo declara.
+        let resp = server
+            .handle_json(r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"glass_frame_timing","arguments":{}}}"#)
+            .expect("frame timing");
+        assert!(resp.contains("\\\"samples\\\""), "{}", resp);
+        assert!(resp.contains("\\\"gpu_samples\\\""), "{}", resp);
+        if resp.contains("\\\"samples\\\": 0") {
+            assert!(resp.contains("sin muestras"), "{}", resp);
+        }
+
+        // Memoria: process siempre presente; gpu puede ser snapshot o null.
+        let resp = server
+            .handle_json(r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"glass_memory_stats","arguments":{}}}"#)
+            .expect("memory stats");
+        assert!(resp.contains("\\\"process\\\""), "{}", resp);
+        assert!(resp.contains("\\\"rss_bytes\\\""), "{}", resp);
+        assert!(resp.contains("\\\"gpu\\\""), "{}", resp);
+    }
+
+    #[test]
     fn test_mcp_shared_scene_concurrent_editor_and_mcp_writes() {
         use std::collections::HashSet;
         // El hilo MCP y el "editor" comparten el Mutex de la escena:

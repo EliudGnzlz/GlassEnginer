@@ -1,6 +1,7 @@
 //! glass_core: Window management, OS event abstractions and lifecycle contracts.
 
 pub mod animator;
+pub mod profiling;
 pub mod lightmap;
 pub mod events;
 pub mod math;

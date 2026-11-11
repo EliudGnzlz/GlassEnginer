@@ -1,7 +1,7 @@
 //! El horneado vive en glass_mcp::bake (compartido con la
 //! tool MCP glass_bake_lightmap); aquí queda el cargador de
 //! runtime y la re-exportación para la ruta GLASS_BAKE.
-pub use glass_mcp::bake::{bake_scene_lightmap, SceneBakeOutput};
+pub use glass_mcp::bake::bake_scene_lightmap;
 
 /// Lightmap cargado en runtime para una escena: el atlas y, por
 /// entidad horneada (mismo orden que `entities`), sus grupos

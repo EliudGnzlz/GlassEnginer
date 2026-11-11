@@ -1,0 +1,61 @@
+name: Soak test
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "Duración en horas"
+        type: number
+        default: 1
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 370
+    # La corrida completa de 12 h se hace en la VM propia con el mismo script
+    # porque GitHub-hosted limita los jobs a 6 h.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Instalar .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Instalar dependencias de sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvulkan-dev mesa-vulkan-drivers \
+            libxkbcommon-dev libxkbcommon-x11-0 libudev-dev \
+            libx11-dev libxcb1-dev libwayland-dev libasound2-dev \
+            pkg-config xvfb
+
+      - name: Localizar ICD de lavapipe
+        run: |
+          ICD="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)"
+          echo "VK_ICD_FILENAMES=$ICD" >> "$GITHUB_ENV"
+
+      - name: Compilar el juego puro
+        run: cargo build -p glass_app --no-default-features --locked
+
+      - name: Ejecutar soak
+        run: |
+          HOURS=1
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            HOURS="${{ inputs.hours }}"
+          fi
+          scripts/soak/run_soak.sh "$HOURS"
+
+      - name: Publicar informe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-report
+          path: soak-report/
+          if-no-files-found: warn

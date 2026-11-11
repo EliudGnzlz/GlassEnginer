@@ -376,7 +376,7 @@ impl McpServer {
                         },
                         {
                             "name": "glass_profiler_snapshot",
-                            "description": "Devuelve una foto de los contadores medibles en este servidor (entidades, componentes de datos presentes, siguiente id, flag de shaders y tamaño de los sets físicos). No incluye VRAM ni tiempos de frame: no se miden aquí.",
+                            "description": "Devuelve una foto de los contadores medibles en este servidor (entidades, componentes de datos presentes, siguiente id, flag de shaders y tamaño de los sets físicos). Los tiempos de frame y la memoria viven en glass_frame_timing y glass_memory_stats.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
@@ -385,6 +385,22 @@ impl McpServer {
                         {
                             "name": "glass_list_portals",
                             "description": "Lista las entidades con componente Portal de la escena: su id, nombre, pareja (pair), tamaño y posición, y el id de la entidad pareja con el mismo pair (o null si no tiene pareja en la escena).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "glass_frame_timing",
+                            "description": "Devuelve las estadísticas de tiempo por fase de frame (update, física, render, present y GPU del pase principal) sobre las últimas 240 muestras registradas por el motor en este proceso: media, p95 y máximo por fase. En modo MCP headless, sin motor gráfico en el proceso, no hay muestras y la respuesta lo declara.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "glass_memory_stats",
+                            "description": "Devuelve la memoria del proceso (RSS actual y pico; en Linux, de /proc/self/status) y la memoria GPU del allocator de Vulkan (asignada y capacidad) si el motor la registró en este proceso. Lo no disponible va como null, nunca inventado.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
@@ -837,6 +853,38 @@ impl McpServer {
                 let pretty = serde_json::to_string_pretty(&payload)
                     .unwrap_or_else(|_| payload.to_string());
                 McpResponse::success(id, json!({"content":[{"type":"text","text": pretty}]}))
+            }
+
+            // Tiempos por fase de frame (Fase 0): estadísticas sobre las
+            // últimas 240 muestras registradas por el motor en ESTE proceso.
+            "glass_frame_timing" => {
+                let snap = glass_core::profiling::frame_timing_snapshot();
+                let mut datos = serde_json::to_value(&snap).unwrap_or(json!({}));
+                if snap.samples == 0 {
+                    // Sin motor gráfico en el proceso no hay muestras: se
+                    // declara en vez de devolver una tabla de ceros.
+                    if let serde_json::Value::Object(ref mut mapa) = datos {
+                        mapa.insert(
+                            "note".to_string(),
+                            json!("sin muestras: ningún frame registrado en este proceso (modo MCP headless o motor aún sin frames)"),
+                        );
+                    }
+                }
+                let texto = serde_json::to_string_pretty(&datos).unwrap_or_default();
+                McpResponse::success(id, json!({"content": [{"type": "text", "text": texto}]}))
+            }
+
+            // Memoria del proceso (RSS) y del allocator GPU (Fase 0):
+            // lo que no se puede medir va como null, nunca inventado.
+            "glass_memory_stats" => {
+                let pm = glass_core::profiling::process_memory_snapshot();
+                let gpu = glass_core::profiling::gpu_memory_snapshot();
+                let datos = json!({
+                    "process": serde_json::to_value(&pm).unwrap_or(json!({})),
+                    "gpu": serde_json::to_value(&gpu).unwrap_or(serde_json::Value::Null)
+                });
+                let texto = serde_json::to_string_pretty(&datos).unwrap_or_default();
+                McpResponse::success(id, json!({"content": [{"type": "text", "text": texto}]}))
             }
 
             "glass_modify_component" => {

@@ -1015,7 +1015,7 @@ impl MeshLoader {
         let mip_levels = mip_level_count(img.width, img.height);
         unsafe {
             // 1. Staging con los píxeles.
-            let (stage_buf, mut stage_alloc) = Self::create_buffer(
+            let (stage_buf, stage_alloc) = Self::create_buffer(
                 device,
                 allocator,
                 size,
@@ -1743,12 +1743,12 @@ mod tests {
     /// identidad y un clip «Saludar» que rota la articulación hija.
     fn build_test_glb_skinned() -> Vec<u8> {
         let mut bin: Vec<u8> = Vec::new();
-        let mut f32s = |vals: &[f32], bin: &mut Vec<u8>| {
+        let f32s = |vals: &[f32], bin: &mut Vec<u8>| {
             for v in vals {
                 bin.extend_from_slice(&v.to_le_bytes());
             }
         };
-        let mut u16s = |vals: &[u16], bin: &mut Vec<u8>| {
+        let u16s = |vals: &[u16], bin: &mut Vec<u8>| {
             for v in vals {
                 bin.extend_from_slice(&v.to_le_bytes());
             }

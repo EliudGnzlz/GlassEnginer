@@ -4,6 +4,12 @@ on:
   push:
   pull_request:
 
+# Los warnings de rustc son error en build y tests (Fase 0). Clippy completo
+# como bloqueante queda pendiente de limpiar los ~175 lints preexistentes
+# (deuda registrada en la Fase 0); su paso abajo es informativo.
+env:
+  RUSTFLAGS: "-D warnings"
+
 jobs:
   build-and-test:
     name: Build y tests (Linux)
@@ -14,6 +20,8 @@ jobs:
 
       - name: Instalar Rust (stable)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Instalar .NET 8 (SDK para compilar la parte C#)
         uses: actions/setup-dotnet@v4
@@ -44,6 +52,10 @@ jobs:
 
       - name: Build del workspace (editor)
         run: cargo build --workspace --locked
+
+      - name: Clippy (informativo, aún no bloqueante)
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets --locked
 
       - name: Build del juego puro (sin editor)
         run: cargo build -p glass_app --no-default-features --locked

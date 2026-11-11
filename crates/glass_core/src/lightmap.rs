@@ -54,89 +54,6 @@ pub enum BakeError {
     AtlasOverflow,
 }
 
-struct MeshInfo {
-    min_u: f32,
-    max_u: f32,
-    min_v: f32,
-    max_v: f32,
-    proj: Vec<[f32; 2]>,
-    w: u32,
-    h: u32,
-}
-
-fn rect_dim(extent: f32, texel_density: f32) -> u32 {
-    let scaled = if extent.is_finite() && texel_density.is_finite() && texel_density > 0.0 {
-        extent * texel_density
-    } else {
-        0.0
-    };
-
-    let mut v = if scaled.is_finite() {
-        scaled.ceil()
-    } else {
-        0.0
-    };
-
-    if v < 4.0 {
-        v = 4.0;
-    }
-    if v > 1024.0 {
-        v = 1024.0;
-    }
-
-    v as u32
-}
-
-fn pack_shelves(sizes: &[(u32, u32)], atlas: u32) -> Option<Vec<(u32, u32)>> {
-    let n = sizes.len();
-    let mut order: Vec<usize> = (0..n).collect();
-
-    // Altura descendente; desempates deterministas por anchura y índice original.
-    order.sort_by(|&a, &b| {
-        sizes[b]
-            .1
-            .cmp(&sizes[a].1)
-            .then_with(|| sizes[b].0.cmp(&sizes[a].0))
-            .then_with(|| a.cmp(&b))
-    });
-
-    let mut placements = vec![(0u32, 0u32); n];
-    // Estanterías: (y, altura, siguiente_x_libre)
-    let mut shelves: Vec<(u32, u32, u32)> = Vec::new();
-
-    for idx in order {
-        let (w, h) = sizes[idx];
-        if w > atlas || h > atlas {
-            return None;
-        }
-
-        let mut placed = false;
-        for shelf in shelves.iter_mut() {
-            let (shelf_y, shelf_h, next_x) = *shelf;
-            if h <= shelf_h && next_x + w <= atlas {
-                placements[idx] = (next_x, shelf_y);
-                shelf.2 = next_x + w + 1;
-                placed = true;
-                break;
-            }
-        }
-
-        if !placed {
-            let y = match shelves.last() {
-                Some(&(shelf_y, shelf_h, _)) => shelf_y + shelf_h + 1,
-                None => 0,
-            };
-            if y + h > atlas {
-                return None;
-            }
-            placements[idx] = (0, y);
-            shelves.push((y, h, w + 1));
-        }
-    }
-
-    Some(placements)
-}
-
 /// Genera las UV2 y el atlas.
 /// - `texel_density`: téxeles por metro (p. ej. 8.0).
 /// - Proyección planar por vértice según el eje dominante de su normal
@@ -641,7 +558,6 @@ mod tests {
             // Grupo = (eje, signo): las caras +Y y -Y proyectan sobre
             // el mismo plano 2D y se pisarían en el atlas si
             // compartieran sub-rect (suelo y techo de un cubo).
-            let key = axis * 2 + (face[axis] < 0.0) as usize;
             for &vi in tri {
                 let u = layout.uv2[0][vi as usize][0];
                 min_u[axis] = min_u[axis].min(u);
@@ -699,7 +615,6 @@ mod tests {
     }
 
     #[test]
-#[test]
     fn cube_groups_are_six_and_disjoint() {
         let (layout, _e) = expand_and_layout(&[cube_mesh(7)], 8.0).unwrap();
         let rect = layout.rects[0];
@@ -726,6 +641,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn layout_is_deterministic() {
         let mesh = cube_mesh(9);
 

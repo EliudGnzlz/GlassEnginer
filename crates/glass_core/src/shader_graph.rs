@@ -526,7 +526,12 @@ impl<'a> Compiler<'a> {
         if self.visiting.contains(&id) {
             return Err(GraphError::Cycle(id));
         }
-        let node = self.nodes.get(&id).ok_or(GraphError::UnknownNode(id))?.clone();
+        let node = match self.nodes.get(&id) {
+            // `nodes` es una referencia compartida: get devuelve doble
+            // referencia y hay que desenvolverla para clonar el nodo.
+            Some(n) => (**n).clone(),
+            None => return Err(GraphError::UnknownNode(id)),
+        };
         self.visiting.push(id);
         let result = self.emit_node(&node);
         self.visiting.pop();
