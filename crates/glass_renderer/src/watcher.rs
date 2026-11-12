@@ -279,8 +279,8 @@ impl AssetWatcher {
                         log::info!("Detectado archivo glTF binario modificado: {:?}", path);
                         let _ = tx.send(AssetReloadEvent::MeshReloaded(path));
                     }
-                    "vert" | "frag" => {
-                        log::info!("Detectado shader fuente modificado: {:?}", path);
+                    "vert" | "frag" | "spv" => {
+                        log::info!("Detectado shader modificado: {:?}", path);
                         let _ = tx.send(AssetReloadEvent::ShaderReloaded(path));
                     }
                     _ => (),

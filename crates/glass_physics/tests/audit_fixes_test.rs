@@ -89,3 +89,40 @@ fn sensor_estatico_emite_eventos_frente_a_cinematico() {
         "Enter de sensor frente a cinemático: {eventos:?}"
     );
 }
+
+#[test]
+fn trimesh_en_escala_milimetrica_se_acepta() {
+    // Pasada de medios (menor): el juicio de degeneración es relativo
+    // a la malla; un triángulo válido de 100 µm no se rechaza por el
+    // antiguo umbral absoluto de área².
+    let mut w = PhysicsWorld::new();
+    let b = w.create_rigid_body(7, BodyType::Static, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+    let verts = [
+        [0.0, 0.0, 0.0],
+        [1.0e-4, 0.0, 0.0],
+        [0.0, 1.0e-4, 0.0],
+    ];
+    let idx = [[0u32, 1, 2]];
+    let h = w.attach_trimesh_collider(b, &verts, &idx, 0.0, 0.5, ColliderConfig::default());
+    assert!(h.is_some(), "una malla diminuta pero válida debe aceptarse");
+}
+
+#[test]
+fn contact_pairs_fusiona_solido_y_sensor() {
+    // Pasada de medios (menor): el mismo par con un collider sólido
+    // y un sensor solapados produce UNA entrada, y manda el contacto.
+    let mut w = PhysicsWorld::new();
+    suelo(&mut w);
+    let c = w.create_rigid_body(8, BodyType::Static, [0.0, 0.8, 0.0], [0.0, 0.0, 0.0, 1.0]);
+    let solido = ColliderConfig::default();
+    let sensor = ColliderConfig { is_trigger: true, ..Default::default() };
+    w.attach_collider_with_config_at(c, ColliderShape::Cuboid { half_extents: [0.5, 0.5, 0.5] }, 0.0, 0.5, solido, [0.0, 0.0, 0.0]);
+    w.attach_collider_with_config_at(c, ColliderShape::Cuboid { half_extents: [0.5, 0.5, 0.5] }, 0.0, 0.5, sensor, [0.0, 0.0, 0.0]);
+    for _ in 0..10 {
+        w.step(DT);
+    }
+    let pares = w.contact_pairs();
+    let del_par: Vec<_> = pares.iter().filter(|p| p.0 == 1 && p.1 == 8).collect();
+    assert_eq!(del_par.len(), 1, "un solo par fusionado: {pares:?}");
+    assert_eq!(del_par[0].2, false, "manda el contacto sólido");
+}

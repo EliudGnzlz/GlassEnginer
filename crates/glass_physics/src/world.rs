@@ -56,6 +56,16 @@ pub struct PhysicsWorld {
 /// de interacción (capa propia + máscara), eventos de colisión activos
 /// (los consume el registro de contactos del mundo) y modo sensor.
 fn apply_config(builder: ColliderBuilder, cfg: ColliderConfig) -> ColliderBuilder {
+    // Auditoría (menor): una capa ≥ 32 no cabe en los 32 grupos de
+    // Rapier; se mapea con & 31 pero AVISANDO (antes era silencioso
+    // y dos capas distintas acababan compartiendo grupo).
+    if cfg.layer > 31 {
+        log::warn!(
+            "Física: capa {} fuera de rango (0..=31); se mapea a {} y puede compartir grupo con ella.",
+            cfg.layer,
+            cfg.layer & 31
+        );
+    }
     let groups = InteractionGroups::new(
         Group::from_bits_truncate(1u32 << (cfg.layer & 31)),
         Group::from_bits_truncate(cfg.mask),
@@ -298,7 +308,19 @@ impl PhysicsWorld {
     /// Pares en contacto o intersección tras el último substep, ordenados:
     /// (entidad_a, entidad_b, es_trigger).
     pub fn contact_pairs(&self) -> Vec<(u64, u64, bool)> {
-        let mut pairs: Vec<(u64, u64, bool)> = self.active_pairs.iter().copied().collect();
+        // Auditoría (menor): el mismo par puede estar como contacto
+        // sólido (false) y como intersección de sensor (true) a la
+        // vez; se fusiona en una sola entrada y manda el contacto.
+        let mut fusion: std::collections::HashMap<(u64, u64), bool> =
+            std::collections::HashMap::new();
+        for &(a, b, is_trigger) in self.active_pairs.iter() {
+            fusion
+                .entry((a, b))
+                .and_modify(|t| *t = *t && is_trigger)
+                .or_insert(is_trigger);
+        }
+        let mut pairs: Vec<(u64, u64, bool)> =
+            fusion.into_iter().map(|((a, b), t)| (a, b, t)).collect();
         pairs.sort_unstable();
         pairs
     }
@@ -677,9 +699,15 @@ impl PhysicsWorld {
         // repetidos o área cero) no colisiona con nada útil: se rechaza
         // entera. Los triángulos degenerados sueltos dentro de una malla
         // válida se dejan pasar (Rapier los tolera).
-        let algun_triangulo_util = indices.iter().any(|t| {
+        // Auditoría (menor): el juicio es RELATIVO a la propia malla
+        // (antes, un umbral absoluto de 1e-12 sobre el área² rechazaba
+        // mallas válidas en escala milimétrica y aceptaba degeneradas
+        // en modelos enormes): basta que exista UN triángulo con área
+        // real frente al mayor de la malla.
+        let mut max_cruz2 = 0.0f32;
+        for t in indices.iter() {
             if t[0] == t[1] || t[1] == t[2] || t[0] == t[2] {
-                return false;
+                continue;
             }
             let a = vertices[t[0] as usize];
             let b = vertices[t[1] as usize];
@@ -691,9 +719,12 @@ impl PhysicsWorld {
                 ab[2] * ac[0] - ab[0] * ac[2],
                 ab[0] * ac[1] - ab[1] * ac[0],
             ];
-            cruz.iter().map(|v| v * v).sum::<f32>() > 1e-12
-        });
-        if !algun_triangulo_util {
+            let cruz2: f32 = cruz.iter().map(|v| v * v).sum();
+            if cruz2 > max_cruz2 {
+                max_cruz2 = cruz2;
+            }
+        }
+        if !(max_cruz2 > 0.0) {
             return None;
         }
 

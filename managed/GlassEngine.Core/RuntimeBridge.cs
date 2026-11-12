@@ -35,6 +35,8 @@ public static class RuntimeBridge
     private static SetAudioSourcePositionDelegate? _setAudioSourcePos;
     private static SetListenerTransformDelegate? _setListenerTransform;
     private static StopAudioDelegate? _stopAudio;
+    private static PlayAudio2DOnBusDelegate? _playAudio2DOnBus;
+    private static PlayAudio3DOnBusDelegate? _playAudio3DOnBus;
 
     private static PlayParticlesDelegate? _playParticles;
     private static StopParticlesDelegate? _stopParticles;
@@ -51,6 +53,8 @@ public static class RuntimeBridge
     private static GetLinearVelocityDelegate? _getLinearVelocity;
     private static SetLinearVelocityDelegate? _setLinearVelocity;
     private static CastRayDelegate? _castRay;
+    private static CastSphereDelegate? _castSphere;
+    private static OverlapSphereDelegate? _overlapSphere;
     private static AttachCapsuleColliderDelegate? _attachCapsuleCollider;
     private static AttachCylinderColliderDelegate? _attachCylinderCollider;
 
@@ -89,26 +93,71 @@ public static class RuntimeBridge
     // creación de instancia recorría todos los ensamblados del dominio.
     private static readonly Dictionary<string, Type?> _typeCache = new();
 
-    [UnmanagedCallersOnly(EntryPoint = "InitAudioBridge")]
-    public static void InitAudioBridge(
-        IntPtr play2dFn,
-        IntPtr play3dFn,
-        IntPtr setPosFn,
-        IntPtr setListenerFn,
-        IntPtr stopFn)
+    [StructLayout(LayoutKind.Sequential)]
+    public struct AudioBridgeCallbacks
     {
-        if (play2dFn != IntPtr.Zero)
-            _playAudio2D = Marshal.GetDelegateForFunctionPointer<PlayAudio2DDelegate>(play2dFn);
-        if (play3dFn != IntPtr.Zero)
-            _playAudio3D = Marshal.GetDelegateForFunctionPointer<PlayAudio3DDelegate>(play3dFn);
-        if (setPosFn != IntPtr.Zero)
-            _setAudioSourcePos = Marshal.GetDelegateForFunctionPointer<SetAudioSourcePositionDelegate>(setPosFn);
-        if (setListenerFn != IntPtr.Zero)
-            _setListenerTransform = Marshal.GetDelegateForFunctionPointer<SetListenerTransformDelegate>(setListenerFn);
-        if (stopFn != IntPtr.Zero)
-            _stopAudio = Marshal.GetDelegateForFunctionPointer<StopAudioDelegate>(stopFn);
+        public IntPtr Play2D;
+        public IntPtr Play3D;
+        public IntPtr SetSourcePosition;
+        public IntPtr SetListenerTransform;
+        public IntPtr Stop;
+        // Añadidos AL FINAL (auditoría C6): play con bus.
+        public IntPtr Play2DOnBus;
+        public IntPtr Play3DOnBus;
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "InitAudioBridge")]
+    public static unsafe void InitAudioBridge(AudioBridgeCallbacks* callbacks)
+    {
+        if (callbacks == null) return;
+        if (callbacks->Play2D != IntPtr.Zero)
+            _playAudio2D = Marshal.GetDelegateForFunctionPointer<PlayAudio2DDelegate>(callbacks->Play2D);
+        if (callbacks->Play3D != IntPtr.Zero)
+            _playAudio3D = Marshal.GetDelegateForFunctionPointer<PlayAudio3DDelegate>(callbacks->Play3D);
+        if (callbacks->SetSourcePosition != IntPtr.Zero)
+            _setAudioSourcePos = Marshal.GetDelegateForFunctionPointer<SetAudioSourcePositionDelegate>(callbacks->SetSourcePosition);
+        if (callbacks->SetListenerTransform != IntPtr.Zero)
+            _setListenerTransform = Marshal.GetDelegateForFunctionPointer<SetListenerTransformDelegate>(callbacks->SetListenerTransform);
+        if (callbacks->Stop != IntPtr.Zero)
+            _stopAudio = Marshal.GetDelegateForFunctionPointer<StopAudioDelegate>(callbacks->Stop);
+        if (callbacks->Play2DOnBus != IntPtr.Zero)
+            _playAudio2DOnBus = Marshal.GetDelegateForFunctionPointer<PlayAudio2DOnBusDelegate>(callbacks->Play2DOnBus);
+        if (callbacks->Play3DOnBus != IntPtr.Zero)
+            _playAudio3DOnBus = Marshal.GetDelegateForFunctionPointer<PlayAudio3DOnBusDelegate>(callbacks->Play3DOnBus);
 
         Log(2, "GlassEngine.Core AudioBridge inicializado exitosamente desde Rust.");
+    }
+
+    public static ulong PlayAudio2DOnBus(string clipName, string busName, float volume, float pitch, bool looping)
+    {
+        if (_playAudio2DOnBus is null) return PlayAudio2D(clipName, volume, pitch, looping);
+        IntPtr utf8 = Marshal.StringToCoTaskMemUTF8(clipName);
+        IntPtr busUtf8 = Marshal.StringToCoTaskMemUTF8(busName);
+        try
+        {
+            return _playAudio2DOnBus(utf8, busUtf8, volume, pitch, looping);
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(utf8);
+            Marshal.FreeCoTaskMem(busUtf8);
+        }
+    }
+
+    public static ulong PlayAudio3DOnBus(string clipName, string busName, Vector3 position, float volume, float pitch, bool looping)
+    {
+        if (_playAudio3DOnBus is null) return PlayAudio3D(clipName, position, volume, pitch, looping);
+        IntPtr utf8 = Marshal.StringToCoTaskMemUTF8(clipName);
+        IntPtr busUtf8 = Marshal.StringToCoTaskMemUTF8(busName);
+        try
+        {
+            return _playAudio3DOnBus(utf8, busUtf8, position.X, position.Y, position.Z, volume, pitch, looping);
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(utf8);
+            Marshal.FreeCoTaskMem(busUtf8);
+        }
     }
 
     public static ulong PlayAudio2D(string clipName, float volume, float pitch, bool looping)
@@ -206,6 +255,10 @@ public static class RuntimeBridge
         // misma convención que CastRay.
         public IntPtr AttachCapsule;
         public IntPtr AttachCylinder;
+        // Decimocuarto y decimoquinto, AL FINAL (auditoría C5):
+        // barrido y solape de esfera para los scripts.
+        public IntPtr CastSphere;
+        public IntPtr OverlapSphere;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitPhysicsBridge")]
@@ -238,6 +291,10 @@ public static class RuntimeBridge
             _attachCapsuleCollider = Marshal.GetDelegateForFunctionPointer<AttachCapsuleColliderDelegate>(callbacks->AttachCapsule);
         if (callbacks->AttachCylinder != IntPtr.Zero)
             _attachCylinderCollider = Marshal.GetDelegateForFunctionPointer<AttachCylinderColliderDelegate>(callbacks->AttachCylinder);
+        if (callbacks->CastSphere != IntPtr.Zero)
+            _castSphere = Marshal.GetDelegateForFunctionPointer<CastSphereDelegate>(callbacks->CastSphere);
+        if (callbacks->OverlapSphere != IntPtr.Zero)
+            _overlapSphere = Marshal.GetDelegateForFunctionPointer<OverlapSphereDelegate>(callbacks->OverlapSphere);
 
         Log(2, "GlassEngine.Core PhysicsBridge inicializado exitosamente desde Rust.");
     }
@@ -1099,6 +1156,58 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
             hitNormal = new Vector3(nx, ny, nz);
         }
         return ok;
+    }
+
+    /// <summary>
+    /// Barrido de esfera contra los colliders del mundo (auditoría
+    /// C5). Devuelve false sin impacto o sin callback enlazado.
+    /// </summary>
+    public static bool CastSphere(Vector3 origin, float radius, Vector3 direction, float maxDistance, ulong excludeEntityId,
+        out ulong hitEntityId, out Vector3 hitPoint, out Vector3 hitNormal, out float hitDistance)
+    {
+        hitEntityId = 0;
+        hitPoint = Vector3.Zero;
+        hitNormal = Vector3.Zero;
+        hitDistance = 0f;
+        if (_castSphere is null) return false;
+        bool ok = _castSphere(
+            origin.X, origin.Y, origin.Z, radius,
+            direction.X, direction.Y, direction.Z,
+            maxDistance, excludeEntityId,
+            out hitEntityId,
+            out float px, out float py, out float pz,
+            out float nx, out float ny, out float nz,
+            out hitDistance);
+        if (ok)
+        {
+            hitPoint = new Vector3(px, py, pz);
+            hitNormal = new Vector3(nx, ny, nz);
+        }
+        return ok;
+    }
+
+    /// <summary>
+    /// Entidades cuyos colliders intersectan la esfera (auditoría
+    /// C5). Hasta 64 resultados; array vacío si no hay callback.
+    /// </summary>
+    public static ulong[] OverlapSphere(Vector3 center, float radius, ulong excludeEntityId)
+    {
+        if (_overlapSphere is null) return Array.Empty<ulong>();
+        var buffer = new ulong[64];
+        var handle = System.Runtime.InteropServices.GCHandle.Alloc(buffer, System.Runtime.InteropServices.GCHandleType.Pinned);
+        try
+        {
+            int n = _overlapSphere(center.X, center.Y, center.Z, radius, excludeEntityId,
+                handle.AddrOfPinnedObject(), (uint)buffer.Length);
+            if (n <= 0) return Array.Empty<ulong>();
+            var result = new ulong[n];
+            Array.Copy(buffer, result, n);
+            return result;
+        }
+        finally
+        {
+            handle.Free();
+        }
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitBridge")]

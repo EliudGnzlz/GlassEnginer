@@ -49,7 +49,7 @@ pub struct ShadowCasters<'a> {
     /// Proyectores cuyo material es un grafo con pase Shadow (Fase 2S):
     /// (malla, matriz de modelo, nombre del grafo, set de texturas del
     /// grafo, umbral de recorte alfa si el grafo declara `alpha_clip`).
-    pub graph_statics: &'a [(&'a GpuMesh, [f32; 16], String, vk::DescriptorSet, Option<f32>)],
+    pub graph_statics: &'a [(&'a GpuMesh, [f32; 16], String, vk::DescriptorSet, Option<f32>, Option<Vec<(u32, u32)>>)],
 }
 
 /// Qué vista procesa `render_post` (la de escena o la de juego).
@@ -1878,8 +1878,19 @@ impl GlassRenderer {
     /// `graph_<nombre>.transparent` (el grafo se declara transparente en
     /// su JSON), el pipeline se crea con mezcla alfa y sin escritura de
     /// profundidad. Un archivo que falle se registra y se sigue.
-    pub fn load_graph_materials(&mut self, shaders_dir: &std::path::Path) {
-        let entries = match std::fs::read_dir(shaders_dir) {
+    /// Recarga en caliente de los materiales de grafo (auditoría C2):
+    /// espera a que la GPU quede libre y vuelve a registrar todos los
+    /// pipelines de grafo desde los .spv en disco, sustituyendo los
+    /// anteriores. La invoca la app cuando el vigía detecta un
+    /// `graph_*.spv` modificado.
+    pub fn reload_graph_materials(&mut self, shaders_dir: &std::path::Path) {
+        unsafe {
+            let _ = self.device.device_wait_idle();
+        }
+        self.load_graph_materials(shaders_dir);
+    }
+
+    pub fn load_graph_materials(&mut self, shaders_dir: &std::path::Path) {        let entries = match std::fs::read_dir(shaders_dir) {
             Ok(e) => e,
             Err(_) => return,
         };
@@ -2324,7 +2335,7 @@ impl GlassRenderer {
                     // recorte si la entidad trae umbral `alpha_clip` y
                     // el grafo tiene ese pipeline.
                     let mut bound_pipe: vk::Pipeline = vk::Pipeline::null();
-                    for (mesh, model, graph, tex_set, alpha_clip) in casters.graph_statics {
+                    for (mesh, model, graph, tex_set, alpha_clip, rangos) in casters.graph_statics {
                         let elegido = match alpha_clip {
                             Some(_) => self
                                 .graph_depth_clip_pipelines
@@ -2376,7 +2387,19 @@ impl GlassRenderer {
                             .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
                         self.device
                             .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
-                        self.device.cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                        // Pasada de medios (resto de C3): también los
+                        // proyectores de grafo respetan el nivel LOD
+                        // activo si la app pasa rangos.
+                        match rangos {
+                            Some(rs) => {
+                                for (first, count) in rs {
+                                    self.device.cmd_draw_indexed(cmd, *count, 1, *first, 0, 0);
+                                }
+                            }
+                            None => {
+                                self.device.cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                            }
+                        }
                     }
                 }
                 self.device.cmd_end_render_pass(cmd);

@@ -2625,7 +2625,32 @@ impl GlassEngineApp {
                     }
                 }
                 AssetReloadEvent::ShaderReloaded(path) => {
-                    log::info!("Notificada recarga de shader: {:?}", path);
+                    // Auditoría C2: la recarga en caliente de shaders
+                    // EXISTE para los materiales de grafo (sus .spv
+                    // viven en disco); el resto de shaders van
+                    // compilados en el binario y sus fuentes .vert/
+                    // .frag no tienen efecto en tiempo de ejecución.
+                    let fname = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let es_spv_grafo = fname.starts_with("graph_")
+                        && (fname.ends_with(".frag.spv") || fname.ends_with(".vert.spv"));
+                    if es_spv_grafo {
+                        if let Some(renderer) = self.renderer.as_mut() {
+                            renderer.reload_graph_materials(std::path::Path::new("assets/shaders"));
+                            log::info!(
+                                "Material de grafo recargado en caliente por cambio en {:?}",
+                                path
+                            );
+                        }
+                    } else {
+                        log::info!(
+                            "Shader {:?} modificado sin recarga: los shaders integrados van en el binario y las fuentes .vert/.frag se compilan fuera; recompila el .spv del grafo y se recargará solo.",
+                            path
+                        );
+                    }
                 }
             }
         }
@@ -3991,6 +4016,7 @@ let resueltos = colliders_resueltos(body, shape);
                 String,
                 vk::DescriptorSet,
                 Option<f32>,
+                Option<Vec<(u32, u32)>>,
             )> = Vec::new();
             let mut shadow_skinned: Vec<(&glass_renderer::GpuMesh, [f32; 16], vk::DescriptorSet)> = Vec::new();
             // Fase 2: frustums de las dos vistas y contadores del frame
@@ -4426,6 +4452,10 @@ let resueltos = colliders_resueltos(body, shape);
                         };
 
                         let lm_params = renderer.lm_params_for(ent.id);
+                        // Rangos de los draw items (nivel LOD activo)
+                        // para el proyector de grafo en sombras (C3).
+                        let rangos_entidad: Vec<(u32, u32)> =
+                            draw_items.iter().map(|it| it.3).collect();
                         let mut shadow_recorded = false;
                         for (c, mp, tex_set, range, em_item, uv_item) in draw_items {
                             if !shadow_recorded {
@@ -4487,6 +4517,14 @@ let resueltos = colliders_resueltos(body, shape);
                                             gname,
                                             tex,
                                             alpha_clip,
+                                            // Resto de C3: los rangos
+                                            // de los draw items del
+                                            // frame (nivel LOD activo).
+                                            if rangos_entidad.is_empty() {
+                                                None
+                                            } else {
+                                                Some(rangos_entidad.clone())
+                                            },
                                         ));
                                     } else {
                                         // Auditoría C3: la sombra usa los
@@ -7303,7 +7341,7 @@ mod spawn_bridge_tests {
             scene_state: Arc::new(Mutex::new(SceneState::new())),
             scene_manager: Arc::new(Mutex::new(SceneManager::new("."))),
             physics_world: Arc::new(Mutex::new(PhysicsWorld::new())),
-            asset_cache: Arc::new(RwLock::new(AssetCache::new())),
+            asset_cache: glass_renderer::AssetCache::new(),
             pending_script_spawns: Arc::new(Mutex::new(Vec::new())),
         }
     }

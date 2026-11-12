@@ -82,6 +82,20 @@ pub struct BlendTree1D {
 pub fn blend_weights<'a>(tree: &'a BlendTree1D, value: f32) -> Vec<(&'a BlendChild, f32)> {
     let mut sorted: Vec<&BlendChild> = tree.children.iter().collect();
     sorted.sort_by(|a, b| a.threshold.partial_cmp(&b.threshold).unwrap_or(std::cmp::Ordering::Equal));
+    // Auditoría M-22: thresholds duplicados se colapsan (manda el
+    // PRIMERO del grupo en el JSON). Sin colapsar, justo por encima
+    // del punto duplicado la mezcla saltaba de un hijo a otro.
+    let mut slots: Vec<&BlendChild> = Vec::with_capacity(sorted.len());
+    for c in sorted {
+        let duplicado = slots
+            .last()
+            .map(|p: &&BlendChild| (p.threshold - c.threshold).abs() <= 1e-6)
+            .unwrap_or(false);
+        if !duplicado {
+            slots.push(c);
+        }
+    }
+    let sorted = slots;
     if sorted.is_empty() {
         return Vec::new();
     }
@@ -113,14 +127,25 @@ pub fn blend_weights<'a>(tree: &'a BlendTree1D, value: f32) -> Vec<(&'a BlendChi
 
 /// Clip de referencia de un estado para `exit_time`: el suyo, o el
 /// hijo de menor umbral si es un estado con blend tree.
-fn state_main_clip(controller: &AnimatorController, state_name: &str) -> Option<String> {
+/// Clip de referencia de un estado para medir tiempos (exit_time):
+/// en un estado con blend tree, el hijo DOMINANTE según el valor
+/// actual del parámetro (auditoría M-23: antes era siempre el de
+/// menor threshold, aunque su peso fuese 0); sin blend, su clip.
+fn state_reference_clip(
+    controller: &AnimatorController,
+    state_name: &str,
+    params: &std::collections::HashMap<String, f32>,
+) -> Option<String> {
     let st = controller.state(state_name)?;
     match &st.blend {
         None => Some(st.clip.clone()),
         Some(tree) => {
-            let mut sorted: Vec<&BlendChild> = tree.children.iter().collect();
-            sorted.sort_by(|a, b| a.threshold.partial_cmp(&b.threshold).unwrap_or(std::cmp::Ordering::Equal));
-            sorted.first().map(|c| c.clip.clone())
+            let value = params.get(&tree.param).copied().unwrap_or(0.0);
+            let pesos = blend_weights(tree, value);
+            pesos
+                .iter()
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(c, _)| c.clip.clone())
         }
     }
 }
@@ -298,6 +323,32 @@ impl AnimatorData {
             self.current_state = controller.default_state.clone();
             self.state_time = 0.0;
         }
+        // Higiene ante un cambio de controlador en caliente (auditoría,
+        // menor): un fundido cuyo origen ya no existe en el
+        // controlador vigente se descarta, y los relojes de blend de
+        // clips ajenos a este controlador se podan.
+        if let Some(from) = &self.fade_from_state {
+            if controller.state(from).is_none() {
+                self.fade_from_state = None;
+                self.fade_from_time = 0.0;
+                self.fade_blend_times.clear();
+            }
+        }
+        {
+            let mut validos: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            for st in &controller.states {
+                if !st.clip.is_empty() {
+                    validos.insert(st.clip.as_str());
+                }
+                if let Some(tree) = &st.blend {
+                    for ch in &tree.children {
+                        validos.insert(ch.clip.as_str());
+                    }
+                }
+            }
+            self.blend_times.retain(|k, _| validos.contains(k.as_str()));
+            self.fade_blend_times.retain(|k, _| validos.contains(k.as_str()));
+        }
         // Inicializar parámetros que falten con sus valores por defecto.
         for p in &controller.parameters {
             let init = match p.kind {
@@ -322,6 +373,23 @@ impl AnimatorData {
             {
                 if d > 0.0 && self.state_time > d {
                     self.state_time = d;
+                }
+            }
+        } else if controller
+            .state(&self.current_state)
+            .map(|s| s.blend.is_none())
+            .unwrap_or(false)
+        {
+            // Auditoría (menor): en loop, el reloj del estado se
+            // envuelve por la duración de su clip para no perder
+            // precisión f32 en sesiones largas (la muestra envuelve
+            // igual al muestrear; el exit_time usa el ciclo en curso).
+            if let Some(d) = controller
+                .state(&self.current_state)
+                .and_then(|s| clip_duration(&s.clip))
+            {
+                if d > 0.0 && self.state_time > d {
+                    self.state_time %= d;
                 }
             }
         }
@@ -353,6 +421,31 @@ impl AnimatorData {
                 self.fade_from_state = None;
                 self.fade_from_time = 0.0;
                 self.fade_blend_times.clear();
+            } else {
+                // Auditoría (menor): durante el fundido TAMBIÉN se
+                // atienden las peticiones y las transiciones (antes
+                // esperaban a que acabase y los triggers disparaban
+                // tarde). Si algo dispara, el fundido en curso se
+                // completa en el acto y el nuevo arranca desde el
+                // estado destino (el salto de pose queda acotado al
+                // peso que le quedaba al origen saliente).
+                let mut fired: Option<(String, f32)> = None;
+                if let Some((name, fade)) = self.pending_play.take() {
+                    if controller.state(&name).is_some() && name != self.current_state {
+                        fired = Some((name, fade.max(0.0)));
+                    }
+                }
+                if fired.is_none() {
+                    fired = self.eval_transitions(controller, &clip_duration);
+                }
+                if let Some((to, fade)) = fired {
+                    self.fade_from_state = None;
+                    self.fade_from_time = 0.0;
+                    self.fade_blend_times.clear();
+                    self.fade_elapsed = 0.0;
+                    self.fade_duration = 0.0;
+                    self.start_fade(to, fade);
+                }
             }
         } else {
             // 2b) Sin fundido: petición pendiente (Play/CrossFade) o transiciones.
@@ -464,18 +557,26 @@ impl AnimatorData {
             if !ok {
                 continue;
             }
-            // exit_time: fracción normalizada sobre la duración del clip origen
-            // (para AnyState se toma el clip del estado actual).
+            // exit_time: fracción normalizada sobre la duración del
+            // clip de referencia del estado actual (en blend, el hijo
+            // dominante — M-23). En estados con loop la fracción es la
+            // del ciclo en curso (state_time % duración); sin loop, la
+            // del tiempo clamped.
             if let Some(et) = tr.exit_time {
-                let src_clip = if tr.from == "*" {
-                    state_main_clip(controller, &current)
-                } else {
-                    state_main_clip(controller, &tr.from)
-                };
+                let src_clip = state_reference_clip(controller, &current, &self.params);
                 let dur = src_clip.as_deref().and_then(|c| clip_duration(c));
                 match dur {
                     Some(d) if d > 0.0 => {
-                        if (state_time / d) < et {
+                        let en_loop = controller
+                            .state(&current)
+                            .map(|s| s.r#loop)
+                            .unwrap_or(true);
+                        let fraccion = if en_loop {
+                            (state_time % d) / d
+                        } else {
+                            state_time / d
+                        };
+                        if fraccion < et {
                             continue;
                         }
                     }
@@ -727,5 +828,93 @@ mod fsm_tests {
         assert_eq!(out.samples.len(), 1);
         assert_eq!(out.samples[0].clip, "jump");
         assert_eq!(out.samples[0].weight, 1.0);
+    }
+
+    #[test]
+    fn blend_con_thresholds_duplicados_no_salta() {
+        // Auditoría M-22: [idle@0, walk@0, jump@1] — el duplicado se
+        // colapsa (manda idle) y justo por encima de 0 no hay salto.
+        let tree = BlendTree1D {
+            param: "Speed".to_string(),
+            children: vec![
+                BlendChild { clip: "idle".to_string(), threshold: 0.0, speed: 1.0 },
+                BlendChild { clip: "walk".to_string(), threshold: 0.0, speed: 1.0 },
+                BlendChild { clip: "jump".to_string(), threshold: 1.0, speed: 1.0 },
+            ],
+        };
+        let w0 = blend_weights(&tree, 0.0);
+        assert_eq!(w0.len(), 1);
+        assert_eq!(w0[0].0.clip, "idle");
+        let w = blend_weights(&tree, 0.001);
+        assert!(w.iter().all(|(c, _)| c.clip != "walk"), "walk no debe aparecer: {w:?}");
+        let dominante = w.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).map(|(c, _)| c).unwrap();
+        assert_eq!(dominante.clip, "idle");
+        let mitad = blend_weights(&tree, 0.5);
+        assert_eq!(mitad.len(), 2);
+        assert!((mitad.iter().map(|(_, x)| x).sum::<f32>() - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn exit_time_en_blend_usa_el_clip_dominante() {
+        // Auditoría M-23: con Speed alta manda jump (0,8 s), no idle
+        // (2,0 s): a 0,5 s de estado la fracción ya supera 0,5.
+        let mut c = controller();
+        c.default_state = "Locomocion".to_string();
+        c.parameters.push(ParamDef { name: "Speed".to_string(), kind: ParamKind::Float, default: 0.0 });
+        c.states.push(StateDef {
+            name: "Locomocion".to_string(),
+            clip: String::new(),
+            speed: 1.0,
+            r#loop: true,
+            blend: Some(BlendTree1D {
+                param: "Speed".to_string(),
+                children: vec![
+                    BlendChild { clip: "idle".to_string(), threshold: 0.0, speed: 1.0 },
+                    BlendChild { clip: "jump".to_string(), threshold: 5.0, speed: 1.0 },
+                ],
+            }),
+        });
+        c.transitions.push(transition("Locomocion", "Idle", vec![], 0.0, Some(0.5)));
+
+        let mut a = animator();
+        a.current_state = "Locomocion".to_string();
+        a.params.insert("Speed".to_string(), 5.0);
+        a.state_time = 0.5;
+        a.advance(0.0, &c, clip_duration);
+        assert_eq!(a.current_state, "Idle", "con el dominante (jump, 0,8 s) la fracción 0,625 dispara");
+
+        // Control: con Speed 0 manda idle (2,0 s) y 0,5 s no basta.
+        let mut b = animator();
+        b.current_state = "Locomocion".to_string();
+        b.params.insert("Speed".to_string(), 0.0);
+        b.state_time = 0.5;
+        b.advance(0.0, &c, clip_duration);
+        assert_eq!(b.current_state, "Locomocion");
+    }
+
+    #[test]
+    fn transicion_durante_el_fundido_no_espera() {
+        // Auditoría (menor): un trigger a mitad de fundido dispara ya.
+        let c = controller();
+        let mut a = animator();
+        a.advance(0.0, &c, clip_duration);
+        a.params.insert("walk".to_string(), 1.0);
+        a.advance(0.016, &c, clip_duration);
+        assert_eq!(a.current_state, "Walk");
+        assert!(a.fade_from_state.is_some(), "el fundido Idle->Walk sigue en curso");
+        a.params.insert("jump".to_string(), 1.0);
+        a.advance(0.016, &c, clip_duration);
+        assert_eq!(a.current_state, "Jump", "el trigger no espera al fin del fundido");
+    }
+
+    #[test]
+    fn el_reloj_en_loop_se_envuelve() {
+        // Auditoría (menor): state_time no crece sin límite en loop.
+        let c = controller();
+        let mut a = animator();
+        a.advance(0.0, &c, clip_duration);
+        a.state_time = 5.0; // idle dura 2,0 s
+        a.advance(0.0, &c, clip_duration);
+        assert!((a.state_time - 1.0).abs() < 1e-4, "state_time={}", a.state_time);
     }
 }

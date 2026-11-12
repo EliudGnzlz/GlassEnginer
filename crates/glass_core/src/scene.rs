@@ -849,41 +849,78 @@ pub fn resolve_ui_rect(rt: &RectTransformData, screen_w: f32, screen_h: f32) -> 
 }
 
 /// Resuelve los rectángulos EN PÍXELES de todas las entidades UI de
-/// la escena (Fase 5): aplica el Canvas Scaler del primer Canvas,
-/// compone la jerarquía (cada hijo contra el rect de su ancestro UI
-/// más cercano) y aplica los layout groups por profundidad
-/// ascendente. Las entidades sin `rect_transform` no aparecen.
+/// la escena (Fase 5): cada subárbol usa el Canvas Scaler de su
+/// Canvas activo más cercano (escala 1 sin Canvas), compone la
+/// jerarquía (cada hijo contra el rect de su ancestro UI más
+/// cercano) y aplica los layout groups por profundidad ascendente,
+/// iterando hasta punto fijo (máx. 4 pasadas) para que los
+/// descendientes de los hijos de layout se resuelvan contra el rect
+/// impuesto. Las entidades sin `rect_transform` no aparecen.
 pub fn resolve_scene_ui_rects(
     scene: &SceneState,
     screen_w: f32,
     screen_h: f32,
 ) -> std::collections::HashMap<u64, [f32; 4]> {
-    let scale = scene
+    use std::collections::HashMap;
+
+    let by_id: HashMap<u64, &EntityData> =
+        scene.entities.iter().map(|e| (e.id, e)).collect();
+
+    // Escala de una entidad: la del Canvas ACTIVO más cercano (ella
+    // misma incluida); los Canvas inactivos se saltan. Sin Canvas → 1.
+    fn escala_de(
+        ent: &EntityData,
+        by_id: &HashMap<u64, &EntityData>,
+        screen_w: f32,
+        screen_h: f32,
+    ) -> f32 {
+        let mut cur: Option<&EntityData> = Some(ent);
+        let mut pasos = 0u32;
+        while let Some(e) = cur {
+            if e.active {
+                if let Some(c) = e.canvas.as_ref() {
+                    return canvas_scale_factor(c, screen_w, screen_h);
+                }
+            }
+            pasos += 1;
+            if pasos > 64 {
+                break;
+            }
+            cur = e.parent.and_then(|pid| by_id.get(&pid).copied());
+        }
+        1.0
+    }
+    let escalas: HashMap<u64, f32> = scene
         .entities
         .iter()
-        .find_map(|e| e.canvas.as_ref())
-        .map(|c| canvas_scale_factor(c, screen_w, screen_h))
-        .unwrap_or(1.0);
-    let root: [f32; 4] = [0.0, 0.0, screen_w / scale, screen_h / scale];
-    let by_id: std::collections::HashMap<u64, &EntityData> =
-        scene.entities.iter().map(|e| (e.id, e)).collect();
+        .map(|e| (e.id, escala_de(e, &by_id, screen_w, screen_h)))
+        .collect();
 
     fn resolver(
         ent: &EntityData,
-        by_id: &std::collections::HashMap<u64, &EntityData>,
-        root: [f32; 4],
-        memo: &mut std::collections::HashMap<u64, [f32; 4]>,
+        by_id: &HashMap<u64, &EntityData>,
+        escalas: &HashMap<u64, f32>,
+        pantalla: [f32; 2],
+        impuestos: &HashMap<u64, [f32; 4]>,
+        memo: &mut HashMap<u64, [f32; 4]>,
         visitando: &mut Vec<u64>,
     ) -> [f32; 4] {
         if let Some(r) = memo.get(&ent.id) {
             return *r;
         }
+        let s = escalas.get(&ent.id).copied().unwrap_or(1.0);
+        let root: [f32; 4] = [0.0, 0.0, pantalla[0] / s, pantalla[1] / s];
         // El Canvas ES el espacio raíz (como en Unity: su
         // RectTransform es la pantalla en unidades de referencia,
         // no su rect autorado).
         if ent.canvas.is_some() {
             memo.insert(ent.id, root);
             return root;
+        }
+        // Rect impuesto por un layout group en la pasada anterior.
+        if let Some(r) = impuestos.get(&ent.id) {
+            memo.insert(ent.id, *r);
+            return *r;
         }
         if visitando.contains(&ent.id) {
             return root; // ciclo en la jerarquía: se corta contra la raíz
@@ -892,11 +929,36 @@ pub fn resolve_scene_ui_rects(
         // Padre: el ancestro UI más cercano (con rect_transform o Canvas).
         let mut padre_rect = root;
         let mut cur = ent.parent;
+        let mut pasos = 0u32;
         while let Some(pid) = cur {
-            let Some(p) = by_id.get(&pid) else { break };
+            pasos += 1;
+            if pasos > 64 {
+                padre_rect = root; // guarda de ciclos: se trata como raíz
+                break;
+            }
+            let Some(p) = by_id.get(&pid) else {
+                // Menor de UI de la auditoría: un padre ausente del
+                // mapa se resolvía contra la pantalla EN SILENCIO.
+                // Ahora avisa (una sola vez por entidad y proceso).
+                static AVISADOS: std::sync::Mutex<Vec<u64>> =
+                    std::sync::Mutex::new(Vec::new());
+                if let Ok(mut v) = AVISADOS.lock() {
+                    if !v.contains(&ent.id) {
+                        v.push(ent.id);
+                        log::warn!(
+                            "UI: la entidad {} declara un padre {} que no existe en la escena; se resuelve contra la pantalla.",
+                            ent.id,
+                            pid
+                        );
+                    }
+                }
+                break;
+            };
             if p.rect_transform.is_some() || p.canvas.is_some() {
                 if p.rect_transform.is_some() {
-                    padre_rect = resolver(p, by_id, root, memo, visitando);
+                    padre_rect = resolver(
+                        p, by_id, escalas, pantalla, impuestos, memo, visitando,
+                    );
                 }
                 break;
             }
@@ -908,19 +970,8 @@ pub fn resolve_scene_ui_rects(
         r
     }
 
-    let mut memo: std::collections::HashMap<u64, [f32; 4]> =
-        std::collections::HashMap::new();
-    for ent in scene
-        .entities
-        .iter()
-        .filter(|e| e.rect_transform.is_some())
-    {
-        let mut visitando = Vec::new();
-        resolver(ent, &by_id, root, &mut memo, &mut visitando);
-    }
-
     // Layout groups por profundidad ascendente (los exteriores primero).
-    fn profundidad(ent: &EntityData, by_id: &std::collections::HashMap<u64, &EntityData>) -> u32 {
+    fn profundidad(ent: &EntityData, by_id: &HashMap<u64, &EntityData>) -> u32 {
         let mut d = 0;
         let mut cur = ent.parent;
         while let Some(pid) = cur {
@@ -938,34 +989,61 @@ pub fn resolve_scene_ui_rects(
     let mut grupos: Vec<&EntityData> = scene
         .entities
         .iter()
-        .filter(|e| e.layout_group.is_some() && memo.contains_key(&e.id))
+        .filter(|e| e.layout_group.is_some() && e.rect_transform.is_some())
         .collect();
     grupos.sort_by_key(|e| profundidad(e, &by_id));
-    for g in grupos {
-        let grect = memo[&g.id];
-        let hijos: Vec<u64> = scene
+
+    let pantalla = [screen_w, screen_h];
+    let mut impuestos: HashMap<u64, [f32; 4]> = HashMap::new();
+    let mut memo: HashMap<u64, [f32; 4]> = HashMap::new();
+    for _ in 0..4 {
+        memo = HashMap::new();
+        for ent in scene
             .entities
             .iter()
-            .filter(|e| e.parent == Some(g.id) && memo.contains_key(&e.id))
-            .map(|e| e.id)
-            .collect();
-        if hijos.is_empty() {
-            continue;
+            .filter(|e| e.rect_transform.is_some())
+        {
+            let mut visitando = Vec::new();
+            resolver(
+                ent, &by_id, &escalas, pantalla, &impuestos, &mut memo, &mut visitando,
+            );
         }
-        let rects: Vec<[f32; 4]> = hijos.iter().map(|id| memo[id]).collect();
-        let nuevos = layout_group_rects(grect, g.layout_group.as_ref().unwrap(), &rects);
-        for (id, nr) in hijos.iter().zip(nuevos) {
-            memo.insert(*id, nr);
+
+        let mut cambio = false;
+        for g in &grupos {
+            let Some(grect) = memo.get(&g.id).copied() else { continue };
+            let hijos: Vec<u64> = scene
+                .entities
+                .iter()
+                .filter(|e| e.parent == Some(g.id) && e.active && memo.contains_key(&e.id))
+                .map(|e| e.id)
+                .collect();
+            if hijos.is_empty() {
+                continue;
+            }
+            let rects: Vec<[f32; 4]> = hijos.iter().map(|id| memo[id]).collect();
+            let nuevos = layout_group_rects(grect, g.layout_group.as_ref().unwrap(), &rects);
+            for (id, nr) in hijos.iter().zip(nuevos) {
+                if impuestos.get(id) != Some(&nr) {
+                    cambio = true;
+                }
+                impuestos.insert(*id, nr);
+                memo.insert(*id, nr);
+            }
+        }
+        if !cambio {
+            break;
         }
     }
 
-    // A píxeles.
-    memo.values_mut().for_each(|r| {
-        r[0] *= scale;
-        r[1] *= scale;
-        r[2] *= scale;
-        r[3] *= scale;
-    });
+    // A píxeles, cada entidad con la escala de su Canvas.
+    for (id, r) in memo.iter_mut() {
+        let s = escalas.get(id).copied().unwrap_or(1.0);
+        r[0] *= s;
+        r[1] *= s;
+        r[2] *= s;
+        r[3] *= s;
+    }
     memo
 }
 
@@ -1194,6 +1272,51 @@ impl Default for SceneState {
             viewport_snapshot_png: None,
             shaders_reloaded_flag: false,
             transform_store: std::cell::RefCell::new(crate::transforms::TransformStore::new()),
+        }
+    }
+}
+
+/// Copia de seguridad de la versión anterior de una escena al
+/// guardar (auditoría C9): `<ruta>.snapshots/<nombre>-<millis>.json`,
+/// con poda a las 10 más recientes. Sin archivo previo, no hace
+/// nada; cualquier fallo se ignora (guardar nunca debe fallar por
+/// culpa de la copia).
+fn snapshot_previous_version(path: &str) {
+    let p = std::path::Path::new(path);
+    if !p.exists() {
+        return;
+    }
+    let Some(stem) = p.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    let dir = p.with_extension("snapshots");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let destino = dir.join(format!("{stem}-{millis}.json"));
+    if std::fs::copy(p, &destino).is_err() {
+        return;
+    }
+    // Poda: solo las 10 instantáneas más recientes de ESTA escena.
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        let mut propias: Vec<std::path::PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|q| {
+                q.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with(stem))
+                    .unwrap_or(false)
+            })
+            .collect();
+        propias.sort();
+        while propias.len() > 10 {
+            let vieja = propias.remove(0);
+            let _ = std::fs::remove_file(vieja);
         }
     }
 }
@@ -1621,13 +1744,19 @@ impl SceneState {
         self.entities.iter().find(|e| e.active && e.light.is_some())
     }
 
-    /// Guarda el estado de la escena en un archivo JSON en disco
+    /// Guarda el estado de la escena en un archivo JSON en disco.
+    ///
+    /// Auditoría C9 (mitigación ante la ausencia de undo/redo): si el
+    /// archivo ya existe, su contenido anterior se copia primero a
+    /// `<escena>.snapshots/<nombre>-<millis>.json`, conservando las
+    /// 10 instantáneas más recientes por escena.
     pub fn save_to_json(&self, path: &str) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(&self.entities)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         if let Some(parent) = std::path::Path::new(path).parent() {
             std::fs::create_dir_all(parent)?;
         }
+        snapshot_previous_version(path);
         std::fs::write(path, json)
     }
 
@@ -1884,6 +2013,148 @@ mod tests {
         // Los botones, en fila dentro del panel por el layout.
         assert_eq!(rects[&b1], [0.0, 660.0, 100.0, 40.0]);
         assert_eq!(rects[&b2], [110.0, 660.0, 100.0, 40.0]);
+    }
+
+    fn rt_simple(pos: [f32; 2], size: [f32; 2]) -> RectTransformData {
+        RectTransformData {
+            anchored_position: pos,
+            size_delta: size,
+            anchor_min: [0.0, 0.0],
+            anchor_max: [0.0, 0.0],
+            pivot: [0.0, 0.0],
+        }
+    }
+
+    fn canvas_ref(scene: &mut SceneState, id: u64, referencia: [f32; 2], activo: bool) {
+        let e = scene.entities.iter_mut().find(|e| e.id == id).unwrap();
+        e.active = activo;
+        e.canvas = Some(CanvasData {
+            render_mode: "ScreenSpaceOverlay".into(),
+            reference_resolution: referencia,
+            match_width_or_height: 0.5,
+        });
+    }
+
+    #[test]
+    fn layout_recoloca_tambien_a_los_nietos() {
+        // Auditoría M-24: la etiqueta hija del botón debe resolverse
+        // contra el rect FINAL del botón (el del layout), no el
+        // autorado (que está en [300, 200]).
+        let mut scene = SceneState::new();
+        let canvas_id = scene.create_entity("Canvas".into(), vec!["Canvas".into()]);
+        let panel_id = scene.create_entity("Panel".into(), vec!["RectTransform".into(), "LayoutGroup".into()]);
+        let b1 = scene.create_entity("B1".into(), vec!["Button".into()]);
+        let label = scene.create_entity("Label".into(), vec!["Text".into()]);
+        canvas_ref(&mut scene, canvas_id, [1280.0, 720.0], true);
+        {
+            let e = scene.entities.iter_mut().find(|e| e.id == panel_id).unwrap();
+            e.parent = Some(canvas_id);
+            e.layout_group = Some(LayoutGroupData {
+                direction: "horizontal".into(),
+                spacing: 10.0,
+                padding: [0.0, 0.0, 0.0, 0.0],
+                alignment: "start".into(),
+            });
+            e.rect_transform = Some(rt_simple([0.0, 0.0], [400.0, 60.0]));
+        }
+        {
+            let e = scene.entities.iter_mut().find(|e| e.id == b1).unwrap();
+            e.parent = Some(panel_id);
+            e.rect_transform = Some(rt_simple([300.0, 200.0], [100.0, 40.0]));
+        }
+        {
+            let e = scene.entities.iter_mut().find(|e| e.id == label).unwrap();
+            e.parent = Some(b1);
+            e.rect_transform = Some(rt_simple([5.0, 5.0], [50.0, 20.0]));
+        }
+        let rects = resolve_scene_ui_rects(&scene, 1280.0, 720.0);
+        assert_eq!(rects[&b1], [0.0, 660.0, 100.0, 40.0]);
+        let lr = rects[&label];
+        assert_eq!(lr[0], rects[&b1][0] + 5.0, "la etiqueta sigue al botón recolocado");
+        assert!(lr[1] >= rects[&b1][1] && lr[1] + lr[3] <= rects[&b1][1] + rects[&b1][3],
+            "la etiqueta queda DENTRO del botón final: {lr:?} vs {:?}", rects[&b1]);
+    }
+
+    #[test]
+    fn cada_canvas_escala_su_subarbol_y_el_inactivo_no() {
+        // Auditoría M-25: dos canvas con referencias distintas; y un
+        // canvas inactivo no impone escala.
+        let mut scene = SceneState::new();
+        let ca = scene.create_entity("CA".into(), vec!["Canvas".into()]);
+        let cb = scene.create_entity("CB".into(), vec!["Canvas".into()]);
+        let cc = scene.create_entity("CC".into(), vec!["Canvas".into()]);
+        let ba = scene.create_entity("BA".into(), vec!["Button".into()]);
+        let bb = scene.create_entity("BB".into(), vec!["Button".into()]);
+        let bc = scene.create_entity("BC".into(), vec!["Button".into()]);
+        canvas_ref(&mut scene, ca, [1280.0, 720.0], true);
+        canvas_ref(&mut scene, cb, [640.0, 360.0], true);
+        canvas_ref(&mut scene, cc, [100.0, 100.0], false);
+        for (b, p) in [(ba, ca), (bb, cb), (bc, cc)] {
+            let e = scene.entities.iter_mut().find(|e| e.id == b).unwrap();
+            e.parent = Some(p);
+            e.rect_transform = Some(rt_simple([0.0, 0.0], [100.0, 40.0]));
+        }
+        let rects = resolve_scene_ui_rects(&scene, 1280.0, 720.0);
+        assert_eq!(rects[&ba][2], 100.0, "canvas A escala 1");
+        assert_eq!(rects[&bb][2], 200.0, "canvas B escala 2");
+        assert_eq!(rects[&bc][2], 100.0, "el canvas inactivo no impone su escala");
+    }
+
+    #[test]
+    fn layout_ignora_hijos_inactivos() {
+        // Auditoría (menor): un hijo inactivo no ocupa hueco.
+        let mut scene = SceneState::new();
+        let canvas_id = scene.create_entity("Canvas".into(), vec!["Canvas".into()]);
+        let panel_id = scene.create_entity("Panel".into(), vec!["RectTransform".into(), "LayoutGroup".into()]);
+        let b1 = scene.create_entity("B1".into(), vec!["Button".into()]);
+        let b2 = scene.create_entity("B2".into(), vec!["Button".into()]);
+        let b3 = scene.create_entity("B3".into(), vec!["Button".into()]);
+        canvas_ref(&mut scene, canvas_id, [1280.0, 720.0], true);
+        {
+            let e = scene.entities.iter_mut().find(|e| e.id == panel_id).unwrap();
+            e.parent = Some(canvas_id);
+            e.layout_group = Some(LayoutGroupData {
+                direction: "horizontal".into(),
+                spacing: 10.0,
+                padding: [0.0, 0.0, 0.0, 0.0],
+                alignment: "start".into(),
+            });
+            e.rect_transform = Some(rt_simple([0.0, 0.0], [400.0, 60.0]));
+        }
+        for (b, activo) in [(b1, true), (b2, false), (b3, true)] {
+            let e = scene.entities.iter_mut().find(|e| e.id == b).unwrap();
+            e.parent = Some(panel_id);
+            e.active = activo;
+            e.rect_transform = Some(rt_simple([0.0, 0.0], [100.0, 40.0]));
+        }
+        let rects = resolve_scene_ui_rects(&scene, 1280.0, 720.0);
+        assert_eq!(rects[&b1][0], 0.0);
+        assert_eq!(rects[&b3][0], 110.0, "B3 va tras B1: B2 inactivo no ocupa hueco");
+    }
+
+    #[test]
+    fn ciclo_entre_no_ui_no_cuelga_el_resolvedor() {
+        // Auditoría M-26: X (UI) -> Y -> Z -> Y (ciclo sin UI en
+        // medio): el paseo de ancestros corta y X se trata como raíz.
+        let mut scene = SceneState::new();
+        let x = scene.create_entity("X".into(), vec!["Text".into()]);
+        let y = scene.create_entity("Y".into(), vec![]);
+        let z = scene.create_entity("Z".into(), vec![]);
+        {
+            let e = scene.entities.iter_mut().find(|e| e.id == x).unwrap();
+            e.parent = Some(y);
+            e.rect_transform = Some(rt_simple([0.0, 0.0], [10.0, 10.0]));
+        }
+        {
+            let e = scene.entities.iter_mut().find(|e| e.id == y).unwrap();
+            e.parent = Some(z);
+        }
+        {
+            let e = scene.entities.iter_mut().find(|e| e.id == z).unwrap();
+            e.parent = Some(y);
+        }
+        let rects = resolve_scene_ui_rects(&scene, 1280.0, 720.0);
+        assert!(rects.contains_key(&x), "X resuelve (como raíz) pese al ciclo");
     }
 
     #[test]
@@ -2201,6 +2472,41 @@ mod tests {
         assert_eq!(loaded_text.parent, Some(canvas_id));
 
         let _ = std::fs::remove_file(temp_path);
+    }
+
+    #[test]
+    fn guardar_crea_snapshot_de_la_version_anterior() {
+        // Auditoría C9: al sobrescribir una escena queda su versión
+        // anterior en <escena>.snapshots/, con poda a 10.
+        let dir = std::env::temp_dir().join("glass_test_snapshot_c9");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Escena.scene.json");
+        let path_str = path.to_string_lossy().to_string();
+
+        let mut scene = SceneState::new();
+        scene.create_entity("Uno".into(), vec![]);
+        scene.save_to_json(&path_str).unwrap();
+        let snap_dir = dir.join("Escena.scene.snapshots");
+        assert!(!snap_dir.exists(), "sin versión previa no hay snapshot");
+
+        scene.create_entity("Dos".into(), vec![]);
+        scene.save_to_json(&path_str).unwrap();
+        let snaps: Vec<_> = std::fs::read_dir(&snap_dir).unwrap().flatten().collect();
+        assert_eq!(snaps.len(), 1);
+        let contenido = std::fs::read_to_string(snaps[0].path()).unwrap();
+        assert!(contenido.contains("Uno") && !contenido.contains("Dos"),
+            "el snapshot guarda la versión ANTERIOR");
+
+        // Poda: tras muchos guardados quedan como mucho 10.
+        for i in 0..12 {
+            scene.create_entity(format!("E{i}"), vec![]);
+            scene.save_to_json(&path_str).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let snaps: Vec<_> = std::fs::read_dir(&snap_dir).unwrap().flatten().collect();
+        assert!(snaps.len() <= 10, "poda a 10: {}", snaps.len());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

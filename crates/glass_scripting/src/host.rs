@@ -25,13 +25,22 @@ pub enum ScriptError {
 }
 
 type InitBridgeFn = unsafe extern "system" fn(*const c_void, *const c_void, *const c_void);
-type InitAudioBridgeFn = unsafe extern "system" fn(
-    *const c_void,
-    *const c_void,
-    *const c_void,
-    *const c_void,
-    *const c_void,
-);
+// El puente de audio viaja como STRUCT de callbacks (como el de
+// física): la resolución de delegados de netcorehost tiene un tope
+// de aridad que los 7 punteros sueltos superaban (auditoría C6).
+type InitAudioBridgeFn = unsafe extern "system" fn(*const AudioBridgeCallbacks);
+
+#[repr(C)]
+struct AudioBridgeCallbacks {
+    play_2d: *const c_void,
+    play_3d: *const c_void,
+    set_source_position: *const c_void,
+    set_listener_transform: *const c_void,
+    stop: *const c_void,
+    // Añadidos AL FINAL (auditoría C6): play 2D/3D con bus.
+    play_2d_on_bus: *const c_void,
+    play_3d_on_bus: *const c_void,
+}
 
 type InitParticleBridgeFn = unsafe extern "system" fn(
     *const c_void,
@@ -61,6 +70,9 @@ struct PhysicsBridgeCallbacks {
     // lado C# nuevo los tolera a null si un host viejo no los entrega.
     attach_capsule: *const c_void,
     attach_cylinder: *const c_void,
+    // Añadidos AL FINAL (auditoría C5): consultas extendidas para C#.
+    cast_sphere: *const c_void,
+    overlap_sphere: *const c_void,
 }
 
 type InitPhysicsBridgeFn = unsafe extern "system" fn(*const PhysicsBridgeCallbacks);
@@ -282,14 +294,17 @@ impl ScriptHost {
             pdcstr!("InitAudioBridge"),
         ) {
             log::info!("Vinculando callbacks Rust <-> C# Audio FFI...");
+            let audio_callbacks = AudioBridgeCallbacks {
+                play_2d: glass_audio::glass_audio_play_2d as *const c_void,
+                play_3d: glass_audio::glass_audio_play_3d as *const c_void,
+                set_source_position: glass_audio::glass_audio_set_source_position as *const c_void,
+                set_listener_transform: glass_audio::glass_audio_set_listener_transform as *const c_void,
+                stop: glass_audio::glass_audio_stop as *const c_void,
+                play_2d_on_bus: glass_audio::glass_audio_play_2d_on_bus as *const c_void,
+                play_3d_on_bus: glass_audio::glass_audio_play_3d_on_bus as *const c_void,
+            };
             unsafe {
-                init_audio_fn(
-                    glass_audio::glass_audio_play_2d as *const c_void,
-                    glass_audio::glass_audio_play_3d as *const c_void,
-                    glass_audio::glass_audio_set_source_position as *const c_void,
-                    glass_audio::glass_audio_set_listener_transform as *const c_void,
-                    glass_audio::glass_audio_stop as *const c_void,
-                );
+                init_audio_fn(&audio_callbacks as *const AudioBridgeCallbacks);
             }
         }
 
@@ -328,6 +343,8 @@ impl ScriptHost {
                 cast_ray: glass_physics::glass_physics_cast_ray as *const c_void,
                 attach_capsule: glass_physics::glass_physics_attach_capsule_collider as *const c_void,
                 attach_cylinder: glass_physics::glass_physics_attach_cylinder_collider as *const c_void,
+                cast_sphere: glass_physics::glass_physics_cast_sphere as *const c_void,
+                overlap_sphere: glass_physics::glass_physics_overlap_sphere as *const c_void,
             };
             unsafe {
                 init_physics_fn(&callbacks as *const PhysicsBridgeCallbacks);

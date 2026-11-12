@@ -45,4 +45,35 @@ public static class Physics
         };
         return true;
     }
+
+    /// <summary>
+    /// Barrido de esfera: como un raycast con grosor, para chequeos de
+    /// suelo y de proximidad que un rayo fino fallaría (auditoría C5).
+    /// </summary>
+    public static bool SphereCast(Vector3 origin, float radius, Vector3 direction, out RaycastHit hit, float maxDistance, ulong excludeEntityId = 0)
+    {
+        hit = default;
+        if (!RuntimeBridge.CastSphere(origin, radius, direction, maxDistance, excludeEntityId,
+                out ulong entityId, out Vector3 point, out Vector3 normal, out float distance))
+        {
+            return false;
+        }
+        hit = new RaycastHit
+        {
+            EntityId = entityId,
+            Point = point,
+            Normal = normal,
+            Distance = distance,
+        };
+        return true;
+    }
+
+    /// <summary>
+    /// Ids de las entidades cuyos colliders intersectan la esfera
+    /// (auditoría C5). Sin duplicados por entidad.
+    /// </summary>
+    public static ulong[] OverlapSphere(Vector3 center, float radius, ulong excludeEntityId = 0)
+    {
+        return RuntimeBridge.OverlapSphere(center, radius, excludeEntityId);
+    }
 }

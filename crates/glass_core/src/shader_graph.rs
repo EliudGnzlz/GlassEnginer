@@ -453,7 +453,7 @@ pub struct ShaderGraph {
     /// declara la propiedad especial `alpha_clip`); Outline = pase
     /// de contorno toon (S5). Por defecto solo Forward: los
     /// `.graph.json` anteriores a este campo cargan igual.
-    #[serde(default = "default_passes")]
+    #[serde(default = "default_passes", deserialize_with = "de_passes_lenient")]
     pub passes: Vec<PassKind>,
 }
 
@@ -468,6 +468,29 @@ pub enum PassKind {
 /// Valor por defecto de `ShaderGraph::passes`: solo el pase normal.
 fn default_passes() -> Vec<PassKind> {
     vec![PassKind::Forward]
+}
+
+/// Deserialización tolerante de `passes` (auditoría, menor): un
+/// nombre de pase mal escrito se salta con aviso en vez de invalidar
+/// el grafo entero (antes un solo typo dejaba el material en magenta
+/// de fallback sin explicar por qué).
+fn de_passes_lenient<'de, D>(deserializer: D) -> Result<Vec<PassKind>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let crudos = Vec::<String>::deserialize(deserializer)?;
+    let mut out = Vec::new();
+    for c in &crudos {
+        match c.as_str() {
+            "Forward" => out.push(PassKind::Forward),
+            "Shadow" => out.push(PassKind::Shadow),
+            "Outline" => out.push(PassKind::Outline),
+            otro => {
+                log::warn!("ShaderGraph: pase desconocido '{otro}' ignorado (válidos: Forward, Shadow, Outline).");
+            }
+        }
+    }
+    Ok(out)
 }
 #[derive(Debug, Error, PartialEq)]
 pub enum GraphError {
@@ -1136,12 +1159,13 @@ impl ShaderGraph {
     /// Declaraciones GLSL de los samplers extra (`tex_prop_0..2`) que usa
     /// el grafo, en orden creciente de slot, una línea por slot usado.
     /// Vacío si ningún nodo `TextureSample` usa slot 1..=3.
-    fn point_lights_ubo_glsl(&self) -> String {
+    fn point_lights_ubo_glsl(&self, alcanzables: &std::collections::HashSet<u32>) -> String {
         let usa_luces_puntuales = self.nodes.iter().any(|n| {
-            matches!(
-                n.kind,
-                NodeKind::PointLightPosition { .. } | NodeKind::PointLightColor { .. }
-            )
+            alcanzables.contains(&n.id)
+                && matches!(
+                    n.kind,
+                    NodeKind::PointLightPosition { .. } | NodeKind::PointLightColor { .. }
+                )
         });
         if !usa_luces_puntuales {
             return String::new();
@@ -1149,10 +1173,15 @@ impl ShaderGraph {
         "layout(set = 3, binding = 0, std140) uniform PointLights {\n    vec4 pos_range[8];\n    vec4 color_intensity[8];\n    vec4 shadow[8];\n    uint count;\n    uint _pad0;\n    uint _pad1;\n    uint _pad2;\n} u_point_lights;\n".to_string()
     }
 
-    fn texture_extra_samplers(&self) -> String {
+    fn texture_extra_samplers(&self, alcanzables: &std::collections::HashSet<u32>) -> String {
+        // Auditoría (menor): solo los nodos ALCANZABLES desde el
+        // Output declaran sampler; un TextureSample huérfano dejaba
+        // declarado un binding que nadie muestrea (y que el set de
+        // descriptores del pipeline no necesariamente alimenta).
         let mut slots: Vec<u32> = self
             .nodes
             .iter()
+            .filter(|n| alcanzables.contains(&n.id))
             .filter_map(|n| match &n.kind {
                 NodeKind::TextureSample { slot } if (1..=3).contains(slot) => Some(*slot),
                 _ => None,
@@ -1178,6 +1207,25 @@ impl ShaderGraph {
             .find(|n| matches!(n.kind, NodeKind::Output))
             .ok_or(GraphError::MissingOutput)?;
 
+        // Alcanzables desde el Output (hacia atrás por las aristas):
+        // las declaraciones de cabecera solo cubren estos nodos.
+        let alcanzables: std::collections::HashSet<u32> = {
+            let mut rev: HashMap<u32, Vec<u32>> = HashMap::new();
+            for e in &self.edges {
+                rev.entry(e.to_node).or_default().push(e.from_node);
+            }
+            let mut set = std::collections::HashSet::new();
+            let mut pila = vec![output.id];
+            while let Some(id) = pila.pop() {
+                if set.insert(id) {
+                    if let Some(fs) = rev.get(&id) {
+                        pila.extend(fs.iter().copied());
+                    }
+                }
+            }
+            set
+        };
+
         let mut compiler = Compiler {
             nodes,
             inputs,
@@ -1198,8 +1246,8 @@ impl ShaderGraph {
         };
 
         let props_ubo = graph_properties_ubo_glsl(&self.properties);
-        let extra_samplers = self.texture_extra_samplers();
-        let point_lights = self.point_lights_ubo_glsl();
+        let extra_samplers = self.texture_extra_samplers(&alcanzables);
+        let point_lights = self.point_lights_ubo_glsl(&alcanzables);
 
         Ok(format!(
             "#version 450\n\
@@ -2643,6 +2691,30 @@ fn grafo_sin_propiedades_no_declara_ubo() {
     }
 
     #[test]
+    fn texture_sample_huerfano_no_declara_sampler() {
+        // Pasada de medios (menor): un TextureSample sin conectar al
+        // Output no declara su sampler en la cabecera.
+        let g = ShaderGraph {
+            name: "huerfano".into(),
+            nodes: vec![
+                nodo(1, NodeKind::TextureSample { slot: 2 }),
+                nodo(2, NodeKind::Color { rgba: [1.0, 0.0, 0.0, 1.0] }),
+                nodo(3, NodeKind::Output),
+            ],
+            edges: vec![arista(2, 3, "color")],
+            transparent: false,
+            properties: vec![PropertyDef {
+                name: "mascara".into(),
+                kind: PropertyKind::Texture2D,
+                default: PropertyValue::Texture("checker".into()),
+            }],
+            passes: vec![PassKind::Forward],
+        };
+        let glsl = g.compile_fragment().expect("compila");
+        assert!(!glsl.contains("tex_prop_1"), "sampler huérfano declarado:\n{glsl}");
+    }
+
+    #[test]
     fn texture_sample_sin_propiedad_es_error() {
         let g = ShaderGraph {
             name: "muestra_huerfana".into(),
@@ -2769,6 +2841,25 @@ fn grafo_sin_propiedades_no_declara_ubo() {
         }"#;
         let g = ShaderGraph::from_json(json).unwrap();
         assert!(g.has_pass(PassKind::Forward));
+        assert!(!g.has_pass(PassKind::Shadow));
+    }
+
+    #[test]
+    fn pase_mal_escrito_no_invalida_el_grafo() {
+        // Pasada de medios (menor): "Shado" se salta con aviso; el
+        // grafo carga con los pases válidos.
+        let json = r#"{
+            "name": "tolerante",
+            "nodes": [
+                { "id": 0, "kind": { "kind": "Output" } }
+            ],
+            "edges": [],
+            "transparent": false,
+            "passes": ["Forward", "Shado", "Outline"]
+        }"#;
+        let g = ShaderGraph::from_json(json).unwrap();
+        assert!(g.has_pass(PassKind::Forward));
+        assert!(g.has_pass(PassKind::Outline));
         assert!(!g.has_pass(PassKind::Shadow));
     }
 

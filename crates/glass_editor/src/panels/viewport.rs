@@ -848,16 +848,21 @@ impl ViewportPanel {
     /// Renderiza elementos de Canvas UI superpuestos en la vista de juego (Screen Space Overlay)
     fn render_in_game_canvas_ui(ui: &mut Ui, game_rect: egui::Rect, scene_state: &Arc<Mutex<SceneState>>) {
         if let Ok(scene) = scene_state.lock() {
+            // Auditoría C7: la vista previa usa el MISMO resolvedor
+            // que el runtime (`resolve_scene_ui_rects` con el tamaño
+            // del viewport como pantalla): jerarquía, anclas con
+            // estirado, layout groups y escala de canvas coinciden
+            // con lo que se verá en juego. Antes había una fórmula
+            // propia simplificada (solo anchor_min, sin padres) que
+            // podía enseñar otra cosa.
+            let rects = glass_core::resolve_scene_ui_rects(&scene, game_rect.width(), game_rect.height());
             for ent in &scene.entities {
                 if !ent.active { continue; }
-                if let Some(rt) = &ent.rect_transform {
-                    let anchor_x = game_rect.left() + game_rect.width() * rt.anchor_min[0];
-                    let anchor_y = game_rect.top() + game_rect.height() * (1.0 - rt.anchor_min[1]);
-                    let pos_x = anchor_x + rt.anchored_position[0] - rt.size_delta[0] * rt.pivot[0];
-                    let pos_y = anchor_y - rt.anchored_position[1] - rt.size_delta[1] * (1.0 - rt.pivot[1]);
+                if ent.rect_transform.is_some() {
+                    let Some(r) = rects.get(&ent.id) else { continue };
                     let elem_rect = egui::Rect::from_min_size(
-                        egui::pos2(pos_x, pos_y),
-                        egui::vec2(rt.size_delta[0].max(10.0), rt.size_delta[1].max(10.0)),
+                        egui::pos2(game_rect.left() + r[0], game_rect.top() + r[1]),
+                        egui::vec2(r[2], r[3]),
                     );
 
                     if let Some(btn) = &ent.ui_button {

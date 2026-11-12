@@ -197,6 +197,12 @@ mod lod_tests {
         assert_eq!(lod_level_for_distance(&[0, 2], 90.0), 2);
         // Solo un nivel alto disponible: se usa ese.
         assert_eq!(lod_level_for_distance(&[2], 3.0), 2);
+        // Niveles por encima de 2 alcanzables (pasada de medios):
+        // las bandas se duplican (90, 180, ...).
+        let disp4 = [0, 1, 2, 3];
+        assert_eq!(lod_level_for_distance(&disp4, 100.0), 3);
+        assert_eq!(lod_level_for_distance(&disp4, 50.0), 2);
+        assert_eq!(lod_level_for_distance(&disp4, 500.0), 3);
     }
 }
 
@@ -230,12 +236,22 @@ pub const LOD_FAR: f32 = 45.0;
 /// mayor disponible ≤ deseado, o el menor disponible si no hay
 /// ninguno ≤. `available` no puede venir vacío.
 pub fn lod_level_for_distance(available: &[u32], distance: f32) -> u32 {
+    // Bandas: <LOD_NEAR → 0, <LOD_FAR → 1, y a partir de LOD_FAR
+    // cada nivel duplica la distancia anterior (90, 180, 360, …).
+    // Auditoría (menor): antes el nivel deseado se topaba en 2 y los
+    // niveles 3+ de un modelo eran inalcanzables.
     let desired = if distance < LOD_NEAR {
         0
     } else if distance < LOD_FAR {
         1
     } else {
-        2
+        let mut nivel = 2u32;
+        let mut umbral = LOD_FAR * 2.0;
+        while distance >= umbral && nivel < 16 {
+            nivel += 1;
+            umbral *= 2.0;
+        }
+        nivel
     };
     let mut best: Option<u32> = None;
     for &l in available {
@@ -780,9 +796,29 @@ pub fn texture_bc_enabled() -> bool {
     TEXTURE_BC_ENABLED.load(Ordering::Relaxed)
 }
 
-/// ¿Algún píxel con alfa < 255? Decide BC3 frente a BC1.
+/// ¿Algún píxel con alfa < 250? Decide BC3 frente a BC1. El umbral
+/// (antes < 255) evita pagar BC3 por texturas «casi opacas» cuyo
+/// único píxel no-255 es ruido de 1 nivel (auditoría, menor).
 pub fn rgba_has_alpha(rgba: &[u8]) -> bool {
-    rgba.chunks_exact(4).any(|p| p[3] < 255)
+    rgba.chunks_exact(4).any(|p| p[3] < 250)
+}
+
+fn srgb_byte_to_linear(v: u8) -> f32 {
+    let s = v as f32 / 255.0;
+    if s <= 0.04045 {
+        s / 12.92
+    } else {
+        ((s + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb_byte(l: f32) -> u8 {
+    let s = if l <= 0.0031308 {
+        12.92 * l
+    } else {
+        1.055 * l.powf(1.0 / 2.4) - 0.055
+    };
+    (s * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
 /// Downsample 2x2 (media de caja) de un nivel RGBA; las dimensiones de
@@ -804,18 +840,25 @@ pub fn downsample_rgba(rgba: &[u8], width: u32, height: u32) -> (Vec<u8>, u32, u
             let y0 = (y * 2).min(height - 1);
             let y1 = (y * 2 + 1).min(height - 1);
 
-            let mut acc = [0u32; 4];
+            // Auditoría (menor): el color se promedia en espacio
+            // LINEAL (los bytes son sRGB; promediarlos tal cual
+            // oscurece los mips). El alfa, dato lineal, va en media
+            // aritmética como siempre.
+            let mut acc_lin = [0.0f32; 3];
+            let mut acc_a = 0u32;
             for (px, py) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
                 let i = ((py * width + px) * 4) as usize;
-                for c in 0..4 {
-                    acc[c] += rgba[i + c] as u32;
+                for c in 0..3 {
+                    acc_lin[c] += srgb_byte_to_linear(rgba[i + c]);
                 }
+                acc_a += rgba[i + 3] as u32;
             }
 
             let o = ((y * dw + x) * 4) as usize;
-            for c in 0..4 {
-                out[o + c] = ((acc[c] + 2) / 4) as u8; // media redondeada
+            for c in 0..3 {
+                out[o + c] = linear_to_srgb_byte(acc_lin[c] / 4.0);
             }
+            out[o + 3] = ((acc_a + 2) / 4) as u8;
         }
     }
 
@@ -1169,9 +1212,100 @@ impl MeshLoader {
         let mut objects: Vec<ModelObject> = Vec::new();
 
         if has_skin {
-            // Con piel, la fusión histórica: por mallas y sin
-            // transformar (la piel compone los globales en el shader).
+            // Con piel: las mallas usadas por nodos CON piel se
+            // fusionan como siempre (sin transformar; la piel compone
+            // los globales en el shader). Las mallas que ningún nodo
+            // con piel usa (un prop estático en el mismo archivo) se
+            // fusionan POR NODO con su transformación global y pesos
+            // cero — el shader con piel tiene fallback para peso cero
+            // y las dibuja tal cual (pasada de medios: antes perdían
+            // su transformación de nodo y aparecían en el origen).
+            let globals = node_globals(&document);
+            let mut con_piel: std::collections::HashSet<usize> = Default::default();
+            for node in document.nodes() {
+                if node.skin().is_some() {
+                    if let Some(m) = node.mesh() {
+                        con_piel.insert(m.index());
+                    }
+                }
+            }
+            let global_de = |node: &gltf::Node| -> [f32; 16] {
+                globals.get(&node.index()).copied().unwrap_or_else(|| {
+                    // Sin global (huérfano u otra escena): usa la local.
+                    let m = node.transform().matrix();
+                    [
+                        m[0][0], m[0][1], m[0][2], m[0][3], //
+                        m[1][0], m[1][1], m[1][2], m[1][3], //
+                        m[2][0], m[2][1], m[2][2], m[2][3], //
+                        m[3][0], m[3][1], m[3][2], m[3][3],
+                    ]
+                })
+            };
+            let mut fusionadas: std::collections::HashMap<usize, Vec<usize>> = Default::default();
+            let mut estaticas: std::collections::HashSet<usize> = Default::default();
+            for node in document.nodes() {
+                let Some(mesh) = node.mesh() else { continue };
+                let mi = mesh.index();
+                let g = global_de(&node);
+                if con_piel.contains(&mi) {
+                    let ranges = fusionadas
+                        .entry(mi)
+                        .or_insert_with(|| {
+                            let primera = primitive_ranges.len();
+                            for primitive in mesh.primitives() {
+                                merge_primitive(
+                                    &primitive,
+                                    &buffers,
+                                    None,
+                                    has_skin,
+                                    &mut vertices,
+                                    &mut indices,
+                                    &mut primitive_materials,
+                                    &mut primitive_ranges,
+                                    &mut vertex_joints,
+                                    &mut vertex_weights,
+                                );
+                            }
+                            (primera..primitive_ranges.len()).collect()
+                        })
+                        .clone();
+                    objects.push(ModelObject {
+                        name: node.name().unwrap_or("").to_string(),
+                        mesh_name: mesh.name().unwrap_or("").to_string(),
+                        transform: g,
+                        ranges,
+                    });
+                } else {
+                    estaticas.insert(mi);
+                    let primera = primitive_ranges.len();
+                    for primitive in mesh.primitives() {
+                        merge_primitive(
+                            &primitive,
+                            &buffers,
+                            Some(&g),
+                            has_skin,
+                            &mut vertices,
+                            &mut indices,
+                            &mut primitive_materials,
+                            &mut primitive_ranges,
+                            &mut vertex_joints,
+                            &mut vertex_weights,
+                        );
+                    }
+                    objects.push(ModelObject {
+                        name: node.name().unwrap_or("").to_string(),
+                        mesh_name: mesh.name().unwrap_or("").to_string(),
+                        transform: g,
+                        ranges: (primera..primitive_ranges.len()).collect(),
+                    });
+                }
+            }
+            // Mallas no referenciadas por ningún nodo: fusión
+            // histórica sin transformar, sin objeto.
             for mesh in document.meshes() {
+                if fusionadas.contains_key(&mesh.index()) || estaticas.contains(&mesh.index()) {
+                    continue;
+                }
                 for primitive in mesh.primitives() {
                     merge_primitive(
                         &primitive,
@@ -1185,38 +1319,6 @@ impl MeshLoader {
                         &mut vertex_joints,
                         &mut vertex_weights,
                     );
-                }
-            }
-            // Objetos: desde los nodos, con los rangos mapeados por
-            // el orden de fusión de cada malla (suma prefija).
-            let globals = node_globals(&document);
-            let mut inicios: Vec<usize> = Vec::new();
-            {
-                let mut acc = 0usize;
-                for mesh in document.meshes() {
-                    inicios.push(acc);
-                    acc += mesh.primitives().len();
-                }
-            }
-            for node in document.nodes() {
-                if let Some(mesh) = node.mesh() {
-                    let ini = inicios.get(mesh.index()).copied().unwrap_or(0);
-                    let n = mesh.primitives().len();
-                    objects.push(ModelObject {
-                        name: node.name().unwrap_or("").to_string(),
-                        mesh_name: mesh.name().unwrap_or("").to_string(),
-                        transform: globals.get(&node.index()).copied().unwrap_or_else(|| {
-                            // Sin global (huérfano u otra escena): usa la local.
-                            let m = node.transform().matrix();
-                            [
-                                m[0][0], m[0][1], m[0][2], m[0][3], //
-                                m[1][0], m[1][1], m[1][2], m[1][3], //
-                                m[2][0], m[2][1], m[2][2], m[2][3], //
-                                m[3][0], m[3][1], m[3][2], m[3][3],
-                            ]
-                        }),
-                        ranges: (ini..ini + n).collect(),
-                    });
                 }
             }
         } else {
@@ -2036,12 +2138,14 @@ mod tests {
 
         let (out, w, h) = downsample_rgba(&rgba, 4, 4);
         assert_eq!((w, h), (2, 2));
-        // (0,0)=10, (1,0)=18, (0,1)=42, (1,1)=50
+        // Medias en espacio LINEAL (auditoría, menor): (0,0)=11,
+        // (1,0)=19, (0,1)=43, (1,1)=51 — la media aritmética en
+        // sRGB daría 10/18/42/50, sistemáticamente más oscura.
         let esperado = vec![
-            10, 0, 0, 255, //
-            18, 0, 0, 255, //
-            42, 0, 0, 255, //
-            50, 0, 0, 255, //
+            11, 0, 0, 255, //
+            19, 0, 0, 255, //
+            43, 0, 0, 255, //
+            51, 0, 0, 255, //
         ];
         assert_eq!(out, esperado);
     }
@@ -2061,9 +2165,9 @@ mod tests {
         let (out, w, h) = downsample_rgba(&rgba, 3, 3);
         // Auditoría Fase 2 (M-11): regla de Vulkan, max(1, floor(3/2))
         // = 1. El píxel resultante promedia el bloque 2x2 superior
-        // izquierdo (0, 10, 30, 40 -> 20).
+        // izquierdo (0, 10, 30, 40) en espacio lineal -> 24.
         assert_eq!((w, h), (1, 1));
-        assert_eq!(out, vec![20, 0, 0, 255]);
+        assert_eq!(out, vec![24, 0, 0, 255]);
     }
 
     #[test]
@@ -2149,8 +2253,13 @@ mod tests {
         let opaca = vec![10u8, 20, 30, 255, 40, 50, 60, 255];
         assert!(!rgba_has_alpha(&opaca));
 
+        // Umbral de la pasada de medios: 254 ya cuenta como opaco
+        // (no fuerza BC3); la transparencia real sí se detecta.
+        let mut casi = opaca.clone();
+        casi[7] = 254;
+        assert!(!rgba_has_alpha(&casi));
         let mut con_alfa = opaca.clone();
-        con_alfa[7] = 254;
+        con_alfa[7] = 200;
         assert!(rgba_has_alpha(&con_alfa));
     }
 
@@ -2615,6 +2724,92 @@ mod tests {
         glb.extend_from_slice(&0x004E_4942u32.to_le_bytes());
         glb.extend_from_slice(&bin);
         glb
+    }
+
+    /// GLB mixto: el triángulo con piel del builder clásico + una
+    /// segunda malla SIN piel en un nodo trasladado [5,0,0].
+    fn build_test_glb_mixto() -> Vec<u8> {
+        let mut bin: Vec<u8> = Vec::new();
+        let f32s = |vals: &[f32], bin: &mut Vec<u8>| {
+            for v in vals {
+                bin.extend_from_slice(&v.to_le_bytes());
+            }
+        };
+        let u16s = |vals: &[u16], bin: &mut Vec<u8>| {
+            for v in vals {
+                bin.extend_from_slice(&v.to_le_bytes());
+            }
+        };
+        // @0 posiciones con piel (36 B)
+        f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &mut bin);
+        // @36 JOINTS_0 (24 B)
+        u16s(&[0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0], &mut bin);
+        // @60 WEIGHTS_0 (48 B)
+        f32s(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0], &mut bin);
+        // @108 índices (6 B) + relleno
+        u16s(&[0, 1, 2], &mut bin);
+        while bin.len() % 4 != 0 {
+            bin.push(0);
+        }
+        // IBMs (128 B)
+        let ibm_offset = bin.len();
+        let identidad: [f32; 16] = [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ];
+        f32s(&identidad, &mut bin);
+        f32s(&identidad, &mut bin);
+        // Tiempos (8 B) y rotaciones (32 B) del clip
+        let times_offset = bin.len();
+        f32s(&[0.0, 1.0], &mut bin);
+        let rot_offset = bin.len();
+        let s = std::f32::consts::FRAC_1_SQRT_2;
+        f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, s, s], &mut bin);
+        // Posiciones de la malla estática (36 B): el mismo triángulo.
+        let pos2_offset = bin.len();
+        f32s(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &mut bin);
+
+        let json = format!(
+            r#"{{"asset": {{"version": "2.0"}}, "scene": 0, "scenes": [{{"nodes": [0, 1, 3]}}], "nodes": [{{"mesh": 0, "skin": 0}}, {{"children": [2]}}, {{"translation": [0.0, 1.0, 0.0]}}, {{"mesh": 1, "translation": [5.0, 0.0, 0.0]}}], "skins": [{{"joints": [1, 2], "inverseBindMatrices": 4}}], "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0, "JOINTS_0": 1, "WEIGHTS_0": 2}}, "indices": 3}}]}}, {{"primitives": [{{"attributes": {{"POSITION": 7}}, "indices": 3}}]}}], "animations": [{{"name": "Saludar", "channels": [{{"sampler": 0, "target": {{"node": 2, "path": "rotation"}}}}], "samplers": [{{"input": 5, "output": 6, "interpolation": "LINEAR"}}]}}], "buffers": [{{"byteLength": {}}}], "bufferViews": [{{"buffer": 0, "byteOffset": 0, "byteLength": 36}}, {{"buffer": 0, "byteOffset": 36, "byteLength": 24}}, {{"buffer": 0, "byteOffset": 60, "byteLength": 48}}, {{"buffer": 0, "byteOffset": 108, "byteLength": 6}}, {{"buffer": 0, "byteOffset": {}, "byteLength": 128}}, {{"buffer": 0, "byteOffset": {}, "byteLength": 8}}, {{"buffer": 0, "byteOffset": {}, "byteLength": 32}}, {{"buffer": 0, "byteOffset": {}, "byteLength": 36}}], "accessors": [{{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 0.0]}}, {{"bufferView": 1, "componentType": 5123, "count": 3, "type": "VEC4"}}, {{"bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC4"}}, {{"bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR"}}, {{"bufferView": 4, "componentType": 5126, "count": 2, "type": "MAT4"}}, {{"bufferView": 5, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0.0], "max": [1.0]}}, {{"bufferView": 6, "componentType": 5126, "count": 2, "type": "VEC4"}}, {{"bufferView": 7, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0.0, 0.0, 0.0], "max": [1.0, 1.0, 0.0]}}]}}"#,
+            bin.len(),
+            ibm_offset,
+            times_offset,
+            rot_offset,
+            pos2_offset
+        );
+
+        let mut glb: Vec<u8> = Vec::new();
+        let json_bytes = json.as_bytes();
+        let json_padded = (json_bytes.len() + 3) / 4 * 4;
+        let total = 12 + 8 + json_padded + 8 + bin.len();
+        glb.extend_from_slice(&0x4654_6C67u32.to_le_bytes());
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total as u32).to_le_bytes());
+        glb.extend_from_slice(&(json_padded as u32).to_le_bytes());
+        glb.extend_from_slice(&0x4E4F_534Au32.to_le_bytes());
+        glb.extend_from_slice(json_bytes);
+        glb.resize(12 + 8 + json_padded, b' ');
+        glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        glb.extend_from_slice(&0x004E_4942u32.to_le_bytes());
+        glb.extend_from_slice(&bin);
+        glb
+    }
+
+    #[test]
+    fn glb_mixto_la_malla_sin_piel_conserva_su_nodo() {
+        // Pasada de medios (menor): en un GLB con piel, la malla sin
+        // piel se fusiona con la transformación de su nodo (x+5) y
+        // pesos cero (el shader la deja pasar sin deformar); la parte
+        // con piel queda intacta en el origen.
+        let glb = build_test_glb_mixto();
+        let model = MeshLoader::load_model_from_glb_bytes(&glb).expect("importar glb mixto");
+        assert!(model.skin.is_some());
+        assert_eq!(model.vertices.len(), 6);
+        assert_eq!(model.vertices[0].position, [0.0, 0.0, 0.0]);
+        assert_eq!(model.vertices[3].position, [5.0, 0.0, 0.0]);
+        assert_eq!(model.vertices[4].position, [6.0, 0.0, 0.0]);
+        assert_eq!(model.vertices[5].position, [5.0, 1.0, 0.0]);
+        assert_eq!(model.vertex_weights[3], [0.0; 4]);
+        assert!(model.vertex_weights[0][0] > 0.0);
     }
 
     #[test]

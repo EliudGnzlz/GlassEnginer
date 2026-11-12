@@ -355,3 +355,112 @@ pub extern "C" fn glass_physics_cast_ray(
     }
     false
 }
+
+/// Barrido de esfera contra los colliders del mundo (auditoría C5:
+/// las consultas extendidas de la Fase 1 solo existían por MCP; esto
+/// las abre a los scripts C#). Misma forma y salidas que el raycast.
+#[no_mangle]
+pub extern "C" fn glass_physics_cast_sphere(
+    origin_x: f32,
+    origin_y: f32,
+    origin_z: f32,
+    radius: f32,
+    dir_x: f32,
+    dir_y: f32,
+    dir_z: f32,
+    max_dist: f32,
+    exclude_entity: u64,
+    out_entity: *mut u64,
+    out_point_x: *mut f32,
+    out_point_y: *mut f32,
+    out_point_z: *mut f32,
+    out_normal_x: *mut f32,
+    out_normal_y: *mut f32,
+    out_normal_z: *mut f32,
+    out_distance: *mut f32,
+) -> bool {
+    if !all_finite(&[
+        origin_x, origin_y, origin_z, radius, dir_x, dir_y, dir_z, max_dist,
+    ]) {
+        log::error!("glass_physics_cast_sphere: valores no finitos; sin impacto");
+        return false;
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            if let Some(hit) = world.cast_sphere(
+                [origin_x, origin_y, origin_z],
+                radius,
+                [dir_x, dir_y, dir_z],
+                max_dist,
+                u32::MAX,
+                exclude_entity,
+            ) {
+                unsafe {
+                    if !out_entity.is_null() {
+                        *out_entity = hit.entity_id;
+                    }
+                    if !out_point_x.is_null() {
+                        *out_point_x = hit.point[0];
+                    }
+                    if !out_point_y.is_null() {
+                        *out_point_y = hit.point[1];
+                    }
+                    if !out_point_z.is_null() {
+                        *out_point_z = hit.point[2];
+                    }
+                    if !out_normal_x.is_null() {
+                        *out_normal_x = hit.normal[0];
+                    }
+                    if !out_normal_y.is_null() {
+                        *out_normal_y = hit.normal[1];
+                    }
+                    if !out_normal_z.is_null() {
+                        *out_normal_z = hit.normal[2];
+                    }
+                    if !out_distance.is_null() {
+                        *out_distance = hit.distance;
+                    }
+                }
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Entidades cuyos colliders intersectan una esfera (auditoría C5).
+/// Escribe hasta `capacity` ids en `out_entities` y devuelve cuántos
+/// escribió; -1 si los argumentos no son válidos.
+#[no_mangle]
+pub extern "C" fn glass_physics_overlap_sphere(
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    radius: f32,
+    exclude_entity: u64,
+    out_entities: *mut u64,
+    capacity: u32,
+) -> i32 {
+    if !all_finite(&[center_x, center_y, center_z, radius]) || out_entities.is_null() {
+        log::error!("glass_physics_overlap_sphere: argumentos no válidos");
+        return -1;
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            let found = world.overlap_sphere(
+                [center_x, center_y, center_z],
+                radius,
+                u32::MAX,
+                exclude_entity,
+            );
+            let n = found.len().min(capacity as usize);
+            unsafe {
+                for (i, id) in found.iter().take(n).enumerate() {
+                    *out_entities.add(i) = *id;
+                }
+            }
+            return n as i32;
+        }
+    }
+    0
+}

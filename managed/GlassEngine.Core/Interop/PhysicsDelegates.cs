@@ -118,3 +118,38 @@ public delegate bool CastRayDelegate(
     out float hitNormalY,
     out float hitNormalZ,
     out float hitDistance);
+
+// Barrido de esfera (auditoría C5): espejo exacto de
+// `glass_physics_cast_sphere` en glass_physics/src/ffi.rs.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate bool CastSphereDelegate(
+    float originX,
+    float originY,
+    float originZ,
+    float radius,
+    float dirX,
+    float dirY,
+    float dirZ,
+    float maxDistance,
+    ulong excludeEntityId,
+    out ulong hitEntityId,
+    out float hitPointX,
+    out float hitPointY,
+    out float hitPointZ,
+    out float hitNormalX,
+    out float hitNormalY,
+    out float hitNormalZ,
+    out float hitDistance);
+
+// Solape de esfera (auditoría C5): espejo de
+// `glass_physics_overlap_sphere`. Escribe hasta `capacity` ids en el
+// búfer y devuelve cuántos escribió (-1 si algo va mal).
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int OverlapSphereDelegate(
+    float centerX,
+    float centerY,
+    float centerZ,
+    float radius,
+    ulong excludeEntityId,
+    IntPtr outEntities,
+    uint capacity);

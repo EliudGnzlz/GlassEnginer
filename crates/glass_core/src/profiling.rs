@@ -32,6 +32,10 @@ pub struct FrameTimingSnapshot {
     pub render: PhaseStats, pub present: PhaseStats,
     pub gpu_render: PhaseStats, pub gpu_samples: usize,
     pub last_gpu_render_us: Option<u64>,
+    /// Antigüedad de `last_gpu_render_us` en frames dentro de la
+    /// ventana (0 = es del último frame). Auditoría Fase 0 (menor):
+    /// sin esto, una marca vieja se leía como actual.
+    pub last_gpu_age_frames: Option<usize>,
 }
 
 /// Buffer circular de muestras en orden cronológico.
@@ -99,8 +103,9 @@ fn compute_snapshot(samples: &[FramePhaseSample]) -> FrameTimingSnapshot {
     // El número de muestras con GPU no se conoce a priori: dejamos que crezca.
     let mut gpu = Vec::new();
     let mut last_gpu = None;
+    let mut last_gpu_idx: Option<usize> = None;
 
-    for sample in samples {
+    for (i, sample) in samples.iter().enumerate() {
         total.push(sample.total_us);
         update.push(sample.update_us);
         physics.push(sample.physics_us);
@@ -110,6 +115,7 @@ fn compute_snapshot(samples: &[FramePhaseSample]) -> FrameTimingSnapshot {
             gpu.push(gpu_us);
             // Al recorrer en orden cronológico, el último que asignemos es el más reciente.
             last_gpu = Some(gpu_us);
+            last_gpu_idx = Some(i);
         }
     }
 
@@ -125,6 +131,7 @@ fn compute_snapshot(samples: &[FramePhaseSample]) -> FrameTimingSnapshot {
         gpu_render,
         gpu_samples: gpu.len(),
         last_gpu_render_us: last_gpu,
+        last_gpu_age_frames: last_gpu_idx.map(|i| n.saturating_sub(1 + i)),
     }
 }
 
@@ -269,9 +276,22 @@ mod tests {
 
         assert_eq!(snap.gpu_samples, 10);
         assert_eq!(snap.last_gpu_render_us, Some(40));
+        // La última muestra GPU es la del índice 19 (v=20): edad 0.
+        assert_eq!(snap.last_gpu_age_frames, Some(0));
         assert!((snap.gpu_render.avg_us - 22.0).abs() < 1e-9);
         assert!((snap.gpu_render.p95_us - 40.0).abs() < 1e-9);
         assert_eq!(snap.gpu_render.max_us, 40);
+
+        // Si la GPU solo aparece en la primera de 5, su edad es 4.
+        let samples: Vec<FramePhaseSample> = (0..5u64)
+            .map(|i| FramePhaseSample {
+                gpu_render_us: if i == 0 { Some(99) } else { None },
+                ..muestra(10)
+            })
+            .collect();
+        let snap = compute_snapshot(&samples);
+        assert_eq!(snap.last_gpu_render_us, Some(99));
+        assert_eq!(snap.last_gpu_age_frames, Some(4));
     }
 
     #[test]
