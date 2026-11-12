@@ -178,6 +178,15 @@ mod lod_tests {
     }
 
     #[test]
+    fn sufijo_lod_con_duplicado_de_blender_y_minusculas() {
+        // Auditoría Fase 6 (M-16): el ".001" de duplicado de Blender
+        // y las minúsculas ya no pierden el LOD.
+        assert_eq!(lod_suffix("Esfera_LOD2.001"), Some(("Esfera".to_string(), 2)));
+        assert_eq!(lod_suffix("Esfera_lod1"), Some(("Esfera".to_string(), 1)));
+        assert_eq!(lod_suffix("Esfera_LOD0.042"), Some(("Esfera".to_string(), 0)));
+    }
+
+    #[test]
     fn nivel_por_distancia_entre_disponibles() {
         let disp = [0, 1, 2];
         assert_eq!(lod_level_for_distance(&disp, 3.0), 0);
@@ -194,12 +203,22 @@ mod lod_tests {
 /// Nivel LOD de un nombre por el sufijo `_LOD<n>` (Fase 6):
 /// "Esfera_LOD2" → Some(("Esfera", 2)). Sin sufijo válido → None.
 pub fn lod_suffix(name: &str) -> Option<(String, u32)> {
-    let idx = name.rfind("_LOD")?;
-    let num = &name[idx + 4..];
+    // Quita el sufijo de duplicado de Blender (".NNN", 3 dígitos) al final.
+    let mut base = name;
+    if let Some(dot) = base.rfind('.') {
+        let dup = &base[dot + 1..];
+        if dup.len() == 3 && dup.chars().all(|c| c.is_ascii_digit()) {
+            base = &base[..dot];
+        }
+    }
+    // Búsqueda del marcador insensible a mayúsculas (byte-length se conserva).
+    let lower = base.to_ascii_lowercase();
+    let idx = lower.rfind("_lod")?;
+    let num = &base[idx + 4..];
     if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
-    Some((name[..idx].to_string(), num.parse().ok()?))
+    Some((base[..idx].to_string(), num.parse().ok()?))
 }
 
 /// Distancias a las que cambia el nivel LOD deseado (Fase 6).
@@ -770,8 +789,11 @@ pub fn rgba_has_alpha(rgba: &[u8]) -> bool {
 /// salida son ceil(w/2) y ceil(h/2) con el borde repetido (clamp).
 pub fn downsample_rgba(rgba: &[u8], width: u32, height: u32) -> (Vec<u8>, u32, u32) {
     debug_assert_eq!(rgba.len(), (width * height * 4) as usize);
-    let dw = (width + 1) / 2;
-    let dh = (height + 1) / 2;
+    // Auditoría Fase 2 (M-11): las dimensiones de cada nivel deben
+    // seguir la regla de Vulkan, max(1, floor(w/2)) — con ceil, en
+    // texturas NPOT los extents de copia superaban el mip real.
+    let dw = (width / 2).max(1);
+    let dh = (height / 2).max(1);
     let mut out = vec![0u8; (dw * dh * 4) as usize];
 
     for y in 0..dh {
@@ -871,6 +893,7 @@ pub fn prepare_bc_upload(img: &GltfImageData) -> (vk::Format, Vec<u8>, Vec<(u64,
 /// (Fase 6): recorre las escenas y compone padre × local. Clave =
 /// índice de nodo.
 fn node_globals(document: &gltf::Document) -> std::collections::HashMap<usize, [f32; 16]> {
+    use std::collections::HashSet;
     fn local_flat(node: &gltf::Node) -> [f32; 16] {
         let m = node.transform().matrix();
         [
@@ -883,18 +906,35 @@ fn node_globals(document: &gltf::Document) -> std::collections::HashMap<usize, [
     fn walk(
         node: gltf::Node,
         parent: [f32; 16],
+        path: &mut HashSet<usize>,
         out: &mut std::collections::HashMap<usize, [f32; 16]>,
     ) {
+        if path.contains(&node.index()) {
+            log::warn!(
+                "node_globals: ciclo detectado en el nodo {}; se trata como hoja",
+                node.index()
+            );
+            return;
+        }
+        path.insert(node.index());
         let global = glass_core::math::mat4_mul(parent, local_flat(&node));
         out.insert(node.index(), global);
         for child in node.children() {
-            walk(child, global, out);
+            walk(child, global, path, out);
         }
+        path.remove(&node.index());
     }
     let mut out = std::collections::HashMap::new();
-    for scene in document.scenes() {
+    let mut path = HashSet::new();
+    if let Some(scene) = document.default_scene() {
         for node in scene.nodes() {
-            walk(node, glass_core::math::mat4_identity(), &mut out);
+            walk(node, glass_core::math::mat4_identity(), &mut path, &mut out);
+        }
+    } else {
+        for scene in document.scenes() {
+            for node in scene.nodes() {
+                walk(node, glass_core::math::mat4_identity(), &mut path, &mut out);
+            }
         }
     }
     out
@@ -1003,14 +1043,62 @@ fn merge_primitive(
         }
     }
 
+    let mirrored = match transform {
+        Some(m) => {
+            let c0 = [m[0], m[1], m[2]];
+            let c1 = [m[4], m[5], m[6]];
+            let c2 = [m[8], m[9], m[10]];
+            let cx = [
+                c1[1] * c2[2] - c1[2] * c2[1],
+                c1[2] * c2[0] - c1[0] * c2[2],
+                c1[0] * c2[1] - c1[1] * c2[0],
+            ];
+            let det = c0[0] * cx[0] + c0[1] * cx[1] + c0[2] * cx[2];
+            det < 0.0
+        }
+        None => false,
+    };
+
     let first_index = indices.len() as u32;
     if let Some(read_indices) = reader.read_indices() {
+        let mut tri = [0u32; 3];
+        let mut n = 0;
         for idx in read_indices.into_u32() {
-            indices.push(base_index + idx);
+            tri[n] = base_index + idx;
+            n += 1;
+            if n == 3 {
+                indices.push(tri[0]);
+                if mirrored {
+                    indices.push(tri[2]);
+                    indices.push(tri[1]);
+                } else {
+                    indices.push(tri[1]);
+                    indices.push(tri[2]);
+                }
+                n = 0;
+            }
+        }
+        for &i in &tri[..n] {
+            indices.push(i);
         }
     } else {
-        for idx in 0..positions.len() as u32 {
-            indices.push(base_index + idx);
+        let count = positions.len() as u32;
+        if mirrored {
+            let mut i = 0;
+            while i + 2 < count {
+                indices.push(base_index + i);
+                indices.push(base_index + i + 2);
+                indices.push(base_index + i + 1);
+                i += 3;
+            }
+            while i < count {
+                indices.push(base_index + i);
+                i += 1;
+            }
+        } else {
+            for idx in 0..count {
+                indices.push(base_index + idx);
+            }
         }
     }
     let index_count = indices.len() as u32 - first_index;
@@ -1117,10 +1205,16 @@ impl MeshLoader {
                     objects.push(ModelObject {
                         name: node.name().unwrap_or("").to_string(),
                         mesh_name: mesh.name().unwrap_or("").to_string(),
-                        transform: globals
-                            .get(&node.index())
-                            .copied()
-                            .unwrap_or_else(glass_core::math::mat4_identity),
+                        transform: globals.get(&node.index()).copied().unwrap_or_else(|| {
+                            // Sin global (huérfano u otra escena): usa la local.
+                            let m = node.transform().matrix();
+                            [
+                                m[0][0], m[0][1], m[0][2], m[0][3], //
+                                m[1][0], m[1][1], m[1][2], m[1][3], //
+                                m[2][0], m[2][1], m[2][2], m[2][3], //
+                                m[3][0], m[3][1], m[3][2], m[3][3],
+                            ]
+                        }),
                         ranges: (ini..ini + n).collect(),
                     });
                 }
@@ -1965,15 +2059,11 @@ mod tests {
         }
 
         let (out, w, h) = downsample_rgba(&rgba, 3, 3);
-        assert_eq!((w, h), (2, 2));
-        // R: 20, 35, 65, 80 (los bordes se repiten)
-        let esperado = vec![
-            20, 0, 0, 255, //
-            35, 0, 0, 255, //
-            65, 0, 0, 255, //
-            80, 0, 0, 255, //
-        ];
-        assert_eq!(out, esperado);
+        // Auditoría Fase 2 (M-11): regla de Vulkan, max(1, floor(3/2))
+        // = 1. El píxel resultante promedia el bloque 2x2 superior
+        // izquierdo (0, 10, 30, 40 -> 20).
+        assert_eq!((w, h), (1, 1));
+        assert_eq!(out, vec![20, 0, 0, 255]);
     }
 
     #[test]
@@ -2037,6 +2127,21 @@ mod tests {
         let (format, _, levels) = prepare_bc_upload(&img);
         assert_eq!(format, vk::Format::BC3_SRGB_BLOCK);
         assert_eq!(levels.len(), 7);
+    }
+
+    #[test]
+    fn prepare_bc_upload_npot_sigue_la_regla_de_vulkan() {
+        // Auditoría Fase 2 (M-11): 18x10 -> 9x5 -> 4x2 -> 2x1 -> 1x1
+        // (floor), nunca por encima del mip que Vulkan calcula.
+        let (w, h) = (18u32, 10u32);
+        let mut rgba = vec![90u8; (w * h * 4) as usize];
+        for px in rgba.chunks_exact_mut(4) {
+            px[3] = 255;
+        }
+        let img = GltfImageData { rgba, width: w, height: h };
+        let (_, _, levels) = prepare_bc_upload(&img);
+        let dims: Vec<(u32, u32)> = levels.iter().map(|&(_, lw, lh)| (lw, lh)).collect();
+        assert_eq!(dims, vec![(18, 10), (9, 5), (4, 2), (2, 1), (1, 1)]);
     }
 
     #[test]

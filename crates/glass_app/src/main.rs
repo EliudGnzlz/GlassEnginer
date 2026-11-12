@@ -52,6 +52,12 @@ struct EngineSceneBridge {
     /// suelta, y se actúa bajo el otro — la disciplina de
     /// `rebuild_physics_from_scene`.
     physics_world: Arc<Mutex<PhysicsWorld>>,
+    /// Caché de activos compartida con la app: el spawn en vivo
+    /// resuelve los colliders de malla con la geometría retenida,
+    /// igual que la carga de escena (auditoría C4). Se consulta ANTES
+    /// de tomar el candado de física, como en
+    /// `rebuild_physics_from_scene`.
+    asset_cache: Arc<RwLock<AssetCache>>,
     /// Cola de (entidad, clase) de los scripts spawneados cuya instancia
     /// C# aún no existe. Crear la instancia dentro del propio callback
     /// FFI de spawn instanciaría C# en mitad de una llamada (y un
@@ -74,10 +80,13 @@ struct SpawnedBodySpec {
     /// offset local por collider).
     colliders: Vec<(ColliderShape, ColliderConfig, [f32; 3])>,
     /// Modo de collider de malla pedido por la escena (Fase 1.5). El
-    /// puente NO tiene la caché de geometría: lo anota para avisar de
-    /// que en spawn en vivo cae a los primitivos resueltos; la carga de
-    /// escena (rebuild) sí lo resuelve de verdad.
+    /// spawn en vivo lo resuelve con la geometría retenida de la
+    /// caché compartida, como la carga de escena (auditoría C4).
     mesh_collider: glass_core::MeshColliderMode,
+    /// Nombre del modelo de la entidad (para buscar su geometría).
+    model: String,
+    /// Escala de mundo (para escalar los puntos del collider).
+    world_scale: [f32; 3],
 }
 
 impl EngineSceneBridge {
@@ -116,6 +125,8 @@ impl EngineSceneBridge {
             restitution: body.restitution,
             colliders,
             mesh_collider: body.mesh_collider,
+            model: model.to_string(),
+            world_scale: glass_core::mat4_scale(world),
         })
     }
 
@@ -124,6 +135,16 @@ impl EngineSceneBridge {
     /// por la vía del spawn/activación, para que la inferencia de forma
     /// no pueda divergir entre caminos.
     fn create_body(&self, spec: SpawnedBodySpec) {
+        // Auditoría C4: la geometría se captura ANTES del candado de
+        // física (la disciplina de rebuild_physics_from_scene).
+        let geometria = if spec.mesh_collider != glass_core::MeshColliderMode::None {
+            self.asset_cache
+                .read()
+                .ok()
+                .and_then(|c| c.geometries.get(&spec.model).cloned())
+        } else {
+            None
+        };
         let Ok(mut physics) = self.physics_world.lock() else {
             return;
         };
@@ -131,12 +152,84 @@ impl EngineSceneBridge {
             return;
         }
         let handle = physics.create_rigid_body(spec.entity_id, spec.body_type, spec.position, spec.rotation);
+        // El collider de malla, si cuela, SUSTITUYE a los primitivos
+        // (la misma semántica que rebuild_physics_from_scene). OJO,
+        // orden deliberado: se pasa (friction, restitution) a la firma
+        // (restitution, friction), el mismo cruce histórico de todas
+        // las rutas.
+        let mut via_mesh = false;
         if spec.mesh_collider != glass_core::MeshColliderMode::None {
-            log::warn!(
-                "entidad {}: collider de malla ({:?}) pedido por la escena, pero el spawn en vivo no lo resuelve; cae a los primitivos resueltos",
-                spec.entity_id,
-                spec.mesh_collider,
-            );
+            match &geometria {
+                Some((vertices, indices)) => {
+                    let cfg = spec
+                        .colliders
+                        .first()
+                        .map(|c| c.1)
+                        .unwrap_or_default();
+                    let escala = spec.world_scale;
+                    let puntos: Vec<[f32; 3]> = vertices
+                        .iter()
+                        .map(|v| [v[0] * escala[0], v[1] * escala[1], v[2] * escala[2]])
+                        .collect();
+                    let attached = match spec.mesh_collider {
+                        glass_core::MeshColliderMode::TriMesh
+                            if spec.body_type == BodyType::Static =>
+                        {
+                            let tris: Vec<[u32; 3]> = indices
+                                .chunks_exact(3)
+                                .map(|c| [c[0], c[1], c[2]])
+                                .collect();
+                            physics.attach_trimesh_collider(
+                                handle,
+                                &puntos,
+                                &tris,
+                                spec.friction,
+                                spec.restitution,
+                                cfg,
+                            )
+                        }
+                        glass_core::MeshColliderMode::TriMesh => {
+                            log::warn!(
+                                "Física: entidad {} pide TriMesh en cuerpo no estático, se degrada a Convex.",
+                                spec.entity_id
+                            );
+                            physics.attach_convex_collider(
+                                handle,
+                                &puntos,
+                                spec.friction,
+                                spec.restitution,
+                                cfg,
+                            )
+                        }
+                        glass_core::MeshColliderMode::Convex => physics.attach_convex_collider(
+                            handle,
+                            &puntos,
+                            spec.friction,
+                            spec.restitution,
+                            cfg,
+                        ),
+                        glass_core::MeshColliderMode::None => None,
+                    };
+                    via_mesh = attached.is_some();
+                    if !via_mesh {
+                        log::warn!(
+                            "entidad {}: el collider de malla no se pudo crear; cae a los primitivos resueltos",
+                            spec.entity_id
+                        );
+                    }
+                }
+                None => {
+                    log::warn!(
+                        "entidad {}: collider de malla ({:?}) pedido, pero no hay geometría retenida para el modelo '{}'; cae a los primitivos resueltos",
+                        spec.entity_id,
+                        spec.mesh_collider,
+                        spec.model
+                    );
+                }
+            }
+        }
+        if via_mesh {
+            return;
         }
         // OJO, orden deliberado: se pasa (friction, restitution) a la
         // firma (restitution, friction) de `attach_collider_with_config_at`,
@@ -3891,7 +3984,7 @@ let resueltos = colliders_resueltos(body, shape);
             // entidad dibujada proyecta con la misma malla y la misma
             // matriz de modelo de su lote; las con piel, además, con su
             // set de articulaciones (la sombra sigue la pose).
-            let mut shadow_statics: Vec<(&glass_renderer::GpuMesh, [f32; 16])> = Vec::new();
+            let mut shadow_statics: Vec<(&glass_renderer::GpuMesh, [f32; 16], Option<Vec<(u32, u32)>>)> = Vec::new();
             let mut shadow_graph_statics: Vec<(
                 &glass_renderer::GpuMesh,
                 [f32; 16],
@@ -3967,13 +4060,15 @@ let resueltos = colliders_resueltos(body, shape);
                         // Cotas locales: las de la geometría retenida del
                         // modelo; sin modelo, el cubo de respaldo (vértices
                         // -1..+1 y `model` ya lleva su media escala); sin
-                        // cotas retenidas, el cubo unitario. Las sombras no
-                        // se filtran: algo fuera de vista puede proyectar
-                        // dentro.
+                        // cotas retenidas, NO se recorta (auditoría Fase
+                        // 2, M-12: el viejo respaldo de 1 m³ podía hacer
+                        // desaparecer un modelo grande cuyo pivote salía
+                        // de cámara). Las sombras no se filtran: algo
+                        // fuera de vista puede proyectar dentro.
                         let (lmin, lmax) = if using_model {
                             model_key
                                 .and_then(|k| cache.bounds(k))
-                                .unwrap_or(([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]))
+                                .unwrap_or(([-1.0e6, -1.0e6, -1.0e6], [1.0e6, 1.0e6, 1.0e6]))
                         } else {
                             ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0])
                         };
@@ -4394,7 +4489,20 @@ let resueltos = colliders_resueltos(body, shape);
                                             alpha_clip,
                                         ));
                                     } else {
-                                        shadow_statics.push((ent_mesh, model));
+                                        // Auditoría C3: la sombra usa los
+                                        // rangos del nivel LOD activo, como
+                                        // el dibujo principal (antes se
+                                        // proyectaba la unión de niveles).
+                                        let rangos = model_key.and_then(|k| {
+                                            let ojo = eye_game_opt.unwrap_or(eye_scene);
+                                            rangos_sombra_lod(
+                                                &cache,
+                                                k,
+                                                [model[12], model[13], model[14]],
+                                                [ojo[0], ojo[1], ojo[2]],
+                                            )
+                                        });
+                                        shadow_statics.push((ent_mesh, model, rangos));
                                     }
                                 }
                             }
@@ -5581,6 +5689,29 @@ impl ApplicationHandler for GlassEngineApp {
         // "graph:<nombre>" en su MeshData.
         renderer.load_graph_materials(std::path::Path::new("assets/shaders"));
 
+        // Auditoría 2S (M-8): un grafo con .spv pero sin .graph.json
+        // cargado perdía sus pases Shadow/Outline en silencio (el
+        // pipeline existe, así que el fallback magenta no salta). Se
+        // avisa una vez por grafo al arrancar.
+        if let Ok(entries) = std::fs::read_dir("assets/shaders") {
+            for entry in entries.flatten() {
+                let fname = entry.file_name();
+                let Some(fname) = fname.to_str() else { continue };
+                let Some(nombre) = fname
+                    .strip_prefix("graph_")
+                    .and_then(|r| r.strip_suffix(".frag.spv"))
+                else {
+                    continue;
+                };
+                if glass_core::shader_graph::graph_passes(nombre).is_none() {
+                    log::warn!(
+                        "Grafo '{}': tiene .spv pero no se cargó su .graph.json (¿nombre o carpeta distinta?); se asume [Forward], sin pase Shadow ni Outline",
+                        nombre
+                    );
+                }
+            }
+        }
+
 
         // El pipeline transparente de los materiales vive en el
         // renderer (registrado como «material_transparent» al
@@ -5812,6 +5943,7 @@ impl ApplicationHandler for GlassEngineApp {
             scene_state: self.scene_state.clone(),
             scene_manager: self.scene_manager.clone(),
             physics_world: self.physics_world.clone(),
+            asset_cache: self.asset_cache.clone(),
             pending_script_spawns: self.pending_script_spawns.clone(),
         }));
 
@@ -7171,6 +7303,7 @@ mod spawn_bridge_tests {
             scene_state: Arc::new(Mutex::new(SceneState::new())),
             scene_manager: Arc::new(Mutex::new(SceneManager::new("."))),
             physics_world: Arc::new(Mutex::new(PhysicsWorld::new())),
+            asset_cache: Arc::new(RwLock::new(AssetCache::new())),
             pending_script_spawns: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -7588,6 +7721,56 @@ game: (Vec<glass_renderer::ParticleVertex>, Vec<u32>),
 /// trabaja sobre los campos sueltos para no pelear con el
 /// préstamo del renderer que mantiene `render_frame`.
 #[allow(clippy::too_many_arguments)]
+/// Rangos que un modelo proyecta en los pases de sombra (auditoría
+/// C3): los del nivel LOD activo según la distancia al ojo, con la
+/// MISMA regla que el dibujo principal (Fase 6), más todos los rangos
+/// que no son LOD. `None` si el modelo no tiene objetos LOD: el pase
+/// dibuja la malla entera, como siempre.
+fn rangos_sombra_lod(
+    cache: &glass_renderer::AssetCache,
+    key: &str,
+    pos: [f32; 3],
+    ojo: [f32; 3],
+) -> Option<Vec<(u32, u32)>> {
+    let objs = cache.objects.get(key)?;
+    let mut disp: std::collections::HashMap<String, Vec<u32>> = std::collections::HashMap::new();
+    let mut lod_de_rango: std::collections::HashMap<usize, (String, u32)> =
+        std::collections::HashMap::new();
+    for o in objs {
+        if let Some((base, nivel)) = glass_renderer::lod_suffix(&o.name) {
+            disp.entry(base.clone()).or_default().push(nivel);
+            for &r in &o.ranges {
+                lod_de_rango.insert(r, (base.clone(), nivel));
+            }
+        }
+    }
+    if disp.is_empty() {
+        return None;
+    }
+    let dx = pos[0] - ojo[0];
+    let dy = pos[1] - ojo[1];
+    let dz = pos[2] - ojo[2];
+    let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+    let mut activo: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for (base, niveles) in &disp {
+        activo.insert(
+            base.clone(),
+            glass_renderer::lod_level_for_distance(niveles, dist),
+        );
+    }
+    let ranges = cache.primitive_ranges.get(key)?;
+    let out: Vec<(u32, u32)> = ranges
+        .iter()
+        .enumerate()
+        .filter(|(idx, _)| match lod_de_rango.get(idx) {
+            Some((base, nivel)) => activo.get(base) == Some(nivel),
+            None => true,
+        })
+        .map(|(_, r)| (r.first_index, r.index_count))
+        .collect();
+    Some(out)
+}
+
 fn avanzar_particulas(
 emisores_rt: &mut std::collections::HashMap<u64, glass_particles::Emitter>,
 aplicados: &mut std::collections::HashMap<u64, glass_core::scene::ParticleEmitterData>,

@@ -41,7 +41,10 @@ const PBR_LEGACY_FRAG_SPV: &[u8] =
 /// articulaciones de la entidad). La MVP de luz la compone el renderer
 /// con la VP fijada por `set_shadow_frame`.
 pub struct ShadowCasters<'a> {
-    pub statics: &'a [(&'a GpuMesh, [f32; 16])],
+    /// (malla, modelo, rangos a dibujar): `Some(rangos)` limita el
+    /// pase a esos (first_index, index_count) — el nivel LOD activo
+    /// (auditoría C3); `None` dibuja la malla entera.
+    pub statics: &'a [(&'a GpuMesh, [f32; 16], Option<Vec<(u32, u32)>>)],
     pub skinned: &'a [(&'a GpuMesh, [f32; 16], vk::DescriptorSet)],
     /// Proyectores cuyo material es un grafo con pase Shadow (Fase 2S):
     /// (malla, matriz de modelo, nombre del grafo, set de texturas del
@@ -2252,7 +2255,7 @@ impl GlassRenderer {
                         vk::PipelineBindPoint::GRAPHICS,
                         self.shadow.depth_pipeline,
                     );
-                    for (mesh, model) in casters.statics {
+                    for (mesh, model, rangos) in casters.statics {
                         let pc = MeshPushConstants {
                             mvp: glass_core::mat4_mul(self.shadow_vp, *model),
                             model: *model,
@@ -2269,7 +2272,16 @@ impl GlassRenderer {
                             .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
                         self.device
                             .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
-                        self.device.cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                        match rangos {
+                            Some(rs) => {
+                                for (first, count) in rs {
+                                    self.device.cmd_draw_indexed(cmd, *count, 1, *first, 0, 0);
+                                }
+                            }
+                            None => {
+                                self.device.cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                            }
+                        }
                     }
                 }
                 if !casters.skinned.is_empty() {
@@ -2394,7 +2406,7 @@ impl GlassRenderer {
                             vk::PipelineBindPoint::GRAPHICS,
                             self.shadow.depth_pipeline,
                         );
-                        for (mesh, model) in casters.statics {
+                        for (mesh, model, rangos) in casters.statics {
                             let pc = MeshPushConstants {
                                 mvp: glass_core::mat4_mul(*vp, *model),
                                 model: *model,
@@ -2411,7 +2423,16 @@ impl GlassRenderer {
                                 .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
                             self.device
                                 .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
-                            self.device.cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                            match rangos {
+                                Some(rs) => {
+                                    for (first, count) in rs {
+                                        self.device.cmd_draw_indexed(cmd, *count, 1, *first, 0, 0);
+                                    }
+                                }
+                                None => {
+                                    self.device.cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                                }
+                            }
                         }
                     }
                     if !casters.skinned.is_empty() {

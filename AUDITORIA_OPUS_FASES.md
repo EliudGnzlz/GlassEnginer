@@ -1,10 +1,53 @@
 # AUDITORÍA OPUS — Fases cerradas 0–8P
 
-**Fecha:** 2026-11-12. **Auditor:** `claude-opus-5-5` (10 paquetes acotados contra el código real y los `REGISTRO_FASE*.md`; el paquete monolítico inicial superó el timeout de lectura del conector y se rehízo por fragmentos). **Alcance:** prioridad alta — 2S, 1+1.5, 2, 6; media — 0, 3, 4, 5; costuras entre fases. **Solo análisis: ningún arreglo está aplicado.** Cada hallazgo lleva la severidad del auditor y la verificación del integrador (Rayo) contra el código: **Confirmado**, **Matizado** o **Refutado**.
+**Fecha:** 2026-11-12. **Auditor:** `claude-opus-5-5` (10 paquetes acotados contra el código real y los `REGISTRO_FASE*.md`; el paquete monolítico inicial superó el timeout de lectura del conector y se rehízo por fragmentos). **Alcance:** prioridad alta — 2S, 1+1.5, 2, 6; media — 0, 3, 4, 5; costuras entre fases. Cada hallazgo lleva la severidad del auditor y la verificación del integrador (Rayo) contra el código: **Confirmado**, **Matizado** o **Refutado**.
 
-**Consumo de Opus:** 119.155 tokens en 10 paquetes (todos `claude-opus-5-5`). Un primer intento monolítico murió por timeout del conector sin respuesta registrada.
+**Precisión de D3m3tr10 (2026-11-12, posterior al informe):** los hallazgos de prioridad alta (2S, 1+1.5, 2, 6) y las costuras críticas que los afectan se **arreglan en el acto** dentro de la misma pasada; los de prioridad media (0, 3, 4, 5) van a la lista diferida. La pasada de arreglos se ejecutó el mismo día: ver la sección siguiente.
 
-## Resumen
+**Consumo:** auditoría Opus 119.155 tokens (10 paquetes, todos `claude-opus-5-5`); pasada de arreglos: Opus 34.636 + DeepSeek 18.759 = 53.395 tokens. Un primer intento monolítico de auditoría murió por timeout del conector sin respuesta registrada.
+
+## Pasada de arreglos — hallazgo → arreglo aplicado (prioridad alta)
+
+Verificación de la pasada: suite completa **363 tests, 0 fallos** (354 previos + 9 nuevos de la auditoría); test físico de física (driver de la Fase 1, con estrés de 1000 cuerpos) en verde; `glass_asset_validate`/`glass_asset_reload` del activo de la Fase 6 en verde con el puente nuevo; pases de sombra de grafo en vivo (`graph_shadow_draw_calls = 3`) tras el cambio de C3.
+
+**Críticos (puente Blender/vigía):**
+- **C-1 → ARREGLADO.** El bridge lanza Blender con `--python-exit-code 1` (una excepción del script ya no sale 0), imprime el inventario DESPUÉS de exportar, calcula el hash de la fuente ANTES de exportar (ese va al sidecar; si la fuente cambia durante la exportación, el resultado lo marca `source_changed_during_export`) y valida también la longitud de cabecera del GLB.
+- **C-2 → ARREGLADO.** El vigía lleva una guarda de exportaciones en vuelo por ruta (un segundo evento sobre la misma ruta se ignora) y el hilo, tras el éxito, re-lee el hash: si la fuente cambió durante la exportación, reexporta (máx. 3 rondas).
+- **C-3 → ARREGLADO.** La rama «glb» del vigía no emite recarga si la ruta está en vuelo (es la salida que el exportador está escribiendo); la recarga la emite la rama blend/fbx al éxito. Además el bridge exporta a un temporal hermano y solo hace `os.replace` tras validar (vale también para M-19: un fallo ya no deja un .glb roto en la ruta final), y el sidecar se escribe igual, vía temporal.
+
+**Física (M-1..M-6) → ARREGLADOS, con tests nuevos (`crates/glass_physics/tests/audit_fixes_test.rs`):**
+- **M-1/M-2:** los eventos se agregan por par de entidades (`pair_colliders`/`pair_owner`/`pair_trigger` en el mundo): un Enter por par aunque haya varios colliders, Exit solo cuando el último collider deja de tocar, y el `Stopped` de un cuerpo eliminado resuelve su par por el mapa de dueños → el Exit llega. Tests: compuesto de 2 colliders = 1 Enter; despawn en contacto = 1 Exit.
+- **M-3:** `step()` descarta el exceso de acumulador al hitting el tope de 4 substeps, y un `dt` no finito o negativo se trata como 0 (test: `step(10.0)` = 4 substeps y el siguiente paso normal no arrastra deuda; `step(NaN)` no envenena).
+- **M-4:** `apply_config` fija `ActiveCollisionTypes::all()`: los sensores emiten eventos también frente a cinemáticos y estáticos (test: sensor estático × cuerpo cinemático teletransportado dentro → Enter).
+- **M-5:** `attach_convex_collider` valida la entrada (vacío, <4 puntos, no finitos → None) y envuelve el hull de parry en `catch_unwind`: un pánico de parry se convierte en None con aviso, no en aborto.
+- **M-6:** las cinco construcciones de `QueryFilter` llevan `.exclude_sensors()` (test: un rayo atraviesa un sensor y golpea el sólido de detrás). Nota: es un cambio de semántica deliberado frente al default de Unity; los triggers ya no bloquean raycasts ni barridos — en particular, ya no producen falsas oclusiones de audio.
+
+**Shaders 2S (M-7..M-10) → ARREGLADOS, con tests nuevos en `shader_graph.rs`:**
+- **M-7:** el nodo `Property` en la etapa de vértices devuelve `GraphError::FragmentOnlyNode` (test). **M-9:** `register_graph_passes` normaliza una lista vacía a `[Forward]` con aviso (test). **M-10:** `validated_maps` rechaza más de 32 propiedades de valor con el error nuevo `TooManyProperties` (test: 33 → error). **M-8:** al arrancar, la app cruza los `graph_*.frag.spv` presentes con los pases registrados y avisa una vez por grafo sin `.graph.json` («se asume [Forward], sin pase Shadow ni Outline»).
+
+**Render (M-11, M-12) → ARREGLADOS, con tests:**
+- **M-11:** `downsample_rgba` usa la regla de Vulkan `max(1, floor(w/2))`; la cadena BC de una textura NPOT ya coincide con los mips de la imagen (test: 18×10 → 9×5 → 4×2 → 2×1 → 1×1; el test histórico de 3×3 se actualizó a la nueva semántica).
+- **M-12:** sin cotas retenidas, la entidad ya NO se recorta (respaldo ±1e6 = siempre visible) en vez del cubo de 1 m³ que podía hacer desaparecer modelos grandes.
+
+**Assets (M-13..M-18) → ARREGLADOS:**
+- **M-13:** `node_globals` lleva guarda de ancestros (un ciclo se trata como hoja, con aviso) y recorre solo la escena por defecto si existe. **M-14:** un nodo sin global usa su transformación LOCAL en la fusión, no la identidad. **M-15:** `merge_primitive` detecta determinante negativo (espejo) e invierte el orden de índices por triángulo. **M-16:** `lod_suffix` quita el sufijo de duplicado de Blender (`.001`) y acepta minúsculas (tests nuevos). **M-17:** el hash solo se registra tras el éxito (ver C-2); un fallo ya no bloquea el reintento. **M-18:** el fallo del bridge se loguea con su línea `GLASS_BRIDGE_RESULT` o la cola de stdout, no con un stderr vacío.
+
+**Costuras que afectan a módulos de prioridad alta:**
+- **C3 → ARREGLADO.** Los pases de sombra (sol y puntuales) dibujan solo los rangos del nivel LOD activo cuando el modelo tiene LOD (`ShadowCasters.statics` lleva los rangos; helper `rangos_sombra_lod` con la misma regla que el dibujo principal). Sin LOD, la malla entera como siempre. Los proyectores de GRAFO siguen dibujando la malla entera (combinación grafo+LOD: queda anotada en la diferida).
+- **C4 → ARREGLADO.** El spawn en vivo resuelve el collider de malla igual que la carga de escena: `EngineSceneBridge` comparte la caché de activos con la app, la spec lleva modelo y escala de mundo, y `create_body` adjunta TriMesh (solo estáticos) o Convex con la geometría retenida, sustituyendo a los primitivos si cuela — el `Instantiate` de C# y el spawn por MCP quedan simétricos con la escena autorada.
+
+## Lista diferida (prioridad media y menores — para decisión de D3m3tr10)
+
+- **Fase 3 (audio):** M-20 ducks solapados que saltan a 1,0; M-21 ducks < 0,65 s con discontinuidades; menores (duck de duración 0 que cancela el activo, NaN en volumen, `effective_volume` sin Master).
+- **Fase 4 (animación):** M-22 thresholds duplicados en blend trees; M-23 `exit_time` medido con el hijo de menor threshold; menores (transiciones no evaluadas durante el fundido, relojes sin wrap, restos al cambiar de controller).
+- **Fase 5 (UI):** M-24 nietos de layout group sin recolocar; M-25 escala del primer Canvas (incluidos inactivos); M-26 guarda de ciclos parcial entre ancestros no-UI; menores (padre ausente → pantalla, inactivos ocupando hueco en el layout).
+- **Fase 0 (instrumentación):** menor — estadísticas GPU sobre subconjunto de frames; ceros indistinguibles sin mirar `gpu_samples`.
+- **Menores de módulos de prioridad alta (no tocados en esta pasada):** umbral absoluto de la guarda trimesh; capa ≥32 truncada con `& 31`; `contact_pairs` puede duplicar un par sólido+sensor; samplers de grafo declarados por nodos huérfanos; variante de `PassKind` mal escrita invalida el grafo entero; mips BC promediados en sRGB; niveles LOD > 2 inalcanzables; mallas estáticas dentro de un GLB con piel sin transformación de nodo; proyectores de grafo sin filtro LOD en sombra (resto de C3).
+- **Costuras restantes:** C1 slots de material por nombre (Post-1.0 aceptado); C2 recarga en caliente de shaders (el evento debería renombrarse o implementarse); C5 consultas extendidas solo por MCP; C6 `AudioSource` de C# sin `Bus`; C7 preview de UI del editor ≠ runtime; C9 sin undo/redo (mitigación sugerida: snapshot antes de guardar o de cada lote MCP).
+
+---
+
+## Resumen original de la auditoría (antes de la pasada de arreglos)
 
 - **Críticos: 3** — todos en el puente Blender/vigía de la Fase 6. Ningún crítico en física, shaders ni render.
 - **Mayores: ~24** — los más serios: eventos de física que se pierden o se duplican con cuerpos compuestos, el acumulador de substeps que no descarta el exceso, los mips BC mal dimensionados en texturas NPOT, y la asimetría de colliders en el spawn en vivo (afecta también a `Instantiate` de C#).
@@ -98,7 +141,7 @@ Física: umbral absoluto de degeneración en la guarda trimesh (rechaza mallas d
 
 Física: todas las rutas de attach pasan por `apply_config` con los grupos correctos; la guarda trimesh valida antes de indexar; el cruce (friction, restitution) es uniforme dentro del crate; canales de eventos sin pánico; anillo de 256 correcto. Shaders: el orden posicional del UBO salta las texturas igual al compilar que al empaquetar; slot > 3 e índice de luz > 7 son errores de compilación; nodos de fragmento bloqueados en vértice (salvo `Property`, M-7). Render: elección BC1/BC3 por el alfa real; fallback del cubo coherente; `mip_level_count` correcto. Assets: mapeo nodo→rangos con piel por suma prefija correcto; inversa-transpuesta sobre la global compuesta correcta. Audio: Master inmune al duck; el duck es función pura sin estado pegado. Animación: limpieza de relojes al terminar el fundido. UI: orden de layout groups por profundidad; canvas como raíz. Instrumentación: avg/p95/max correctos incluso con pocas muestras.
 
-## Lista para decisión (sin aplicar)
+## Lista para decisión original (histórica — los puntos 1–6 se resolvieron en la pasada de arreglos; el resto vive en la lista diferida de arriba)
 
 1. **Puente/vigía (C-1, C-2, C-3, M-17, M-18, M-19):** bloque de robustez del pipeline .blend — es el área más débil del motor hoy: `--python-exit-code`, hash de la fuente ANTES de exportar, exportar a temporal y renombrar, lock por ruta, no vigilar el .glb de salida como entrada, registrar el hash solo tras el éxito, y loguear el resultado del bridge.
 2. **Física (M-1, M-2, M-3):** Exit sintético al despawnear, eventos agregados por par de entidades y descarte del exceso de acumulador. M-3 es de una línea y protege de tirones reales.

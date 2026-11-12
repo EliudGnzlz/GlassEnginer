@@ -49,6 +49,11 @@ if ext == ".fbx":
 else:
     bpy.ops.wm.open_mainfile(filepath=input_file)
 
+# La exportación va ANTES del inventario: si lanza, no hay inventario y
+# (con --python-exit-code) Blender sale no-cero.
+bpy.ops.export_scene.gltf(filepath=output_glb, export_format='GLB')
+print(f"Exportado exitosamente: {output_glb}")
+
 # --- Inventario de la escena (Fase 6) ---
 def lod_de(nombre):
     import re
@@ -90,9 +95,6 @@ inventario = {
 print("GLASS_INVENTORY_BEGIN")
 print(json.dumps(inventario))
 print("GLASS_INVENTORY_END")
-
-bpy.ops.export_scene.gltf(filepath=output_glb, export_format='GLB')
-print(f"Exportado exitosamente: {output_glb}")
 """
 
 
@@ -122,6 +124,10 @@ def validar_glb(glb_path):
     magic, version, length = struct.unpack("<4sII", data[:12])
     if magic != b"glTF" or version != 2:
         return False, f"Encabezado GLB inválido (magic={magic}, version={version})", {}
+    if length != len(data):
+        return False, (
+            f"Longitud GLB inconsistente: cabecera={length} bytes, archivo={len(data)} bytes"
+        ), {}
     chunk_len, chunk_type = struct.unpack("<I4s", data[12:20])
     if chunk_type != b"JSON":
         return False, "El primer chunk del GLB no es JSON.", {}
@@ -153,6 +159,25 @@ def export_blend_to_glb(blend_path, glb_path):
             "con su ruta o añade 'blender' al PATH."
         ), {}
 
+    # Hash del contenido que se va a exportar, ANTES de lanzar Blender.
+    try:
+        source_sha256 = sha256_de(blend_path)
+    except OSError as e:
+        return False, f"No se pudo leer la fuente {blend_path}: {e}", {}
+
+    # Exportación a una ruta temporal hermana; el destino solo se toca
+    # tras validar el GLB temporal.
+    tmp_glb = glb_path + ".glass-tmp"
+
+    def limpiar_tmp():
+        for p in (tmp_glb, tmp_glb + ".glb"):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+    limpiar_tmp()
+
     with tempfile.NamedTemporaryFile(
         "w", suffix=".py", prefix="glass_blender_export_", delete=False, encoding="utf-8"
     ) as f:
@@ -160,8 +185,14 @@ def export_blend_to_glb(blend_path, glb_path):
         script_path = f.name
 
     try:
-        cmd = [blender, "-b", "--python", script_path, "--", blend_path, glb_path]
+        cmd = [
+            blender, "-b", "--python-exit-code", "1", "--python", script_path,
+            "--", blend_path, tmp_glb,
+        ]
         res = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError as e:
+        limpiar_tmp()
+        return False, f"Fallo al lanzar Blender: {e}", {}
     finally:
         try:
             os.unlink(script_path)
@@ -169,7 +200,12 @@ def export_blend_to_glb(blend_path, glb_path):
             pass
 
     if res.returncode != 0:
+        limpiar_tmp()
         return False, f"Fallo al ejecutar Blender: {res.stderr}\n{res.stdout}", {}
+
+    # Por si alguna versión del exportador añade la extensión ".glb".
+    if not os.path.isfile(tmp_glb) and os.path.isfile(tmp_glb + ".glb"):
+        os.replace(tmp_glb + ".glb", tmp_glb)
 
     inventario = {}
     if "GLASS_INVENTORY_BEGIN" in res.stdout:
@@ -182,18 +218,28 @@ def export_blend_to_glb(blend_path, glb_path):
         # Sin inventario no hay sidecar fiable: mejor un error claro
         # que pisar un sidecar bueno con uno vacío (pasó una vez con
         # la salida de Blender truncada).
+        limpiar_tmp()
         return False, (
             "Blender exportó pero no devolvió el inventario de la escena; "
             "no se escribe el sidecar. Salida: " + res.stdout[-400:]
         ), {}
 
-    ok, msg, conteos = validar_glb(glb_path)
+    ok, msg, conteos = validar_glb(tmp_glb)
     if not ok:
+        limpiar_tmp()
         return False, msg, {}
+
+    # Re-hash tras exportar: si la fuente cambió, el sidecar conserva el
+    # hash previo (el del contenido exportado) y la validación dirá fresh=false.
+    try:
+        hash_despues = sha256_de(blend_path)
+    except OSError:
+        hash_despues = None
+    fuente_cambio = hash_despues != source_sha256
 
     sidecar = {
         "source": os.path.basename(blend_path),
-        "source_sha256": sha256_de(blend_path),
+        "source_sha256": source_sha256,
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "blender_version": inventario.get("blender_version", ""),
         "counts": conteos,
@@ -201,8 +247,19 @@ def export_blend_to_glb(blend_path, glb_path):
         "collections": inventario.get("collections", []),
     }
     sidecar_path = glb_path + ".meta.json"
-    with open(sidecar_path, "w", encoding="utf-8") as f:
-        json.dump(sidecar, f, indent=2)
+    sidecar_tmp = sidecar_path + ".glass-tmp"
+    try:
+        with open(sidecar_tmp, "w", encoding="utf-8") as f:
+            json.dump(sidecar, f, indent=2)
+        os.replace(tmp_glb, glb_path)
+        os.replace(sidecar_tmp, sidecar_path)
+    except OSError as e:
+        limpiar_tmp()
+        try:
+            os.unlink(sidecar_tmp)
+        except OSError:
+            pass
+        return False, f"No se pudo instalar el GLB/sidecar en el destino: {e}", {}
 
     resultado = {
         "ok": True,
@@ -215,6 +272,8 @@ def export_blend_to_glb(blend_path, glb_path):
         "lods": sorted({o["lod"] for o in sidecar["objects"] if o.get("lod") is not None}),
         "prefabs": [c["prefab"] for c in sidecar["collections"] if c.get("prefab")],
     }
+    if fuente_cambio:
+        resultado["source_changed_during_export"] = True
     return True, f"Conversión exitosa y verificada: {glb_path} ({conteos['bytes']} bytes)", resultado
 
 

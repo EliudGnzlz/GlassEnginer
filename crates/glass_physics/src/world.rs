@@ -35,6 +35,12 @@ pub struct PhysicsWorld {
     pending_contact_events: Vec<ContactEvent>,
     /// Anillo de los últimos 256 eventos, para inspección (MCP).
     contact_ring: VecDeque<ContactEvent>,
+    /// Par de entidades ordenado -> pares de colliders crudos en contacto.
+    pair_colliders: std::collections::HashMap<(u64, u64), std::collections::HashSet<(u32, u32)>>,
+    /// Par de colliders crudo ordenado -> par de entidades dueño (registrado al Started).
+    pair_owner: std::collections::HashMap<(u32, u32), (u64, u64)>,
+    /// Par de entidades -> is_trigger con el que se emitió su Enter.
+    pair_trigger: std::collections::HashMap<(u64, u64), bool>,
     /// Pares (a, b, is_trigger) en contacto o intersección tras el
     /// último substep; de aquí se deriva Stay.
     active_pairs: HashSet<(u64, u64, bool)>,
@@ -57,6 +63,7 @@ fn apply_config(builder: ColliderBuilder, cfg: ColliderConfig) -> ColliderBuilde
     builder
         .collision_groups(groups)
         .active_events(ActiveEvents::COLLISION_EVENTS)
+        .active_collision_types(rapier3d::geometry::ActiveCollisionTypes::all())
         .sensor(cfg.is_trigger)
 }
 
@@ -83,6 +90,9 @@ impl PhysicsWorld {
             step_count: 0,
             pending_contact_events: Vec::new(),
             contact_ring: VecDeque::new(),
+            pair_colliders: std::collections::HashMap::new(),
+            pair_owner: std::collections::HashMap::new(),
+            pair_trigger: std::collections::HashMap::new(),
             active_pairs: HashSet::new(),
             next_handle: 1,
             body_map: HashMap::new(),
@@ -94,6 +104,10 @@ impl PhysicsWorld {
 
     /// Steps the physics simulation using a fixed timestep accumulator to guarantee stability and prevent jitter.
     pub fn step(&mut self, dt: f32) {
+        let dt = if dt.is_finite() && dt >= 0.0 { dt } else { 0.0 };
+        if !self.accumulator.is_finite() {
+            self.accumulator = 0.0;
+        }
         self.accumulator += dt;
         let fixed_dt = self.fixed_timestep;
         self.integration_parameters.dt = fixed_dt;
@@ -122,6 +136,10 @@ impl PhysicsWorld {
             self.collect_contact_events();
             self.rebuild_active_pairs();
         }
+        // Tope de substeps alcanzado: se descarta el exceso para no arrastrar deuda.
+        if substeps == 4 && self.accumulator >= fixed_dt {
+            self.accumulator = 0.0;
+        }
     }
 
     /// Drena el canal de eventos de Rapier tras un substep: convierte los
@@ -134,33 +152,87 @@ impl PhysicsWorld {
         // que no crezca sin límite.
         while self.force_event_receiver.try_recv().is_ok() {}
         while let Ok(event) = self.event_receiver.try_recv() {
-            let (h1, h2, kind) = match event {
-                CollisionEvent::Started(h1, h2, _) => (h1, h2, ContactKind::Enter),
-                CollisionEvent::Stopped(h1, h2, _) => (h1, h2, ContactKind::Exit),
-            };
-            let (Some(e1), Some(e2)) = (self.entity_of_collider(h1), self.entity_of_collider(h2))
-            else {
-                continue;
-            };
-            if e1 == e2 {
-                continue;
+            match event {
+                CollisionEvent::Started(h1, h2, _) => {
+                    let (Some(e1), Some(e2)) =
+                        (self.entity_of_collider(h1), self.entity_of_collider(h2))
+                    else {
+                        continue;
+                    };
+                    if e1 == e2 {
+                        continue;
+                    }
+                    let pair = if e1 < e2 { (e1, e2) } else { (e2, e1) };
+                    let (r1, r2) = (h1.into_raw_parts().0, h2.into_raw_parts().0);
+                    let key = if r1 < r2 { (r1, r2) } else { (r2, r1) };
+                    self.pair_owner.insert(key, pair);
+                    let set = self.pair_colliders.entry(pair).or_default();
+                    let first = set.is_empty();
+                    set.insert(key);
+                    if first {
+                        let is_trigger =
+                            self.collider_set.get(h1).map(|c| c.is_sensor()).unwrap_or(false)
+                                || self.collider_set.get(h2).map(|c| c.is_sensor()).unwrap_or(false);
+                        self.pair_trigger.insert(pair, is_trigger);
+                        self.push_contact_event(pair, ContactKind::Enter, is_trigger);
+                    }
+                }
+                CollisionEvent::Stopped(h1, h2, _) => {
+                    let (r1, r2) = (h1.into_raw_parts().0, h2.into_raw_parts().0);
+                    let key = if r1 < r2 { (r1, r2) } else { (r2, r1) };
+                    let pair = match self.pair_owner.remove(&key) {
+                        Some(pair) => pair,
+                        None => {
+                            let (Some(e1), Some(e2)) =
+                                (self.entity_of_collider(h1), self.entity_of_collider(h2))
+                            else {
+                                continue;
+                            };
+                            if e1 == e2 {
+                                continue;
+                            }
+                            if e1 < e2 { (e1, e2) } else { (e2, e1) }
+                        }
+                    };
+                    let now_empty = match self.pair_colliders.get_mut(&pair) {
+                        Some(set) => {
+                            set.remove(&key);
+                            set.is_empty()
+                        }
+                        None => true,
+                    };
+                    if !now_empty {
+                        continue;
+                    }
+                    self.pair_colliders.remove(&pair);
+                    let is_trigger = match self.pair_trigger.remove(&pair) {
+                        Some(t) => t,
+                        None => {
+                            self.collider_set.get(h1).map(|c| c.is_sensor()).unwrap_or(false)
+                                || self.collider_set.get(h2).map(|c| c.is_sensor()).unwrap_or(false)
+                        }
+                    };
+                    self.push_contact_event(pair, ContactKind::Exit, is_trigger);
+                }
             }
-            let is_trigger = self.collider_set.get(h1).map(|c| c.is_sensor()).unwrap_or(false)
-                || self.collider_set.get(h2).map(|c| c.is_sensor()).unwrap_or(false);
-            let (a, b) = if e1 < e2 { (e1, e2) } else { (e2, e1) };
-            let ev = ContactEvent {
-                a,
-                b,
-                kind,
-                is_trigger,
-                step: self.step_count,
-            };
-            self.pending_contact_events.push(ev);
-            if self.contact_ring.len() >= 256 {
-                self.contact_ring.pop_front();
-            }
-            self.contact_ring.push_back(ev);
         }
+    }
+
+    /// Registra un evento agregado (por par de entidades) en `pending` y en
+    /// el anillo de inspección.
+    fn push_contact_event(&mut self, pair: (u64, u64), kind: ContactKind, is_trigger: bool) {
+        let ev = ContactEvent {
+            a: pair.0,
+            b: pair.1,
+            kind,
+            is_trigger,
+            step: self.step_count,
+        };
+        self.pending_contact_events.push(ev);
+        if self.contact_ring.len() >= 256 {
+            self.contact_ring.pop_front();
+        }
+        self.contact_ring.push_back(ev);
     }
 
     /// Reconstruye los pares activos desde la narrow phase: contactos con
@@ -500,11 +572,27 @@ impl PhysicsWorld {
         cfg: ColliderConfig,
     ) -> Option<ColliderHandle> {
         let &(rapier_handle, _) = self.body_map.get(&body_handle)?;
+        if points.is_empty()
+            || points.len() < 4
+            || points.iter().any(|p| !p.iter().all(|c| c.is_finite()))
+        {
+            return None;
+        }
         let rapier_points: Vec<Point<f32>> =
             points.iter().map(|p| Point::new(p[0], p[1], p[2])).collect();
-        let builder = ColliderBuilder::convex_hull(&rapier_points)?
-            .restitution(restitution)
-            .friction(friction);
+        let hull = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ColliderBuilder::convex_hull(&rapier_points)
+        })) {
+            Ok(hull) => hull?,
+            Err(_) => {
+                log::warn!(
+                    "attach_convex_collider: convex_hull entró en pánico ({} puntos); collider descartado",
+                    rapier_points.len()
+                );
+                return None;
+            }
+        };
+        let builder = hull.restitution(restitution).friction(friction);
         let collider = apply_config(builder, cfg).build();
         let collider_handle = self.collider_set.insert_with_parent(
             collider,
@@ -821,7 +909,8 @@ impl PhysicsWorld {
                 Group::all(),
                 Group::from_bits_truncate(mask),
             ))
-            .predicate(&pred);
+            .predicate(&pred)
+            .exclude_sensors();
         let (handle, intersection) = self.query_pipeline.cast_ray_and_get_normal(
             &self.rigid_body_set,
             &self.collider_set,
@@ -910,7 +999,8 @@ impl PhysicsWorld {
                 Group::all(),
                 Group::from_bits_truncate(mask),
             ))
-            .predicate(&pred);
+            .predicate(&pred)
+            .exclude_sensors();
 
         let shape_pos = Isometry::translation(origin[0], origin[1], origin[2]);
         let ball = Ball::new(radius);
@@ -984,7 +1074,8 @@ impl PhysicsWorld {
                 Group::all(),
                 Group::from_bits_truncate(mask),
             ))
-            .predicate(&pred);
+            .predicate(&pred)
+            .exclude_sensors();
 
         let shape_pos = Isometry::translation(origin[0], origin[1], origin[2]);
         let capsule = Capsule::new_y(half_height, radius);
@@ -1042,7 +1133,8 @@ impl PhysicsWorld {
                 Group::all(),
                 Group::from_bits_truncate(mask),
             ))
-            .predicate(&pred);
+            .predicate(&pred)
+            .exclude_sensors();
 
         let shape_pos = Isometry::translation(center[0], center[1], center[2]);
         let ball = Ball::new(radius);
@@ -1101,7 +1193,8 @@ impl PhysicsWorld {
                 Group::all(),
                 Group::from_bits_truncate(mask),
             ))
-            .predicate(&pred);
+            .predicate(&pred)
+            .exclude_sensors();
 
         let shape_pos = Isometry::translation(center[0], center[1], center[2]);
         let cuboid = Cuboid::new(Vector::new(

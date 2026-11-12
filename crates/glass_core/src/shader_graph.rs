@@ -491,6 +491,8 @@ pub enum GraphError {
     PropertyTypeMismatch(String),
     #[error("el nodo {0} solo vale en la etapa de fragmento")]
     FragmentOnlyNode(u32),
+    #[error("el grafo declara {0} propiedades de valor; el tope del UBO por instancia es 32")]
+    TooManyProperties(usize),
     #[error("el slot de textura {0} no tiene una propiedad Texture2D asociada (slots válidos: 0, o 1..=3 con esa cantidad de propiedades Texture2D declaradas)")]
     TextureSlotWithoutProperty(u32),
     #[error("el índice de luz puntual {0} supera el máximo soportado (7)")]
@@ -778,7 +780,15 @@ impl<'a> Compiler<'a> {
             // las etapas de vértice y fragmento: el mismo acceso vale en
             // las dos plantillas.
             NodeKind::Time => Ok(Emitted { expr: "u_push.light_color.w".into(), ty: GlslType::Float }),
-            NodeKind::Property { name } => self.emit_property(name),
+            NodeKind::Property { name } => {
+                // Auditoría 2S (M-7): la plantilla de vértices NO declara
+                // GraphProperties; sin esta guarda el nodo emitía u_props
+                // en el vertex shader y glslang fallaba con un error crudo.
+                if self.stage == Stage::Vertex {
+                    return Err(GraphError::FragmentOnlyNode(id));
+                }
+                self.emit_property(name)
+            }
             NodeKind::TextureSample { slot } => self.emit_texture_sample(id, *slot),
             NodeKind::MainLightDirection => Ok(Emitted {
                 expr: "u_push.light_dir.xyz".into(),
@@ -1089,6 +1099,17 @@ impl ShaderGraph {
     fn validated_maps<'a>(
         &'a self,
     ) -> Result<(HashMap<u32, &'a GraphNode>, HashMap<(u32, &'a str), u32>), GraphError> {
+        // Auditoría 2S (M-10): el tope de 32 propiedades de valor del
+        // UBO por instancia no se hacía cumplir en ninguna parte; un
+        // grafo mayor desbordaba el pool del renderer en silencio.
+        let de_valor = self
+            .properties
+            .iter()
+            .filter(|p| p.kind != PropertyKind::Texture2D)
+            .count();
+        if de_valor > 32 {
+            return Err(GraphError::TooManyProperties(de_valor));
+        }
         let mut nodes: HashMap<u32, &GraphNode> = HashMap::new();
         for n in &self.nodes {
             if nodes.insert(n.id, n).is_some() {
@@ -1658,6 +1679,17 @@ fn graph_passes_map() -> &'static RwLock<HashMap<String, Vec<PassKind>>> {
 /// decida los pipelines extra (sombra de grafo, contorno) sin releer
 /// los archivos.
 pub fn register_graph_passes(name: String, passes: Vec<PassKind>) {
+    // Auditoría 2S (M-9): un "passes": [] explícito en el JSON anulaba
+    // también el pase Forward y la entidad quedaba invisible sin aviso.
+    let passes = if passes.is_empty() {
+        log::warn!(
+            "Grafo '{}': la lista de pases está vacía; se asume [Forward]",
+            name
+        );
+        vec![PassKind::Forward]
+    } else {
+        passes
+    };
     graph_passes_map().write().unwrap().insert(name, passes);
 }
 
@@ -2914,6 +2946,64 @@ mod pack_property_values_tests {
         overrides.insert("normal_scale".into(), json!([0.1, 0.2, 0.3, 0.9]));
         let packed = pack_property_values(&schema(), &overrides);
         assert_eq!(&packed[12..16], &[0.1, 0.2, 0.3, 0.0]);
+    }
+
+    #[test]
+    fn propiedad_en_la_etapa_de_vertices_da_error_claro() {
+        // Auditoría 2S (M-7): un Property alimentando el offset de
+        // vértices debe dar FragmentOnlyNode, no GLSL inválido.
+        use NodeKind as K;
+        let g = ShaderGraph {
+            transparent: false,
+            name: "prop_en_vertices".into(),
+            nodes: vec![
+                GraphNode { id: 1, kind: K::Property { name: "altura".into() }, position: [0.0, 0.0] },
+                GraphNode { id: 2, kind: K::VertexOutput, position: [0.0, 0.0] },
+            ],
+            edges: vec![GraphEdge { from_node: 1, to_node: 2, to_input: "offset".into() }],
+            properties: vec![PropertyDef {
+                name: "altura".into(),
+                kind: PropertyKind::Float,
+                default: PropertyValue::Float(0.5),
+            }],
+            passes: vec![PassKind::Forward],
+        };
+        assert!(matches!(g.compile_vertex(), Err(GraphError::FragmentOnlyNode(1))));
+    }
+
+    #[test]
+    fn mas_de_32_propiedades_de_valor_no_compila() {
+        // Auditoría 2S (M-10): el tope del UBO por instancia se cumple.
+        use NodeKind as K;
+        let props: Vec<PropertyDef> = (0..33)
+            .map(|i| PropertyDef {
+                name: format!("p{i}"),
+                kind: PropertyKind::Float,
+                default: PropertyValue::Float(0.0),
+            })
+            .collect();
+        let g = ShaderGraph {
+            transparent: false,
+            name: "demasiadas".into(),
+            nodes: vec![GraphNode { id: 1, kind: K::Output, position: [0.0, 0.0] }],
+            edges: vec![],
+            properties: props,
+            passes: vec![PassKind::Forward],
+        };
+        assert!(matches!(
+            g.compile_fragment(),
+            Err(GraphError::TooManyProperties(33))
+        ));
+    }
+
+    #[test]
+    fn registro_de_pases_vacios_asume_forward() {
+        // Auditoría 2S (M-9).
+        register_graph_passes("grafo_prueba_vacio".into(), vec![]);
+        assert_eq!(
+            graph_passes("grafo_prueba_vacio"),
+            Some(vec![PassKind::Forward])
+        );
     }
 
 }
