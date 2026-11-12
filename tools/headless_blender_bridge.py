@@ -149,6 +149,18 @@ def validar_glb(glb_path):
 
 
 def export_blend_to_glb(blend_path, glb_path):
+    # Las rutas relativas se resuelven contra la raíz del proyecto
+    # (la carpeta que contiene tools/), nunca contra el directorio
+    # de trabajo del proceso que nos lanzó: al abrir la app desde un
+    # acceso directo o un IDE, ese directorio (o su $PWD) puede ser
+    # cualquiera y la exportación fallaba con «Cannot read file»
+    # (defecto de la Fase 10).
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if not os.path.isabs(blend_path):
+        blend_path = os.path.join(raiz, blend_path)
+    if not os.path.isabs(glb_path):
+        glb_path = os.path.join(raiz, glb_path)
+
     if not os.path.isfile(blend_path):
         return False, f"Archivo de modelo no encontrado: {blend_path}", {}
 

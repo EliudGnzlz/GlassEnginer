@@ -2,29 +2,100 @@
 
 Motor de videojuegos open source tipo Unity, en desarrollo activo (beta). Núcleo en Rust con render Vulkan 1.3, scripting en C# con API estilo Unity y un servidor MCP nativo pensado como vía principal para trabajar el motor con IA.
 
+Está pensado para flujos procedurales: generar y borrar grandes cantidades de objetos en tiempo real, creando y regenerando mundos repetidamente sin grandes cargas de memoria ni de procesos.
+
 Versión actual: **0.1.0**.
 
 ## Qué es
 
-Lo que está implementado hoy, verificado en el código:
+Sistemas implementados hoy, verificados en el código:
 
-- **Editor visual** con Launcher inicial estilo Hub antiguo de Unity: tema claro, proyectos en cuadrícula y siempre offline.
-- **Render PBR** con importación glTF de materiales y texturas, mip-maps y materiales por primitiva.
-- **Física** con Rapier3D y **audio** con Kira.
-- **Scripting C# embebido** (.NET 8) con API estilo Unity, incluido input de teclado y ratón.
-- **UI de juego tipo Canvas de Unity** (Canvas, RectTransform, texto, botones) que funciona en el editor y en el juego standalone; los botones reciben clics en el standalone.
-- **Servidor MCP nativo** en dos modos: sobre la escena viva del editor y headless con escena propia.
-- **Grafo de shaders visual propio** (nodos básicos) con 6 grafos prefabricados editables: agua, brisa, espuma, fragmentos, láser y tormenta de arena. Compilan a SPIR-V.
-- **Recarga en caliente de assets** y **puente con Blender**: al guardar un `.blend` o `.fbx`, Blender headless lo convierte a `.glb` y el motor lo refleja.
-- **Paquete standalone**: el editor genera `build/standalone/` con el ejecutable del juego, los assets, `project.json` y las DLL de C#.
-- **Escenas de ejemplo** en `assets/scenes/`: `SampleScene`, `Nivel2` y `CanvasUiTest`.
-- **124 tests automatizados** en verde en la máquina de desarrollo (`cargo test --workspace`); la validación en CI queda pendiente de la primera corrida, cuando el repo se suba.
+### Render
+
+- Render PBR con importación de glTF.
+- Culling por frustum.
+- Texturas BC con compresión en GPU.
+- Sombras puntuales en atlas —4 cubos— y sombras de sol con PCF.
+- Niebla.
+- Post-procesado HDR con ACES, bloom y viñeta.
+- Ciclo día/noche en tiempo real.
+- Bake de lightmaps v1.
+- Portales en vivo, con cruce e impulso conservado.
+
+### Física
+
+- Capas, máscaras y triggers.
+- Eventos de contacto expuestos a C#.
+- Colliders compuestos y de malla.
+- Consultas de raycast, sphere, capsule y overlap.
+
+### Audio
+
+- Buses Master, Music y SFX.
+- Ducking.
+- Oclusión por rayo.
+
+### Animación
+
+- Animator con FSM y blend tree 1D.
+- Skinning por GPU.
+
+### UI
+
+- Canvas con anclas.
+- Canvas Scaler.
+- Grupos de layout.
+
+### Partículas y núcleo
+
+- Partículas en CPU con pool SoA.
+- TransformStore SoA.
+- Generación y borrado de grandes cantidades de objetos en tiempo real para crear y regenerar mundos repetidamente sin grandes cargas de memoria ni de procesos.
+- Instrumentación de frame y GPU.
+- Scripting C# embebido con .NET 8 y API estilo Unity.
+
+### Shaders
+
+- Grafo de shaders rehecho, con propiedades y UBO por instancia.
+- Pases Shadow y Outline.
+- Presets toon.
+- Fallback magenta.
+
+### MCP e IA
+
+- MCP nativo con 48 tools.
+- Cola de comandos determinista.
+
+### Assets y editor
+
+- Editor visual con Launcher estilo Hub antiguo de Unity, siempre offline.
+- Puente con Blender, con recarga en caliente y LOD automático por sufijo.
+- Panel Project completo: carpetas, creación, renombrado y movimiento de archivos, papelera y prefabs desde C#.
+- Generación de paquete standalone.
+
+## Demos y escenas de prueba
+
+- **Escena escaparate**: demo del motor — avenida PBR y toon, clima (lluvia y tormenta de arena) y portal en vivo.
+- **Demo FPS**: demo del motor que ejercita la física, las consultas, las partículas y la prueba integral en una misma escena.
+- **Cúmulos de cubos**: escenas de estrés de spawn y física (1.000 / 5.000 / 10.000 cuerpos).
+
+El acabado visual de las demos está en pulido; su función hoy es ejercitar y medir los sistemas del motor.
+
+## En fase de pruebas
+
+- Cierre de la **Fase 10**: prueba integral del motor.
+- Sesión del editor: importación de assets arrastrando desde el sistema operativo.
+- Integración de iluminación: Spot emisiva, asignación de luces por objeto con perfiles e IBL básica de skybox.
+
+## Inspiración y dirección de arte
+
+GlassEnginer está inspirado en la forma de trabajar de Unity — su API en C#, su editor por paneles y su flujo de escenas y componentes — pero no persigue el fotorrealismo: su dirección de arte es la composición estilizada, con PBR de criterio y acabado toon/cartoon, poniendo la legibilidad y el estilo por encima del realismo.
 
 ## Requisitos
 
 - **Rust 1.80 o superior** (edition 2021).
 - **Driver Vulkan 1.3**. En Linux sin GPU sirve el render por software (lavapipe: paquete `mesa-vulkan-drivers` y `libxkbcommon-x11-0`).
-- **Runtime de .NET 8** para ejecutar los scripts C# de los juegos.
+- **Runtime de .NET 8** para ejecutar los scripts C# de las escenas.
 - **SDK de .NET 8**, solo para compilar el proyecto C# (`managed/GlassEngine.Core`). El repo fija `8.0.132` en `global.json`.
 - **glslangValidator**, solo para recompilar shaders.
 - **Blender** instalado, solo para el puente con Blender.
@@ -103,31 +174,9 @@ glslangValidator -V assets/shaders/pbr.frag -o assets/shaders/pbr.frag.spv
 
 Los `.spv` de `assets/shaders/` se incrustan en el binario al compilar, así que hay que recompilar el motor después de regenerarlos.
 
-## Estructura del proyecto
-
-- `crates/` — workspace Rust de 8 crates:
-  - `glass_core` — escenas y datos.
-  - `glass_renderer` — Vulkan con `ash` y `gpu-allocator`.
-  - `glass_editor` — editor con `egui`.
-  - `glass_scripting` — CoreCLR/.NET 8 embebido vía `netcorehost`.
-  - `glass_mcp` — servidor MCP JSON-RPC sobre stdio.
-  - `glass_audio` — Kira.
-  - `glass_physics` — Rapier3D.
-  - `glass_app` — el binario `glass_app`, que reúne editor + launcher o juego.
-- `managed/` — proyecto C# `GlassEngine.Core`.
-- `assets/` — `scenes`, `shaders`, `shader_graphs`, `models`, `textures`, `fonts`, `prefabs`.
-- `tools/` — utilidades Python del proyecto.
-- `project.json` — proyecto de ejemplo «GlassPlatformerBeta», escena por defecto `SampleScene`, ventana 1280×720.
-
 ## Estado del proyecto
 
-GlassEnginer es una **beta en desarrollo activo**, no una versión estable. Lo que todavía no está:
-
-- Sin sombras en cascada (CSM) ni cadena de post-proceso.
-- Sin skinning/animación esquelética de modelos.
-- El editor no tiene undo/redo.
-- La red del Launcher (descargar el motor, actualizaciones, comunidad) está deshabilitada hasta que exista el repositorio oficial; el Launcher es offline.
-- El juego en red (cooperativo y servidor) es un tema de diseño post-beta: no está implementado.
+GlassEnginer **0.1.0** es una beta en desarrollo activo. El repositorio está publicado, la CI está en verde y los **382 tests automatizados** pasan correctamente.
 
 ## Licencia
 

@@ -1269,25 +1269,36 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
 
     /// <summary>
     /// Entidades cuyos colliders intersectan la esfera (auditoría
-    /// C5). Hasta 64 resultados; array vacío si no hay callback.
+    /// C5). El buffer crece ×4 mientras la consulta lo llene (tope
+    /// 65536): antes era fijo de 64 y truncaba en silencio — la
+    /// explosión del RPG de la Fase 10 solo afectaba a 64 cuerpos
+    /// de una pila de 1.000. Array vacío si no hay callback.
     /// </summary>
     public static ulong[] OverlapSphere(Vector3 center, float radius, ulong excludeEntityId)
     {
         if (_overlapSphere is null) return Array.Empty<ulong>();
-        var buffer = new ulong[64];
-        var handle = System.Runtime.InteropServices.GCHandle.Alloc(buffer, System.Runtime.InteropServices.GCHandleType.Pinned);
-        try
+        int capacidad = 256;
+        while (true)
         {
-            int n = _overlapSphere(center.X, center.Y, center.Z, radius, excludeEntityId,
-                handle.AddrOfPinnedObject(), (uint)buffer.Length);
-            if (n <= 0) return Array.Empty<ulong>();
-            var result = new ulong[n];
-            Array.Copy(buffer, result, n);
-            return result;
-        }
-        finally
-        {
-            handle.Free();
+            var buffer = new ulong[capacidad];
+            var handle = System.Runtime.InteropServices.GCHandle.Alloc(buffer, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try
+            {
+                int n = _overlapSphere(center.X, center.Y, center.Z, radius, excludeEntityId,
+                    handle.AddrOfPinnedObject(), (uint)buffer.Length);
+                if (n <= 0) return Array.Empty<ulong>();
+                if (n < buffer.Length || capacidad >= 65536)
+                {
+                    var result = new ulong[n];
+                    Array.Copy(buffer, result, n);
+                    return result;
+                }
+            }
+            finally
+            {
+                handle.Free();
+            }
+            capacidad *= 4;
         }
     }
 

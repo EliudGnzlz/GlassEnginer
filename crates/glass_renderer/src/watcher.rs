@@ -102,12 +102,12 @@ fn resumen_bridge(stdout: &str) -> String {
 }
 
 /// Ejecuta el bridge una vez; true si tuvo éxito.
-fn ejecutar_bridge(bridge_script: &str, input_path: &Path, glb_path: &Path) -> bool {
+fn ejecutar_bridge(bridge_script: &Path, input_path: &Path, glb_path: &Path) -> bool {
     let output = Command::new("python3")
         .args([
-            bridge_script,
-            input_path.to_str().unwrap_or_default(),
-            glb_path.to_str().unwrap_or_default(),
+            bridge_script.to_string_lossy().into_owned(),
+            input_path.to_string_lossy().into_owned(),
+            glb_path.to_string_lossy().into_owned(),
         ])
         .output();
 
@@ -148,10 +148,31 @@ pub struct AssetWatcher {
     pub receiver: Receiver<AssetReloadEvent>,
 }
 
+/// Ruta absoluta del bridge de Blender, fijada al crear el vigía a
+/// partir de la raíz del proyecto (el padre de `assets/`). La cadena
+/// de recarga nunca trabaja con rutas relativas: algún eslabón
+/// resolvía contra el `$PWD` del lanzador y la exportación fallaba
+/// al abrir la app desde otro directorio (defecto de la Fase 10).
+static BRIDGE_PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+fn bridge_path() -> PathBuf {
+    BRIDGE_PATH
+        .get()
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from("tools/headless_blender_bridge.py"))
+}
+
 impl AssetWatcher {
     pub fn new(assets_dir: impl AsRef<Path>) -> Result<Self, String> {
         let (tx, rx) = channel();
-        let path = assets_dir.as_ref().to_path_buf();
+        // Canonizar: los eventos del vigía heredan el prefijo con el
+        // que se registra la carpeta; si es absoluta, todas las rutas
+        // de la recarga lo son.
+        let path = std::fs::canonicalize(assets_dir.as_ref())
+            .unwrap_or_else(|_| assets_dir.as_ref().to_path_buf());
+        if let Some(raiz) = path.parent() {
+            let _ = BRIDGE_PATH.set(raiz.join("tools").join("headless_blender_bridge.py"));
+        }
 
         let mut watcher = RecommendedWatcher::new(
             move |res: Result<Event, notify::Error>| match res {
@@ -224,20 +245,20 @@ impl AssetWatcher {
                         // Ejecutar conversión desatendida en un hilo separado para no bloquear
                         thread::spawn(move || {
                             let _en_vuelo = en_vuelo;
-                            let bridge_script = "tools/headless_blender_bridge.py";
-                            if !Path::new(bridge_script).exists() {
+                            let bridge_script = bridge_path();
+                            if !bridge_script.exists() {
                                 // Fase 6: nada de fallos silenciosos.
                                 log::error!(
                                     "Bridge de Blender no encontrado en '{}': no se exporta {:?}. \
                                      El .glb queda como estaba.",
-                                    bridge_script,
+                                    bridge_script.display(),
                                     input_path
                                 );
                                 return;
                             }
                             let mut hash_previo = hash_inicial;
                             for ronda in 1..=MAX_RONDAS_EXPORTACION {
-                                if !ejecutar_bridge(bridge_script, &input_path, &glb_path) {
+                                if !ejecutar_bridge(&bridge_script, &input_path, &glb_path) {
                                     // Sin registro: el próximo guardado reintenta.
                                     break;
                                 }

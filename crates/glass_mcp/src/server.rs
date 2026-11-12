@@ -2726,11 +2726,19 @@ impl McpServer {
                     );
                 }
                 let glb = ruta.with_extension("glb");
+                // Rutas ABSOLUTAS contra la raíz del proyecto: algún
+                // eslabón de la cadena (app → bridge → Blender)
+                // resolvía las relativas contra el $PWD del lanzador
+                // y la recarga fallaba al abrir la app desde un
+                // acceso directo o un IDE (defecto de la Fase 10).
+                let raiz = raiz_proyecto();
                 let salida = std::process::Command::new("python3")
                     .args([
-                        "tools/headless_blender_bridge.py",
-                        path,
-                        glb.to_str().unwrap_or_default(),
+                        raiz.join("tools/headless_blender_bridge.py")
+                            .to_string_lossy()
+                            .into_owned(),
+                        raiz.join(path).to_string_lossy().into_owned(),
+                        raiz.join(&glb).to_string_lossy().into_owned(),
                     ])
                     .output();
                 match salida {
@@ -3578,6 +3586,24 @@ fn glb_json(path: &std::path::Path) -> Result<serde_json::Value, String> {
 
 /// Validación de un asset de modelo (Fase 6): sirve a
 /// `glass_asset_validate` y a la rama .glb de `glass_asset_reload`.
+/// Raíz del proyecto contra la que se resuelven las rutas de assets:
+/// la que descubre el VFS subiendo hasta `project.json`; si no hay
+/// proyecto, el directorio de trabajo. Las rutas de assets nunca se
+/// pasan relativas a procesos hijos (el bridge de Blender): la
+/// cadena resolvía contra el `$PWD` del lanzador y la recarga en
+/// caliente fallaba al abrir la app desde otro directorio (defecto
+/// de la Fase 10, corregido aquí).
+fn raiz_proyecto() -> std::path::PathBuf {
+    glass_core::AssetVfs::locate()
+        .map(|v| v.root().to_path_buf())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+}
+
+/// Ruta de asset (`assets/...`) en absoluto, contra la raíz.
+fn ruta_asset_abs(path: &str) -> std::path::PathBuf {
+    raiz_proyecto().join(path)
+}
+
 fn validar_asset(path: &str) -> Result<serde_json::Value, String> {
     if !path.starts_with("assets/") || path.contains("..") {
         return Err("La ruta debe estar bajo assets/ y sin '..'".into());
@@ -3595,7 +3621,8 @@ fn validar_asset(path: &str) -> Result<serde_json::Value, String> {
     } else {
         return Err("Extensión no soportada: se espera .blend, .fbx o .glb".into());
     };
-    let doc = glb_json(&glb_path)?;
+    let glb_abs = ruta_asset_abs(&glb_path.to_string_lossy());
+    let doc = glb_json(&glb_abs)?;
     let contar = |k: &str| doc.get(k).and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
     // Nodos con malla: instancias (misma malla en ≥2 nodos) y LODs.
     let mut por_malla: std::collections::HashMap<usize, Vec<String>> =
@@ -3618,7 +3645,7 @@ fn validar_asset(path: &str) -> Result<serde_json::Value, String> {
         .map(|(mi, nombres)| json!({ "mesh": mi, "nodes": nombres }))
         .collect();
     // Sidecar del bridge (si existe): colecciones/prefabs y frescura.
-    let sidecar_path = std::path::PathBuf::from(format!("{}.meta.json", glb_path.display()));
+    let sidecar_path = std::path::PathBuf::from(format!("{}.meta.json", glb_abs.display()));
     let mut sidecar_info = json!({ "present": false });
     if let Ok(texto) = std::fs::read_to_string(&sidecar_path) {
         if let Ok(sc) = serde_json::from_str::<serde_json::Value>(&texto) {
@@ -3630,7 +3657,7 @@ fn validar_asset(path: &str) -> Result<serde_json::Value, String> {
                 "collections": sc.get("collections"),
             });
             if ext == "blend" || ext == "fbx" {
-                let actual = sha256_hex(ruta);
+                let actual = sha256_hex(&ruta_asset_abs(path));
                 let registrado = sc.get("source_sha256").and_then(|v| v.as_str()).map(|s| s.to_string());
                 info["fresh"] = json!(actual.is_some() && actual == registrado);
                 info["source_sha256"] = json!(registrado);

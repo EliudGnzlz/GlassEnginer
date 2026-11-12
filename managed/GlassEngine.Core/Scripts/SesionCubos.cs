@@ -22,8 +22,27 @@ namespace GlassEngine.Core.Scripts
 
         int frame;
 
+        // Programa de la sesión. Los valores por defecto son los de la
+        // prueba de 1.000 cubos; en los escalones grandes el driver
+        // puede adelantar los disparos por variable de entorno (con
+        // pilas de 5.000+ el frame tarda segundos y esperar al frame
+        // 660 no aporta más señal de asiento).
+        int fEquipar = 600;
+        int fDisparo2 = 2400;
+        int fFin = 3600;
+
+        static int EnvEntero(string nombre, int defecto)
+        {
+            var v = System.Environment.GetEnvironmentVariable(nombre);
+            return int.TryParse(v, out int n) && n > 0 ? n : defecto;
+        }
+
         public override void Start()
         {
+            fEquipar = EnvEntero("GLASS_CUBOS_F1", 600);
+            fDisparo2 = EnvEntero("GLASS_CUBOS_F2", 2400);
+            fFin = EnvEntero("GLASS_CUBOS_FIN", 3600);
+
             ProyectilRpg.EmisorFogonazoId = EMISOR_FOGONAZO;
             ProyectilRpg.EmisorOndaId     = EMISOR_ONDA;
             ProyectilRpg.EmisorHumoId     = EMISOR_HUMO;
@@ -38,7 +57,7 @@ namespace GlassEngine.Core.Scripts
             frame++;
             var jugador = JugadorFps.Instancia;
 
-            if (frame == 600)
+            if (frame == fEquipar)
             {
                 if (jugador != null)
                 {
@@ -46,12 +65,12 @@ namespace GlassEngine.Core.Scripts
                     jugador.ApuntarA(CENTRO_CUMULO);
                 }
             }
-            else if (frame == 660)
+            else if (frame == fEquipar + 60)
             {
                 if (jugador != null) jugador.DispararUnaVez();
                 UnityEngine.Debug.Log("[CUBOS] DISPARO 1");
             }
-            else if (frame == 2400)
+            else if (frame == fDisparo2)
             {
                 if (jugador != null)
                 {
@@ -61,7 +80,7 @@ namespace GlassEngine.Core.Scripts
                 }
                 UnityEngine.Debug.Log("[CUBOS] DISPARO 2");
             }
-            else if (frame == 3600)
+            else if (frame == fFin)
             {
                 RuntimeBridge.GetPhysicsCounts(out int cuerposFin, out int collidersFin);
                 UnityEngine.Debug.Log($"[CUBOS] FIN cuerpos={cuerposFin}");
