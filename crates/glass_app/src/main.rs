@@ -723,7 +723,38 @@ impl SceneBridge for EngineSceneBridge {
                 }
             }
             let body_spec = if spec.physics != glass_scripting::SPAWN_PHYSICS_NONE {
-                let world_matrices = state.compute_world_matrices();
+                // Solo la matriz de mundo de la entidad nueva, subiendo
+                // por su cadena de padres. Antes se pedía el mapa de
+                // mundo de TODA la escena por cada spawn con física:
+                // coste O(N) por alta y O(N²) al generar en masa
+                // (prueba de esferas: 30.000 dinámicas en una llamada
+                // tardaron 552 s; sin física, ~0,45 ms por entidad).
+                let world = state.get_entity(id).map(|ent| {
+                    let mut m = glass_core::mat4_from_trs_euler(
+                        ent.transform.position,
+                        ent.transform.rotation(),
+                        ent.transform.scale,
+                    );
+                    let mut padre = ent.parent;
+                    let mut pasos = 0;
+                    while let Some(pid) = padre {
+                        pasos += 1;
+                        if pasos > 64 {
+                            break; // guarda anti-ciclos
+                        }
+                        let Some(p) = state.get_entity(pid) else { break };
+                        let pm = glass_core::mat4_from_trs_euler(
+                            p.transform.position,
+                            p.transform.rotation(),
+                            p.transform.scale,
+                        );
+                        m = glass_core::mat4_mul(pm, m);
+                        padre = p.parent;
+                    }
+                    m
+                });
+                let world_matrices: std::collections::HashMap<u64, [f32; 16]> =
+                    world.map(|m| [(id, m)].into_iter().collect()).unwrap_or_default();
                 state
                     .get_entity(id)
                     .and_then(|ent| Self::body_spec_for(&world_matrices, ent))

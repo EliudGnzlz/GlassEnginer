@@ -78,3 +78,19 @@ registrados hoy:
   principal — será un **módulo aparte**, que el desarrollador usa
   solo si lo quiere. El runtime ya animaría esas articulaciones vía
   skinning; lo que falta es ese generador opcional.
+
+## 6. Rendimiento multinúcleo — CANDIDATO PRE-BETA (evaluado el 2026-11-12)
+
+D3m3tr10 pidió evaluarlo como candidato a entrar antes de la beta
+(no es Post-1.0 firme). Evaluación completa en
+`~/workspace/glass-engine/EVALUACION_MULTINUCLEO.md`. Alcance
+acotado: (1) física multinúcleo — la llamada a Rapier pasa `None`
+en el hueco del ThreadPool, basta la feature `parallel` + pool de
+rayon; (2) partículas y transforms SoA en paralelo por trozos;
+(3) spawn masivo tras perfilar (el diagnóstico de la discrepancia
+551 s / 21 s a 30.000 esferas está en curso). Fuera: sistema de
+trabajos genérico y backend GPU de partículas (Post-1.0).
+Verificación obligatoria: las cifras reproducibles de la Fase 10
+(caída a 100 m = 1,46 m) con el solver paralelo. Hueco natural:
+tras la iluminación y antes del bloque online. Decisión final al
+cerrar la escalera de esferas.
