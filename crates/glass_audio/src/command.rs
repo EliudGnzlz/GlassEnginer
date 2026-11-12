@@ -1,5 +1,7 @@
 use crossbeam_queue::ArrayQueue;
 
+use crate::buses::BusId;
+
 pub type SoundHandle = u64;
 
 #[derive(Debug)]
@@ -13,6 +15,7 @@ pub enum AudioCommand {
         volume: f32,
         pitch: f32,
         looping: bool,
+        bus: BusId,
         handle: SoundHandle,
     },
     Play3D {
@@ -21,6 +24,7 @@ pub enum AudioCommand {
         volume: f32,
         pitch: f32,
         looping: bool,
+        bus: BusId,
         handle: SoundHandle,
     },
     SetSourcePosition {
@@ -33,6 +37,19 @@ pub enum AudioCommand {
     },
     Stop {
         handle: SoundHandle,
+    },
+    SetBusVolume {
+        bus: BusId,
+        volume: f32,
+    },
+    DuckBus {
+        bus: BusId,
+        amount: f32,
+        duration_secs: f32,
+    },
+    SetSourceOcclusion {
+        handle: SoundHandle,
+        occluded: bool,
     },
     StopAll,
 }

@@ -1,0 +1,369 @@
+[
+  {
+    "id": 1,
+    "name": "Camara",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "active": true,
+    "parent": null,
+    "children": [],
+    "transform": {
+      "position": [
+        0.0,
+        1.6,
+        6.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "components": [
+      "Transform",
+      "Camera"
+    ],
+    "mesh": null,
+    "camera": {
+      "fov": 60,
+      "near_clip": 0.1,
+      "far_clip": 200,
+      "is_main": true
+    },
+    "light": null,
+    "physics": null,
+    "script": null,
+    "script_data": null,
+    "audio": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "ui_image": null,
+    "ui_drag": null,
+    "portal": null,
+    "animator": null,
+    "fog": null
+  },
+  {
+    "id": 2,
+    "name": "Sol",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "active": true,
+    "parent": null,
+    "children": [],
+    "transform": {
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        -50,
+        -30,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "components": [
+      "Transform",
+      "Light"
+    ],
+    "mesh": null,
+    "camera": null,
+    "light": {
+      "light_type": "Directional",
+      "color": [
+        1,
+        0.95,
+        0.85
+      ],
+      "intensity": 1.1,
+      "range": 0,
+      "cast_shadow": true
+    },
+    "physics": null,
+    "script": null,
+    "script_data": null,
+    "audio": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "ui_image": null,
+    "ui_drag": null,
+    "portal": null,
+    "animator": null,
+    "fog": null
+  },
+  {
+    "id": 3,
+    "active": true,
+    "name": "Suelo",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": true,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody"
+    ],
+    "transform": {
+      "position": [
+        0.0,
+        -0.5,
+        0.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        30.0,
+        1.0,
+        30.0
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.55,
+        0.57,
+        0.6
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Static",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        20,
+        0.5,
+        20
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false,
+      "colliders": [],
+      "mesh_collider": "None"
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 4,
+    "active": true,
+    "name": "Pared",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": true,
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "RigidBody"
+    ],
+    "transform": {
+      "position": [
+        0.0,
+        1.5,
+        0.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "mesh": {
+      "color": [
+        0.7,
+        0.4,
+        0.3
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv",
+      "model": "cube"
+    },
+    "script": null,
+    "script_data": null,
+    "physics": {
+      "body_type": "Static",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        3.0,
+        2.0,
+        0.3
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false,
+      "colliders": [],
+      "mesh_collider": "None"
+    },
+    "audio": null,
+    "camera": null,
+    "light": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "parent": null,
+    "children": []
+  },
+  {
+    "id": 5,
+    "name": "MarcadorA",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "active": true,
+    "parent": null,
+    "children": [],
+    "transform": {
+      "position": [
+        0.0,
+        1.5,
+        -4.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    },
+    "components": [
+      "Transform",
+      "MeshRenderer"
+    ],
+    "mesh": {
+      "color": [
+        1.0,
+        0.2,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr",
+      "model": "cube",
+      "material": ""
+    },
+    "camera": null,
+    "light": null,
+    "physics": null,
+    "script": null,
+    "script_data": null,
+    "audio": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "ui_image": null,
+    "ui_drag": null,
+    "portal": null,
+    "animator": null,
+    "fog": null
+  },
+  {
+    "id": 6,
+    "name": "MarcadorB",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "active": true,
+    "parent": null,
+    "children": [],
+    "transform": {
+      "position": [
+        3.0,
+        1.5,
+        3.0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    },
+    "components": [
+      "Transform",
+      "MeshRenderer"
+    ],
+    "mesh": {
+      "color": [
+        0.2,
+        1.0,
+        0.2
+      ],
+      "wireframe": false,
+      "shader": "pbr",
+      "model": "cube",
+      "material": ""
+    },
+    "camera": null,
+    "light": null,
+    "physics": null,
+    "script": null,
+    "script_data": null,
+    "audio": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "ui_image": null,
+    "ui_drag": null,
+    "portal": null,
+    "animator": null,
+    "fog": null
+  }
+]

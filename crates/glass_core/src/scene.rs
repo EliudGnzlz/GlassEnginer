@@ -246,6 +246,13 @@ pub struct AudioSourceData {
     pub volume: f32,
     pub pitch: f32,
     pub is_playing: bool,
+    /// Bus de audio de la fuente (Fase 3): "master" | "music" | "sfx".
+    #[serde(default = "default_audio_bus")]
+    pub bus: String,
+}
+
+fn default_audio_bus() -> String {
+    "sfx".to_string()
 }
 
 impl Default for AudioSourceData {
@@ -255,6 +262,7 @@ impl Default for AudioSourceData {
             volume: 1.0,
             pitch: 1.0,
             is_playing: false,
+            bus: "sfx".to_string(),
         }
     }
 }

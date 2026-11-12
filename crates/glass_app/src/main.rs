@@ -1444,6 +1444,10 @@ struct GlassEngineApp {
     /// junto a su .spv): la ordenación de draws de S6 los manda al
     /// final de cada lista para no romper la mezcla.
     transparent_graphs: std::collections::HashSet<String>,
+    /// Estado de oclusión ya aplicado por fuente 3D (Fase 3) y reloj
+    /// del último chequeo de oclusión (cada 150 ms).
+    occlusion_applied: std::collections::HashMap<u64, bool>,
+    last_occlusion_check: std::time::Instant,
     /// Último instante en que se avanzaron las animaciones (para el dt).
     last_anim_instant: Instant,
     /// Buffers de articulación retirados (cambio de escena o piel con otro
@@ -1725,6 +1729,8 @@ impl GlassEngineApp {
             graph_tex_state: std::collections::HashMap::new(),
             graph_error_logged: std::collections::HashSet::new(),
             transparent_graphs: std::collections::HashSet::new(),
+            occlusion_applied: std::collections::HashMap::new(),
+            last_occlusion_check: std::time::Instant::now(),
             last_anim_instant: Instant::now(),
             retired_joint_buffers: Vec::new(),
             player_body_handle: None,
@@ -1869,6 +1875,7 @@ impl GlassEngineApp {
                     volume: 1.0,
                     pitch: 1.0,
                     is_playing: false,
+                    bus: "sfx".to_string(),
                 });
             }
 
@@ -1996,6 +2003,7 @@ impl GlassEngineApp {
                     volume: 1.0,
                     pitch: 1.0,
                     is_playing: false,
+                    bus: "sfx".to_string(),
                 });
             }
 
@@ -2306,6 +2314,7 @@ impl GlassEngineApp {
                     volume: 0.8,
                     pitch: 1.0,
                     is_playing: true,
+                    bus: "sfx".to_string(),
                 });
             }
 
@@ -4532,6 +4541,51 @@ let resueltos = colliders_resueltos(body, shape);
                         || self.transparent_graphs.contains(nombre);
                     (transp, nombre.to_string(), orden_tex[&item.2])
                 });
+            }
+
+            // Oclusión de audio (Fase 3): cada 150 ms, rayo de la
+            // cámara de juego a cada fuente 3D viva; si algo tapa la
+            // línea de visión, la fuente pasa por un low-pass en el
+            // backend. Solo se avisa al sistema de audio al cambiar.
+            if self.last_occlusion_check.elapsed() >= std::time::Duration::from_millis(150) {
+                self.last_occlusion_check = std::time::Instant::now();
+                let ojo = match eye_game_opt {
+                    Some(e) => [e[0], e[1], e[2]],
+                    None => [eye_scene[0], eye_scene[1], eye_scene[2]],
+                };
+                let fuentes = self.audio_system.live_3d_sources();
+                if !fuentes.is_empty() {
+                    if let Ok(mut physics) = self.physics_world.lock() {
+                        for (handle, pos) in fuentes {
+                            let delta = [
+                                pos[0] - ojo[0],
+                                pos[1] - ojo[1],
+                                pos[2] - ojo[2],
+                            ];
+                            let dist = (delta[0] * delta[0]
+                                + delta[1] * delta[1]
+                                + delta[2] * delta[2])
+                                .sqrt();
+                            let ocluida = if dist > 0.35 {
+                                let dir = [
+                                    delta[0] / dist,
+                                    delta[1] / dist,
+                                    delta[2] / dist,
+                                ];
+                                physics
+                                    .cast_ray_masked(ojo, dir, dist - 0.3, u32::MAX, 0)
+                                    .is_some()
+                            } else {
+                                false
+                            };
+                            if self.occlusion_applied.get(&handle) != Some(&ocluida) {
+                                self.occlusion_applied.insert(handle, ocluida);
+                                self.audio_system
+                                    .set_source_occlusion(handle, ocluida);
+                            }
+                        }
+                    }
+                }
             }
 
             // Fase 2: estadísticas del frame para la tool MCP.

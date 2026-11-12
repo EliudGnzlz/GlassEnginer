@@ -223,9 +223,32 @@ impl McpServer {
                                     "pitch": {
                                         "type": "number",
                                         "description": "Factor de tono/frecuencia (default 1.0)"
+                                    },
+                                    "bus": {
+                                        "type": "string",
+                                        "enum": ["master", "music", "sfx"],
+                                        "description": "Bus de destino (Fase 3, default sfx)"
+                                    },
+                                    "looping": {
+                                        "type": "boolean",
+                                        "description": "Reproducir en bucle (default false)"
                                     }
                                 },
                                 "required": ["clip"]
+                            }
+                        },
+                        {
+                            "name": "glass_audio_buses",
+                            "description": "Jerarquía de buses de audio (Fase 3): Master, Music y SFX con volumen base, volumen efectivo y estado de ducking, más las fuentes vivas con su bus y su oclusión. Sin 'action' solo consulta. Con action=set_volume fija el volumen base de un bus; con action=duck dispara el ducking de un bus (factor amount durante duration_secs).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "action": { "type": "string", "enum": ["set_volume", "duck"] },
+                                    "bus": { "type": "string", "enum": ["master", "music", "sfx"] },
+                                    "volume": { "type": "number" },
+                                    "amount": { "type": "number" },
+                                    "duration_secs": { "type": "number" }
+                                }
                             }
                         },
                         {
@@ -1942,6 +1965,7 @@ impl McpServer {
                         volume: 1.0,
                         pitch: 1.0,
                         is_playing: false,
+                        bus: "sfx".to_string(),
                     });
                 }
 
@@ -2028,11 +2052,18 @@ impl McpServer {
                     }
                 });
 
+                let looping = args.get("looping").and_then(|l| l.as_bool()).unwrap_or(false);
+                let bus = args
+                    .get("bus")
+                    .and_then(|b| b.as_str())
+                    .and_then(glass_audio::BusId::from_name)
+                    .unwrap_or(glass_audio::BusId::Sfx);
+
                 let audio_sys = self.get_audio();
                 let handle = if let Some(p) = pos {
-                    audio_sys.play_3d(clip, p, volume, pitch, false)
+                    audio_sys.play_3d_on_bus(clip, p, volume, pitch, looping, bus)
                 } else {
-                    audio_sys.play_2d(clip, volume, pitch, false)
+                    audio_sys.play_2d_on_bus(clip, volume, pitch, looping, bus)
                 };
 
                 log::info!("MCP glass_play_audio: Reproduciendo clip '{}' (handle={}, 3D={:?}, vol={}, pitch={})", clip, handle, pos, volume, pitch);
@@ -2047,6 +2078,71 @@ impl McpServer {
                             }
                         ],
                         "handle": handle
+                    }),
+                )
+            }
+
+            "glass_audio_buses" => {
+                let audio_sys = self.get_audio();
+                if let Some(action) = args.get("action").and_then(|a| a.as_str()) {
+                    let bus_nombre = args.get("bus").and_then(|b| b.as_str()).unwrap_or("");
+                    let bus = match glass_audio::BusId::from_name(bus_nombre) {
+                        Some(b) => b,
+                        None => return McpResponse::invalid_params(id, "Field 'bus' must be 'master', 'music' or 'sfx'"),
+                    };
+                    match action {
+                        "set_volume" => {
+                            let volume = match args.get("volume").and_then(|v| v.as_f64()) {
+                                Some(v) => v as f32,
+                                None => return McpResponse::invalid_params(id, "Field 'volume' is required for set_volume"),
+                            };
+                            audio_sys.set_bus_volume(bus, volume);
+                        }
+                        "duck" => {
+                            let amount = args.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.2) as f32;
+                            let duration = args.get("duration_secs").and_then(|v| v.as_f64()).unwrap_or(3.0) as f32;
+                            audio_sys.duck_bus(bus, amount, duration);
+                        }
+                        _otro => return McpResponse::invalid_params(id, "Unknown action"),
+                    }
+                }
+                let buses: Vec<_> = audio_sys
+                    .bus_snapshot()
+                    .iter()
+                    .map(|b| {
+                        json!({
+                            "name": b.name,
+                            "volume": b.volume,
+                            "effective_volume": b.effective_volume,
+                            "ducking": b.ducking,
+                            "duck_factor": b.duck_factor
+                        })
+                    })
+                    .collect();
+                let sources: Vec<_> = audio_sys
+                    .sources_snapshot()
+                    .iter()
+                    .map(|(h, info)| {
+                        json!({
+                            "handle": h,
+                            "bus": info.bus.name(),
+                            "position": info.position,
+                            "occluded": info.occluded
+                        })
+                    })
+                    .collect();
+                let datos = json!({
+                    "backend": if audio_sys.is_null_backend { "null" } else { "kira" },
+                    "buses": buses,
+                    "sources": sources
+                });
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&datos).unwrap()
+                        }]
                     }),
                 )
             }
