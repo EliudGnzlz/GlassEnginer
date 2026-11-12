@@ -1068,6 +1068,10 @@ pub struct SceneState {
     pub next_entity_id: u64,
     pub viewport_snapshot_png: Option<Vec<u8>>,
     pub shaders_reloaded_flag: bool,
+    /// Caché SoA de transforms (Fase 7): la resolución de mundos
+    /// trabaja sobre arrays contiguos; la fuente autoral sigue
+    /// siendo `EntityData.transform`.
+    pub transform_store: std::cell::RefCell<crate::transforms::TransformStore>,
 }
 
 impl Default for SceneState {
@@ -1082,6 +1086,7 @@ impl Default for SceneState {
             next_entity_id: 5,
             viewport_snapshot_png: None,
             shaders_reloaded_flag: false,
+            transform_store: std::cell::RefCell::new(crate::transforms::TransformStore::new()),
         }
     }
 }
@@ -1412,63 +1417,23 @@ impl SceneState {
     ///
     /// Entidades cuyo padre no existe en la escena se tratan como raíces.
     pub fn compute_world_matrices(&self) -> std::collections::HashMap<u64, [f32; 16]> {
-        use std::collections::HashMap;
-
-        let mut out: HashMap<u64, [f32; 16]> = HashMap::with_capacity(self.entities.len());
-        let mut pending: Vec<&EntityData> = self.entities.iter().collect();
-
-        // Pasada topológica: en cada vuelta se resuelven todas las entidades
-        // cuyo padre ya esté resuelto (o que no tengan padre).
-        let mut last_len = pending.len() + 1;
-        while !pending.is_empty() && pending.len() < last_len {
-            last_len = pending.len();
-            let mut still_pending = Vec::with_capacity(pending.len());
-
-            for ent in pending {
-                let parent_world = match ent.parent {
-                    None => Some(crate::math::mat4_identity()),
-                    Some(pid) => out.get(&pid).copied(),
-                };
-
-                match parent_world {
-                    Some(pw) => {
-                        let local = crate::math::mat4_from_trs_quat(
-                            ent.transform.position,
-                            ent.transform.rotation_quat(),
-                            ent.transform.scale,
-                        );
-                        out.insert(ent.id, crate::math::mat4_mul(pw, local));
-                    }
-                    // El padre aún no está resuelto: se intenta en la vuelta siguiente.
-                    None => still_pending.push(ent),
-                }
-            }
-
-            pending = still_pending;
+        let inicio = std::time::Instant::now();
+        let mut store = self.transform_store.borrow_mut();
+        if store.structure_differs(self) {
+            store.rebuild(self);
+        } else {
+            store.refresh_locals(self);
         }
-
-        // Lo que quede sin resolver sólo puede ser un ciclo o una cadena que
-        // depende de un padre inexistente. Se resuelve como raíz para que nada
-        // desaparezca de la escena.
-        for ent in pending {
-            log::warn!(
-                "Entidad {} no pudo resolver su jerarquía (ciclo o padre inexistente); \
-                 se renderiza como raíz.",
-                ent.id
-            );
-            out.insert(
-                ent.id,
-                crate::math::mat4_from_trs_quat(
-                    ent.transform.position,
-                    ent.transform.rotation_quat(),
-                    ent.transform.scale,
-                ),
-            );
-        }
-
-        out
+        let hechas = store.compute_world();
+        let mapa = store.world_map();
+        crate::transform_stats::record_pass(
+            store.len() as u32,
+            hechas as u32,
+            store.max_depth,
+            inicio.elapsed().as_micros() as u64,
+        );
+        mapa
     }
-
     pub fn get_entity(&self, id: u64) -> Option<&EntityData> {
         self.entities.iter().find(|e| e.id == id)
     }

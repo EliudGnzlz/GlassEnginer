@@ -298,6 +298,14 @@ impl McpServer {
                             }
                         },
                         {
+                            "name": "glass_transform_stats",
+                            "description": "Estadísticas de la resolución de transforms SoA (Fase 7): entidades y recomputadas de la última pasada, profundidad máxima de la jerarquía, microsegundos de la pasada y total de pasadas desde el arranque.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
                             "name": "glass_asset_validate",
                             "description": "Valida un asset de modelo (Fase 6): conteos del GLB, objetos, instancias enlazadas (nodos que comparten malla), grupos LOD por sufijo _LOD<n>, colecciones/prefabs del sidecar del bridge y frescura (si la fuente .blend/.fbx cambió desde la exportación, por SHA-256). Acepta la ruta del .blend/.fbx o la del .glb bajo assets/.",
                             "inputSchema": {
@@ -2447,6 +2455,26 @@ impl McpServer {
                     "scale_factor": scale,
                     "width": width,
                     "height": height,
+                });
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&datos).unwrap()
+                        }]
+                    }),
+                )
+            }
+
+            "glass_transform_stats" => {
+                let s = glass_core::transform_stats::snapshot();
+                let datos = json!({
+                    "entities": s.entities,
+                    "recomputed": s.recomputed,
+                    "max_depth": s.max_depth,
+                    "last_micros": s.last_micros,
+                    "total_passes": s.total_passes,
                 });
                 McpResponse::success(
                     id,
