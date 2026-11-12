@@ -12,7 +12,9 @@ namespace GlassEngine.Core.Scripts
         // Ids de las entidades de la escena escaparate
         private const ulong SOL = 2;
         private const ulong EMISOR_LLUVIA = 50;
+        private const ulong EMISOR_LLUVIA_FINA = 54;
         private const ulong EMISOR_ARENA = 51;
+        private const ulong EMISOR_POLVO = 55;
         private const ulong MURO_POLVO = 52;
         private const ulong BOLA = 9;
 
@@ -115,9 +117,22 @@ namespace GlassEngine.Core.Scripts
         private void AplicarClima(bool tormenta)
         {
             RuntimeBridge.SetEntityActive(EMISOR_LLUVIA, !tormenta);
+            RuntimeBridge.SetEntityActive(EMISOR_LLUVIA_FINA, !tormenta);
             RuntimeBridge.SetEntityActive(EMISOR_ARENA, tormenta);
+            RuntimeBridge.SetEntityActive(EMISOR_POLVO, tormenta);
             RuntimeBridge.SetEntityActive(MURO_POLVO, tormenta);
-            RuntimeBridge.LightSetIntensity(SOL, tormenta ? 0.45f : 1.0f);
+            // Sol atenuado de verdad en tormenta y niebla a juego:
+            // arena cálida y cercana; en lluvia, la niebla fría
+            // autorada de la escena.
+            RuntimeBridge.LightSetIntensity(SOL, tormenta ? 0.35f : 1.0f);
+            if (tormenta)
+            {
+                RuntimeBridge.SetFog(0.66f, 0.52f, 0.32f, 9f, 48f);
+            }
+            else
+            {
+                RuntimeBridge.SetFog(0.55f, 0.62f, 0.72f, 20f, 60f);
+            }
         }
     }
 }
