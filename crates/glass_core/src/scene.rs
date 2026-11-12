@@ -104,6 +104,11 @@ pub struct MeshData {
     /// color de la entidad y los valores históricos).
     #[serde(default)]
     pub material: String,
+    /// Valores de las propiedades del shader de grafo de esta entidad
+    /// (solo tienen efecto si `shader` es "graph:<nombre>" y el grafo
+    /// declara esas propiedades; ver glass_core::shader_graph).
+    #[serde(default)]
+    pub shader_properties: std::collections::HashMap<String, serde_json::Value>,
 }
 
 impl Default for MeshData {
@@ -114,6 +119,7 @@ impl Default for MeshData {
             model: String::new(),
             shader: "triangle.vert.spv".into(),
             material: String::new(),
+            shader_properties: Default::default(),
         }
     }
 }
@@ -1231,6 +1237,7 @@ impl SceneState {
                     shader: "triangle.vert.spv".into(),
                     model: String::new(),
                     material: String::new(),
+                    shader_properties: Default::default(),
                 });
             }
             true

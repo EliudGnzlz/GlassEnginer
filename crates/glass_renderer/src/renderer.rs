@@ -17,6 +17,11 @@ const FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/triangle.frag.sp
 const MESH_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/mesh.vert.spv");
 const MESH_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/mesh.frag.spv");
 const PBR_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/pbr.vert.spv");
+/// Fragmento de recorte alfa para la profundidad de grafos con la
+/// propiedad especial `alpha_clip` (Fase 2S).
+const DEPTH_CLIP_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/depth_clip.frag.spv");
+const OUTLINE_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/outline.vert.spv");
+const OUTLINE_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/outline.frag.spv");
 const PORTAL_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/portal.vert.spv");
 const PORTAL_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/portal.frag.spv");
 const PBR_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/pbr.frag.spv");
@@ -36,6 +41,10 @@ const PBR_LEGACY_FRAG_SPV: &[u8] =
 pub struct ShadowCasters<'a> {
     pub statics: &'a [(&'a GpuMesh, [f32; 16])],
     pub skinned: &'a [(&'a GpuMesh, [f32; 16], vk::DescriptorSet)],
+    /// Proyectores cuyo material es un grafo con pase Shadow (Fase 2S):
+    /// (malla, matriz de modelo, nombre del grafo, set de texturas del
+    /// grafo, umbral de recorte alfa si el grafo declara `alpha_clip`).
+    pub graph_statics: &'a [(&'a GpuMesh, [f32; 16], String, vk::DescriptorSet, Option<f32>)],
 }
 
 /// Qué vista procesa `render_post` (la de escena o la de juego).
@@ -140,6 +149,7 @@ pub type MeshDrawItem<'a> = (
     vk::DescriptorSet,
     Option<String>,
     (u32, u32),
+    Option<vk::DescriptorSet>,
 );
 
 const IDENTITY_MAT4: [f32; 16] = [
@@ -283,6 +293,18 @@ fn create_lm_data_set_layout(
     unsafe { device.create_descriptor_set_layout(&info, None) }
 }
 
+/// Una entrada viva del `graph_props_pool`: el set asignado, el buffer
+/// CpuToGpu que respalda su binding 1 y el puntero mapeado para que
+/// `update_graph_props_set` pueda volcar datos sin reabrir el mapeo.
+pub struct GraphPropsEntry {
+    pub set: vk::DescriptorSet,
+    pub buffer: vk::Buffer,
+    #[allow(dead_code)]
+    pub allocation: Option<Allocation>,
+    pub mapped: *mut u8,
+    pub size: u64,
+}
+
 pub struct GlassRenderer {
     pub device: Arc<ash::Device>,
     pub allocator: Arc<Mutex<Allocator>>,
@@ -372,6 +394,19 @@ pub struct GlassRenderer {
     /// `render_views`, tras la espera del fence (el mismo patrón de
     /// sincronización que los `JointBuffer`: un frame en vuelo).
     pub graph_globals_layout: vk::DescriptorSetLayout,
+    /// Pipelines de profundidad por grafo con pase Shadow (Fase 2S):
+    /// la etapa de vértices del grafo contra el render pass de sombras
+    /// del sol. `graph_depth_clip_pipelines` es la variante con el
+    /// fragmento de recorte alfa (grafos con propiedad `alpha_clip`).
+    pub graph_depth_pipelines: std::collections::HashMap<String, (vk::Pipeline, vk::PipelineLayout)>,
+    pub graph_depth_clip_pipelines: std::collections::HashMap<String, (vk::Pipeline, vk::PipelineLayout)>,
+    pub graph_outline_pipelines: std::collections::HashMap<String, GraphicsPipeline>,
+    pub graph_outline_pipelines_legacy: std::collections::HashMap<String, GraphicsPipeline>,
+    /// Contadores de enlaces del frame (Fase 2S, S6): se reinician al
+    /// abrir `render_views` y los acumula el bucle de mallas de cada
+    /// pase de vista.
+    pub frame_pipeline_binds: std::cell::Cell<u32>,
+    pub frame_descriptor_binds: std::cell::Cell<u32>,
     /// Pool del que sale el único set global (no se libera nunca).
     pub graph_globals_pool: vk::DescriptorPool,
     /// El set global ya enlazado al buffer; se enlaza en el índice 1 en
@@ -383,6 +418,26 @@ pub struct GlassRenderer {
     #[allow(dead_code)]
     graph_globals_allocation: Option<Allocation>,
     graph_globals_mapped: *mut u8,
+    /// Buffer de respaldo del binding 1 (propiedades de grafo) para las
+    /// mallas que dibujan con el set global en vez de un set de
+    /// instancia propio: 32 vec4 a cero, el tope de propiedades que
+    /// `GraphPropsEntry` puede declarar. Sin este buffer el binding 1
+    /// del set global quedaría sin escribir y la validación de Vulkan
+    /// fallaría en cuanto el layout exige dos bindings.
+    pub graph_props_dummy_buffer: vk::Buffer,
+    #[allow(dead_code)]
+    graph_props_dummy_allocation: Option<Allocation>,
+    #[allow(dead_code)]
+    graph_props_dummy_mapped: *mut u8,
+    /// Pool de sets de propiedades por instancia (CL-2S2a): cada malla
+    /// que publica sus propias propiedades de grafo (distintas del
+    /// canal global) se lleva un set de aquí en vez de compartir
+    /// `graph_globals_set`. 64 sets, 128 descriptores de UBO (2 por
+    /// set, el máximo de bindings del layout).
+    pub graph_props_pool: vk::DescriptorPool,
+    /// Entradas vivas del pool anterior, indexadas por el
+    /// `vk::DescriptorSet` que `create_graph_props_set` devolvió.
+    pub graph_props_sets: Vec<GraphPropsEntry>,
     /// Valor actual del canal global, en el lado CPU: el punto de
     /// interacción (posición de mundo + radio en el w) seguido de la
     /// forma de su huella (semiejes X/Z de la caja, rotación Y en
@@ -770,19 +825,40 @@ impl GlassRenderer {
         // UBO `GraphGlobals` (dos vec4). Se crea una sola vez y lo comparten
         // todos los pipelines de grafo; ningún otro pipeline lo declara.
         // Mismo patrón de buffer mapeado CpuToGpu que los JointBuffer.
-        let (graph_globals_layout, graph_globals_pool, graph_globals_set, graph_globals_buffer, graph_globals_allocation, graph_globals_mapped) =
-            unsafe {
-                let binding = [vk::DescriptorSetLayoutBinding::default()
-                    .binding(0)
-                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)];
-                let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&binding);
+        let (
+            graph_globals_layout,
+            graph_globals_pool,
+            graph_globals_set,
+            graph_globals_buffer,
+            graph_globals_allocation,
+            graph_globals_mapped,
+            graph_props_dummy_buffer,
+            graph_props_dummy_allocation,
+            graph_props_dummy_mapped,
+        ) = unsafe {
+                let bindings = [
+                    vk::DescriptorSetLayoutBinding::default()
+                        .binding(0)
+                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                        .descriptor_count(1)
+                        .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+                    // Binding 1: propiedades de grafo (CL-2S2a). Todos los
+                    // pipelines de grafo lo declaran en el mismo layout que
+                    // el canal de interacción, así que el set global y
+                    // cualquier set de instancia de `graph_props_pool` son
+                    // intercambiables desde el punto de vista del layout.
+                    vk::DescriptorSetLayoutBinding::default()
+                        .binding(1)
+                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                        .descriptor_count(1)
+                        .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+                ];
+                let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
                 let layout = device.create_descriptor_set_layout(&layout_info, None)?;
 
                 let pool_sizes = [vk::DescriptorPoolSize::default()
                     .ty(vk::DescriptorType::UNIFORM_BUFFER)
-                    .descriptor_count(1)];
+                    .descriptor_count(2)];
                 let pool_info = vk::DescriptorPoolCreateInfo::default()
                     .pool_sizes(&pool_sizes)
                     .max_sets(1);
@@ -808,6 +884,39 @@ impl GlassRenderer {
                     .map_err(RendererError::Allocator)?;
                 device.bind_buffer_memory(buffer, allocation.memory(), allocation.offset())?;
 
+                // Buffer de respaldo del binding 1: 512 B (32 vec4), el
+                // tope de propiedades que declara un `GraphPropsEntry`.
+                let props_dummy_size = (std::mem::size_of::<[f32; 4]>() * 32) as u64;
+                let props_dummy_buffer_info = vk::BufferCreateInfo::default()
+                    .size(props_dummy_size)
+                    .usage(vk::BufferUsageFlags::UNIFORM_BUFFER)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE);
+                let props_dummy_buffer = device.create_buffer(&props_dummy_buffer_info, None)?;
+                let props_dummy_mem_reqs = device.get_buffer_memory_requirements(props_dummy_buffer);
+                let props_dummy_allocation = allocator
+                    .lock()
+                    .unwrap()
+                    .allocate(&AllocationCreateDesc {
+                        name: "graph_props_dummy",
+                        requirements: props_dummy_mem_reqs,
+                        location: MemoryLocation::CpuToGpu,
+                        linear: true,
+                        allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+                    })
+                    .map_err(RendererError::Allocator)?;
+                device.bind_buffer_memory(
+                    props_dummy_buffer,
+                    props_dummy_allocation.memory(),
+                    props_dummy_allocation.offset(),
+                )?;
+                let props_dummy_mapped = props_dummy_allocation
+                    .mapped_ptr()
+                    .map(|p| p.as_ptr() as *mut u8)
+                    .ok_or(RendererError::Descriptor(
+                        "el buffer de propiedades de grafo no quedó mapeado".into(),
+                    ))?;
+                std::ptr::write_bytes(props_dummy_mapped, 0, props_dummy_size as usize);
+
                 let layouts = [layout];
                 let set_alloc_info = vk::DescriptorSetAllocateInfo::default()
                     .descriptor_pool(pool)
@@ -821,11 +930,22 @@ impl GlassRenderer {
                     .buffer(buffer)
                     .offset(0)
                     .range(size)];
-                let write = [vk::WriteDescriptorSet::default()
-                    .dst_set(set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                    .buffer_info(&buffer_desc)];
+                let props_dummy_desc = [vk::DescriptorBufferInfo::default()
+                    .buffer(props_dummy_buffer)
+                    .offset(0)
+                    .range(props_dummy_size)];
+                let write = [
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(0)
+                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                        .buffer_info(&buffer_desc),
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(set)
+                        .dst_binding(1)
+                        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                        .buffer_info(&props_dummy_desc),
+                ];
                 device.update_descriptor_sets(&write, &[]);
 
                 let mapped = allocation
@@ -842,8 +962,32 @@ impl GlassRenderer {
                     mapped,
                     std::mem::size_of::<[f32; 8]>(),
                 );
-                (layout, pool, set, buffer, Some(allocation), mapped)
+                (
+                    layout,
+                    pool,
+                    set,
+                    buffer,
+                    Some(allocation),
+                    mapped,
+                    props_dummy_buffer,
+                    Some(props_dummy_allocation),
+                    props_dummy_mapped,
+                )
             };
+
+        // Pool de sets de propiedades por instancia (CL-2S2a): comparte
+        // layout con el canal global pero cada instancia que lo pida
+        // obtiene su propio set y su propio buffer de binding 1.
+        let graph_props_pool = unsafe {
+            let pool_sizes = [vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(128)];
+            let pool_info = vk::DescriptorPoolCreateInfo::default()
+                .pool_sizes(&pool_sizes)
+                .max_sets(64);
+            device.create_descriptor_pool(&pool_info, None)?
+        };
+        let graph_props_sets: Vec<GraphPropsEntry> = Vec::new();
 
         // 5c. Luces puntuales: pool + buffer + set del UBO (set 3).
         // Mismo patrón que 5b; el contenido inicial es todo ceros
@@ -1157,9 +1301,20 @@ impl GlassRenderer {
             graph_globals_layout,
             graph_globals_pool,
             graph_globals_set,
+            graph_depth_pipelines: std::collections::HashMap::new(),
+            graph_depth_clip_pipelines: std::collections::HashMap::new(),
+            graph_outline_pipelines: std::collections::HashMap::new(),
+            graph_outline_pipelines_legacy: std::collections::HashMap::new(),
+            frame_pipeline_binds: std::cell::Cell::new(0),
+            frame_descriptor_binds: std::cell::Cell::new(0),
             graph_globals_buffer,
             graph_globals_allocation,
             graph_globals_mapped,
+            graph_props_dummy_buffer,
+            graph_props_dummy_allocation,
+            graph_props_dummy_mapped,
+            graph_props_pool,
+            graph_props_sets,
             graph_globals: glass_core::shader_graph::INTERACTION_GLOBALS_INACTIVE,
             point_lights_layout,
             point_lights_pool,
@@ -1318,6 +1473,13 @@ impl GlassRenderer {
     /// `render_views`, tras la espera del fence, y el pase de
     /// profundidad se graba con los proyectores que acompañen a esa
     /// llamada. Sin luz en la escena, la app publica `params.w = 0`.
+    /// Contadores de enlaces acumulados por el último `render_views`
+    /// (Fase 2S, S6): (pipelines enlazados, descriptor sets enlazados)
+    /// en los bucles de mallas de los pases de vista.
+    pub fn frame_bind_counts(&self) -> (u32, u32) {
+        (self.frame_pipeline_binds.get(), self.frame_descriptor_binds.get())
+    }
+
     pub fn set_shadow_frame(&mut self, light_vp: [f32; 16], params: [f32; 4]) {
         self.shadow_vp = light_vp;
         self.shadow_params = params;
@@ -1532,7 +1694,9 @@ impl GlassRenderer {
             self.graph_globals_layout,
             transparent,
             Some(self.shadow.dummy_layout),
+            Some(self.point_lights_layout),
         )?;
+        let graph_set0 = pipeline.descriptor_set_layout;
         self.custom_pipelines.insert(name.to_string(), pipeline);
         // Gemelo contra el render pass LDR para la ruta sin post
         // (mismos SPV: los grafos no mapean tono en ninguna ruta).
@@ -1544,8 +1708,104 @@ impl GlassRenderer {
             self.graph_globals_layout,
             transparent,
             Some(self.shadow.dummy_layout),
+            Some(self.point_lights_layout),
         )?;
         self.custom_pipelines_legacy.insert(name.to_string(), pipeline_legacy);
+        // Pipelines de profundidad del grafo (Fase 2S): si el grafo
+        // declara el pase Shadow, su sombra del sol se proyecta con su
+        // etapa de vértices (desplazamiento incluido); un grafo sin
+        // etapa propia usa el vértice PBR estándar, como en el pase
+        // hacia adelante. Con la propiedad especial `alpha_clip`
+        // (Float) se crea además la variante con recorte alfa.
+        {
+            let vert = vert_spv.unwrap_or(PBR_VERT_SPV);
+            let pases = glass_core::shader_graph::graph_passes(name)
+                .unwrap_or_else(|| vec![glass_core::shader_graph::PassKind::Forward]);
+            if pases.contains(&glass_core::shader_graph::PassKind::Shadow) {
+                if let Some(set0) = graph_set0 {
+                    match GraphicsPipeline::new_depth_pipeline_graph(
+                        self.device.clone(),
+                        self.shadow.render_pass,
+                        vert,
+                        None,
+                        set0,
+                        self.graph_globals_layout,
+                    ) {
+                        Ok(p) => {
+                            self.graph_depth_pipelines.insert(name.to_string(), p);
+                        }
+                        Err(e) => log::warn!(
+                            "Renderer: fallo creando la profundidad de sombra del grafo '{}': {}",
+                            name, e
+                        ),
+                    }
+                    let con_clip = glass_core::shader_graph::graph_schema(name)
+                        .map(|props| {
+                            props.iter().any(|p| {
+                                p.name == "alpha_clip"
+                                    && matches!(p.kind, glass_core::shader_graph::PropertyKind::Float)
+                            })
+                        })
+                        .unwrap_or(false);
+                    if con_clip {
+                        match GraphicsPipeline::new_depth_pipeline_graph(
+                            self.device.clone(),
+                            self.shadow.render_pass,
+                            vert,
+                            Some(DEPTH_CLIP_FRAG_SPV),
+                            set0,
+                            self.graph_globals_layout,
+                        ) {
+                            Ok(p) => {
+                                self.graph_depth_clip_pipelines.insert(name.to_string(), p);
+                            }
+                            Err(e) => log::warn!(
+                                "Renderer: fallo creando la profundidad con recorte del grafo '{}': {}",
+                                name, e
+                            ),
+                        }
+                    }
+                }
+            }
+        }
+        // Pipelines de contorno (Fase 2S, S5): si el grafo declara el
+        // pase Outline, su gemelo de contorno en ambas rutas (HDR y
+        // LDR). La app los pide con el nombre "outline:<grafo>".
+        {
+            let pases_o = glass_core::shader_graph::graph_passes(name)
+                .unwrap_or_else(|| vec![glass_core::shader_graph::PassKind::Forward]);
+            if pases_o.contains(&glass_core::shader_graph::PassKind::Outline) {
+                match GraphicsPipeline::new_outline_pipeline(
+                    self.device.clone(),
+                    self.offscreen.render_pass,
+                    OUTLINE_VERT_SPV,
+                    OUTLINE_FRAG_SPV,
+                ) {
+                    Ok(p) => {
+                        self.graph_outline_pipelines.insert(name.to_string(), p);
+                    }
+                    Err(e) => log::warn!(
+                        "Renderer: fallo creando el contorno del grafo '{}': {}",
+                        name, e
+                    ),
+                }
+                match GraphicsPipeline::new_outline_pipeline(
+                    self.device.clone(),
+                    self.final_offscreen.render_pass,
+                    OUTLINE_VERT_SPV,
+                    OUTLINE_FRAG_SPV,
+                ) {
+                    Ok(p) => {
+                        self.graph_outline_pipelines_legacy
+                            .insert(name.to_string(), p);
+                    }
+                    Err(e) => log::warn!(
+                        "Renderer: fallo creando el contorno LDR del grafo '{}': {}",
+                        name, e
+                    ),
+                }
+            }
+        }
         log::info!(
             "Renderer: material de grafo '{}' registrado{}{}",
             name,
@@ -1617,18 +1877,146 @@ impl GlassRenderer {
     /// cada dibujo, como el set 0 de textura: los layouts de grafo y PBR
     /// son handles distintos aunque el set 0 tenga el mismo contenido,
     /// así que ningún enlace se hereda entre pipelines.
-    unsafe fn bind_graph_globals(&self, cmd: vk::CommandBuffer, pipe: &GraphicsPipeline) {
+    unsafe fn bind_graph_globals(
+        &self,
+        cmd: vk::CommandBuffer,
+        pipe: &GraphicsPipeline,
+        props_set: Option<vk::DescriptorSet>,
+    ) {
         if pipe.globals_set_layout.is_some() {
             self.device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
                 pipe.layout,
                 1,
-                &[self.graph_globals_set],
+                &[props_set.unwrap_or(self.graph_globals_set)],
                 &[],
             );
         }
     }
+
+    /// Crea un buffer y un set de propiedades de grafo para una
+    /// instancia (CL-2S2a): el binding 0 comparte el buffer de
+    /// `graph_globals` (el canal de interacción sigue siendo global),
+    /// el binding 1 apunta a un buffer propio con `data`. `data` se
+    /// copia tal cual; si es menor de 16 B el buffer se crea igual con
+    /// 16 B (el mínimo de un UBO con sentido) y solo se copian los
+    /// bytes de `data`. Devuelve `None` y loguea si falla la creación
+    /// del buffer, la asignación de memoria o el mapeo.
+    pub fn create_graph_props_set(&mut self, data: &[u8]) -> Option<vk::DescriptorSet> {
+        let size = (data.len() as u64).max(16);
+        unsafe {
+            let buffer_info = vk::BufferCreateInfo::default()
+                .size(size)
+                .usage(vk::BufferUsageFlags::UNIFORM_BUFFER)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            let buffer = match self.device.create_buffer(&buffer_info, None) {
+                Ok(b) => b,
+                Err(e) => {
+                    log::error!("graph_props: fallo al crear buffer: {e:?}");
+                    return None;
+                }
+            };
+            let mem_reqs = self.device.get_buffer_memory_requirements(buffer);
+            let allocation = match self.allocator.lock().unwrap().allocate(&AllocationCreateDesc {
+                name: "graph_props_instance",
+                requirements: mem_reqs,
+                location: MemoryLocation::CpuToGpu,
+                linear: true,
+                allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+            }) {
+                Ok(a) => a,
+                Err(e) => {
+                    log::error!("graph_props: fallo al asignar memoria: {e:?}");
+                    self.device.destroy_buffer(buffer, None);
+                    return None;
+                }
+            };
+            if let Err(e) = self
+                .device
+                .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
+            {
+                log::error!("graph_props: fallo al enlazar memoria: {e:?}");
+                self.device.destroy_buffer(buffer, None);
+                return None;
+            }
+            let mapped = match allocation.mapped_ptr() {
+                Some(p) => p.as_ptr() as *mut u8,
+                None => {
+                    log::error!("graph_props: el buffer de instancia no quedó mapeado");
+                    self.device.destroy_buffer(buffer, None);
+                    return None;
+                }
+            };
+            std::ptr::copy_nonoverlapping(data.as_ptr(), mapped, data.len());
+
+            let layouts = [self.graph_globals_layout];
+            let set_alloc_info = vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(self.graph_props_pool)
+                .set_layouts(&layouts);
+            let set = match self.device.allocate_descriptor_sets(&set_alloc_info) {
+                Ok(mut sets) => match sets.pop() {
+                    Some(s) => s,
+                    None => {
+                        log::error!("graph_props: pool de propiedades sin sets");
+                        self.device.destroy_buffer(buffer, None);
+                        return None;
+                    }
+                },
+                Err(e) => {
+                    log::error!("graph_props: fallo al asignar set: {e:?}");
+                    self.device.destroy_buffer(buffer, None);
+                    return None;
+                }
+            };
+            let globals_desc = [vk::DescriptorBufferInfo::default()
+                .buffer(self.graph_globals_buffer)
+                .offset(0)
+                .range(std::mem::size_of::<[f32; 8]>() as u64)];
+            let props_desc = [vk::DescriptorBufferInfo::default()
+                .buffer(buffer)
+                .offset(0)
+                .range(size)];
+            let writes = [
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(&globals_desc),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(1)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(&props_desc),
+            ];
+            self.device.update_descriptor_sets(&writes, &[]);
+
+            self.graph_props_sets.push(GraphPropsEntry {
+                set,
+                buffer,
+                allocation: Some(allocation),
+                mapped,
+                size,
+            });
+            Some(set)
+        }
+    }
+
+    /// Actualiza los datos de un set creado por `create_graph_props_set`.
+    /// Copia hasta `size` bytes de `data` (los que sobren se descartan);
+    /// no hace nada si `set` no corresponde a ninguna entrada viva.
+    pub fn update_graph_props_set(&mut self, set: vk::DescriptorSet, data: &[u8]) {
+        if let Some(entry) = self.graph_props_sets.iter().find(|e| e.set == set) {
+            let len = data.len().min(entry.size as usize);
+            unsafe {
+                std::ptr::copy_nonoverlapping(data.as_ptr(), entry.mapped, len);
+            }
+        } else {
+            log::warn!("graph_props: update sobre un set desconocido");
+        }
+    }
+
+    /// Enlaza el set 1 con el UBO global cuando el pipeline del lote es
 
     /// El pipeline de un lote: el del grafo si lo pide y existe; si
     /// no, PBR. Con `legacy` (post desactivado) se usan los gemelos
@@ -1636,6 +2024,16 @@ impl GlassRenderer {
     fn pipeline_for(&self, shader_name: &Option<String>, legacy: bool) -> &GraphicsPipeline {
         match shader_name {
             Some(name) => {
+                if let Some(grafo) = name.strip_prefix("outline:") {
+                    let mapa = if legacy {
+                        &self.graph_outline_pipelines_legacy
+                    } else {
+                        &self.graph_outline_pipelines
+                    };
+                    if let Some(p) = mapa.get(grafo) {
+                        return p;
+                    }
+                }
                 if legacy {
                     self.custom_pipelines_legacy.get(name).unwrap_or(&self.pbr_pipeline_legacy)
                 } else {
@@ -1789,7 +2187,11 @@ impl GlassRenderer {
         shadow_params: [f32; 4],
     ) {
         unsafe {
-        if shadow_params[3] > 0.5 && (!casters.statics.is_empty() || !casters.skinned.is_empty()) {
+        if shadow_params[3] > 0.5
+            && (!casters.statics.is_empty()
+                || !casters.skinned.is_empty()
+                || !casters.graph_statics.is_empty())
+        {
                 self.shadow.begin_pass(&self.device, cmd);
                 if !casters.statics.is_empty() {
                     self.device.cmd_bind_pipeline(
@@ -1840,6 +2242,67 @@ impl GlassRenderer {
                         self.device.cmd_push_constants(
                             cmd,
                             self.shadow.depth_skinned_layout,
+                            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                            0,
+                            bytemuck::bytes_of(&pc),
+                        );
+                        self.device
+                            .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
+                        self.device
+                            .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
+                        self.device.cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                    }
+                }
+                if !casters.graph_statics.is_empty() {
+                    // Proyectores de grafo (Fase 2S): profundidad con la
+                    // etapa de vértices del grafo; la variante con
+                    // recorte si la entidad trae umbral `alpha_clip` y
+                    // el grafo tiene ese pipeline.
+                    let mut bound_pipe: vk::Pipeline = vk::Pipeline::null();
+                    for (mesh, model, graph, tex_set, alpha_clip) in casters.graph_statics {
+                        let elegido = match alpha_clip {
+                            Some(_) => self
+                                .graph_depth_clip_pipelines
+                                .get(graph)
+                                .or_else(|| self.graph_depth_pipelines.get(graph)),
+                            None => self.graph_depth_pipelines.get(graph),
+                        };
+                        let Some((pipe, layout)) = elegido else { continue };
+                        if bound_pipe != *pipe {
+                            self.device.cmd_bind_pipeline(
+                                cmd,
+                                vk::PipelineBindPoint::GRAPHICS,
+                                *pipe,
+                            );
+                            bound_pipe = *pipe;
+                        }
+                        self.device.cmd_bind_descriptor_sets(
+                            cmd,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            *layout,
+                            1,
+                            &[self.graph_globals_set],
+                            &[],
+                        );
+                        if alpha_clip.is_some() {
+                            self.device.cmd_bind_descriptor_sets(
+                                cmd,
+                                vk::PipelineBindPoint::GRAPHICS,
+                                *layout,
+                                0,
+                                &[*tex_set],
+                                &[],
+                            );
+                        }
+                        let pc = MeshPushConstants {
+                            mvp: glass_core::mat4_mul(self.shadow_vp, *model),
+                            model: *model,
+                            material_params: [alpha_clip.unwrap_or(0.0), 0.0, 0.0, 0.0],
+                            ..Default::default()
+                        };
+                        self.device.cmd_push_constants(
+                            cmd,
+                            *layout,
                             vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                             0,
                             bytemuck::bytes_of(&pc),
@@ -2015,7 +2478,7 @@ impl GlassRenderer {
                 // El pipeline se enlaza por lote: PBR por defecto o el
                 // material de grafo que pida la entidad.
                 let mut bound: *const GraphicsPipeline = std::ptr::null();
-                for (mesh, push_consts, tex_set, shader_name, range) in meshes {
+                for (mesh, push_consts, tex_set, shader_name, range, props_set) in meshes {
                     let pipe = self.pipeline_for(shader_name, legacy);
                     if !std::ptr::eq(bound, pipe) {
                         self.device.cmd_bind_pipeline(
@@ -2024,6 +2487,8 @@ impl GlassRenderer {
                             pipe.pipeline,
                         );
                         bound = pipe;
+                        self.frame_pipeline_binds
+                            .set(self.frame_pipeline_binds.get() + 1);
                     }
                     if *tex_set != vk::DescriptorSet::null() {
                         self.device.cmd_bind_descriptor_sets(
@@ -2035,10 +2500,30 @@ impl GlassRenderer {
                             &[],
                         );
                     }
-                    self.bind_graph_globals(cmd, pipe);
+                    self.bind_graph_globals(cmd, pipe, *props_set);
                     self.bind_shadow_set(cmd, pipe);
                     self.bind_point_lights_set(cmd, pipe);
                     self.bind_lightmap_sets(cmd, pipe);
+                    {
+                        let mut desc = 0u32;
+                        if *tex_set != vk::DescriptorSet::null() {
+                            desc += 1;
+                        }
+                        if pipe.globals_set_layout.is_some() {
+                            desc += 1;
+                        }
+                        if pipe.shadow_set_layout.is_some() {
+                            desc += 1;
+                        }
+                        if pipe.point_lights_set_layout.is_some() {
+                            desc += 1;
+                        }
+                        if pipe.lm_set_layouts.is_some() {
+                            desc += 2;
+                        }
+                        self.frame_descriptor_binds
+                            .set(self.frame_descriptor_binds.get() + desc);
+                    }
                     let push_bytes = bytemuck::bytes_of(push_consts);
                     self.device.cmd_push_constants(
                         cmd,
@@ -2115,8 +2600,8 @@ impl GlassRenderer {
     pub fn render_views(
         &mut self,
         queue: vk::Queue,
-        scene_meshes: &[(&GpuMesh, MeshPushConstants, vk::DescriptorSet, Option<String>, (u32, u32))],
-        game_meshes: Option<&[(&GpuMesh, MeshPushConstants, vk::DescriptorSet, Option<String>, (u32, u32))]>,
+        scene_meshes: &[MeshDrawItem],
+        game_meshes: Option<&[MeshDrawItem]>,
         scene_skinned: &[SkinnedDrawItem<'_>],
         game_skinned: Option<&[SkinnedDrawItem<'_>]>,
         shadow_casters: Option<&ShadowCasters<'_>>,
@@ -2126,6 +2611,9 @@ impl GlassRenderer {
         unsafe {
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
             self.device.reset_fences(&[self.fence])?;
+            // Contadores de enlaces del frame (Fase 2S, S6).
+            self.frame_pipeline_binds.set(0);
+            self.frame_descriptor_binds.set(0);
 
             // Lectura de la query del frame anterior: el fence ya garantizó
             // que ese trabajo terminó, así que WAIT no bloquea. La telemetría
@@ -2287,9 +2775,9 @@ impl GlassRenderer {
         queue: vk::Queue,
         meshes: &[(&GpuMesh, [f32; 16])],
     ) -> Result<(), RendererError> {
-        let pc_list: Vec<(&GpuMesh, MeshPushConstants, vk::DescriptorSet, Option<String>, (u32, u32))> = meshes
+        let pc_list: Vec<MeshDrawItem> = meshes
             .iter()
-            .map(|(m, mvp)| (*m, MeshPushConstants::new(*mvp), self.fallback_set, None, (0, m.index_count)))
+            .map(|(m, mvp)| (*m, MeshPushConstants::new(*mvp), self.fallback_set, None, (0, m.index_count), None))
             .collect();
         self.render_views(queue, &pc_list, None, &[], None, None, &[], None)
     }
@@ -2662,6 +3150,17 @@ impl Drop for GlassRenderer {
             }
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_descriptor_pool(self.joints_pool, None);
+            self.device.destroy_buffer(self.graph_globals_buffer, None);
+            self.device.destroy_buffer(self.graph_props_dummy_buffer, None);
+            self.device
+                .destroy_descriptor_pool(self.graph_globals_pool, None);
+            for entry in self.graph_props_sets.drain(..) {
+                self.device.destroy_buffer(entry.buffer, None);
+            }
+            self.device
+                .destroy_descriptor_pool(self.graph_props_pool, None);
+            self.device
+                .destroy_descriptor_set_layout(self.graph_globals_layout, None);
         }
         self.ui.destroy(&mut *self.allocator.lock().unwrap());
         if let Some(ui_img) = &mut self.ui_images {

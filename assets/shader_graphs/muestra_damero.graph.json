@@ -1,0 +1,43 @@
+{
+  "name": "muestra_damero",
+  "nodes": [
+    {
+      "id": 1,
+      "kind": {
+        "kind": "TextureSample",
+        "slot": 1
+      },
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "id": 2,
+      "kind": {
+        "kind": "Output"
+      },
+      "position": [
+        200,
+        0
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from_node": 1,
+      "to_node": 2,
+      "to_input": "color"
+    }
+  ],
+  "transparent": false,
+  "properties": [
+    {
+      "name": "mascara",
+      "kind": "Texture2D",
+      "default": {
+        "Texture": "cubo_checker_opaco"
+      }
+    }
+  ]
+}

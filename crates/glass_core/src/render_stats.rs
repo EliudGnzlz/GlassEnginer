@@ -15,6 +15,16 @@ pub struct RenderStatsSnapshot {
     pub scene_draw_calls: u32,
     /// Draw calls del pase de sombras del sol.
     pub shadow_draw_calls: u32,
+    /// Draw calls del pase de sombras con etapa de vértices de grafo
+    /// (Fase 2S).
+    pub graph_shadow_draw_calls: u32,
+    /// Draw calls del pase de contorno toon (Fase 2S, S5).
+    pub outline_draw_calls: u32,
+    /// Enlaces de pipeline en los pases de vista del frame (Fase 2S, S6).
+    pub pipeline_binds: u32,
+    /// Enlaces de descriptor set en el bucle de mallas de los pases de
+    /// vista del frame (Fase 2S, S6).
+    pub descriptor_binds: u32,
 }
 
 static STATE: OnceLock<Mutex<RenderStatsSnapshot>> = OnceLock::new();
@@ -50,6 +60,10 @@ mod tests {
             game_draw_calls: 7,
             scene_draw_calls: 10,
             shadow_draw_calls: 5,
+            graph_shadow_draw_calls: 3,
+            outline_draw_calls: 2,
+            pipeline_binds: 11,
+            descriptor_binds: 23,
         };
 
         record_render_stats(stats);
@@ -60,5 +74,9 @@ mod tests {
         assert_eq!(snapshot.game_draw_calls, 7);
         assert_eq!(snapshot.scene_draw_calls, 10);
         assert_eq!(snapshot.shadow_draw_calls, 5);
+        assert_eq!(snapshot.graph_shadow_draw_calls, 3);
+        assert_eq!(snapshot.outline_draw_calls, 2);
+        assert_eq!(snapshot.pipeline_binds, 11);
+        assert_eq!(snapshot.descriptor_binds, 23);
     }
 }

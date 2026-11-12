@@ -358,6 +358,75 @@ impl AssetCache {
         self.default_set
     }
 
+    /// La vista de imagen de la textura (modelo, índice); si no existe,
+    /// la de la textura blanca por defecto (`default_texture`). Pensada
+    /// para componer sets de grafo (`graph_texture_set`) sin depender de
+    /// que cada combinación tenga ya su propio set de 1 binding.
+    pub fn view_for_image(&self, model: Option<&str>, image: Option<usize>) -> Option<vk::ImageView> {
+        if let (Some(m), Some(i)) = (model, image) {
+            if let Some(tex) = self.textures.get(&(m.to_string(), i)) {
+                return Some(tex.image_view);
+            }
+        }
+        self.default_texture.as_ref().map(|tex| tex.image_view)
+    }
+
+    /// Aloja (del `descriptor_pool` propio) y escribe un descriptor set con
+    /// 4 bindings COMBINED_IMAGE_SAMPLER (0..=3), uno por textura de grafo.
+    /// Las entradas `None` de `views` se rellenan con la vista por defecto
+    /// (`view_for_image(None, None)`) porque el shader siempre muestrea los
+    /// 4 bindings aunque el grafo solo use alguno. `None` si falta el pool
+    /// o el sampler compartido (infraestructura aún no inicializada).
+    pub fn graph_texture_set(
+        &mut self,
+        device: &ash::Device,
+        layout: vk::DescriptorSetLayout,
+        views: [Option<vk::ImageView>; 4],
+    ) -> Option<vk::DescriptorSet> {
+        let pool = self.descriptor_pool?;
+        let sampler = self.sampler?;
+        let default_view = self.view_for_image(None, None);
+
+        let layouts = [layout];
+        let alloc_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(pool)
+            .set_layouts(&layouts);
+        let set = unsafe { device.allocate_descriptor_sets(&alloc_info) }
+            .ok()?
+            .into_iter()
+            .next()?;
+
+        let mut image_infos = [vk::DescriptorImageInfo::default(); 4];
+        let mut present = [false; 4];
+        for (binding, view_opt) in views.into_iter().enumerate() {
+            let view = match view_opt.or(default_view) {
+                Some(v) => v,
+                None => continue,
+            };
+            image_infos[binding] = vk::DescriptorImageInfo::default()
+                .sampler(sampler)
+                .image_view(view)
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+            present[binding] = true;
+        }
+        let mut writes = Vec::with_capacity(4);
+        for binding in 0..4 {
+            if !present[binding] {
+                continue;
+            }
+            writes.push(
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(binding as u32)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(std::slice::from_ref(&image_infos[binding])),
+            );
+        }
+        unsafe { device.update_descriptor_sets(&writes, &[]) };
+        Some(set)
+    }
+
     /// Marca un modelo como usado en el tick actual.
     pub fn touch(&self, name: &str) {
         let now = self.tick.load(Ordering::Relaxed);

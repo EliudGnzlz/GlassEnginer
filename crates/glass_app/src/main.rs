@@ -1428,6 +1428,22 @@ struct GlassEngineApp {
     /// Fundidos libres clip→clip en curso (bloque FSM: `CrossFade` sin
     /// controlador), por entidad.
     anim_free_fade: std::collections::HashMap<u64, FreeFadeRt>,
+    /// Estado de propiedades de grafo resueltas por entidad (Fase 2S):
+    /// el descriptor set creado y los valores empaquetados que lleva,
+    /// para no recrear/actualizar el set si no cambiaron entre frames.
+    graph_props_state: std::collections::HashMap<u64, (vk::DescriptorSet, Vec<f32>)>,
+    /// Sets de texturas de grafo (set 0 con 4 bindings) por entidad
+    /// (Fase 2S): el set creado y los nombres de textura (base + hasta
+    /// 3 de propiedades Texture2D) que lo produjeron.
+    graph_tex_state: std::collections::HashMap<u64, (vk::DescriptorSet, [String; 4])>,
+    /// Grafos cuyo material de error ya se avisó en el log (Fase 2S,
+    /// S4): el aviso de grafo no disponible se emite una sola vez
+    /// por grafo y sesión.
+    graph_error_logged: std::collections::HashSet<String>,
+    /// Grafos cuyo material es transparente (marcador .transparent
+    /// junto a su .spv): la ordenación de draws de S6 los manda al
+    /// final de cada lista para no romper la mezcla.
+    transparent_graphs: std::collections::HashSet<String>,
     /// Último instante en que se avanzaron las animaciones (para el dt).
     last_anim_instant: Instant,
     /// Buffers de articulación retirados (cambio de escena o piel con otro
@@ -1705,6 +1721,10 @@ impl GlassEngineApp {
             animator_controllers: std::collections::HashMap::new(),
             anim_pose: std::collections::HashMap::new(),
             anim_free_fade: std::collections::HashMap::new(),
+            graph_props_state: std::collections::HashMap::new(),
+            graph_tex_state: std::collections::HashMap::new(),
+            graph_error_logged: std::collections::HashSet::new(),
+            transparent_graphs: std::collections::HashSet::new(),
             last_anim_instant: Instant::now(),
             retired_joint_buffers: Vec::new(),
             player_body_handle: None,
@@ -3634,6 +3654,80 @@ let resueltos = colliders_resueltos(body, shape);
             if !evicted.is_empty() {
                 log::info!("AssetCache: {} modelos ociosos expulsados: {:?}", evicted.len(), evicted);
             }
+
+            // Sets de texturas de grafo (Fase 2S, S1): para las entidades
+            // cuyo grafo declara propiedades Texture2D, el set 0 necesita
+            // 4 bindings (base + hasta 3 texturas de propiedad). Se resuelve
+            // aquí porque crear sets exige &mut cache; el bucle de
+            // recolección solo lee self.graph_tex_state.
+            {
+                let trabajos: Vec<(u64, String, String, std::collections::HashMap<String, serde_json::Value>)> = {
+                    if let Ok(scene) = self.scene_state.lock() {
+                        scene.entities.iter().filter_map(|ent| {
+                            let mesh = ent.mesh.as_ref()?;
+                            let gname = mesh.shader.strip_prefix("graph:")?;
+                            Some((ent.id, mesh.model.clone(), gname.to_string(), mesh.shader_properties.clone()))
+                        }).collect()
+                    } else {
+                        Vec::new()
+                    }
+                };
+                for (ent_id, modelo, gname, overrides) in trabajos {
+                    let Some(schema) = glass_core::shader_graph::graph_schema(&gname) else { continue };
+                    let tex_props: Vec<&glass_core::shader_graph::PropertyDef> = schema
+                        .iter()
+                        .filter(|p| matches!(p.kind, glass_core::shader_graph::PropertyKind::Texture2D))
+                        .take(3)
+                        .collect();
+                    if tex_props.is_empty() {
+                        self.graph_tex_state.remove(&ent_id);
+                        continue;
+                    }
+                    let mut names: [String; 4] = Default::default();
+                    names[0] = modelo.clone();
+                    for (i, p) in tex_props.iter().enumerate() {
+                        names[i + 1] = overrides
+                            .get(&p.name)
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                            .or_else(|| match &p.default {
+                                glass_core::shader_graph::PropertyValue::Texture(n) => Some(n.clone()),
+                                _ => None,
+                            })
+                            .unwrap_or_default();
+                    }
+                    if self.graph_tex_state.get(&ent_id).map(|(_, n)| n) == Some(&names) {
+                        continue;
+                    }
+                    let layout = renderer
+                        .custom_pipelines
+                        .get(&gname)
+                        .and_then(|p| p.descriptor_set_layout)
+                        .or_else(|| {
+                            renderer
+                                .custom_pipelines_legacy
+                                .get(&gname)
+                                .and_then(|p| p.descriptor_set_layout)
+                        });
+                    let Some(layout) = layout else { continue };
+                    let model_key = if modelo.is_empty() { None } else { Some(modelo.as_str()) };
+                    let primary_image = model_key
+                        .and_then(|k| cache.primary_materials.get(k))
+                        .and_then(|m| m.base_color_image);
+                    let mut views: [Option<vk::ImageView>; 4] =
+                        [cache.view_for_image(model_key, primary_image), None, None, None];
+                    for (i, nm) in names[1..].iter().enumerate() {
+                        if !nm.is_empty() {
+                            views[i + 1] = cache.view_for_image(Some(nm.as_str()), Some(0));
+                        }
+                    }
+                    if let Some(set) = cache.graph_texture_set(&renderer.device, layout, views) {
+                        self.graph_tex_state.insert(ent_id, (set, names));
+                    } else {
+                        self.graph_tex_state.remove(&ent_id);
+                    }
+                }
+            }
         }
 
         // dt de animación (bloque de skinning): tiempo real entre frames
@@ -3754,21 +3848,35 @@ let resueltos = colliders_resueltos(body, shape);
             );
         }
         if let Some(cube_mesh) = cache.meshes.get("cube") {
-            let mut scene_batches: Vec<(&glass_renderer::GpuMesh, glass_renderer::MeshPushConstants, vk::DescriptorSet, Option<String>, (u32, u32))> = Vec::new();
-            let mut game_batches: Vec<(&glass_renderer::GpuMesh, glass_renderer::MeshPushConstants, vk::DescriptorSet, Option<String>, (u32, u32))> = Vec::new();
+            let mut scene_batches: Vec<glass_renderer::MeshDrawItem<'_>> = Vec::new();
+            let mut game_batches: Vec<glass_renderer::MeshDrawItem<'_>> = Vec::new();
             let mut scene_skinned: Vec<glass_renderer::SkinnedDrawItem> = Vec::new();
             let mut game_skinned: Vec<glass_renderer::SkinnedDrawItem> = Vec::new();
+            // Resolución de propiedades de grafo por entidad (Fase 2S):
+            // cachea el set y los bytes ya subidos por entidad para no
+            // recrear/actualizar el descriptor set si no cambiaron.
+            let empty_overrides = serde_json::Map::new();
+            let props_set_cached: Option<vk::DescriptorSet> = None;
+            let _ = props_set_cached; // evita warning si el flujo cambia abajo
             // Proyectores del mapa de sombras (bloque de gráficos): cada
             // entidad dibujada proyecta con la misma malla y la misma
             // matriz de modelo de su lote; las con piel, además, con su
             // set de articulaciones (la sombra sigue la pose).
             let mut shadow_statics: Vec<(&glass_renderer::GpuMesh, [f32; 16])> = Vec::new();
+            let mut shadow_graph_statics: Vec<(
+                &glass_renderer::GpuMesh,
+                [f32; 16],
+                String,
+                vk::DescriptorSet,
+                Option<f32>,
+            )> = Vec::new();
             let mut shadow_skinned: Vec<(&glass_renderer::GpuMesh, [f32; 16], vk::DescriptorSet)> = Vec::new();
             // Fase 2: frustums de las dos vistas y contadores del frame
             // para la tool glass_render_stats.
             let frustum_scene = glass_core::math::Frustum::from_view_proj(&vp_scene);
             let frustum_game = vp_game_opt.map(|vp| glass_core::math::Frustum::from_view_proj(&vp));
             let mut stats_considered: u32 = 0;
+            let mut stats_outline: u32 = 0;
             let mut stats_culled: u32 = 0;
 
             if let Ok(scene) = self.scene_state.lock() {
@@ -3992,6 +4100,28 @@ let resueltos = colliders_resueltos(body, shape);
                                 }
                             }
                         }
+                        // Fallback de grafo (Fase 2S, S4): si el grafo
+                        // pedido no tiene pipeline registrado (su .spv
+                        // falta o falló al registrarse), la entidad se
+                        // dibuja con el material de error (PBR magenta
+                        // plano, vía color_error en los pushes) y se
+                        // avisa una sola vez por grafo.
+                        let mut color_error = false;
+                        if let Some(g) = &shader_name {
+                            if g != "material_transparent"
+                                && !renderer.custom_pipelines.contains_key(g)
+                                && !renderer.custom_pipelines_legacy.contains_key(g)
+                            {
+                                if self.graph_error_logged.insert(g.clone()) {
+                                    log::error!(
+                                        "Material de grafo '{}' no disponible (sin .spv o falló su registro): se usa el material de error magenta",
+                                        g
+                                    );
+                                }
+                                color_error = true;
+                                shader_name = None;
+                            }
+                        }
 
                         // --- Bloque de skinning: pose de ESTA entidad ---
                         // Si el modelo de la entidad tiene piel en caché, su
@@ -4139,7 +4269,66 @@ let resueltos = colliders_resueltos(body, shape);
                             if !shadow_recorded {
                                 shadow_recorded = true;
                                 if skin_pose.is_none() {
-                                    shadow_statics.push((ent_mesh, model));
+                                    // Proyector de grafo con pase Shadow
+                                    // (Fase 2S): va a la lista de grafos
+                                    // para que el pase de sombras del sol
+                                    // use la etapa de vértices del grafo.
+                                    let pases = shader_name
+                                        .as_deref()
+                                        .and_then(glass_core::shader_graph::graph_passes);
+                                    let es_grafo_sombra = pases
+                                        .map(|p| {
+                                            p.contains(
+                                                &glass_core::shader_graph::PassKind::Shadow,
+                                            )
+                                        })
+                                        .unwrap_or(false);
+                                    if es_grafo_sombra {
+                                        let gname = shader_name.clone().unwrap();
+                                        // Umbral de recorte: la propiedad
+                                        // especial `alpha_clip` del esquema,
+                                        // con el override de la entidad si
+                                        // lo trae. Sin esa propiedad, None
+                                        // (profundidad pura).
+                                        let mut alpha_clip = glass_core::shader_graph::graph_schema(&gname)
+                                            .and_then(|props| {
+                                                props.iter().find(|p| {
+                                                    p.name == "alpha_clip"
+                                                        && matches!(
+                                                            p.kind,
+                                                            glass_core::shader_graph::PropertyKind::Float
+                                                        )
+                                                })
+                                                .map(|p| match p.default {
+                                                    glass_core::shader_graph::PropertyValue::Float(v) => v,
+                                                    _ => 0.0,
+                                                })
+                                            });
+                                        if let Some(o) = ent
+                                            .mesh
+                                            .as_ref()
+                                            .and_then(|m| m.shader_properties.get("alpha_clip"))
+                                            .and_then(|v| v.as_f64())
+                                        {
+                                            if alpha_clip.is_some() {
+                                                alpha_clip = Some(o as f32);
+                                            }
+                                        }
+                                        let tex = self
+                                            .graph_tex_state
+                                            .get(&ent.id)
+                                            .map(|(s, _)| *s)
+                                            .unwrap_or(tex_set);
+                                        shadow_graph_statics.push((
+                                            ent_mesh,
+                                            model,
+                                            gname,
+                                            tex,
+                                            alpha_clip,
+                                        ));
+                                    } else {
+                                        shadow_statics.push((ent_mesh, model));
+                                    }
                                 }
                             }
                             // Rama con piel: mismos push constants y rangos
@@ -4186,18 +4375,105 @@ let resueltos = colliders_resueltos(body, shape);
                                 }
                                 continue;
                             }
+                            let ent_overrides = ent
+                                .mesh
+                                .as_ref()
+                                .map(|m| &m.shader_properties)
+                                .map(|m| {
+                                    // shader_properties es HashMap<String, Value>; el
+                                    // resolutor espera un serde_json::Map. Convierte
+                                    // sin clonar los valores más de una vez.
+                                    let mut map = serde_json::Map::new();
+                                    for (k, v) in m.iter() {
+                                        map.insert(k.clone(), v.clone());
+                                    }
+                                    map
+                                })
+                                .unwrap_or_else(|| empty_overrides.clone());
+                            let props_set = shader_name.as_deref().and_then(|g| {
+                                resolver_props_set(
+                                    &mut *renderer,
+                                    &mut self.graph_props_state,
+                                    ent.id,
+                                    g,
+                                    &ent_overrides,
+                                )
+                            });
+
+                            // Set de texturas de grafo (resuelto en el pase
+                            // previo con &mut cache). Sustituye a tex_set
+                            // solo en esta entidad/item; si no hay uno, cada
+                            // push usa el tex_set normal.
+                            let tex_set_grafo: Option<vk::DescriptorSet> =
+                                self.graph_tex_state.get(&ent.id).map(|(set, _)| *set);
+                            // Contorno toon (Fase 2S, S5): si el grafo de
+                            // la entidad declara el pase Outline, cada push
+                            // normal va seguido de su push de contorno con
+                            // el pipeline "outline:<grafo>". El grosor y el
+                            // color salen de las propiedades especiales
+                            // `outline_width` (Float) y `outline_color`
+                            // (Color) del esquema, con los overrides de la
+                            // entidad si los trae.
+                            let contorno: Option<(String, [f32; 4], f32)> =
+                                shader_name.as_deref().and_then(|g| {
+                                    let pases = glass_core::shader_graph::graph_passes(g)?;
+                                    if !pases.contains(&glass_core::shader_graph::PassKind::Outline) {
+                                        return None;
+                                    }
+                                    let mut ancho = 0.03f32;
+                                    let mut color_c = [0.05f32, 0.05, 0.08, 1.0];
+                                    if let Some(props) = glass_core::shader_graph::graph_schema(g) {
+                                        for p in props.iter() {
+                                            match (p.name.as_str(), &p.default) {
+                                                ("outline_width", glass_core::shader_graph::PropertyValue::Float(v)) => ancho = *v,
+                                                ("outline_color", glass_core::shader_graph::PropertyValue::Color(c4)) => color_c = *c4,
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                    if let Some(m) = ent.mesh.as_ref() {
+                                        if let Some(v) = m.shader_properties.get("outline_width").and_then(|v| v.as_f64()) {
+                                            ancho = v as f32;
+                                        }
+                                        if let Some(a) = m.shader_properties.get("outline_color").and_then(|v| v.as_array()) {
+                                            if a.len() == 4 {
+                                                color_c = [
+                                                    a[0].as_f64().unwrap_or(0.0) as f32,
+                                                    a[1].as_f64().unwrap_or(0.0) as f32,
+                                                    a[2].as_f64().unwrap_or(0.0) as f32,
+                                                    a[3].as_f64().unwrap_or(1.0) as f32,
+                                                ];
+                                            }
+                                        }
+                                    }
+                                    Some((format!("outline:{}", g), color_c, ancho))
+                                });
                             if vis_scene { scene_batches.push((ent_mesh, glass_renderer::MeshPushConstants {
                                 mvp: mvp_scene,
                                 model,
                                 light_dir,
                                 light_color,
                                 material_params: mp,
-                                object_color: c,
+                                object_color: if color_error { [1.0, 0.0, 1.0, 1.0] } else { c },
                                 camera_pos: eye_scene,
                                 lm_params,
                                 emissive: em_item,
                                 uv_transform: uv_item,
-                            }, tex_set, shader_name.clone(), range)); }
+                            }, tex_set_grafo.unwrap_or(tex_set), shader_name.clone(), range, props_set)); }
+                                if let Some((nombre_o, color_o, ancho_o)) = &contorno {
+                                    scene_batches.push((ent_mesh, glass_renderer::MeshPushConstants {
+                                        mvp: mvp_scene,
+                                        model,
+                                        light_dir,
+                                        light_color,
+                                        material_params: [*ancho_o, 0.0, 0.0, 0.0],
+                                        object_color: *color_o,
+                                        camera_pos: eye_scene,
+                                        lm_params,
+                                        emissive: em_item,
+                                        uv_transform: uv_item,
+                                    }, tex_set_grafo.unwrap_or(tex_set), Some(nombre_o.clone()), range, props_set));
+                                }
 
                             if let Some(vp_game) = vp_game_opt.filter(|_| vis_game) {
                                 let mvp_game = matmul(&vp_game, &model);
@@ -4207,7 +4483,7 @@ let resueltos = colliders_resueltos(body, shape);
                                     light_dir,
                                     light_color,
                                     material_params: mp,
-                                    object_color: c,
+                                    object_color: if color_error { [1.0, 0.0, 1.0, 1.0] } else { c },
                                     // Si la escena no tiene cámara activa no hay Game
                                     // View, así que este valor sólo se usa cuando
                                     // vp_game_opt es Some.
@@ -4215,13 +4491,48 @@ let resueltos = colliders_resueltos(body, shape);
                                     lm_params,
                                     emissive: em_item,
                                     uv_transform: uv_item,
-                                }, tex_set, shader_name.clone(), range));
+                                }, tex_set_grafo.unwrap_or(tex_set), shader_name.clone(), range, props_set));
+                                    if let Some((nombre_o, color_o, ancho_o)) = &contorno {
+                                        stats_outline += 1;
+                                        game_batches.push((ent_mesh, glass_renderer::MeshPushConstants {
+                                            mvp: mvp_game,
+                                            model,
+                                            light_dir,
+                                            light_color,
+                                            material_params: [*ancho_o, 0.0, 0.0, 0.0],
+                                            object_color: *color_o,
+                                            camera_pos: eye_game_opt.unwrap_or(eye_scene),
+                                            lm_params,
+                                            emissive: em_item,
+                                            uv_transform: uv_item,
+                                        }, tex_set_grafo.unwrap_or(tex_set), Some(nombre_o.clone()), range, props_set));
+                                    }
                             }
                         }
                     }
                 }
             }
 
+
+            // Ordenación de draws (Fase 2S, S6): por (transparente al
+            // final, shader, textura) con orden estable, para agrupar
+            // los enlaces de pipeline y de descriptor set del pase. El
+            // índice de textura es el de primera aparición en la lista,
+            // así la ordenación es determinista sin claves externas.
+            for lotes in [&mut scene_batches, &mut game_batches] {
+                let mut orden_tex: std::collections::HashMap<vk::DescriptorSet, usize> =
+                    std::collections::HashMap::new();
+                for item in lotes.iter() {
+                    let n = orden_tex.len();
+                    orden_tex.entry(item.2).or_insert(n);
+                }
+                lotes.sort_by_cached_key(|item| {
+                    let nombre = item.3.as_deref().unwrap_or("");
+                    let transp = nombre == "material_transparent"
+                        || self.transparent_graphs.contains(nombre);
+                    (transp, nombre.to_string(), orden_tex[&item.2])
+                });
+            }
 
             // Fase 2: estadísticas del frame para la tool MCP.
             glass_core::render_stats::record_render_stats(glass_core::render_stats::RenderStatsSnapshot {
@@ -4230,6 +4541,10 @@ let resueltos = colliders_resueltos(body, shape);
                 game_draw_calls: (game_batches.len() + game_skinned.len()) as u32,
                 scene_draw_calls: (scene_batches.len() + scene_skinned.len()) as u32,
                 shadow_draw_calls: (shadow_statics.len() + shadow_skinned.len()) as u32,
+                graph_shadow_draw_calls: shadow_graph_statics.len() as u32,
+                outline_draw_calls: stats_outline,
+                pipeline_binds: renderer.frame_bind_counts().0,
+                descriptor_binds: renderer.frame_bind_counts().1,
             });
 
             // ------------------------------------------------------------
@@ -4338,10 +4653,10 @@ let resueltos = colliders_resueltos(body, shape);
                         // virtuales: la de salida quedaría pegada
                         // al plano cercano y taparía el centro de
                         // su propia vista con su cara trasera.
-                        items_a.retain(|(_, pc, _, _, _)| {
+                        items_a.retain(|(_, pc, _, _, _, _)| {
                             pc.model != world_a && pc.model != world_b
                         });
-                        items_b.retain(|(_, pc, _, _, _)| {
+                        items_b.retain(|(_, pc, _, _, _, _)| {
                             pc.model != world_a && pc.model != world_b
                         });
                         portal_render = Some((items_a, piel_a, items_b, piel_b));
@@ -4360,10 +4675,10 @@ let resueltos = colliders_resueltos(body, shape);
 
                         // Fuera de los lotes normales (la
                         // superficie la dibuja el pase de portal).
-                        scene_batches.retain(|(_, pc, _, _, _)| {
+                        scene_batches.retain(|(_, pc, _, _, _, _)| {
                             pc.model != world_a && pc.model != world_b
                         });
-                        game_batches.retain(|(_, pc, _, _, _)| {
+                        game_batches.retain(|(_, pc, _, _, _, _)| {
                             pc.model != world_a && pc.model != world_b
                         });
                     }
@@ -4418,6 +4733,7 @@ let resueltos = colliders_resueltos(body, shape);
             let shadow_casters = glass_renderer::ShadowCasters {
                 statics: &shadow_statics,
                 skinned: &shadow_skinned,
+                graph_statics: &shadow_graph_statics,
             };
 
             // Luces puntuales del frame: las 8 «Point» más cercanas al
@@ -4439,6 +4755,44 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                     },
                     Err(_) => renderer.set_fog([0.0, 0.0, 0.0], 0.0, 1.0, false),
                 }
+
+                // Telemetría de iluminación (Fase 2S) para glass_render_lighting_debug.
+                let fog = match self.scene_state.lock() {
+                    Ok(scene) => scene.fog_settings(),
+                    Err(_) => None,
+                };
+                let (fog_enabled, fog_color, fog_near, fog_far) = match fog {
+                    Some(f) => (true, f.color, f.near, f.far),
+                    None => (false, [0.0, 0.0, 0.0], 0.0, 0.0),
+                };
+
+                let mut puntos = [glass_core::lighting_stats::PointLightSnapshot::default(); 8];
+                for i in 0..8 {
+                    let pos_range = ubo_luces.pos_range[i];
+                    let color_intensity = ubo_luces.color_intensity[i];
+                    puntos[i] = glass_core::lighting_stats::PointLightSnapshot {
+                        position: [pos_range[0], pos_range[1], pos_range[2]],
+                        range: pos_range[3],
+                        color: [color_intensity[0], color_intensity[1], color_intensity[2]],
+                        intensity: color_intensity[3],
+                        shadow_cube: ubo_luces.shadow[i][0] as i32,
+                    };
+                }
+
+                glass_core::lighting_stats::record_lighting_stats(
+                    glass_core::lighting_stats::LightingStatsSnapshot {
+                        has_directional: light_color[0] + light_color[1] + light_color[2] > 0.0
+                            || light_dir[3] > 0.1,
+                        directional_dir: [light_dir[0], light_dir[1], light_dir[2]],
+                        directional_color: [light_color[0], light_color[1], light_color[2]],
+                        point_count: ubo_luces.count,
+                        points: puntos,
+                        fog_enabled,
+                        fog_color,
+                        fog_near,
+                        fog_far,
+                    },
+                );
             }
 
             if let Some((items_a, piel_a, items_b, piel_b)) = &portal_render {
@@ -5035,10 +5389,61 @@ impl ApplicationHandler for GlassEngineApp {
             }
         }
 
+        // Esquemas de propiedades de los grafos: se registran globalmente
+        // (glass_core::shader_graph) para que la resolución por entidad y
+        // las tools MCP de inspección puedan consultarlos sin recargar los
+        // .graph.json en cada acceso.
+        if let Ok(entries) = std::fs::read_dir("assets/shader_graphs") {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let is_graph_json = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.ends_with(".graph.json"))
+                    .unwrap_or(false);
+                if !is_graph_json {
+                    continue;
+                }
+                match std::fs::read_to_string(&path) {
+                    Ok(contents) => match glass_core::shader_graph::ShaderGraph::from_json(&contents) {
+                        Ok(graph) => {
+                            glass_core::shader_graph::register_graph_schema(
+                                graph.name.clone(),
+                                graph.properties.clone(),
+                            );
+                            glass_core::shader_graph::register_graph_passes(
+                                graph.name.clone(),
+                                graph.passes.clone(),
+                            );
+                            if std::path::Path::new(&format!(
+                                "assets/shaders/graph_{}.transparent",
+                                graph.name
+                            ))
+                            .exists()
+                            {
+                                self.transparent_graphs.insert(graph.name.clone());
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "No se pudo parsear el grafo de shaders {:?}: {}",
+                                path,
+                                e
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!("No se pudo leer el grafo de shaders {:?}: {}", path, e);
+                    }
+                }
+            }
+        }
+
         // Materiales de grafo: cada graph_<nombre>.frag.spv de assets/shaders
         // se registra como pipeline; una entidad lo usa con shader =
         // "graph:<nombre>" en su MeshData.
         renderer.load_graph_materials(std::path::Path::new("assets/shaders"));
+
 
         // El pipeline transparente de los materiales vive en el
         // renderer (registrado como «material_transparent» al
@@ -6206,6 +6611,50 @@ fn is_standalone_launch(pure_build: bool, args: &[String]) -> bool {
 /// push constants de siempre.
 /// Clona los lotes de mallas con otra VP (las vistas de
 /// portal): cada push ya trae su `model`, así que basta
+/// Resuelve el descriptor set de propiedades de grafo para una entidad,
+/// reutilizando el set creado en frames anteriores si los valores
+/// empaquetados no cambiaron.
+///
+/// Devuelve `None` si el grafo no tiene esquema registrado, o si su esquema
+/// no declara ninguna propiedad no-textura (no hay UBO que subir).
+fn resolver_props_set(
+    renderer: &mut glass_renderer::GlassRenderer,
+    estado: &mut std::collections::HashMap<u64, (vk::DescriptorSet, Vec<f32>)>,
+    ent_id: u64,
+    graph: &str,
+    overrides: &serde_json::Map<String, serde_json::Value>,
+) -> Option<vk::DescriptorSet> {
+    let schema = glass_core::shader_graph::graph_schema(graph)?;
+    if schema
+        .iter()
+        .all(|p| matches!(p.kind, glass_core::shader_graph::PropertyKind::Texture2D))
+    {
+        return None;
+    }
+
+    let packed = glass_core::shader_graph::pack_property_values(&schema, overrides);
+    // Sin bytemuck en este crate: los bytes salen de los f32 en orden nativo.
+    let mut bytes = Vec::with_capacity(packed.len() * 4);
+    for v in &packed {
+        bytes.extend_from_slice(&v.to_ne_bytes());
+    }
+    let bytes: &[u8] = &bytes;
+
+    match estado.get_mut(&ent_id) {
+        Some((set, cached)) if cached == &packed => Some(*set),
+        Some((set, cached)) => {
+            renderer.update_graph_props_set(*set, bytes);
+            *cached = packed;
+            Some(*set)
+        }
+        None => {
+            let set = renderer.create_graph_props_set(bytes)?;
+            estado.insert(ent_id, (set, packed));
+            Some(set)
+        }
+    }
+}
+
 /// recomponer el MVP y mover el ojo.
 fn clonar_lotes_portal<'x>(
     lotes: &[glass_renderer::MeshDrawItem<'x>],
@@ -6214,11 +6663,11 @@ fn clonar_lotes_portal<'x>(
 ) -> Vec<glass_renderer::MeshDrawItem<'x>> {
     lotes
         .iter()
-        .map(|(m, pc, tex, sh, r)| {
+        .map(|(m, pc, tex, sh, r, ps)| {
             let mut pc2 = *pc;
             pc2.mvp = matmul(&vp, &pc.model);
             pc2.camera_pos = ojo;
-            (*m, pc2, *tex, sh.clone(), *r)
+            (*m, pc2, *tex, sh.clone(), *r, *ps)
         })
         .collect()
 }
@@ -6249,8 +6698,8 @@ fn robar_superficie<'x>(
 ) -> Option<(&'x glass_renderer::GpuMesh, (u32, u32))> {
     lotes
         .iter()
-        .find(|(_, pc, _, _, _)| pc.model == w)
-        .map(|(m, _, _, _, r)| (*m, *r))
+        .find(|(_, pc, _, _, _, _)| pc.model == w)
+        .map(|(m, _, _, _, r, _)| (*m, *r))
 }
 
 /// Añade el dibujo de una superficie de portal a las listas

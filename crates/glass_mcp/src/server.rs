@@ -441,6 +441,12 @@ impl McpServer {
                             "inputSchema": {"type": "object", "properties": {}}
                         },
                         {
+                            "name": "glass_render_lighting_debug",
+                            "description": "Iluminación del último frame (Fase 2S): luz direccional principal, luces puntuales publicadas en el UBO (posición, color, intensidad, rango y cubo de sombra) y niebla de la escena. Es la misma foto que consumen los nodos de luz de los grafos.",
+                            "inputSchema": {"type": "object", "properties": {}}
+                        },
+                        
+                        {
                             "name": "glass_texture_info",
                             "description": "Texturas cargadas en VRAM (Fase 2): formato Vulkan (RGBA8 o BC), dimensiones, niveles de mip y bytes por textura, con el total. Parámetro opcional model para filtrar por clave de modelo.",
                             "inputSchema": {
@@ -448,6 +454,111 @@ impl McpServer {
                                 "properties": {
                                     "model": {"type": "string", "description": "Clave de modelo a filtrar (opcional)."}
                                 }
+                            }
+                        },
+                        {
+                            "name": "glass_shader_schema_get",
+                            "description": "Esquema de propiedades declaradas por un grafo de shaders (Fase 2S): nombre, tipo y valor por defecto de cada propiedad editable desde el material. Parámetro graph requerido.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "graph": {"type": "string", "description": "Nombre del grafo de shaders."}
+                                }
+                            }
+                        },
+                        {
+                            "name": "glass_material_property_set",
+                            "description": "Fija el valor de una propiedad del shader de grafo de una entidad viva (Fase 2S): se escribe en MeshData.shader_properties y el motor lo sube a su UBO de propiedades en el siguiente frame.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": {"type": "number", "description": "ID de la entidad."},
+                                    "property": {"type": "string", "description": "Nombre de la propiedad del shader."},
+                                    "value": {"description": "Nuevo valor de la propiedad (tipo según el esquema del grafo)."}
+                                }
+                            }
+                        },
+                        {
+                            "name": "glass_shader_graph_validate",
+                            "description": "Valida un grafo de shader en disco (Fase 2S): lee assets/shader_graphs/<graph>.graph.json, comprueba que el JSON deserializa como ShaderGraph y que compila el fragment y el vertex shader. Devuelve valid=false con el error concreto si algo falla.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "graph": {"type": "string", "description": "Nombre del grafo (sin extensión); se resuelve como assets/shader_graphs/<graph>.graph.json."}
+                                },
+                                "required": ["graph"]
+                            }
+                        },
+                        {
+                            "name": "glass_shader_node_add",
+                            "description": "Añade un nodo a un grafo de shader editando el .graph.json en disco (Fase 2S): carga assets/shader_graphs/<graph>.graph.json, inserta el nodo con un id nuevo (máximo + 1) y reescribe el archivo. El cambio requiere recompilar el .spv para verse en el motor.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "graph": {"type": "string", "description": "Nombre del grafo (sin extensión); se resuelve como assets/shader_graphs/<graph>.graph.json."},
+                                    "kind": {"type": "object", "description": "NodeKind en su forma serde, p. ej. {\"kind\": \"Float\", \"value\": 0.5} o {\"kind\": \"Output\"}."},
+                                    "position": {
+                                        "type": "array",
+                                        "items": {"type": "number"},
+                                        "description": "Posición [x, y] del nodo en el editor (por defecto [0.0, 0.0])."
+                                    }
+                                },
+                                "required": ["graph", "kind"]
+                            }
+                        },
+                        {
+                            "name": "glass_shader_compile_check",
+                            "description": "Comprobación completa de un grafo (Fase 2S): parsea y compila el .graph.json a GLSL y verifica que su .spv exista en assets/shaders. ready=true solo si compila y el .spv está presente; si no, el motor dibuja esas entidades con el material de error magenta.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "graph": {
+                                        "type": "string",
+                                        "description": "Nombre del grafo (sin ruta ni extensión)."
+                                    }
+                                },
+                                "required": ["graph"]
+                            }
+                        },
+                        {
+                            "name": "glass_shader_pass_configure",
+                            "description": "Fija los pases de render de un grafo en su .graph.json en disco (Fase 2S): Forward (dibujo normal), Shadow (su etapa de vértices proyecta la sombra del sol, con recorte si declara la propiedad alpha_clip) y Outline (contorno toon, S5). El cambio se aplica al reiniciar el motor, que es cuando se registran los pipelines.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "graph": {"type": "string", "description": "Nombre del grafo (sin extensión ni ruta)."},
+                                    "passes": {"type": "array", "items": {"type": "string"}, "description": "Lista de pases: subconjunto de [\"Forward\", \"Shadow\", \"Outline\"]."}
+                                },
+                                "required": ["graph", "passes"]
+                            }
+                        },
+                        {
+                            "name": "glass_shader_preset_apply",
+                            "description": "Aplica un preset de propiedades a una entidad viva (Fase 2S): lee assets/shader_graphs/<graph>.<preset>.preset.json (un objeto con 'properties') y escribe cada propiedad en los shader_properties de la entidad, que debe usar ese grafo. El efecto es inmediato en el siguiente frame.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "graph": { "type": "string" },
+                                    "preset": { "type": "string" },
+                                    "entity_id": { "type": "number" }
+                                },
+                                "required": ["graph", "preset", "entity_id"]
+                            }
+                        },
+                        {
+                            "name": "glass_render_pass_stats",
+                            "description": "Draw calls por pase del último frame (Fase 2S): forward (vistas de juego y escena), sombras del sol, sombras con vértices de grafo y contornos.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "glass_render_draw_stats",
+                            "description": "Enlaces del último frame renderizado (Fase 2S, S6): cuántos pipelines y descriptor sets se enlazaron en los pases de vista, con los draw calls forward de referencia. Tras la ordenación de draws, los enlaces de pipeline se acercan al número de shaders distintos.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
                             }
                         }
                     ]
@@ -960,6 +1071,44 @@ impl McpServer {
                 let texto = serde_json::to_string_pretty(&datos).unwrap_or_default();
                 McpResponse::success(id, json!({"content": [{"type": "text", "text": texto}]}))
             }
+            "glass_render_lighting_debug" => {
+                let snap = glass_core::lighting_stats::lighting_stats_snapshot();
+                let puntos: Vec<_> = (0..(snap.point_count as usize).min(8))
+                    .map(|i| {
+                        let p = snap.points[i];
+                        json!({
+                            "position": p.position,
+                            "range": p.range,
+                            "color": p.color,
+                            "intensity": p.intensity,
+                            "shadow_cube": p.shadow_cube,
+                        })
+                    })
+                    .collect();
+                let mut datos = json!({
+                    "directional": {
+                        "present": snap.has_directional,
+                        "direction": snap.directional_dir,
+                        "color": snap.directional_color,
+                    },
+                    "point_lights": puntos,
+                    "point_count": snap.point_count,
+                    "fog": {
+                        "enabled": snap.fog_enabled,
+                        "color": snap.fog_color,
+                        "near": snap.fog_near,
+                        "far": snap.fog_far,
+                    },
+                });
+                if !snap.has_directional && snap.point_count == 0 {
+                    datos.as_object_mut().unwrap().insert(
+                        "note".to_string(),
+                        json!("sin datos: ningún frame con iluminación recolectado en este proceso"),
+                    );
+                }
+                let texto = serde_json::to_string_pretty(&datos).unwrap_or_default();
+                McpResponse::success(id, json!({"content": [{"type": "text", "text": texto}]}))
+            }
 
             // Texturas en VRAM (Fase 2): formato, tamaño y bytes de la
             // caché de assets global que registra la app al arrancar.
@@ -1010,6 +1159,453 @@ impl McpServer {
                 };
                 let texto = serde_json::to_string_pretty(&datos).unwrap_or_default();
                 McpResponse::success(id, json!({"content": [{"type": "text", "text": texto}]}))
+            }
+
+"glass_shader_schema_get" => {
+                let graph = match args.get("graph").and_then(|v| v.as_str()) {
+                    Some(g) => g,
+                    None => return McpResponse::invalid_params(id, "Field 'graph' is required"),
+                };
+                match glass_core::shader_graph::graph_schema(graph) {
+                    None => McpResponse::success(
+                        id,
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&json!({
+                                    "graph": graph,
+                                    "note": "sin esquema registrado con ese nombre (los esquemas se registran al arrancar desde assets/shader_graphs)"
+                                })).unwrap()
+                            }]
+                        }),
+                    ),
+                    Some(props) => {
+                        let properties: Vec<serde_json::Value> = props
+                            .iter()
+                            .map(|p| {
+                                json!({
+                                    "name": p.name,
+                                    "kind": serde_json::to_value(&p.kind).unwrap(),
+                                    "default": serde_json::to_value(&p.default).unwrap()
+                                })
+                            })
+                            .collect();
+                        McpResponse::success(
+                            id,
+                            json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": serde_json::to_string_pretty(&json!({
+                                        "graph": graph,
+                                        "properties": properties
+                                    })).unwrap()
+                                }]
+                            }),
+                        )
+                    }
+                }
+            }
+            "glass_material_property_set" => {
+                let entity_id = match args.get("entity_id").and_then(|n| n.as_u64()) {
+                    Some(v) => v,
+                    None => return McpResponse::invalid_params(id, "Field 'entity_id' is required"),
+                };
+                let property = match args.get("property").and_then(|v| v.as_str()) {
+                    Some(p) => p.to_string(),
+                    None => return McpResponse::invalid_params(id, "Field 'property' is required"),
+                };
+                let value = match args.get("value").cloned() {
+                    Some(v) => v,
+                    None => return McpResponse::invalid_params(id, "Field 'value' is required"),
+                };
+                let Some(ent) = scene.entities.iter_mut().find(|e| e.id == entity_id) else {
+                    return McpResponse::error(id, -32004, "Entity not found");
+                };
+                if ent.mesh.is_none() {
+                    return McpResponse::invalid_params(id, "La entidad no tiene MeshData");
+                }
+                ent.mesh
+                    .as_mut()
+                    .unwrap()
+                    .shader_properties
+                    .insert(property.clone(), value.clone());
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&json!({
+                                "ok": true,
+                                "entity_id": entity_id,
+                                "property": property,
+                                "value": value
+                            })).unwrap()
+                        }]
+                    }),
+                )
+            }
+            "glass_shader_graph_validate" => {
+                let graph = match args.get("graph").and_then(|v| v.as_str()) {
+                    Some(g) => g,
+                    None => return McpResponse::invalid_params(id, "Field 'graph' is required"),
+                };
+                if graph.contains('/') || graph.contains('\\') || graph.contains("..") {
+                    return McpResponse::invalid_params(id, "Field 'graph' contains invalid characters");
+                }
+                let path = format!("assets/shader_graphs/{}.graph.json", graph);
+                let outcome = match std::fs::read_to_string(&path) {
+                    Err(e) => json!({
+                        "graph": graph,
+                        "valid": false,
+                        "error": format!("no se pudo leer el archivo: {}", e)
+                    }),
+                    Ok(text) => match serde_json::from_str::<glass_core::shader_graph::ShaderGraph>(&text) {
+                        Err(e) => json!({
+                            "graph": graph,
+                            "valid": false,
+                            "error": format!("JSON inválido: {}", e)
+                        }),
+                        Ok(shader_graph) => {
+                            let fragment = shader_graph.compile_fragment();
+                            let vertex = shader_graph.compile_vertex();
+                            let compile_error = match (&fragment, &vertex) {
+                                (Err(e), _) => Some(format!("{}", e)),
+                                (_, Err(e)) => Some(format!("{}", e)),
+                                (Ok(_), Ok(_)) => None,
+                            };
+                            match compile_error {
+                                Some(e) => json!({
+                                    "graph": graph,
+                                    "valid": false,
+                                    "error": e
+                                }),
+                                None => json!({
+                                    "graph": graph,
+                                    "valid": true,
+                                    "nodes": shader_graph.nodes.len(),
+                                    "properties": shader_graph.properties.len()
+                                }),
+                            }
+                        }
+                    },
+                };
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&outcome).unwrap()
+                        }]
+                    }),
+                )
+            }
+            "glass_shader_node_add" => {
+                let graph = match args.get("graph").and_then(|v| v.as_str()) {
+                    Some(g) => g,
+                    None => return McpResponse::invalid_params(id, "Field 'graph' is required"),
+                };
+                if graph.contains('/') || graph.contains('\\') || graph.contains("..") {
+                    return McpResponse::invalid_params(id, "Field 'graph' contains invalid characters");
+                }
+                let kind_value = match args.get("kind") {
+                    Some(v) => v.clone(),
+                    None => return McpResponse::invalid_params(id, "Field 'kind' is required"),
+                };
+                let position = match args.get("position").and_then(|v| v.as_array()) {
+                    Some(a) if a.len() == 2 => match (a[0].as_f64(), a[1].as_f64()) {
+                        (Some(x), Some(y)) => [x as f32, y as f32],
+                        _ => [0.0, 0.0],
+                    },
+                    _ => [0.0, 0.0],
+                };
+                let kind = match serde_json::from_value::<glass_core::shader_graph::NodeKind>(kind_value) {
+                    Ok(k) => k,
+                    Err(e) => return McpResponse::invalid_params(id, &format!("Invalid 'kind': {}", e)),
+                };
+                let path = format!("assets/shader_graphs/{}.graph.json", graph);
+                let text = match std::fs::read_to_string(&path) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        return McpResponse::error(
+                            id,
+                            -32000,
+                            &format!("no se pudo leer el archivo {}: {}", path, e),
+                        )
+                    }
+                };
+                let mut shader_graph = match serde_json::from_str::<glass_core::shader_graph::ShaderGraph>(&text) {
+                    Ok(g) => g,
+                    Err(e) => {
+                        return McpResponse::error(
+                            id,
+                            -32000,
+                            &format!("JSON inválido en {}: {}", path, e),
+                        )
+                    }
+                };
+                let new_id = shader_graph.nodes.iter().map(|n| n.id).max().unwrap_or(0) + 1;
+                shader_graph.nodes.push(glass_core::shader_graph::GraphNode {
+                    id: new_id,
+                    kind,
+                    position,
+                });
+                let serialized = match serde_json::to_string_pretty(&shader_graph) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return McpResponse::error(
+                            id,
+                            -32000,
+                            &format!("no se pudo serializar el grafo: {}", e),
+                        )
+                    }
+                };
+                if let Err(e) = std::fs::write(&path, serialized) {
+                    return McpResponse::error(
+                        id,
+                        -32000,
+                        &format!("no se pudo escribir el archivo {}: {}", path, e),
+                    );
+                }
+                let total = shader_graph.nodes.len();
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&json!({
+                                "ok": true,
+                                "graph": graph,
+                                "node_id": new_id,
+                                "nodes": total
+                            })).unwrap()
+                        }]
+                    }),
+                )
+            }
+            "glass_shader_compile_check" => {
+                let graph = match args.get("graph").and_then(|v| v.as_str()) {
+                    Some(g) if !g.is_empty() => g.to_string(),
+                    _ => return McpResponse::invalid_params(id, "Field 'graph' is required"),
+                };
+                if graph.contains('/') || graph.contains('\\') || graph.contains("..") {
+                    return McpResponse::invalid_params(id, "Field 'graph' contains invalid characters");
+                }
+                let path = format!("assets/shader_graphs/{}.graph.json", graph);
+                let mut compiles = false;
+                let mut error: Option<String> = None;
+                match std::fs::read_to_string(&path) {
+                    Ok(src) => match serde_json::from_str::<glass_core::shader_graph::ShaderGraph>(&src) {
+                        Ok(sg) => {
+                            if let Err(e) = sg.compile_fragment() {
+                                error = Some(format!("{}", e));
+                            } else if let Err(e) = sg.compile_vertex() {
+                                error = Some(format!("{}", e));
+                            } else {
+                                compiles = true;
+                            }
+                        }
+                        Err(e) => error = Some(format!("no se pudo parsear el archivo: {}", e)),
+                    },
+                    Err(e) => error = Some(format!("no se pudo leer el archivo: {}", e)),
+                }
+                let spv_present = std::path::Path::new(&format!("assets/shaders/graph_{}.frag.spv", graph)).exists();
+                let ready = compiles && spv_present;
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&json!({
+                                "graph": graph,
+                                "compiles": compiles,
+                                "error": error,
+                                "spv_present": spv_present,
+                                "ready": ready
+                            })).unwrap()
+                        }]
+                    }),
+                )
+            }
+            "glass_shader_pass_configure" => {
+                let graph = match args.get("graph").and_then(|v| v.as_str()) {
+                    Some(g) => g.to_string(),
+                    None => return McpResponse::invalid_params(id, "Field 'graph' is required"),
+                };
+                if graph.contains('/') || graph.contains('\\') || graph.contains("..") {
+                    return McpResponse::invalid_params(id, "El nombre del grafo no puede contener '/', '\\' ni '..'");
+                }
+                let nombres = match args.get("passes").and_then(|v| v.as_array()) {
+                    Some(a) if !a.is_empty() => a.clone(),
+                    _ => return McpResponse::invalid_params(id, "Field 'passes' is required (array no vacío)"),
+                };
+                let mut pases = Vec::new();
+                for n in &nombres {
+                    let Some(txt) = n.as_str() else {
+                        return McpResponse::invalid_params(id, "Cada pase debe ser un string");
+                    };
+                    match serde_json::from_value::<glass_core::shader_graph::PassKind>(json!(txt)) {
+                        Ok(p) => pases.push(p),
+                        Err(_) => {
+                            return McpResponse::invalid_params(
+                                id,
+                                "Pase no válido: usa Forward, Shadow u Outline",
+                            )
+                        }
+                    }
+                }
+                let ruta = format!("assets/shader_graphs/{}.graph.json", graph);
+                let mut grafo: glass_core::shader_graph::ShaderGraph =
+                    match std::fs::read_to_string(&ruta)
+                        .ok()
+                        .and_then(|t| glass_core::shader_graph::ShaderGraph::from_json(&t).ok())
+                    {
+                        Some(g) => g,
+                        None => {
+                            return McpResponse::error(
+                                id,
+                                -32000,
+                                format!("No se pudo leer o parsear {}", ruta),
+                            )
+                        }
+                    };
+                grafo.passes = pases.clone();
+                match serde_json::to_string_pretty(&grafo)
+                    .ok()
+                    .and_then(|t| std::fs::write(&ruta, t).ok())
+                {
+                    Some(()) => McpResponse::success(
+                        id,
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&json!({
+                                    "ok": true,
+                                    "graph": graph,
+                                    "passes": pases.iter().map(|p| format!("{:?}", p)).collect::<Vec<_>>()
+                                })).unwrap()
+                            }]
+                        }),
+                    ),
+                    None => McpResponse::error(id, -32000, format!("No se pudo escribir {}", ruta)),
+                }
+            }
+            "glass_render_pass_stats" => {
+                let stats = glass_core::render_stats::render_stats_snapshot();
+                let mut datos = json!({
+                    "forward_draw_calls": stats.game_draw_calls + stats.scene_draw_calls,
+                    "game_draw_calls": stats.game_draw_calls,
+                    "scene_draw_calls": stats.scene_draw_calls,
+                    "shadow_draw_calls": stats.shadow_draw_calls,
+                    "graph_shadow_draw_calls": stats.graph_shadow_draw_calls,
+                    "outline_draw_calls": stats.outline_draw_calls
+                });
+                if stats.game_draw_calls == 0
+                    && stats.scene_draw_calls == 0
+                    && stats.shadow_draw_calls == 0
+                    && stats.graph_shadow_draw_calls == 0
+                    && stats.outline_draw_calls == 0
+                {
+                    datos["note"] =
+                        json!("sin datos: ningún frame recolectado en este proceso");
+                }
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&datos).unwrap()
+                        }]
+                    }),
+                )
+            }
+            "glass_shader_preset_apply" => {
+                let graph = match args.get("graph").and_then(|v| v.as_str()) {
+                    Some(g) => g.to_string(),
+                    None => return McpResponse::invalid_params(id, "Field 'graph' is required"),
+                };
+                let preset = match args.get("preset").and_then(|v| v.as_str()) {
+                    Some(p) => p.to_string(),
+                    None => return McpResponse::invalid_params(id, "Field 'preset' is required"),
+                };
+                if graph.contains('/') || graph.contains('\\') || graph.contains("..")
+                    || preset.contains('/') || preset.contains('\\') || preset.contains("..")
+                {
+                    return McpResponse::invalid_params(id, "graph/preset no pueden contener '/', '\\' ni '..'");
+                }
+                let entity_id = match args.get("entity_id").and_then(|n| n.as_u64()) {
+                    Some(v) => v,
+                    None => return McpResponse::invalid_params(id, "Field 'entity_id' is required"),
+                };
+                let ruta = format!("assets/shader_graphs/{}.{}.preset.json", graph, preset);
+                let doc: serde_json::Value = match std::fs::read_to_string(&ruta)
+                    .ok()
+                    .and_then(|t| serde_json::from_str(&t).ok())
+                {
+                    Some(d) => d,
+                    None => {
+                        return McpResponse::error(
+                            id,
+                            -32000,
+                            format!("No se pudo leer o parsear {}", ruta),
+                        )
+                    }
+                };
+                let Some(props) = doc.get("properties").and_then(|p| p.as_object()) else {
+                    return McpResponse::invalid_params(id, "El preset no trae un objeto 'properties'");
+                };
+                let Some(ent) = scene.entities.iter_mut().find(|e| e.id == entity_id) else {
+                    return McpResponse::error(id, -32004, "Entity not found");
+                };
+                let Some(mesh) = ent.mesh.as_mut() else {
+                    return McpResponse::invalid_params(id, "La entidad no tiene MeshData");
+                };
+                if mesh.shader != format!("graph:{}", graph) {
+                    return McpResponse::error(
+                        id,
+                        -32004,
+                        format!("La entidad no usa el grafo '{}' (usa '{}')", graph, mesh.shader),
+                    );
+                }
+                let mut aplicadas: Vec<String> = Vec::new();
+                for (k, v) in props {
+                    mesh.shader_properties.insert(k.clone(), v.clone());
+                    aplicadas.push(k.clone());
+                }
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&json!({
+                                "ok": true,
+                                "graph": graph,
+                                "preset": preset,
+                                "entity_id": entity_id,
+                                "applied": aplicadas
+                            })).unwrap()
+                        }]
+                    }),
+                )
+            }
+            "glass_render_draw_stats" => {
+                let stats = glass_core::render_stats::render_stats_snapshot();
+                let mut datos = json!({
+                    "pipeline_binds": stats.pipeline_binds,
+                    "descriptor_binds": stats.descriptor_binds,
+                    "forward_draw_calls": stats.game_draw_calls + stats.scene_draw_calls
+                });
+                if stats.pipeline_binds == 0 && stats.descriptor_binds == 0 {
+                    datos["note"] = json!("sin datos: ningún frame renderizado en este proceso");
+                }
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&datos).unwrap()
+                        }]
+                    }),
+                )
             }
             "glass_physics_cast" => {
                 let v3 = |v: &serde_json::Value| -> Option<[f32; 3]> {

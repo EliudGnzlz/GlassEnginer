@@ -60,6 +60,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
 use thiserror::Error;
 
 /// Valor del punto de interacción cuando nadie lo está alimentando: un
@@ -303,10 +304,77 @@ pub enum NodeKind {
     Clamp { min: f32, max: f32 },
     /// pow(x, exponent) con el exponente como propiedad.
     Power { exponent: f32 },
+    /// Bandas toon (Fase 2S): cuantiza un float de [0,1] en `bands`
+    /// escalones (ramps de iluminación dibujada). El compilador limita
+    /// las bandas a 1..=16.
+    ToonBands { bands: u32 },
     /// step(edge, x): 0 si x < edge, 1 en caso contrario.
     Step { edge: f32 },
     /// mod(x, y) componente a componente.
     Modulo,
+    /// Lee una propiedad declarada en `ShaderGraph::properties` por
+    /// nombre. Sin entradas: el valor viene de fuera (UBO
+    /// `GraphProperties`), no de otros nodos. Falla en compilación si
+    /// `name` no está declarada (`UnknownProperty`) o si está declarada
+    /// como `Texture2D` (`PropertyTypeMismatch`): una textura no es un
+    /// escalar/vector que se pueda emitir como expresión GLSL aquí.
+    Property { name: String },
+    /// Muestra una textura con la UV de su entrada "uv" (o la UV del
+    /// fragmento si no se conecta). slot 0 = la textura base del material
+    /// (base_color_tex, set 0 binding 0); slot k (1..=3) = la k-ésima
+    /// propiedad Texture2D declarada en el grafo (set 0 binding k).
+    TextureSample { slot: u32 },
+    /// Dirección de la luz principal (el sol), leída de los push constants
+    /// (u_push.light_dir). Sin entradas; salida vec3.
+    MainLightDirection,
+    /// Color de la luz principal (u_push.light_color). Sin entradas; salida vec3.
+    MainLightColor,
+    /// Posición en mundo de la luz puntual `index` del UBO de luces del
+    /// frame (u_point_lights). Sin entradas; salida vec3.
+    PointLightPosition { index: u32 },
+    /// Color de la luz puntual `index`. Sin entradas; salida vec3.
+    PointLightColor { index: u32 },
+}
+/// Tipo de dato de una propiedad declarada en el grafo (ver `PropertyDef`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PropertyKind {
+    Float,
+    Color,
+    Vec2,
+    Vec3,
+    Vec4,
+    Texture2D,
+}
+
+/// Valor concreto de una propiedad (su `default` en `PropertyDef`, o el
+/// valor que un editor de materiales escribiría en el UBO/descriptor).
+/// Serializa con el formato externo natural de serde para un enum con
+/// datos: la variante es la clave del objeto JSON, p. ej.
+/// `{"Float": 0.5}` o `{"Color": [1.0, 0.0, 0.0, 1.0]}`. NO lleva
+/// `#[serde(tag = "kind")]` como `NodeKind`: aquí la variante ya implica
+/// el tipo y no hace falta duplicarlo en un campo "kind" aparte.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PropertyValue {
+    Float(f32),
+    Color([f32; 4]),
+    Vec2([f32; 2]),
+    Vec3([f32; 3]),
+    Vec4([f32; 4]),
+    Texture(String),
+}
+
+/// Declaración de una propiedad del grafo: una entrada editable desde
+/// fuera (material/UBO) en vez de una constante horneada en un nodo
+/// `Float`/`Color`. Las no-textura viajan en el UBO `GraphProperties`
+/// (set 1, binding 1); las `Texture2D` son un contrato para una fase
+/// futura de descriptors de material (v1 de este paquete no las
+/// declara en ninguna plantilla GLSL, solo las contabiliza en
+/// `properties_ubo_size`/`property_index`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PropertyDef {
+    pub name: String,
+    pub kind: PropertyKind,
+    pub default: PropertyValue,
 }
 
 /// Qué lee un nodo `InteractionPoint` de los vec4 globales.
@@ -372,8 +440,35 @@ pub struct ShaderGraph {
     /// regenerado (ver la doc del módulo). Sin el campo, opaco.
     #[serde(default)]
     pub transparent: bool,
+    /// Propiedades declaradas por el grafo: entradas editables desde el
+    /// material, consumidas por nodos `Property`. Vacío para todo grafo
+    /// anterior a este paquete (los `.graph.json` viejos cargan igual
+    /// por el `#[serde(default)]`).
+    #[serde(default)]
+    pub properties: Vec<PropertyDef>,
+
+    /// Pases de render en los que participa el grafo (Fase 2S):
+    /// Forward = el dibujo normal; Shadow = su etapa de vértices se
+    /// usa también en el pase de sombras del sol (con alpha clip si
+    /// declara la propiedad especial `alpha_clip`); Outline = pase
+    /// de contorno toon (S5). Por defecto solo Forward: los
+    /// `.graph.json` anteriores a este campo cargan igual.
+    #[serde(default = "default_passes")]
+    pub passes: Vec<PassKind>,
 }
 
+/// Un pase de render en el que un grafo puede participar (Fase 2S).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PassKind {
+    Forward,
+    Shadow,
+    Outline,
+}
+
+/// Valor por defecto de `ShaderGraph::passes`: solo el pase normal.
+fn default_passes() -> Vec<PassKind> {
+    vec![PassKind::Forward]
+}
 #[derive(Debug, Error, PartialEq)]
 pub enum GraphError {
     #[error("el grafo no tiene nodo Output")]
@@ -390,8 +485,17 @@ pub enum GraphError {
     VertexOnlyNode(u32),
     #[error("el nodo {0} no está soportado en la etapa de vértices (v1)")]
     StageUnsupported(u32),
+    #[error("la propiedad '{0}' no está declarada en el grafo")]
+    UnknownProperty(String),
+    #[error("la propiedad '{0}' es Texture2D y no se puede leer como valor en un nodo Property")]
+    PropertyTypeMismatch(String),
+    #[error("el nodo {0} solo vale en la etapa de fragmento")]
+    FragmentOnlyNode(u32),
+    #[error("el slot de textura {0} no tiene una propiedad Texture2D asociada (slots válidos: 0, o 1..=3 con esa cantidad de propiedades Texture2D declaradas)")]
+    TextureSlotWithoutProperty(u32),
+    #[error("el índice de luz puntual {0} supera el máximo soportado (7)")]
+    PointLightIndexOutOfRange(u32),
 }
-
 /// Tipo GLSL de la salida de un nodo, para coercionar al conectar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum GlslType {
@@ -418,10 +522,28 @@ struct Emitted {
     ty: GlslType,
 }
 
+/// Genera el bloque GLSL del UBO `GraphProperties` (set 1, binding 1) con
+/// un `vec4 p<i>;` por cada propiedad NO-textura, en orden de
+/// declaración. Cadena vacía si no hay ninguna: así una plantilla puede
+/// insertar el resultado sin comprobar antes si hace falta.
+fn graph_properties_ubo_glsl(properties: &[PropertyDef]) -> String {
+    let count = properties.iter().filter(|p| p.kind != PropertyKind::Texture2D).count();
+    if count == 0 {
+        return String::new();
+    }
+    let mut fields = String::new();
+    for i in 0..count {
+        fields.push_str(&format!("    vec4 p{};\n", i));
+    }
+    format!(
+        "layout(set = 1, binding = 1) uniform GraphProperties {{\n{fields}}} u_props;\n",
+        fields = fields
+    )
+}
+
 /// Convierte `expr` del tipo `from` al tipo `to` con las reglas usuales:
 /// un escalar se replica; subir de dimensión rellena (vec3→vec4 con alfa 1).
-fn coerce(expr: &str, from: GlslType, to: GlslType) -> String {
-    if from == to {
+fn coerce(expr: &str, from: GlslType, to: GlslType) -> String {    if from == to {
         return expr.to_string();
     }
     match (from, to) {
@@ -488,8 +610,11 @@ struct Compiler<'a> {
     visiting: Vec<u32>,
     body: String,
     stage: Stage,
+    /// Propiedades declaradas por el grafo, en el orden de
+    /// `ShaderGraph::properties` (el orden de declaración es el que fija
+    /// el índice posicional p<i> del UBO; ver `property_index`).
+    properties: &'a [PropertyDef],
 }
-
 impl<'a> Compiler<'a> {
     /// Entradas válidas de cada tipo de nodo (además de las propiedades).
     fn valid_inputs(kind: &NodeKind) -> &'static [&'static str] {
@@ -500,11 +625,12 @@ impl<'a> Compiler<'a> {
             NodeKind::Output => &["color"],
             NodeKind::VertexOutput => &["offset"],
             NodeKind::ValueNoise { .. } | NodeKind::GradientNoise { .. } | NodeKind::FbmNoise { .. } => &["uv"],
+            NodeKind::TextureSample { .. } => &["uv"],
         NodeKind::Subtract | NodeKind::Divide => &["a", "b"],
         NodeKind::ChannelR | NodeKind::ChannelG | NodeKind::ChannelB | NodeKind::ChannelA => &["x"],
         NodeKind::Combine => &["r", "g", "b", "a"],
         NodeKind::Dot | NodeKind::Distance => &["a", "b"],
-        NodeKind::Length | NodeKind::Normalize | NodeKind::Clamp { .. } | NodeKind::Power { .. } | NodeKind::Step { .. } => &["x"],
+        NodeKind::Length | NodeKind::Normalize | NodeKind::Clamp { .. } | NodeKind::Power { .. } | NodeKind::Step { .. } | NodeKind::ToonBands { .. } => &["x"],
         NodeKind::Modulo => &["x", "y"],
             _ => &[],
         }
@@ -517,6 +643,93 @@ impl<'a> Compiler<'a> {
         } else {
             Ok(default)
         }
+    }
+
+    /// Resuelve un nodo `Property { name }` a su expresión `u_props.p<i>`
+    /// (o `u_props.p<i>.xy`/`.xyz` según el tipo), con `i` el índice
+    /// posicional entre las propiedades NO-textura, en orden de
+    /// declaración. Un vec4/Color se emite como el vec4 completo
+    /// (`u_props.p<i>`), sin sufijo.
+    fn emit_property(&self, name: &str) -> Result<Emitted, GraphError> {
+        let mut vec4_index = 0usize;
+        for p in self.properties {
+            if p.kind == PropertyKind::Texture2D {
+                continue;
+            }
+            if p.name == name {
+                let base = format!("u_props.p{}", vec4_index);
+                return Ok(match p.kind {
+                    PropertyKind::Float => Emitted { expr: format!("{}.x", base), ty: GlslType::Float },
+                    PropertyKind::Vec2 => Emitted { expr: format!("{}.xy", base), ty: GlslType::Vec2 },
+                    PropertyKind::Vec3 => Emitted { expr: format!("{}.xyz", base), ty: GlslType::Vec3 },
+                    PropertyKind::Color | PropertyKind::Vec4 => Emitted { expr: base, ty: GlslType::Vec4 },
+                    PropertyKind::Texture2D => unreachable!(),
+                });
+            }
+            vec4_index += 1;
+        }
+        // Puede estar declarada pero ser una textura: distinguimos el error.
+        if self.properties.iter().any(|p| p.name == name && p.kind == PropertyKind::Texture2D) {
+            return Err(GraphError::PropertyTypeMismatch(name.to_string()));
+        }
+        Err(GraphError::UnknownProperty(name.to_string()))
+    }
+
+    /// Resuelve un nodo `TextureSample { slot }`: slot 0 lee
+    /// `base_color_tex`; slot k en 1..=3 lee `tex_prop_{k-1}`, que exige
+    /// que el grafo declare al menos k propiedades `Texture2D`.
+    fn emit_point_light(
+        &mut self,
+        id: u32,
+        index: u32,
+        es_posicion: bool,
+    ) -> Result<Emitted, GraphError> {
+        if self.stage == Stage::Vertex {
+            return Err(GraphError::FragmentOnlyNode(id));
+        }
+        if index > 7 {
+            return Err(GraphError::PointLightIndexOutOfRange(index));
+        }
+        let expr = if es_posicion {
+            format!("u_point_lights.pos_range[{}].xyz", index)
+        } else {
+            format!("u_point_lights.color_intensity[{}].xyz", index)
+        };
+        Ok(Emitted {
+            expr,
+            ty: GlslType::Vec3,
+        })
+    }
+
+    fn emit_texture_sample(&mut self, id: u32, slot: u32) -> Result<Emitted, GraphError> {
+        if self.stage == Stage::Vertex {
+            return Err(GraphError::FragmentOnlyNode(id));
+        }
+        let sampler = if slot == 0 {
+            "base_color_tex".to_string()
+        } else if slot <= 3 {
+            let tex_count = self
+                .properties
+                .iter()
+                .filter(|p| p.kind == PropertyKind::Texture2D)
+                .count() as u32;
+            if tex_count < slot {
+                return Err(GraphError::TextureSlotWithoutProperty(slot));
+            }
+            format!("tex_prop_{}", slot - 1)
+        } else {
+            return Err(GraphError::TextureSlotWithoutProperty(slot));
+        };
+        let uv = self.input_or(
+            id,
+            "uv",
+            match self.stage {
+                Stage::Fragment => Emitted { expr: "v_uv".into(), ty: GlslType::Vec2 },
+                Stage::Vertex => Emitted { expr: "in_uv".into(), ty: GlslType::Vec2 },
+            },
+        )?;
+        let uv_expr = coerce(&uv.expr.clone(), uv.ty, GlslType::Vec2);
+        Ok(Emitted { expr: format!("texture({}, {})", sampler, uv_expr), ty: GlslType::Vec4 })
     }
 
     fn emit(&mut self, id: u32) -> Result<&Emitted, GraphError> {
@@ -565,6 +778,18 @@ impl<'a> Compiler<'a> {
             // las etapas de vértice y fragmento: el mismo acceso vale en
             // las dos plantillas.
             NodeKind::Time => Ok(Emitted { expr: "u_push.light_color.w".into(), ty: GlslType::Float }),
+            NodeKind::Property { name } => self.emit_property(name),
+            NodeKind::TextureSample { slot } => self.emit_texture_sample(id, *slot),
+            NodeKind::MainLightDirection => Ok(Emitted {
+                expr: "u_push.light_dir.xyz".into(),
+                ty: GlslType::Vec3,
+            }),
+            NodeKind::MainLightColor => Ok(Emitted {
+                expr: "u_push.light_color.xyz".into(),
+                ty: GlslType::Vec3,
+            }),
+            NodeKind::PointLightPosition { index } => self.emit_point_light(id, *index, true),
+            NodeKind::PointLightColor { index } => self.emit_point_light(id, *index, false),
             NodeKind::Uv => Ok(match self.stage {
                 Stage::Fragment => Emitted { expr: "v_uv".into(), ty: GlslType::Vec2 },
                 Stage::Vertex => Emitted { expr: "in_uv".into(), ty: GlslType::Vec2 },
@@ -712,6 +937,18 @@ impl<'a> Compiler<'a> {
                     GlslType::Vec4 => format!("pow({}, vec4({}))", x.expr, e),
                 };
                 Ok(Emitted { expr, ty: x.ty })
+            }
+            NodeKind::ToonBands { bands } => {
+                let x = self.input_or(id, "x", scalar(0.0))?;
+                let x = coerce(&x.expr, x.ty, GlslType::Float);
+                let b = (*bands).clamp(1, 16) as f32;
+                Ok(Emitted {
+                    expr: format!(
+                        "(floor(clamp({}, 0.0, 1.0) * {:.1}) / {:.1})",
+                        x, b, b
+                    ),
+                    ty: GlslType::Float,
+                })
             }
             NodeKind::Step { edge } => {
                 let x = self.input_or(id, "x", scalar(0.0))?;
@@ -875,6 +1112,43 @@ impl ShaderGraph {
     /// Compila el grafo a un fragment shader GLSL 450 completo, listo para
     /// glslangValidator. La plantilla declara las mismas entradas que el
     /// pipeline de mallas del motor (posición, normal, UV).
+    /// Declaraciones GLSL de los samplers extra (`tex_prop_0..2`) que usa
+    /// el grafo, en orden creciente de slot, una línea por slot usado.
+    /// Vacío si ningún nodo `TextureSample` usa slot 1..=3.
+    fn point_lights_ubo_glsl(&self) -> String {
+        let usa_luces_puntuales = self.nodes.iter().any(|n| {
+            matches!(
+                n.kind,
+                NodeKind::PointLightPosition { .. } | NodeKind::PointLightColor { .. }
+            )
+        });
+        if !usa_luces_puntuales {
+            return String::new();
+        }
+        "layout(set = 3, binding = 0, std140) uniform PointLights {\n    vec4 pos_range[8];\n    vec4 color_intensity[8];\n    vec4 shadow[8];\n    uint count;\n    uint _pad0;\n    uint _pad1;\n    uint _pad2;\n} u_point_lights;\n".to_string()
+    }
+
+    fn texture_extra_samplers(&self) -> String {
+        let mut slots: Vec<u32> = self
+            .nodes
+            .iter()
+            .filter_map(|n| match &n.kind {
+                NodeKind::TextureSample { slot } if (1..=3).contains(slot) => Some(*slot),
+                _ => None,
+            })
+            .collect();
+        slots.sort_unstable();
+        slots.dedup();
+        let mut out = String::new();
+        for slot in slots {
+            out.push_str(&format!(
+                "layout(set = 0, binding = {slot}) uniform sampler2D tex_prop_{};\n",
+                slot - 1
+            ));
+        }
+        out
+    }
+
     pub fn compile_fragment(&self) -> Result<String, GraphError> {
         let (nodes, inputs) = self.validated_maps()?;
         let output = self
@@ -890,6 +1164,7 @@ impl ShaderGraph {
             visiting: Vec::new(),
             body: String::new(),
             stage: Stage::Fragment,
+            properties: &self.properties,
         };
 
         // El color final: la entrada "color" del Output (negro si no hay).
@@ -901,6 +1176,10 @@ impl ShaderGraph {
             None => "vec4(0.0, 0.0, 0.0, 1.0)".to_string(),
         };
 
+        let props_ubo = graph_properties_ubo_glsl(&self.properties);
+        let extra_samplers = self.texture_extra_samplers();
+        let point_lights = self.point_lights_ubo_glsl();
+
         Ok(format!(
             "#version 450\n\
              // Generado por el grafo de shaders «{name}» de GlassEngine.\n\
@@ -909,6 +1188,7 @@ impl ShaderGraph {
              layout(location = 2) in vec2 v_uv;\n\
              layout(location = 0) out vec4 out_color;\n\
              layout(set = 0, binding = 0) uniform sampler2D base_color_tex;\n\
+             {extra_samplers}\
              layout(push_constant) uniform PushConstants {{\n\
              \x20   mat4 mvp;\n\
              \x20   mat4 model;\n\
@@ -919,18 +1199,21 @@ impl ShaderGraph {
              \x20   vec4 camera_pos;\n\
              }} u_push;\n\
              {globals}\
+             {props_ubo}\
+             {point_lights}\
              {noise}\
              void main() {{\n{body}\
              \x20   out_color = {final_expr};\n\
              }}\n",
             name = self.name,
             globals = GRAPH_GLOBALS_GLSL,
+            props_ubo = props_ubo,
+            point_lights = point_lights,
             noise = NOISE_GLSL,
             body = compiler.body,
             final_expr = final_expr
         ))
     }
-
     /// Compila la sub-red de vértices a un vertex shader GLSL 450, espejo
     /// del vértice PBR del motor (mismos atributos, varyings y bloque de
     /// push constants — que debe permanecer idéntico byte a byte al del
@@ -944,8 +1227,45 @@ impl ShaderGraph {
     /// matrices de modelo y MVP (el patrón de Shader Graph), así que lo
     /// escala el transform de la entidad. Las normales NO se recalculan:
     /// viajan las originales (límite documentado de la v1).
-    pub fn compile_vertex(&self) -> Result<Option<String>, GraphError> {
-        let Some(vertex_output) = self
+    /// Tamaño en bytes del UBO `GraphProperties`: 16 (un vec4) por cada
+    /// propiedad NO-textura declarada. Las `Texture2D` no ocupan sitio
+    /// en este UBO (van por un set de descriptors aparte, fuera del
+    /// alcance de este paquete).    /// ¿Participa el grafo en el pase `pass`? (Fase 2S.)
+    pub fn has_pass(&self, pass: PassKind) -> bool {
+        self.passes.contains(&pass)
+    }
+
+    pub fn properties_ubo_size(&self) -> u32 {
+        16 * self.properties.iter().filter(|p| p.kind != PropertyKind::Texture2D).count() as u32
+    }
+
+    /// Índice de una propiedad dentro de su grupo (no-textura o
+    /// textura, cada uno numerado por separado desde 0 en orden de
+    /// declaración) y su `PropertyKind`. Para una propiedad no-textura,
+    /// el índice es el mismo `i` del campo `p<i>` del UBO. Para una
+    /// `Texture2D`, el índice es su posición entre las demás texturas
+    /// del grafo (no un índice de UBO: las texturas no viven ahí).
+    /// `None` si no hay ninguna propiedad con ese nombre.
+    pub fn property_index(&self, name: &str) -> Option<(usize, PropertyKind)> {
+        let mut vec4_index = 0usize;
+        let mut tex_index = 0usize;
+        for p in &self.properties {
+            if p.kind == PropertyKind::Texture2D {
+                if p.name == name {
+                    return Some((tex_index, p.kind));
+                }
+                tex_index += 1;
+            } else {
+                if p.name == name {
+                    return Some((vec4_index, p.kind));
+                }
+                vec4_index += 1;
+            }
+        }
+        None
+    }
+
+    pub fn compile_vertex(&self) -> Result<Option<String>, GraphError> {        let Some(vertex_output) = self
             .nodes
             .iter()
             .find(|n| matches!(n.kind, NodeKind::VertexOutput))
@@ -964,9 +1284,12 @@ impl ShaderGraph {
             visiting: Vec::new(),
             body: String::new(),
             stage: Stage::Vertex,
+            properties: &self.properties,
         };
         let e = compiler.emit(src)?;
         let offset_expr = coerce(&e.expr.clone(), e.ty, GlslType::Vec3);
+
+        let props_ubo = graph_properties_ubo_glsl(&self.properties);
 
         Ok(Some(format!(
             "#version 450\n\
@@ -987,6 +1310,7 @@ impl ShaderGraph {
              \x20   vec4 camera_pos;\n\
              }} u_push;\n\
              {globals}\
+             {props_ubo}\
              {noise}\
              void main() {{\n{body}\
              \x20   vec3 displaced = in_position + {offset};\n\
@@ -997,12 +1321,12 @@ impl ShaderGraph {
              }}\n",
             name = self.name,
             globals = GRAPH_GLOBALS_GLSL,
+            props_ubo = props_ubo,
             noise = NOISE_GLSL,
             body = compiler.body,
             offset = offset_expr
         )))
     }
-
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).unwrap_or_default()
     }
@@ -1034,15 +1358,15 @@ pub mod presets {
             name: "agua".into(),
             nodes: vec![
                 node(1, NodeKind::Uv),
-                node(2, NodeKind::Float { value: 8.0 }),
+                node(2, NodeKind::Property { name: "frecuencia".into() }),
                 node(3, NodeKind::Multiply), // uv * 8 (vec2)
                 node(4, NodeKind::Time),
-                node(5, NodeKind::Float { value: 1.5 }),
+                node(5, NodeKind::Property { name: "velocidad".into() }),
                 node(6, NodeKind::Multiply), // tiempo * 1.5
                 node(7, NodeKind::Add),      // (uv*8) + (t*1.5) -> vec2
                 node(8, NodeKind::Sine),     // sin(...) vec2
-                node(9, NodeKind::Color { rgba: [0.02, 0.15, 0.35, 1.0] }),
-                node(10, NodeKind::Color { rgba: [0.15, 0.55, 0.85, 1.0] }),
+                node(9, NodeKind::Property { name: "color_profundo".into() }),
+                node(10, NodeKind::Property { name: "color_claro".into() }),
                 node(11, NodeKind::Mix),
                 node(12, NodeKind::Output),
             ],
@@ -1059,6 +1383,13 @@ pub mod presets {
                 edge(8, 11, "t"),
                 edge(11, 12, "color"),
             ],
+            properties: vec![
+                PropertyDef { name: "frecuencia".into(), kind: PropertyKind::Float, default: PropertyValue::Float(8.0) },
+                PropertyDef { name: "velocidad".into(), kind: PropertyKind::Float, default: PropertyValue::Float(1.5) },
+                PropertyDef { name: "color_profundo".into(), kind: PropertyKind::Color, default: PropertyValue::Color([0.02, 0.15, 0.35, 1.0]) },
+                PropertyDef { name: "color_claro".into(), kind: PropertyKind::Color, default: PropertyValue::Color([0.15, 0.55, 0.85, 1.0]) },
+            ],
+            passes: vec![PassKind::Forward],
         }
     }
 
@@ -1074,16 +1405,16 @@ pub mod presets {
             name: "espuma".into(),
             nodes: vec![
                 node(1, NodeKind::Uv),
-                node(2, NodeKind::Float { value: 30.0 }),
+                node(2, NodeKind::Property { name: "frecuencia".into() }),
                 node(3, NodeKind::Multiply),
                 node(4, NodeKind::Time),
-                node(5, NodeKind::Float { value: -2.0 }),
+                node(5, NodeKind::Property { name: "velocidad".into() }),
                 node(6, NodeKind::Multiply),
                 node(7, NodeKind::Add),
                 node(8, NodeKind::Sine),
                 node(9, NodeKind::Smoothstep { edge0: 0.6, edge1: 0.95 }),
-                node(10, NodeKind::Color { rgba: [0.05, 0.25, 0.5, 1.0] }),
-                node(11, NodeKind::Color { rgba: [1.0, 1.0, 1.0, 1.0] }),
+                node(10, NodeKind::Property { name: "color_base".into() }),
+                node(11, NodeKind::Property { name: "color_espuma".into() }),
                 node(12, NodeKind::Mix),
                 node(13, NodeKind::Output),
                 node(14, NodeKind::RadialUv { edge0: 0.7, edge1: 1.0 }),
@@ -1105,6 +1436,13 @@ pub mod presets {
                 edge(14, 15, "b"),
                 edge(15, 13, "color"),
             ],
+            properties: vec![
+                PropertyDef { name: "frecuencia".into(), kind: PropertyKind::Float, default: PropertyValue::Float(30.0) },
+                PropertyDef { name: "velocidad".into(), kind: PropertyKind::Float, default: PropertyValue::Float(-2.0) },
+                PropertyDef { name: "color_base".into(), kind: PropertyKind::Color, default: PropertyValue::Color([0.05, 0.25, 0.5, 1.0]) },
+                PropertyDef { name: "color_espuma".into(), kind: PropertyKind::Color, default: PropertyValue::Color([1.0, 1.0, 1.0, 1.0]) },
+            ],
+            passes: vec![PassKind::Forward],
         }
     }
 
@@ -1116,13 +1454,13 @@ pub mod presets {
             name: "fragmentos".into(),
             nodes: vec![
                 node(1, NodeKind::Uv),
-                node(2, NodeKind::Float { value: 40.0 }),
+                node(2, NodeKind::Property { name: "frecuencia".into() }),
                 node(3, NodeKind::Multiply),
                 node(4, NodeKind::Sine),
                 node(5, NodeKind::Fresnel { power: 2.0 }),
                 node(6, NodeKind::Multiply), // fresnel * destello
-                node(7, NodeKind::Color { rgba: [0.1, 0.12, 0.2, 1.0] }),
-                node(8, NodeKind::Color { rgba: [0.85, 0.95, 1.0, 1.0] }),
+                node(7, NodeKind::Property { name: "color_base".into() }),
+                node(8, NodeKind::Property { name: "color_destello".into() }),
                 node(9, NodeKind::Mix),
                 node(10, NodeKind::Output),
             ],
@@ -1137,6 +1475,12 @@ pub mod presets {
                 edge(6, 9, "t"),
                 edge(9, 10, "color"),
             ],
+            properties: vec![
+                PropertyDef { name: "frecuencia".into(), kind: PropertyKind::Float, default: PropertyValue::Float(40.0) },
+                PropertyDef { name: "color_base".into(), kind: PropertyKind::Color, default: PropertyValue::Color([0.1, 0.12, 0.2, 1.0]) },
+                PropertyDef { name: "color_destello".into(), kind: PropertyKind::Color, default: PropertyValue::Color([0.85, 0.95, 1.0, 1.0]) },
+            ],
+            passes: vec![PassKind::Forward],
         }
     }
 
@@ -1153,7 +1497,7 @@ pub mod presets {
                 node(5, NodeKind::Abs),
                 node(6, NodeKind::Smoothstep { edge0: 0.0, edge1: 0.5 }),
                 node(7, NodeKind::OneMinus),
-                node(8, NodeKind::Color { rgba: [1.0, 0.1, 0.1, 1.0] }),
+                node(8, NodeKind::Property { name: "color".into() }),
                 node(9, NodeKind::Multiply),
                 node(10, NodeKind::Output),
             ],
@@ -1167,6 +1511,10 @@ pub mod presets {
                 edge(7, 9, "b"),
                 edge(9, 10, "color"),
             ],
+            properties: vec![
+                PropertyDef { name: "color".into(), kind: PropertyKind::Color, default: PropertyValue::Color([1.0, 0.1, 0.1, 1.0]) },
+            ],
+            passes: vec![PassKind::Forward],
         }
     }
 
@@ -1178,15 +1526,15 @@ pub mod presets {
             name: "brisa".into(),
             nodes: vec![
                 node(1, NodeKind::Uv),
-                node(2, NodeKind::Float { value: 3.0 }),
+                node(2, NodeKind::Property { name: "frecuencia".into() }),
                 node(3, NodeKind::Multiply),
                 node(4, NodeKind::Time),
-                node(5, NodeKind::Float { value: 0.8 }),
+                node(5, NodeKind::Property { name: "velocidad".into() }),
                 node(6, NodeKind::Multiply),
                 node(7, NodeKind::Add),
                 node(8, NodeKind::Sine),
-                node(9, NodeKind::Color { rgba: [0.08, 0.3, 0.08, 1.0] }),
-                node(10, NodeKind::Color { rgba: [0.45, 0.75, 0.3, 1.0] }),
+                node(9, NodeKind::Property { name: "color_oscuro".into() }),
+                node(10, NodeKind::Property { name: "color_claro".into() }),
                 node(11, NodeKind::Mix),
                 node(12, NodeKind::Output),
             ],
@@ -1203,6 +1551,13 @@ pub mod presets {
                 edge(8, 11, "t"),
                 edge(11, 12, "color"),
             ],
+            properties: vec![
+                PropertyDef { name: "frecuencia".into(), kind: PropertyKind::Float, default: PropertyValue::Float(3.0) },
+                PropertyDef { name: "velocidad".into(), kind: PropertyKind::Float, default: PropertyValue::Float(0.8) },
+                PropertyDef { name: "color_oscuro".into(), kind: PropertyKind::Color, default: PropertyValue::Color([0.08, 0.3, 0.08, 1.0]) },
+                PropertyDef { name: "color_claro".into(), kind: PropertyKind::Color, default: PropertyValue::Color([0.45, 0.75, 0.3, 1.0]) },
+            ],
+            passes: vec![PassKind::Forward],
         }
     }
 
@@ -1215,7 +1570,7 @@ pub mod presets {
             name: "tormenta_arena".into(),
             nodes: vec![
                 node(1, NodeKind::Uv),
-                node(2, NodeKind::Float { value: 12.0 }),
+                node(2, NodeKind::Property { name: "frecuencia".into() }),
                 node(3, NodeKind::Multiply),
                 node(4, NodeKind::Time),
                 node(5, NodeKind::Float { value: 3.0 }),
@@ -1229,8 +1584,8 @@ pub mod presets {
                 node(13, NodeKind::Add),
                 node(14, NodeKind::Sine),
                 node(15, NodeKind::Multiply), // capa1 * capa2
-                node(16, NodeKind::Color { rgba: [0.45, 0.32, 0.15, 1.0] }),
-                node(17, NodeKind::Color { rgba: [0.9, 0.75, 0.45, 1.0] }),
+                node(16, NodeKind::Property { name: "color_oscuro".into() }),
+                node(17, NodeKind::Property { name: "color_claro".into() }),
                 node(18, NodeKind::Mix),
                 node(19, NodeKind::Output),
             ],
@@ -1256,12 +1611,142 @@ pub mod presets {
                 edge(15, 18, "t"),
                 edge(18, 19, "color"),
             ],
+            properties: vec![
+                PropertyDef { name: "frecuencia".into(), kind: PropertyKind::Float, default: PropertyValue::Float(12.0) },
+                PropertyDef { name: "color_oscuro".into(), kind: PropertyKind::Color, default: PropertyValue::Color([0.45, 0.32, 0.15, 1.0]) },
+                PropertyDef { name: "color_claro".into(), kind: PropertyKind::Color, default: PropertyValue::Color([0.9, 0.75, 0.45, 1.0]) },
+            ],
+            passes: vec![PassKind::Forward],
         }
     }
 
     /// Toda la librería, en el orden en que la mostrará el editor.
     pub fn all() -> Vec<ShaderGraph> {
         vec![agua(), espuma(), fragmentos(), laser(), brisa(), tormenta_arena()]
+    }
+}
+
+static GRAPH_SCHEMAS: OnceLock<RwLock<HashMap<String, Vec<PropertyDef>>>> = OnceLock::new();
+
+fn graph_schemas() -> &'static RwLock<HashMap<String, Vec<PropertyDef>>> {
+    GRAPH_SCHEMAS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Registra (o sustituye) el esquema de propiedades de un grafo de shaders.
+pub fn register_graph_schema(name: String, props: Vec<PropertyDef>) {
+    graph_schemas().write().unwrap().insert(name, props);
+}
+
+/// Devuelve una copia del esquema de propiedades del grafo `name`, si está
+/// registrado.
+pub fn graph_schema(name: &str) -> Option<Vec<PropertyDef>> {
+    graph_schemas().read().unwrap().get(name).cloned()
+}
+/// Nombres de todos los grafos con esquema registrado.
+pub fn graph_schema_names() -> Vec<String> {
+    graph_schemas().read().unwrap().keys().cloned().collect()
+}
+
+static GRAPH_PASSES: OnceLock<RwLock<HashMap<String, Vec<PassKind>>>> = OnceLock::new();
+
+fn graph_passes_map() -> &'static RwLock<HashMap<String, Vec<PassKind>>> {
+    GRAPH_PASSES.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Registra los pases declarados por el grafo `name` (Fase 2S): la app
+/// los registra al arrancar desde los .graph.json para que el renderer
+/// decida los pipelines extra (sombra de grafo, contorno) sin releer
+/// los archivos.
+pub fn register_graph_passes(name: String, passes: Vec<PassKind>) {
+    graph_passes_map().write().unwrap().insert(name, passes);
+}
+
+/// Pases registrados del grafo `name`, si los hay.
+pub fn graph_passes(name: &str) -> Option<Vec<PassKind>> {
+    graph_passes_map().read().unwrap().get(name).cloned()
+}
+
+/// Empaqueta los valores de las propiedades no-textura de `schema` en un
+/// vector de floats listo para subir a la UBO del grafo: 4 floats por
+/// propiedad, en orden de declaración, ignorando las `Texture2D` (no ocupan
+/// hueco en la UBO).
+///
+/// Para cada propiedad usa el valor de `overrides[nombre]` si existe y es
+/// compatible con su `PropertyKind`; si no hay override, o es de un tipo
+/// incompatible, usa el `default` de la propiedad.
+pub fn pack_property_values(
+    schema: &[PropertyDef],
+    overrides: &serde_json::Map<String, serde_json::Value>,
+) -> Vec<f32> {
+    let mut out = Vec::new();
+
+    for prop in schema {
+        if matches!(prop.kind, PropertyKind::Texture2D) {
+            continue;
+        }
+
+        let packed = overrides
+            .get(&prop.name)
+            .and_then(|v| pack_override(prop.kind, v))
+            .unwrap_or_else(|| pack_default(&prop.default));
+
+        out.extend_from_slice(&packed);
+    }
+
+    out
+}
+
+/// Intenta empaquetar un valor de override JSON según el `PropertyKind`
+/// esperado. `None` si el tipo del JSON no es compatible.
+fn pack_override(kind: PropertyKind, value: &serde_json::Value) -> Option<[f32; 4]> {
+    match kind {
+        PropertyKind::Float => value.as_f64().map(|f| [f as f32, 0.0, 0.0, 0.0]),
+        PropertyKind::Color | PropertyKind::Vec4 => {
+            let arr = value.as_array()?;
+            if arr.len() < 3 {
+                return None;
+            }
+            let x = arr[0].as_f64()? as f32;
+            let y = arr[1].as_f64()? as f32;
+            let z = arr[2].as_f64()? as f32;
+            let w = if arr.len() >= 4 {
+                arr[3].as_f64()? as f32
+            } else {
+                1.0
+            };
+            Some([x, y, z, w])
+        }
+        PropertyKind::Vec3 => {
+            let arr = value.as_array()?;
+            if arr.len() < 3 {
+                return None;
+            }
+            let x = arr[0].as_f64()? as f32;
+            let y = arr[1].as_f64()? as f32;
+            let z = arr[2].as_f64()? as f32;
+            Some([x, y, z, 0.0])
+        }
+        PropertyKind::Vec2 => {
+            let arr = value.as_array()?;
+            if arr.len() < 2 {
+                return None;
+            }
+            let x = arr[0].as_f64()? as f32;
+            let y = arr[1].as_f64()? as f32;
+            Some([x, y, 0.0, 0.0])
+        }
+        PropertyKind::Texture2D => None,
+    }
+}
+
+/// Empaqueta el `default` declarado de una propiedad en 4 floats.
+fn pack_default(default: &PropertyValue) -> [f32; 4] {
+    match *default {
+        PropertyValue::Float(v) => [v, 0.0, 0.0, 0.0],
+        PropertyValue::Color(v) | PropertyValue::Vec4(v) => v,
+        PropertyValue::Vec3([x, y, z]) => [x, y, z, 0.0],
+        PropertyValue::Vec2([x, y]) => [x, y, 0.0, 0.0],
+        PropertyValue::Texture(_) => [0.0, 0.0, 0.0, 0.0],
     }
 }
 
@@ -1321,7 +1806,9 @@ mod tests {
                 GraphEdge { from_node: 3, to_node: 4, to_input: "color".into() },
                 GraphEdge { from_node: 2, to_node: 5, to_input: "offset".into() },
             ],
-        };
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
         let frag = g.compile_fragment().expect("fragmento compila");
         assert!(frag.contains("length(v_uv - vec2(0.5))"));
         let vert = g.compile_vertex().expect("vértices compila").expect("hay etapa de vértices");
@@ -1353,7 +1840,9 @@ mod tests {
                 GraphEdge { from_node: 1, to_node: 2, to_input: "a".into() },
                 GraphEdge { from_node: 1, to_node: 3, to_input: "color".into() },
             ],
-        };
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
         assert!(matches!(g.compile_fragment(), Err(GraphError::Cycle(_))));
     }
 
@@ -1364,7 +1853,9 @@ mod tests {
             name: "x".into(),
             nodes: vec![GraphNode { id: 1, kind: NodeKind::Time, position: [0.0, 0.0] }],
             edges: vec![],
-        };
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
         assert_eq!(sin_output.compile_fragment(), Err(GraphError::MissingOutput));
 
         let mala = ShaderGraph {
@@ -1375,7 +1866,9 @@ mod tests {
                 GraphNode { id: 2, kind: NodeKind::Output, position: [0.0, 0.0] },
             ],
             edges: vec![GraphEdge { from_node: 1, to_node: 2, to_input: "brillo".into() }],
-        };
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
         assert!(matches!(mala.compile_fragment(), Err(GraphError::UnknownInput(2, _))));
     }
 
@@ -1449,6 +1942,8 @@ mod tests {
                 arista(22, 23, "offset"),
                 arista(24, 25, "color"),
             ],
+            properties: vec![],
+            passes: vec![PassKind::Forward],
         }
     }
 
@@ -1493,7 +1988,9 @@ mod tests {
                 nodo(2, NodeKind::Output),
             ],
             edges: vec![arista(1, 2, "color")],
-        };
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
         assert_eq!(g.compile_fragment(), Err(GraphError::VertexOnlyNode(1)));
     }
 
@@ -1509,7 +2006,9 @@ mod tests {
                 nodo(4, NodeKind::Output),
             ],
             edges: vec![arista(1, 2, "offset"), arista(3, 4, "color")],
-        };
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
         assert_eq!(g.compile_vertex(), Err(GraphError::StageUnsupported(1)));
     }
 
@@ -1548,6 +2047,8 @@ mod tests {
                 arista(8, 11, "t"),
                 arista(11, 12, "color"),
             ],
+            properties: vec![],
+            passes: vec![PassKind::Forward],
         }
     }
 
@@ -1603,7 +2104,9 @@ mod tests {
                 nodo(4, K::VertexOutput),
             ],
             edges: vec![arista(1, 2, "color"), arista(3, 4, "offset")],
-        };
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
         let frag = g.compile_fragment().unwrap();
         assert!(frag.contains("vec4 n1 = u_globals.interaction_point;"), "{}", frag);
         // Radius en la etapa de vértices: el w crudo, sin distancias.
@@ -1661,6 +2164,8 @@ mod tests {
                 arista(1, 2, "uv"),
                 arista(2, 3, "color"),
             ],
+            properties: vec![],
+            passes: vec![PassKind::Forward],
         }
     }
 
@@ -1718,7 +2223,9 @@ mod tests {
                 arista(2, 3, "b"),
                 arista(3, 4, "color"),
             ],
-        };
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
         let glsl = g.compile_fragment().expect("compila");
         assert_eq!(glsl.matches("float graph_value_noise(").count(), 1, "{}", glsl);
         assert_eq!(glsl.matches("float graph_fbm_noise(").count(), 1, "{}", glsl);
@@ -1735,7 +2242,9 @@ mod tests {
                 nodo(2, NodeKind::VertexOutput),
             ],
             edges: vec![arista(1, 2, "offset")],
-        };
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
         let vert = g.compile_vertex().expect("compila").expect("hay vértice");
         assert!(vert.contains("graph_value_noise(in_uv, 8.0)"), "{}", vert);
     }
@@ -1760,7 +2269,9 @@ mod tests {
                 arista(5, 4, "b"),
                 arista(4, 6, "color"),
             ],
-        };
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
         let glsl = g.compile_fragment().expect("compila");
         assert!(glsl.contains("vec2 n3 = (n1 - vec2(n2));"), "{glsl}");
         assert!(glsl.contains("vec2 n4 = (n3 / vec2(n5));"), "{glsl}");
@@ -1792,7 +2303,9 @@ mod tests {
                 arista(6, 7, "a"),
                 arista(7, 8, "color"),
             ],
-        };
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
         let glsl = g.compile_fragment().expect("compila");
         assert!(glsl.contains("float n3 = 0.0;"), "{glsl}");
         assert!(glsl.contains("float n4 = 1.0;"), "{glsl}");
@@ -1818,7 +2331,9 @@ mod tests {
                 arista(3, 4, "b"),
                 arista(4, 5, "color"),
             ],
-        };
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
         let glsl = g.compile_fragment().expect("compila");
         assert!(glsl.contains("vec4 n4 = vec4(n1, n2, n3, 1.0);"), "{glsl}");
     }
@@ -1857,7 +2372,9 @@ mod tests {
                 arista(9, 10, "a"),
                 arista(10, 11, "color"),
             ],
-        };
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
         let glsl = g.compile_fragment().expect("compila");
         assert!(glsl.contains("float n4 = length(n3);"), "{glsl}");
         assert!(glsl.contains("float n5 = dot(n3, n3);"), "{glsl}");
@@ -1893,7 +2410,9 @@ mod tests {
                 arista(7, 8, "a"),
                 arista(8, 9, "color"),
             ],
-        };
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
         let glsl = g.compile_fragment().expect("compila");
         assert!(glsl.contains("float n2 = clamp(n1, 0.0, 1.0);"), "{glsl}");
         assert!(glsl.contains("float n3 = pow(n1, 2.0);"), "{glsl}");
@@ -1919,10 +2438,482 @@ mod tests {
                 arista(3, 4, "x"),
                 arista(4, 5, "color"),
             ],
-        };
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
         let glsl = g.compile_fragment().expect("compila");
         assert!(glsl.contains("vec2 n3 = (n1 - vec2(n2));"), "{glsl}");
         assert!(glsl.contains("float n4 = length(n3);"), "{glsl}");
         assert!(glsl.contains("out_color = vec4(vec3(n4), 1.0);"), "{glsl}");
     }
+
+#[test]
+fn property_no_textura_compila_y_declara_ubo() {
+    let graph = ShaderGraph {
+        name: "props_test".into(),
+        nodes: vec![
+            nodo(1, NodeKind::Property { name: "tinte".into() }),
+            nodo(2, NodeKind::Output),
+        ],
+        edges: vec![arista(1, 2, "color")],
+        transparent: false,
+        properties: vec![
+            PropertyDef { name: "brillo".into(), kind: PropertyKind::Float, default: PropertyValue::Float(0.5) },
+            PropertyDef { name: "tinte".into(), kind: PropertyKind::Color, default: PropertyValue::Color([1.0, 1.0, 1.0, 1.0]) },
+        ],
+    
+        passes: vec![PassKind::Forward],};
+    let glsl = graph.compile_fragment().expect("debe compilar");
+    assert!(glsl.contains("GraphProperties"));
+    assert!(glsl.contains("p0"));
+    assert!(glsl.contains("p1"));
+    assert!(glsl.contains("u_props.p1"));
+    assert!(!glsl.contains("u_props.p1."));
+}
+
+#[test]
+fn property_float_usa_sufijo_x() {
+    let graph = ShaderGraph {
+        name: "props_float".into(),
+        nodes: vec![
+            nodo(1, NodeKind::Property { name: "brillo".into() }),
+            nodo(2, NodeKind::Output),
+        ],
+        edges: vec![arista(1, 2, "color")],
+        transparent: false,
+        properties: vec![
+            PropertyDef { name: "brillo".into(), kind: PropertyKind::Float, default: PropertyValue::Float(0.5) },
+        ],
+    
+        passes: vec![PassKind::Forward],};
+    let glsl = graph.compile_fragment().expect("debe compilar");
+    assert!(glsl.contains("u_props.p0.x"));
+}
+
+#[test]
+fn property_no_declarada_es_error() {
+    let graph = ShaderGraph {
+        name: "props_unknown".into(),
+        nodes: vec![
+            nodo(1, NodeKind::Property { name: "no_existe".into() }),
+            nodo(2, NodeKind::Output),
+        ],
+        edges: vec![arista(1, 2, "color")],
+        transparent: false,
+        properties: vec![],
+    
+        passes: vec![PassKind::Forward],};
+    assert_eq!(
+        graph.compile_fragment(),
+        Err(GraphError::UnknownProperty("no_existe".into()))
+    );
+}
+
+#[test]
+fn property_sobre_textura_es_error() {
+    let graph = ShaderGraph {
+        name: "props_tex".into(),
+        nodes: vec![
+            nodo(1, NodeKind::Property { name: "albedo".into() }),
+            nodo(2, NodeKind::Output),
+        ],
+        edges: vec![arista(1, 2, "color")],
+        transparent: false,
+        properties: vec![
+            PropertyDef { name: "albedo".into(), kind: PropertyKind::Texture2D, default: PropertyValue::Texture(String::new()) },
+        ],
+    
+        passes: vec![PassKind::Forward],};
+    assert_eq!(
+        graph.compile_fragment(),
+        Err(GraphError::PropertyTypeMismatch("albedo".into()))
+    );
+}
+
+#[test]
+fn properties_ubo_size_cuenta_solo_no_textura() {
+    let graph = ShaderGraph {
+        name: "props_size".into(),
+        nodes: vec![nodo(1, NodeKind::Output)],
+        edges: vec![],
+        transparent: false,
+        properties: vec![
+            PropertyDef { name: "a".into(), kind: PropertyKind::Float, default: PropertyValue::Float(0.0) },
+            PropertyDef { name: "b".into(), kind: PropertyKind::Color, default: PropertyValue::Color([0.0; 4]) },
+            PropertyDef { name: "tex".into(), kind: PropertyKind::Texture2D, default: PropertyValue::Texture(String::new()) },
+        ],
+    
+        passes: vec![PassKind::Forward],};
+    assert_eq!(graph.properties_ubo_size(), 32);
+}
+
+#[test]
+fn grafo_sin_propiedades_no_declara_ubo() {
+    // Grafo mínimo sin propiedades (la librería ya migró sus constantes
+    // a propiedades en la Fase 2S, así que el ejemplo se construye aquí).
+    let g = ShaderGraph {
+        name: "plano".into(),
+        nodes: vec![
+            nodo(1, NodeKind::Color { rgba: [1.0, 0.0, 0.0, 1.0] }),
+            nodo(2, NodeKind::Output),
+        ],
+        edges: vec![arista(1, 2, "color")],
+        transparent: false,
+        properties: vec![],
+    
+        passes: vec![PassKind::Forward],};
+    let glsl = g.compile_fragment().expect("debe compilar");
+    assert!(!glsl.contains("GraphProperties"));
+    // Y la librería migrada SÍ declara el UBO de propiedades.
+    let glsl_agua = presets::agua().compile_fragment().expect("debe compilar");
+    assert!(glsl_agua.contains("GraphProperties"));
+}
+
+#[test]
+    fn texture_sample_slot1_declara_sampler_extra() {
+        let g = ShaderGraph {
+            name: "muestra_mascara".into(),
+            nodes: vec![
+                nodo(1, NodeKind::TextureSample { slot: 1 }),
+                nodo(2, NodeKind::Output),
+            ],
+            edges: vec![arista(1, 2, "color")],
+            transparent: false,
+            properties: vec![PropertyDef {
+                name: "mascara".into(),
+                kind: PropertyKind::Texture2D,
+                default: PropertyValue::Texture("checker".into()),
+            }],
+        
+            passes: vec![PassKind::Forward],};
+        let glsl = g.compile_fragment().expect("compila");
+        assert!(glsl.contains("binding = 1"), "{glsl}");
+        assert!(glsl.contains("tex_prop_0"), "{glsl}");
+        assert!(glsl.contains("texture(tex_prop_0"), "{glsl}");
+    }
+
+    #[test]
+    fn texture_sample_slot0_usa_la_base_sin_extra() {
+        let g = ShaderGraph {
+            name: "muestra_base".into(),
+            nodes: vec![
+                nodo(1, NodeKind::TextureSample { slot: 0 }),
+                nodo(2, NodeKind::Output),
+            ],
+            edges: vec![arista(1, 2, "color")],
+            transparent: false,
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
+        let glsl = g.compile_fragment().expect("compila");
+        assert!(glsl.contains("texture(base_color_tex"), "{glsl}");
+        assert!(!glsl.contains("tex_prop_0"), "{glsl}");
+    }
+
+    #[test]
+    fn texture_sample_sin_propiedad_es_error() {
+        let g = ShaderGraph {
+            name: "muestra_huerfana".into(),
+            nodes: vec![
+                nodo(1, NodeKind::TextureSample { slot: 1 }),
+                nodo(2, NodeKind::Output),
+            ],
+            edges: vec![arista(1, 2, "color")],
+            transparent: false,
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
+        assert!(matches!(
+            g.compile_fragment(),
+            Err(GraphError::TextureSlotWithoutProperty(1))
+        ));
+    }
+
+    #[test]
+    fn texture_sample_en_vertices_es_error() {
+        let g = ShaderGraph {
+            name: "muestra_vertices".into(),
+            nodes: vec![
+                nodo(1, NodeKind::TextureSample { slot: 0 }),
+                nodo(2, NodeKind::VertexOutput),
+                nodo(3, NodeKind::Color { rgba: [1.0, 1.0, 1.0, 1.0] }),
+                nodo(4, NodeKind::Output),
+            ],
+            edges: vec![arista(1, 2, "offset"), arista(3, 4, "color")],
+            transparent: false,
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
+        assert!(matches!(
+            g.compile_vertex(),
+            Err(GraphError::FragmentOnlyNode(1))
+        ));
+    }
+
+    #[test]
+    fn luz_principal_compila_sin_ubo_puntuales() {
+        let g = ShaderGraph {
+            name: "test".into(),
+            nodes: vec![
+                nodo(1, NodeKind::MainLightColor),
+                nodo(2, NodeKind::Output),
+            ],
+            edges: vec![arista(1, 2, "color")],
+            transparent: false,
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
+        let glsl = g.compile_fragment().expect("debe compilar");
+        assert!(glsl.contains("u_push.light_color.xyz"));
+        assert!(!glsl.contains("u_point_lights"));
+    }
+
+    #[test]
+    fn luz_puntual_compila_con_ubo() {
+        let g = ShaderGraph {
+            name: "test".into(),
+            nodes: vec![
+                nodo(1, NodeKind::PointLightPosition { index: 2 }),
+                nodo(2, NodeKind::Output),
+            ],
+            edges: vec![arista(1, 2, "color")],
+            transparent: false,
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
+        let glsl = g.compile_fragment().expect("debe compilar");
+        assert!(glsl.contains("u_point_lights.pos_range[2].xyz"));
+        assert!(glsl.contains("set = 3"));
+    }
+
+    #[test]
+    fn luz_puntual_indice_fuera_de_rango() {
+        let g = ShaderGraph {
+            name: "test".into(),
+            nodes: vec![
+                nodo(1, NodeKind::PointLightColor { index: 8 }),
+                nodo(2, NodeKind::Output),
+            ],
+            edges: vec![arista(1, 2, "color")],
+            transparent: false,
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};
+        assert!(matches!(
+            g.compile_fragment(),
+            Err(GraphError::PointLightIndexOutOfRange(8))
+        ));
+    }
+
+    #[test]
+    fn luz_puntual_en_vertices_es_error() {
+        let g = ShaderGraph {
+            name: "test".into(),
+            nodes: vec![
+                nodo(1, NodeKind::PointLightPosition { index: 0 }),
+                nodo(2, NodeKind::VertexOutput),
+                nodo(3, NodeKind::Color { rgba: [1.0, 1.0, 1.0, 1.0] }),
+                nodo(4, NodeKind::Output),
+            ],
+            edges: vec![arista(1, 2, "offset"), arista(3, 4, "color")],
+            transparent: false,
+            properties: vec![],
+        
+            passes: vec![PassKind::Forward],};        assert!(matches!(
+            g.compile_vertex(),
+            Err(GraphError::FragmentOnlyNode(1))
+        ));
+    }
+
+    #[test]
+    fn pases_por_defecto_en_json_viejo() {
+        let json = r#"{
+            "name": "viejo",
+            "nodes": [
+                { "id": 0, "kind": { "kind": "Output" } }
+            ],
+            "edges": [],
+            "transparent": false
+        }"#;
+        let g = ShaderGraph::from_json(json).unwrap();
+        assert!(g.has_pass(PassKind::Forward));
+        assert!(!g.has_pass(PassKind::Shadow));
+    }
+
+    #[test]
+    fn pases_en_json_roundtrip() {
+        let g = ShaderGraph {
+            name: "con_pases".into(),
+            nodes: vec![],
+            edges: vec![],
+            transparent: false,
+            properties: vec![],
+            passes: vec![PassKind::Forward, PassKind::Shadow],
+        };
+        let json = g.to_json();
+        let g2 = ShaderGraph::from_json(&json).unwrap();
+        assert!(g2.has_pass(PassKind::Shadow));
+        assert_eq!(g2.passes.len(), 2);
+    }
+
+    #[test]
+    fn registro_de_pases() {
+        register_graph_passes(
+            "grafo_prueba_pases".into(),
+            vec![PassKind::Forward, PassKind::Outline],
+        );
+        assert_eq!(
+            graph_passes("grafo_prueba_pases"),
+            Some(vec![PassKind::Forward, PassKind::Outline])
+        );
+        assert_eq!(graph_passes("no_registrado_pases"), None);
+    }
+    fn grafo_toon(bands: u32) -> ShaderGraph {
+        ShaderGraph {
+            transparent: false,
+            name: "toon_test".into(),
+            nodes: vec![
+                nodo(1, NodeKind::Float { value: 0.37 }),
+                nodo(2, NodeKind::ToonBands { bands }),
+                nodo(3, NodeKind::Output),
+            ],
+            edges: vec![arista(1, 2, "x"), arista(2, 3, "color")],
+            properties: Vec::new(),
+            passes: vec![PassKind::Forward],
+        }
+    }
+
+    #[test]
+    fn toon_bands_cuantiza_en_el_glsl() {
+        let glsl = grafo_toon(4).compile_fragment().unwrap();
+        assert!(glsl.contains("floor(clamp("), "{}", glsl);
+        assert!(glsl.contains("/ 4.0)"), "{}", glsl);
+    }
+
+    #[test]
+    fn toon_bands_limita_las_bandas() {
+        let glsl = grafo_toon(99).compile_fragment().unwrap();
+        assert!(glsl.contains("/ 16.0)"), "{}", glsl);
+    }
+
+    #[test]
+    fn toon_bands_roundtrip_json() {
+        let json = serde_json::to_string(&grafo_toon(3)).unwrap();
+        let parsed = ShaderGraph::from_json(&json).unwrap();
+        assert!(parsed
+            .nodes
+            .iter()
+            .any(|n| matches!(n.kind, NodeKind::ToonBands { bands: 3 })));
+    }
+}
+
+#[cfg(test)]
+mod pack_property_values_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn schema() -> Vec<PropertyDef> {
+        vec![
+            PropertyDef {
+                name: "albedo".into(),
+                kind: PropertyKind::Color,
+                default: PropertyValue::Color([1.0, 0.0, 0.0, 1.0]),
+            },
+            PropertyDef {
+                name: "tex".into(),
+                kind: PropertyKind::Texture2D,
+                default: PropertyValue::Texture(String::new()),
+            },
+            PropertyDef {
+                name: "roughness".into(),
+                kind: PropertyKind::Float,
+                default: PropertyValue::Float(0.5),
+            },
+            PropertyDef {
+                name: "offset".into(),
+                kind: PropertyKind::Vec2,
+                default: PropertyValue::Vec2([0.0, 0.0]),
+            },
+            PropertyDef {
+                name: "normal_scale".into(),
+                kind: PropertyKind::Vec3,
+                default: PropertyValue::Vec3([1.0, 1.0, 1.0]),
+            },
+        ]
+    }
+
+    #[test]
+    fn empaqueta_defaults_sin_overrides() {
+        let overrides = serde_json::Map::new();
+        let packed = pack_property_values(&schema(), &overrides);
+        assert_eq!(
+            packed,
+            vec![
+                1.0, 0.0, 0.0, 1.0, // albedo
+                0.5, 0.0, 0.0, 0.0, // roughness
+                0.0, 0.0, 0.0, 0.0, // offset
+                1.0, 1.0, 1.0, 0.0, // normal_scale
+            ]
+        );
+    }
+
+    #[test]
+    fn override_parcial_respeta_el_resto() {
+        let mut overrides = serde_json::Map::new();
+        overrides.insert("roughness".into(), json!(0.9));
+        let packed = pack_property_values(&schema(), &overrides);
+        assert_eq!(
+            packed,
+            vec![
+                1.0, 0.0, 0.0, 1.0, // albedo (default)
+                0.9, 0.0, 0.0, 0.0, // roughness (override)
+                0.0, 0.0, 0.0, 0.0, // offset (default)
+                1.0, 1.0, 1.0, 0.0, // normal_scale (default)
+            ]
+        );
+    }
+
+    #[test]
+    fn override_color_con_tres_componentes_asume_alfa_uno() {
+        let mut overrides = serde_json::Map::new();
+        overrides.insert("albedo".into(), json!([0.2, 0.3, 0.4]));
+        let packed = pack_property_values(&schema(), &overrides);
+        assert_eq!(&packed[0..4], &[0.2, 0.3, 0.4, 1.0]);
+    }
+
+    #[test]
+    fn override_tipo_incompatible_se_ignora() {
+        let mut overrides = serde_json::Map::new();
+        // roughness es Float: un array no es compatible.
+        overrides.insert("roughness".into(), json!([1.0, 2.0]));
+        let packed = pack_property_values(&schema(), &overrides);
+        assert_eq!(&packed[4..8], &[0.5, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn textura_intercalada_no_desplaza_indices() {
+        // "tex" está entre "albedo" y "roughness" en el esquema y no debe
+        // ocupar hueco: el bloque de "roughness" sigue siendo el segundo.
+        let overrides = serde_json::Map::new();
+        let packed = pack_property_values(&schema(), &overrides);
+        assert_eq!(packed.len(), 16); // 4 propiedades no-textura * 4 floats
+        assert_eq!(&packed[4..8], &[0.5, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn override_vec2_con_mas_de_dos_componentes_toma_los_dos_primeros() {
+        let mut overrides = serde_json::Map::new();
+        overrides.insert("offset".into(), json!([3.0, 4.0, 999.0]));
+        let packed = pack_property_values(&schema(), &overrides);
+        assert_eq!(&packed[8..12], &[3.0, 4.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn override_vec3_con_cuatro_componentes_ignora_w() {
+        let mut overrides = serde_json::Map::new();
+        overrides.insert("normal_scale".into(), json!([0.1, 0.2, 0.3, 0.9]));
+        let packed = pack_property_values(&schema(), &overrides);
+        assert_eq!(&packed[12..16], &[0.1, 0.2, 0.3, 0.0]);
+    }
+
 }

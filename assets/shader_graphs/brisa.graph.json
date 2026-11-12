@@ -14,8 +14,8 @@
     {
       "id": 2,
       "kind": {
-        "kind": "Float",
-        "value": 3.0
+        "kind": "Property",
+        "name": "frecuencia"
       },
       "position": [
         0.0,
@@ -45,8 +45,8 @@
     {
       "id": 5,
       "kind": {
-        "kind": "Float",
-        "value": 0.8
+        "kind": "Property",
+        "name": "velocidad"
       },
       "position": [
         0.0,
@@ -86,13 +86,8 @@
     {
       "id": 9,
       "kind": {
-        "kind": "Color",
-        "rgba": [
-          0.08,
-          0.3,
-          0.08,
-          1.0
-        ]
+        "kind": "Property",
+        "name": "color_oscuro"
       },
       "position": [
         0.0,
@@ -102,13 +97,8 @@
     {
       "id": 10,
       "kind": {
-        "kind": "Color",
-        "rgba": [
-          0.45,
-          0.75,
-          0.3,
-          1.0
-        ]
+        "kind": "Property",
+        "name": "color_claro"
       },
       "position": [
         0.0,
@@ -191,6 +181,47 @@
       "from_node": 11,
       "to_node": 12,
       "to_input": "color"
+    }
+  ],
+  "transparent": false,
+  "properties": [
+    {
+      "name": "frecuencia",
+      "kind": "Float",
+      "default": {
+        "Float": 3.0
+      }
+    },
+    {
+      "name": "velocidad",
+      "kind": "Float",
+      "default": {
+        "Float": 0.8
+      }
+    },
+    {
+      "name": "color_oscuro",
+      "kind": "Color",
+      "default": {
+        "Color": [
+          0.08,
+          0.3,
+          0.08,
+          1.0
+        ]
+      }
+    },
+    {
+      "name": "color_claro",
+      "kind": "Color",
+      "default": {
+        "Color": [
+          0.45,
+          0.75,
+          0.3,
+          1.0
+        ]
+      }
     }
   ]
 }

@@ -1,5 +1,10 @@
 //! glass_mcp: Internal lightweight JSON-RPC MCP server for runtime engine introspection.
 
+// La lista de tools es un json! gigante: la expansión de la macro
+// necesita más recursión que el límite por defecto (llegó al techo al
+// añadir glass_render_lighting_debug, Fase 2S).
+#![recursion_limit = "512"]
+
 pub mod bake;
 pub mod protocol;
 pub mod scene;

@@ -213,6 +213,7 @@ impl GraphicsPipeline {
         globals_set_layout: vk::DescriptorSetLayout,
         transparent: bool,
         shadow_set_layout: Option<vk::DescriptorSetLayout>,
+        point_lights_set_layout: Option<vk::DescriptorSetLayout>,
     ) -> Result<Self, PipelineError> {
         Self::new_mesh_pipeline_impl(
             device,
@@ -222,7 +223,7 @@ impl GraphicsPipeline {
             Some(globals_set_layout),
             transparent,
             shadow_set_layout,
-            None,
+            point_lights_set_layout,
             None,
         )
     }
@@ -345,15 +346,32 @@ impl GraphicsPipeline {
             .offset(0)
             .size(crate::renderer::MESH_PUSH_CONSTANTS_SIZE)];
 
-        // Set 0: la textura base (baseColor) del material, muestreada por el
-        // fragment shader. Los pipelines cuyo shader no la declara (mesh.frag)
-        // simplemente nunca enlazan el set; el PBR la exige en cada dibujo.
-        let sampler_binding = [vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
-        let set_layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&sampler_binding);
+
+        // Set 0: la(s) textura(s) muestreadas por el fragment shader.
+        // El PBR y las mallas clásicas solo declaran baseColor (binding 0),
+        // un único COMBINED_IMAGE_SAMPLER como siempre. Los pipelines de
+        // grafo (globals_set_layout.is_some()) reservan 4 bindings
+        // (0..=3) para las hasta 4 texturas que un grafo de shader puede
+        // declarar; el grafo que solo use la 0 simplemente no enlaza las
+        // demás, pero el layout debe reflejar el máximo posible.
+        let sampler_bindings: Vec<vk::DescriptorSetLayoutBinding> = if globals_set_layout.is_some() {
+            (0..=3)
+                .map(|binding| {
+                    vk::DescriptorSetLayoutBinding::default()
+                        .binding(binding)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .descriptor_count(1)
+                        .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+                })
+                .collect()
+        } else {
+            vec![vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT)]
+        };
+        let set_layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&sampler_bindings);
         let descriptor_set_layout =
             unsafe { device.create_descriptor_set_layout(&set_layout_info, None)? };
         // Set 0 siempre; el set 1 (globales de grafo) solo cuando el
@@ -783,6 +801,252 @@ impl GraphicsPipeline {
         unsafe { device.destroy_shader_module(vert_module, None) };
         Ok((pipelines[0], layout))
     }
+
+    /// Pipeline de profundidad para los pases de sombra de un grafo
+    /// (Fase 2S): la etapa de vértices es la del grafo (con sus
+    /// GraphGlobals en el set 1) y el set 0 es el de texturas del grafo;
+    /// sin fragmento (profundidad pura) o con el fragmento de recorte
+    /// alfa de la propiedad `alpha_clip`.
+    pub fn new_outline_pipeline(
+        device: Arc<ash::Device>,
+        render_pass: vk::RenderPass,
+        vert_spv: &[u8],
+        frag_spv: &[u8],
+    ) -> Result<Self, PipelineError> {
+        let vert_module = Self::create_shader_module(&device, vert_spv)?;
+        let frag_module = Self::create_shader_module(&device, frag_spv)?;
+        let entry_point = c"main";
+        let shader_stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(vert_module)
+                .name(entry_point),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(frag_module)
+                .name(entry_point),
+        ];
+
+        let binding_descriptions = [vk::VertexInputBindingDescription::default()
+            .binding(0)
+            .stride(std::mem::size_of::<crate::mesh::Vertex>() as u32)
+            .input_rate(vk::VertexInputRate::VERTEX)];
+        let attribute_descriptions = [
+            vk::VertexInputAttributeDescription::default().location(0).binding(0).format(vk::Format::R32G32B32_SFLOAT).offset(0),
+            vk::VertexInputAttributeDescription::default().location(1).binding(0).format(vk::Format::R32G32B32_SFLOAT).offset(12),
+            vk::VertexInputAttributeDescription::default().location(2).binding(0).format(vk::Format::R32G32_SFLOAT).offset(24),
+        ];
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&binding_descriptions)
+            .vertex_attribute_descriptions(&attribute_descriptions);
+
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+            .primitive_restart_enable(false);
+
+        let viewports = [vk::Viewport::default()];
+        let scissors = [vk::Rect2D::default()];
+        let viewport_state_info = vk::PipelineViewportStateCreateInfo::default()
+            .viewports(&viewports)
+            .scissors(&scissors);
+
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state_info =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+        let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
+            .depth_clamp_enable(false)
+            .rasterizer_discard_enable(false)
+            .polygon_mode(vk::PolygonMode::FILL)
+            .line_width(1.0)
+            .cull_mode(vk::CullModeFlags::FRONT)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .depth_bias_enable(false);
+
+        let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
+            .sample_shading_enable(false)
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL)
+            .depth_bounds_test_enable(false)
+            .stencil_test_enable(false);
+
+        let color_blend_attachments = [vk::PipelineColorBlendAttachmentState::default()
+            .blend_enable(false)
+            .color_write_mask(vk::ColorComponentFlags::RGBA)];
+        let color_blending = vk::PipelineColorBlendStateCreateInfo::default()
+            .logic_op_enable(false)
+            .attachments(&color_blend_attachments);
+
+        let push_constant_ranges = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+            .offset(0)
+            .size(crate::renderer::MESH_PUSH_CONSTANTS_SIZE)];
+
+        let set_layouts: [vk::DescriptorSetLayout; 0] = [];
+        let layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&set_layouts)
+            .push_constant_ranges(&push_constant_ranges);
+        let layout = unsafe { device.create_pipeline_layout(&layout_info, None)? };
+
+        let pipeline_info = [vk::GraphicsPipelineCreateInfo::default()
+            .stages(&shader_stages)
+            .vertex_input_state(&vertex_input_info)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state_info)
+            .rasterization_state(&rasterizer)
+            .multisample_state(&multisampling)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blending)
+            .dynamic_state(&dynamic_state_info)
+            .layout(layout)
+            .render_pass(render_pass)
+            .subpass(0)];
+
+        let pipelines = unsafe {
+            device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &pipeline_info, None)
+                .map_err(|(_, err)| PipelineError::Driver(err))?
+        };
+
+        unsafe {
+            device.destroy_shader_module(vert_module, None);
+            device.destroy_shader_module(frag_module, None);
+        }
+
+        Ok(Self {
+            device,
+            layout,
+            pipeline: pipelines[0],
+            descriptor_set_layout: None,
+            joints_set_layout: None,
+            globals_set_layout: None,
+            shadow_set_layout: None,
+            point_lights_set_layout: None,
+            lm_set_layouts: None,
+        })
+    }
+
+
+    pub fn new_depth_pipeline_graph(
+        device: Arc<ash::Device>,
+        render_pass: vk::RenderPass,
+        vert_spv: &[u8],
+        frag_spv: Option<&[u8]>,
+        set0_layout: vk::DescriptorSetLayout,
+        globals_layout: vk::DescriptorSetLayout,
+    ) -> Result<(vk::Pipeline, vk::PipelineLayout), PipelineError> {
+        let vert_module = Self::create_shader_module(&device, vert_spv)?;
+        let frag_module = match frag_spv {
+            Some(spv) => Some(Self::create_shader_module(&device, spv)?),
+            None => None,
+        };
+        let entry_point = c"main";
+        let mut shader_stages = vec![vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(vert_module)
+            .name(entry_point)];
+        if let Some(frag) = frag_module {
+            shader_stages.push(
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(frag)
+                    .name(entry_point),
+            );
+        }
+
+        let binding_descriptions = [vk::VertexInputBindingDescription::default()
+            .binding(0)
+            .stride(std::mem::size_of::<crate::mesh::Vertex>() as u32)
+            .input_rate(vk::VertexInputRate::VERTEX)];
+        let attribute_descriptions = vec![
+            vk::VertexInputAttributeDescription::default().location(0).binding(0).format(vk::Format::R32G32B32_SFLOAT).offset(0),
+            vk::VertexInputAttributeDescription::default().location(1).binding(0).format(vk::Format::R32G32B32_SFLOAT).offset(12),
+            vk::VertexInputAttributeDescription::default().location(2).binding(0).format(vk::Format::R32G32_SFLOAT).offset(24),
+        ];
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&binding_descriptions)
+            .vertex_attribute_descriptions(&attribute_descriptions);
+
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+            .primitive_restart_enable(false);
+
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state_info =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+        let viewport_state_info = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+
+        let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
+            .depth_clamp_enable(false)
+            .rasterizer_discard_enable(false)
+            .polygon_mode(vk::PolygonMode::FILL)
+            .line_width(1.0)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .depth_bias_enable(true)
+            .depth_bias_constant_factor(1.0)
+            .depth_bias_slope_factor(1.5);
+
+        let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
+            .sample_shading_enable(false)
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(true)
+            .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL)
+            .depth_bounds_test_enable(false)
+            .stencil_test_enable(false);
+
+        // Sin attachments de color: el array vacío es el contrato con
+        // el render pass de sombras (solo profundidad).
+        let color_blending = vk::PipelineColorBlendStateCreateInfo::default()
+            .logic_op_enable(false)
+            .attachments(&[]);
+
+        let push_constant_ranges = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+            .offset(0)
+            .size(crate::renderer::MESH_PUSH_CONSTANTS_SIZE)];
+
+        let set_layouts = [set0_layout, globals_layout];
+        let layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&set_layouts)
+            .push_constant_ranges(&push_constant_ranges);
+        let layout = unsafe { device.create_pipeline_layout(&layout_info, None)? };
+
+        let pipeline_info = [vk::GraphicsPipelineCreateInfo::default()
+            .stages(&shader_stages)
+            .vertex_input_state(&vertex_input_info)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state_info)
+            .rasterization_state(&rasterizer)
+            .multisample_state(&multisampling)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blending)
+            .dynamic_state(&dynamic_state_info)
+            .layout(layout)
+            .render_pass(render_pass)
+            .subpass(0)];
+
+        let pipelines = unsafe {
+            device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &pipeline_info, None)
+                .map_err(|(_, err)| PipelineError::Driver(err))?
+        };
+        unsafe { device.destroy_shader_module(vert_module, None) };
+        if let Some(frag) = frag_module {
+            unsafe { device.destroy_shader_module(frag, None) };
+        }
+        Ok((pipelines[0], layout))
+    }
+
 
     /// Pipeline de pantalla completa para las pasadas del post
     /// (bright-pass, blur, final): sin entrada de vértices (el triángulo

@@ -39,6 +39,12 @@ impl Default for ShaderGraphEditorPanel {
 fn kind_label(kind: &NodeKind) -> &'static str {
     match kind {
         NodeKind::Color { .. } => "🎨 Color",
+        NodeKind::Property { .. } => "🎛 Propiedad",
+        NodeKind::TextureSample { .. } => "🖼 Textura",
+        NodeKind::MainLightDirection => "☀ Dirección luz",
+        NodeKind::MainLightColor => "☀ Color luz",
+        NodeKind::PointLightPosition { .. } => "💡 Posición puntual",
+        NodeKind::PointLightColor { .. } => "💡 Color puntual",
         NodeKind::Float { .. } => "🔢 Float",
         NodeKind::Time => "⏱ Tiempo",
         NodeKind::Uv => "🌐 UV",
@@ -72,6 +78,7 @@ fn kind_label(kind: &NodeKind) -> &'static str {
         NodeKind::Normalize => "🧭 Normalizar",
         NodeKind::Clamp { .. } => "✂ Limitar (Clamp)",
         NodeKind::Power { .. } => "⬆ Potencia",
+        NodeKind::ToonBands { .. } => "🔲 Bandas toon",
         NodeKind::Step { .. } => "🪜 Escalón (Step)",
         NodeKind::Modulo => "% Módulo",
     }
@@ -88,7 +95,7 @@ fn kind_inputs(kind: &NodeKind) -> &'static [&'static str] {
         NodeKind::Subtract | NodeKind::Divide | NodeKind::Dot | NodeKind::Distance => &["a", "b"],
         NodeKind::ChannelR | NodeKind::ChannelG | NodeKind::ChannelB | NodeKind::ChannelA => &["x"],
         NodeKind::Combine => &["r", "g", "b", "a"],
-        NodeKind::Length | NodeKind::Normalize | NodeKind::Clamp { .. } | NodeKind::Power { .. } | NodeKind::Step { .. } => &["x"],
+        NodeKind::Length | NodeKind::Normalize | NodeKind::Clamp { .. } | NodeKind::Power { .. } | NodeKind::Step { .. } | NodeKind::ToonBands { .. } => &["x"],
         NodeKind::Modulo => &["x", "y"],
         NodeKind::VertexOutput => &["offset"],
         _ => &[],
@@ -224,6 +231,7 @@ impl ShaderGraphEditorPanel {
                     ("🧭 Normalizar", NodeKind::Normalize),
                     ("✂ Limitar (Clamp)", NodeKind::Clamp { min: 0.0, max: 1.0 }),
                     ("⬆ Potencia", NodeKind::Power { exponent: 2.0 }),
+                    ("🔲 Bandas toon", NodeKind::ToonBands { bands: 4 }),
                     ("🪜 Escalón (Step)", NodeKind::Step { edge: 0.5 }),
                     ("% Módulo", NodeKind::Modulo),
                 ];

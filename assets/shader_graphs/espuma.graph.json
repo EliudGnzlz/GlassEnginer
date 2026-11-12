@@ -14,8 +14,8 @@
     {
       "id": 2,
       "kind": {
-        "kind": "Float",
-        "value": 30.0
+        "kind": "Property",
+        "name": "frecuencia"
       },
       "position": [
         0.0,
@@ -45,8 +45,8 @@
     {
       "id": 5,
       "kind": {
-        "kind": "Float",
-        "value": -2.0
+        "kind": "Property",
+        "name": "velocidad"
       },
       "position": [
         0.0,
@@ -98,13 +98,8 @@
     {
       "id": 10,
       "kind": {
-        "kind": "Color",
-        "rgba": [
-          0.05,
-          0.25,
-          0.5,
-          1.0
-        ]
+        "kind": "Property",
+        "name": "color_base"
       },
       "position": [
         0.0,
@@ -114,13 +109,8 @@
     {
       "id": 11,
       "kind": {
-        "kind": "Color",
-        "rgba": [
-          1.0,
-          1.0,
-          1.0,
-          1.0
-        ]
+        "kind": "Property",
+        "name": "color_espuma"
       },
       "position": [
         0.0,
@@ -242,5 +232,45 @@
       "to_input": "color"
     }
   ],
-  "transparent": true
+  "transparent": true,
+  "properties": [
+    {
+      "name": "frecuencia",
+      "kind": "Float",
+      "default": {
+        "Float": 30.0
+      }
+    },
+    {
+      "name": "velocidad",
+      "kind": "Float",
+      "default": {
+        "Float": -2.0
+      }
+    },
+    {
+      "name": "color_base",
+      "kind": "Color",
+      "default": {
+        "Color": [
+          0.05,
+          0.25,
+          0.5,
+          1.0
+        ]
+      }
+    },
+    {
+      "name": "color_espuma",
+      "kind": "Color",
+      "default": {
+        "Color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    }
+  ]
 }

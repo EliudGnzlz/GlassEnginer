@@ -1,0 +1,174 @@
+{
+ "name": "toon_demo",
+ "nodes": [
+  {
+   "id": 1,
+   "kind": {
+    "kind": "Normal"
+   },
+   "position": [
+    0,
+    0
+   ]
+  },
+  {
+   "id": 2,
+   "kind": {
+    "kind": "MainLightDirection"
+   },
+   "position": [
+    0,
+    80
+   ]
+  },
+  {
+   "id": 3,
+   "kind": {
+    "kind": "Dot"
+   },
+   "position": [
+    160,
+    40
+   ]
+  },
+  {
+   "id": 4,
+   "kind": {
+    "kind": "ToonBands",
+    "bands": 4
+   },
+   "position": [
+    320,
+    40
+   ]
+  },
+  {
+   "id": 5,
+   "kind": {
+    "kind": "Property",
+    "name": "color_sombra"
+   },
+   "position": [
+    320,
+    140
+   ]
+  },
+  {
+   "id": 6,
+   "kind": {
+    "kind": "Property",
+    "name": "color_luz"
+   },
+   "position": [
+    320,
+    220
+   ]
+  },
+  {
+   "id": 7,
+   "kind": {
+    "kind": "Mix"
+   },
+   "position": [
+    480,
+    120
+   ]
+  },
+  {
+   "id": 8,
+   "kind": {
+    "kind": "Output"
+   },
+   "position": [
+    640,
+    120
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "from_node": 1,
+   "to_node": 3,
+   "to_input": "a"
+  },
+  {
+   "from_node": 2,
+   "to_node": 3,
+   "to_input": "b"
+  },
+  {
+   "from_node": 3,
+   "to_node": 4,
+   "to_input": "x"
+  },
+  {
+   "from_node": 5,
+   "to_node": 7,
+   "to_input": "a"
+  },
+  {
+   "from_node": 6,
+   "to_node": 7,
+   "to_input": "b"
+  },
+  {
+   "from_node": 4,
+   "to_node": 7,
+   "to_input": "t"
+  },
+  {
+   "from_node": 7,
+   "to_node": 8,
+   "to_input": "color"
+  }
+ ],
+ "properties": [
+  {
+   "name": "color_sombra",
+   "kind": "Color",
+   "default": {
+    "Color": [
+     0.16,
+     0.22,
+     0.5,
+     1.0
+    ]
+   }
+  },
+  {
+   "name": "color_luz",
+   "kind": "Color",
+   "default": {
+    "Color": [
+     1.0,
+     0.85,
+     0.6,
+     1.0
+    ]
+   }
+  },
+  {
+   "name": "outline_width",
+   "kind": "Float",
+   "default": {
+    "Float": 0.035
+   }
+  },
+  {
+   "name": "outline_color",
+   "kind": "Color",
+   "default": {
+    "Color": [
+     0.04,
+     0.04,
+     0.1,
+     1.0
+    ]
+   }
+  }
+ ],
+ "passes": [
+  "Forward",
+  "Outline"
+ ]
+}

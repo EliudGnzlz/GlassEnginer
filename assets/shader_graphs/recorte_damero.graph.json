@@ -1,0 +1,57 @@
+{
+ "name": "recorte_damero",
+ "nodes": [
+  {
+   "id": 1,
+   "kind": {
+    "kind": "TextureSample",
+    "slot": 0
+   },
+   "position": [
+    0,
+    0
+   ]
+  },
+  {
+   "id": 2,
+   "kind": {
+    "kind": "Output"
+   },
+   "position": [
+    200,
+    0
+   ]
+  },
+  {
+   "id": 3,
+   "kind": {
+    "kind": "Property",
+    "name": "alpha_clip"
+   },
+   "position": [
+    0,
+    120
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "from_node": 1,
+   "to_node": 2,
+   "to_input": "color"
+  }
+ ],
+ "properties": [
+  {
+   "name": "alpha_clip",
+   "kind": "Float",
+   "default": {
+    "Float": 0.5
+   }
+  }
+ ],
+ "passes": [
+  "Forward",
+  "Shadow"
+ ]
+}

@@ -1,0 +1,86 @@
+{
+  "name": "tinte_demo",
+  "nodes": [
+    {
+      "id": 1,
+      "kind": {
+        "kind": "Property",
+        "name": "tinte"
+      },
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "id": 2,
+      "kind": {
+        "kind": "Property",
+        "name": "brillo"
+      },
+      "position": [
+        0,
+        80
+      ]
+    },
+    {
+      "id": 3,
+      "kind": {
+        "kind": "Multiply"
+      },
+      "position": [
+        160,
+        40
+      ]
+    },
+    {
+      "id": 4,
+      "kind": {
+        "kind": "Output"
+      },
+      "position": [
+        320,
+        40
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from_node": 1,
+      "to_node": 3,
+      "to_input": "a"
+    },
+    {
+      "from_node": 2,
+      "to_node": 3,
+      "to_input": "b"
+    },
+    {
+      "from_node": 3,
+      "to_node": 4,
+      "to_input": "color"
+    }
+  ],
+  "transparent": false,
+  "properties": [
+    {
+      "name": "tinte",
+      "kind": "Color",
+      "default": {
+        "Color": [
+          1.0,
+          0.25,
+          0.85,
+          1.0
+        ]
+      }
+    },
+    {
+      "name": "brillo",
+      "kind": "Float",
+      "default": {
+        "Float": 1.0
+      }
+    }
+  ]
+}
