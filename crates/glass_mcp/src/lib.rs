@@ -6,6 +6,7 @@
 #![recursion_limit = "512"]
 
 pub mod bake;
+pub mod queue;
 pub mod protocol;
 pub mod scene;
 pub mod server;

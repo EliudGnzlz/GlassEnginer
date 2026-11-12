@@ -2891,6 +2891,11 @@ let resueltos = colliders_resueltos(body, shape);
     // campos sueltos de `self`, nunca `&mut self` entero.
 
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Command Queue del MCP (Fase 8): los comandos encolados se
+        // ejecutan AQUÍ, al inicio del frame y en orden de envío —
+        // nunca a mitad de frame ni en el hilo del cliente MCP.
+        self.mcp_server.pump_queue();
+
         // Antes de recargar o expulsar activos hay que garantizar que la GPU
         // terminó el frame anterior: la recarga en caliente y `evict_idle`
         // destruyen texturas y descriptor sets, y hasta ahora la única espera

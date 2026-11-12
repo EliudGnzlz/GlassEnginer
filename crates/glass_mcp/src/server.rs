@@ -24,6 +24,34 @@ pub struct McpServer {
     pub player_body: Arc<Mutex<Option<BodyHandle>>>,
     local_physics: Arc<Mutex<Option<Arc<Mutex<PhysicsWorld>>>>>,
     local_audio: Arc<Mutex<Option<Arc<AudioSystem>>>>,
+    /// Command Queue (Fase 8): la ejecuta el bucle del motor.
+    pub queue: Arc<crate::queue::CommandQueue>,
+}
+
+/// Tools que ALTERAN el estado (Fase 8): pasan por la Command
+/// Queue cuando el bucle del motor está bombeando. Las de consulta
+/// responden directas, como siempre.
+pub fn is_mutating_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "glass_create_entity"
+            | "glass_batch_spawn_entities"
+            | "glass_destroy_entity"
+            | "glass_modify_component"
+            | "glass_set_ui_text"
+            | "glass_set_entity_material"
+            | "glass_material_property_set"
+            | "glass_shader_node_add"
+            | "glass_shader_pass_configure"
+            | "glass_shader_preset_apply"
+            | "glass_animator_set_param"
+            | "glass_audio_buses"
+            | "glass_play_audio"
+            | "glass_reload_shaders"
+            | "glass_bake_lightmap"
+            | "glass_setup_platformer_scene"
+            | "glass_asset_reload"
+    )
 }
 
 impl McpServer {
@@ -33,6 +61,7 @@ impl McpServer {
             player_body: Arc::new(Mutex::new(None)),
             local_physics: Arc::new(Mutex::new(None)),
             local_audio: Arc::new(Mutex::new(None)),
+            queue: Arc::new(crate::queue::CommandQueue::new()),
         }
     }
 
@@ -325,6 +354,48 @@ impl McpServer {
                                     "path": { "type": "string" }
                                 },
                                 "required": ["path"]
+                            }
+                        },
+                        {
+                            "name": "glass_destroy_entity",
+                            "description": "Destruye una entidad de la escena por su id (Fase 8). Es mutante: pasa por la Command Queue como las demás tools de escritura.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "number" }
+                                },
+                                "required": ["entity_id"]
+                            }
+                        },
+                        {
+                            "name": "glass_queue_submit",
+                            "description": "Encola un lote de comandos MUTANTES para que el bucle del motor los ejecute en orden (Fase 8), sin esperar: devuelve los command_ids asignados. Las tools de consulta, las de la propia cola y las desconocidas se rechazan sin encolar nada.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "commands": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "tool": { "type": "string" },
+                                                "args": { "type": "object" }
+                                            },
+                                            "required": ["tool"]
+                                        }
+                                    }
+                                },
+                                "required": ["commands"]
+                            }
+                        },
+                        {
+                            "name": "glass_queue_status",
+                            "description": "Estado de la Command Queue (Fase 8): con command_id, el registro completo de ese comando (estado, pasada de ejecución, resultado o error); sin él, el resumen y los últimos 10 comandos.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "command_id": { "type": "number" }
+                                }
                             }
                         },
                         {
@@ -677,10 +748,83 @@ impl McpServer {
 
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
-                self.execute_tool(req.id, name, args)
+                self.call_tool(req.id, name, args)
             }
 
             _ => McpResponse::method_not_found(req.id, &req.method),
+        }
+    }
+
+    /// Puerta de entrada de las tools (Fase 8): una tool mutante
+    /// con el bucle bombeando se ENCOLA y esta llamada espera su
+    /// resultado (la semántica síncrona del cliente no cambia; la
+    /// ejecución ocurre en orden dentro del bucle del motor). Sin
+    /// bombeo vivo, se ejecuta directa y queda registrada.
+    fn call_tool(
+        &self,
+        id: Option<serde_json::Value>,
+        name: &str,
+        args: serde_json::Value,
+    ) -> McpResponse {
+        if !is_mutating_tool(name) || name == "glass_queue_submit" {
+            return self.execute_tool(id, name, args);
+        }
+        if self.queue.pump_alive() {
+            let cid = self.queue.submit(name, args);
+            match self.queue.wait(cid, std::time::Duration::from_secs(15)) {
+                Some(crate::queue::CmdState::Done) => {
+                    let c = self.queue.status(cid).unwrap();
+                    McpResponse::success(id, c.result.unwrap_or(serde_json::json!({})))
+                }
+                Some(crate::queue::CmdState::Error) => {
+                    let c = self.queue.status(cid).unwrap();
+                    McpResponse::error(
+                        id,
+                        -32006,
+                        c.error.unwrap_or_else(|| "Error de comando".into()),
+                    )
+                }
+                _ => McpResponse::error(
+                    id,
+                    -32007,
+                    format!(
+                        "El comando {cid} sigue encolado tras 15 s; su estado se consulta con glass_queue_status"
+                    ),
+                ),
+            }
+        } else {
+            // Sin bucle (stdio puro o arranque): directo, registrado.
+            let cid = self.queue.submit(name, args.clone());
+            let resp = self.execute_tool(id, name, args);
+            match (&resp.result, &resp.error) {
+                (_, Some(e)) => self
+                    .queue
+                    .complete(cid, Err(e.message.clone()), 0, true),
+                (Some(r), _) => self.queue.complete(cid, Ok(r.clone()), 0, true),
+                _ => self.queue.complete(cid, Ok(serde_json::json!({})), 0, true),
+            }
+            resp
+        }
+    }
+
+    /// Bombeo de la Command Queue (Fase 8): lo llama el bucle del
+    /// motor una vez por frame, antes de física y scripts. Ejecuta
+    /// los pendientes en orden de envío y guarda cada desenlace.
+    pub fn pump_queue(&self) {
+        let pass = self.queue.note_pump();
+        for cmd in self.queue.take_pending() {
+            let resp = self.execute_tool(None, &cmd.tool, cmd.args.clone());
+            match (&resp.result, &resp.error) {
+                (_, Some(e)) => self
+                    .queue
+                    .complete(cmd.id, Err(e.message.clone()), pass, false),
+                (Some(r), _) => self
+                    .queue
+                    .complete(cmd.id, Ok(r.clone()), pass, false),
+                _ => self
+                    .queue
+                    .complete(cmd.id, Ok(serde_json::json!({})), pass, false),
+            }
         }
     }
 
@@ -2592,6 +2736,118 @@ impl McpServer {
                         -32005,
                         format!("No se pudo lanzar el bridge: {e}"),
                     ),
+                }
+            }
+
+            "glass_destroy_entity" => {
+                let Some(entity_id) = args.get("entity_id").and_then(|n| n.as_u64()) else {
+                    return McpResponse::invalid_params(id, "Field 'entity_id' is required");
+                };
+                if scene.delete_entity(entity_id) {
+                    McpResponse::success(
+                        id,
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": format!("Entidad {entity_id} destruida")
+                            }]
+                        }),
+                    )
+                } else {
+                    McpResponse::error(id, -32004, "Entity not found")
+                }
+            }
+
+            "glass_queue_submit" => {
+                let Some(lista) = args.get("commands").and_then(|v| v.as_array()) else {
+                    return McpResponse::invalid_params(id, "Field 'commands' is required");
+                };
+                if lista.is_empty() {
+                    return McpResponse::invalid_params(id, "Field 'commands' must not be empty");
+                }
+                // Validación completa ANTES de encolar nada.
+                let mut preparados: Vec<(String, serde_json::Value)> = Vec::new();
+                for c in lista {
+                    let Some(tool) = c.get("tool").and_then(|v| v.as_str()) else {
+                        return McpResponse::invalid_params(
+                            id,
+                            "Cada comando necesita su 'tool'",
+                        );
+                    };
+                    if !is_mutating_tool(tool) {
+                        return McpResponse::error(
+                            id,
+                            -32008,
+                            format!("'{tool}' no es una tool mutante encolable"),
+                        );
+                    }
+                    preparados.push((
+                        tool.to_string(),
+                        c.get("args").cloned().unwrap_or(json!({})),
+                    ));
+                }
+                let ids: Vec<u64> = preparados
+                    .iter()
+                    .map(|(tool, a)| self.queue.submit(tool, a.clone()))
+                    .collect();
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&json!({
+                                "command_ids": ids,
+                                "note": "Encolados en orden; el bucle los ejecuta en la siguiente pasada. Estado con glass_queue_status."
+                            }))
+                            .unwrap()
+                        }]
+                    }),
+                )
+            }
+
+            "glass_queue_status" => {
+                if let Some(cid) = args.get("command_id").and_then(|v| v.as_u64()) {
+                    match self.queue.status(cid) {
+                        Some(c) => {
+                            let datos = crate::queue::command_json(&c);
+                            McpResponse::success(
+                                id,
+                                json!({
+                                    "content": [{
+                                        "type": "text",
+                                        "text": serde_json::to_string_pretty(&datos).unwrap()
+                                    }]
+                                }),
+                            )
+                        }
+                        None => McpResponse::error(id, -32004, "Command not found"),
+                    }
+                } else {
+                    let (pendientes, hechos, errores, total, pasada) = self.queue.summary();
+                    let recientes: Vec<serde_json::Value> = self
+                        .queue
+                        .recent(10)
+                        .iter()
+                        .map(crate::queue::command_json)
+                        .collect();
+                    let datos = json!({
+                        "pending": pendientes,
+                        "done": hechos,
+                        "errors": errores,
+                        "total": total,
+                        "current_pass": pasada,
+                        "pump_alive": self.queue.pump_alive(),
+                        "recent": recientes,
+                    });
+                    McpResponse::success(
+                        id,
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&datos).unwrap()
+                            }]
+                        }),
+                    )
                 }
             }
 
