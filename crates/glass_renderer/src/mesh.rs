@@ -146,6 +146,85 @@ pub struct LoadedModel {
     pub vertex_joints: Vec<[u16; 4]>,
     /// `WEIGHTS_0` por vértice, alineado con `vertices` y `vertex_joints`.
     pub vertex_weights: Vec<[f32; 4]>,
+    /// Objetos del documento (Fase 6): un registro por nodo con
+    /// malla (o por malla sin nodo), con su transformación global y
+    /// los rangos que aportó a la fusión. Varios objetos con el
+    /// mismo `mesh_name` = instancias enlazadas de la misma malla.
+    pub objects: Vec<ModelObject>,
+}
+
+/// Un objeto del documento glTF (Fase 6): su nombre de nodo, la
+/// malla que referencia, su transformación global y los índices de
+/// `LoadedModel::primitive_ranges` que salieron de él.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelObject {
+    pub name: String,
+    pub mesh_name: String,
+    pub transform: [f32; 16],
+    pub ranges: Vec<usize>,
+}
+
+#[cfg(test)]
+mod lod_tests {
+    use super::{lod_level_for_distance, lod_suffix};
+
+    #[test]
+    fn sufijo_lod_se_parsea() {
+        assert_eq!(lod_suffix("Esfera_LOD2"), Some(("Esfera".to_string(), 2)));
+        assert_eq!(lod_suffix("Esfera_LOD0"), Some(("Esfera".to_string(), 0)));
+        assert_eq!(lod_suffix("Cubo"), None);
+        assert_eq!(lod_suffix("Cubo_LODx"), None);
+        assert_eq!(lod_suffix("Cubo_LOD"), None);
+    }
+
+    #[test]
+    fn nivel_por_distancia_entre_disponibles() {
+        let disp = [0, 1, 2];
+        assert_eq!(lod_level_for_distance(&disp, 3.0), 0);
+        assert_eq!(lod_level_for_distance(&disp, 30.0), 1);
+        assert_eq!(lod_level_for_distance(&disp, 90.0), 2);
+        // Sin el nivel deseado: el mayor disponible por debajo.
+        assert_eq!(lod_level_for_distance(&[0, 2], 30.0), 0);
+        assert_eq!(lod_level_for_distance(&[0, 2], 90.0), 2);
+        // Solo un nivel alto disponible: se usa ese.
+        assert_eq!(lod_level_for_distance(&[2], 3.0), 2);
+    }
+}
+
+/// Nivel LOD de un nombre por el sufijo `_LOD<n>` (Fase 6):
+/// "Esfera_LOD2" → Some(("Esfera", 2)). Sin sufijo válido → None.
+pub fn lod_suffix(name: &str) -> Option<(String, u32)> {
+    let idx = name.rfind("_LOD")?;
+    let num = &name[idx + 4..];
+    if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some((name[..idx].to_string(), num.parse().ok()?))
+}
+
+/// Distancias a las que cambia el nivel LOD deseado (Fase 6).
+pub const LOD_NEAR: f32 = 20.0;
+pub const LOD_FAR: f32 = 45.0;
+
+/// Nivel LOD a dibujar entre los DISPONIBLES para una distancia:
+/// el deseado es 0 (<LOD_NEAR), 1 (<LOD_FAR) o 2; se elige el
+/// mayor disponible ≤ deseado, o el menor disponible si no hay
+/// ninguno ≤. `available` no puede venir vacío.
+pub fn lod_level_for_distance(available: &[u32], distance: f32) -> u32 {
+    let desired = if distance < LOD_NEAR {
+        0
+    } else if distance < LOD_FAR {
+        1
+    } else {
+        2
+    };
+    let mut best: Option<u32> = None;
+    for &l in available {
+        if l <= desired && best.map(|b| l > b).unwrap_or(true) {
+            best = Some(l);
+        }
+    }
+    best.unwrap_or_else(|| *available.iter().min().unwrap_or(&0))
 }
 
 impl LoadedModel {
@@ -788,6 +867,156 @@ pub fn prepare_bc_upload(img: &GltfImageData) -> (vk::Format, Vec<u8>, Vec<(u64,
     (format, data, levels_info)
 }
 
+/// Transformaciones globales de todos los nodos del documento
+/// (Fase 6): recorre las escenas y compone padre × local. Clave =
+/// índice de nodo.
+fn node_globals(document: &gltf::Document) -> std::collections::HashMap<usize, [f32; 16]> {
+    fn local_flat(node: &gltf::Node) -> [f32; 16] {
+        let m = node.transform().matrix();
+        [
+            m[0][0], m[0][1], m[0][2], m[0][3], //
+            m[1][0], m[1][1], m[1][2], m[1][3], //
+            m[2][0], m[2][1], m[2][2], m[2][3], //
+            m[3][0], m[3][1], m[3][2], m[3][3],
+        ]
+    }
+    fn walk(
+        node: gltf::Node,
+        parent: [f32; 16],
+        out: &mut std::collections::HashMap<usize, [f32; 16]>,
+    ) {
+        let global = glass_core::math::mat4_mul(parent, local_flat(&node));
+        out.insert(node.index(), global);
+        for child in node.children() {
+            walk(child, global, out);
+        }
+    }
+    let mut out = std::collections::HashMap::new();
+    for scene in document.scenes() {
+        for node in scene.nodes() {
+            walk(node, glass_core::math::mat4_identity(), &mut out);
+        }
+    }
+    out
+}
+
+/// Fusiona UNA primitiva en los vectores del modelo (el cuerpo que
+/// antes vivía dentro del doble bucle de `load_model_from_glb_bytes`).
+/// Con `transform` (modelos sin piel, Fase 6), las posiciones se
+/// transforman por la global del nodo y las normales por su
+/// inversa-transpuesta normalizada; sin él, la primitiva entra tal
+/// cual (el camino histórico, que es el de los modelos con piel).
+#[allow(clippy::too_many_arguments)]
+fn merge_primitive(
+    primitive: &gltf::Primitive,
+    buffers: &[gltf::buffer::Data],
+    transform: Option<&[f32; 16]>,
+    has_skin: bool,
+    vertices: &mut Vec<Vertex>,
+    indices: &mut Vec<u32>,
+    primitive_materials: &mut Vec<Option<usize>>,
+    primitive_ranges: &mut Vec<PrimitiveRange>,
+    vertex_joints: &mut Vec<[u16; 4]>,
+    vertex_weights: &mut Vec<[f32; 4]>,
+) {
+    let material = primitive.material().index();
+    primitive_materials.push(material);
+    let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+
+    let positions: Vec<[f32; 3]> = reader
+        .read_positions()
+        .map(|iter| iter.collect())
+        .unwrap_or_default();
+    let positions: Vec<[f32; 3]> = match transform {
+        Some(m) => positions
+            .iter()
+            .map(|p| glass_core::math::mat4_transform_point(*m, *p))
+            .collect(),
+        None => positions,
+    };
+
+    let normals: Vec<[f32; 3]> = reader
+        .read_normals()
+        .map(|iter| iter.collect())
+        .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
+    let normals: Vec<[f32; 3]> = match transform {
+        Some(m) => {
+            // Normales por la inversa-transpuesta de la global:
+            // n'[r] = Σ_c inv[r*4+c] · n[c], y normalizar.
+            let inv = glass_core::math::mat4_inverse_affine(*m);
+            normals
+                .iter()
+                .map(|n| match inv {
+                    Some(iv) => {
+                        let v = [
+                            iv[0] * n[0] + iv[1] * n[1] + iv[2] * n[2],
+                            iv[4] * n[0] + iv[5] * n[1] + iv[6] * n[2],
+                            iv[8] * n[0] + iv[9] * n[1] + iv[10] * n[2],
+                        ];
+                        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                        if len > 1e-8 {
+                            [v[0] / len, v[1] / len, v[2] / len]
+                        } else {
+                            *n
+                        }
+                    }
+                    None => *n,
+                })
+                .collect()
+        }
+        None => normals,
+    };
+
+    let uvs: Vec<[f32; 2]> = reader
+        .read_tex_coords(0)
+        .map(|iter| iter.into_f32().collect())
+        .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
+
+    let prim_joints: Vec<[u16; 4]> = if has_skin {
+        reader
+            .read_joints(0)
+            .map(|j| j.into_u16().collect())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let prim_weights: Vec<[f32; 4]> = if has_skin {
+        reader
+            .read_weights(0)
+            .map(|w| w.into_f32().collect())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    let base_index = vertices.len() as u32;
+
+    for i in 0..positions.len() {
+        vertices.push(Vertex {
+            position: positions[i],
+            normal: normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]),
+            uv: uvs.get(i).copied().unwrap_or([0.0, 0.0]),
+        });
+        if has_skin {
+            vertex_joints.push(prim_joints.get(i).copied().unwrap_or([0, 0, 0, 0]));
+            vertex_weights.push(prim_weights.get(i).copied().unwrap_or([0.0; 4]));
+        }
+    }
+
+    let first_index = indices.len() as u32;
+    if let Some(read_indices) = reader.read_indices() {
+        for idx in read_indices.into_u32() {
+            indices.push(base_index + idx);
+        }
+    } else {
+        for idx in 0..positions.len() as u32 {
+            indices.push(base_index + idx);
+        }
+    }
+    let index_count = indices.len() as u32 - first_index;
+    primitive_ranges.push(PrimitiveRange { first_index, index_count, material });
+}
+
 impl MeshLoader {
     /// Carga vértices e índices desde un buffer binario glTF (.glb).
     /// Compatibilidad: equivale a `load_model_from_glb_bytes` descartando
@@ -849,75 +1078,118 @@ impl MeshLoader {
         let mut primitive_ranges: Vec<PrimitiveRange> = Vec::new();
         let mut vertex_joints: Vec<[u16; 4]> = Vec::new();
         let mut vertex_weights: Vec<[f32; 4]> = Vec::new();
+        let mut objects: Vec<ModelObject> = Vec::new();
 
-        for mesh in document.meshes() {
-            for primitive in mesh.primitives() {
-                let material = primitive.material().index();
-                primitive_materials.push(material);
-                let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
-
-                let positions: Vec<[f32; 3]> = reader
-                    .read_positions()
-                    .map(|iter| iter.collect())
-                    .unwrap_or_default();
-
-                let normals: Vec<[f32; 3]> = reader
-                    .read_normals()
-                    .map(|iter| iter.collect())
-                    .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
-
-                let uvs: Vec<[f32; 2]> = reader
-                    .read_tex_coords(0)
-                    .map(|iter| iter.into_f32().collect())
-                    .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
-
-                // Influencias de piel de ESTA primitiva. Una primitiva sin
-                // JOINTS_0 dentro de un modelo con piel aporta ceros: el
-                // shader la deja pasar sin deformar (mezcla de rígidos y
-                // deformables en el mismo archivo).
-                let prim_joints: Vec<[u16; 4]> = if has_skin {
-                    reader
-                        .read_joints(0)
-                        .map(|j| j.into_u16().collect())
-                        .unwrap_or_default()
-                } else {
-                    Vec::new()
-                };
-                let prim_weights: Vec<[f32; 4]> = if has_skin {
-                    reader
-                        .read_weights(0)
-                        .map(|w| w.into_f32().collect())
-                        .unwrap_or_default()
-                } else {
-                    Vec::new()
-                };
-
-                let base_index = vertices.len() as u32;
-
-                for i in 0..positions.len() {
-                    vertices.push(Vertex {
-                        position: positions[i],
-                        normal: normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]),
-                        uv: uvs.get(i).copied().unwrap_or([0.0, 0.0]),
+        if has_skin {
+            // Con piel, la fusión histórica: por mallas y sin
+            // transformar (la piel compone los globales en el shader).
+            for mesh in document.meshes() {
+                for primitive in mesh.primitives() {
+                    merge_primitive(
+                        &primitive,
+                        &buffers,
+                        None,
+                        has_skin,
+                        &mut vertices,
+                        &mut indices,
+                        &mut primitive_materials,
+                        &mut primitive_ranges,
+                        &mut vertex_joints,
+                        &mut vertex_weights,
+                    );
+                }
+            }
+            // Objetos: desde los nodos, con los rangos mapeados por
+            // el orden de fusión de cada malla (suma prefija).
+            let globals = node_globals(&document);
+            let mut inicios: Vec<usize> = Vec::new();
+            {
+                let mut acc = 0usize;
+                for mesh in document.meshes() {
+                    inicios.push(acc);
+                    acc += mesh.primitives().len();
+                }
+            }
+            for node in document.nodes() {
+                if let Some(mesh) = node.mesh() {
+                    let ini = inicios.get(mesh.index()).copied().unwrap_or(0);
+                    let n = mesh.primitives().len();
+                    objects.push(ModelObject {
+                        name: node.name().unwrap_or("").to_string(),
+                        mesh_name: mesh.name().unwrap_or("").to_string(),
+                        transform: globals
+                            .get(&node.index())
+                            .copied()
+                            .unwrap_or_else(glass_core::math::mat4_identity),
+                        ranges: (ini..ini + n).collect(),
                     });
-                    if has_skin {
-                        vertex_joints.push(prim_joints.get(i).copied().unwrap_or([0, 0, 0, 0]));
-                        vertex_weights.push(prim_weights.get(i).copied().unwrap_or([0.0; 4]));
-                    }
                 }
-
-                let first_index = indices.len() as u32;
-                if let Some(read_indices) = reader.read_indices() {
-                    for idx in read_indices.into_u32() {
-                        indices.push(base_index + idx);
+            }
+        } else {
+            // Sin piel (Fase 6): la fusión recorre los NODOS y aplica
+            // su transformación global; una malla referenciada por
+            // varios nodos se fusiona una vez por nodo (instancias
+            // enlazadas horneadas pero registradas en `objects`).
+            let globals = node_globals(&document);
+            let mut meshes_vistas: std::collections::HashSet<usize> =
+                std::collections::HashSet::new();
+            for node in document.nodes() {
+                if let Some(mesh) = node.mesh() {
+                    meshes_vistas.insert(mesh.index());
+                    let g = globals
+                        .get(&node.index())
+                        .copied()
+                        .unwrap_or_else(glass_core::math::mat4_identity);
+                    let primera = primitive_ranges.len();
+                    for primitive in mesh.primitives() {
+                        merge_primitive(
+                            &primitive,
+                            &buffers,
+                            Some(&g),
+                            has_skin,
+                            &mut vertices,
+                            &mut indices,
+                            &mut primitive_materials,
+                            &mut primitive_ranges,
+                            &mut vertex_joints,
+                            &mut vertex_weights,
+                        );
                     }
-                } else {
-                    for idx in 0..positions.len() as u32 {
-                        indices.push(base_index + idx);
-                    }
+                    objects.push(ModelObject {
+                        name: node.name().unwrap_or("").to_string(),
+                        mesh_name: mesh.name().unwrap_or("").to_string(),
+                        transform: g,
+                        ranges: (primera..primitive_ranges.len()).collect(),
+                    });
                 }
-                let index_count = indices.len() as u32 - first_index;
-                primitive_ranges.push(PrimitiveRange { first_index, index_count, material });
+            }
+            // Mallas que ningún nodo referencia: sin transformar,
+            // al final (compatibilidad con archivos laxos).
+            for mesh in document.meshes() {
+                if meshes_vistas.contains(&mesh.index()) {
+                    continue;
+                }
+                let primera = primitive_ranges.len();
+                for primitive in mesh.primitives() {
+                    merge_primitive(
+                        &primitive,
+                        &buffers,
+                        None,
+                        has_skin,
+                        &mut vertices,
+                        &mut indices,
+                        &mut primitive_materials,
+                        &mut primitive_ranges,
+                        &mut vertex_joints,
+                        &mut vertex_weights,
+                    );
+                }
+                objects.push(ModelObject {
+                    name: mesh.name().unwrap_or("").to_string(),
+                    mesh_name: mesh.name().unwrap_or("").to_string(),
+                    transform: glass_core::math::mat4_identity(),
+                    ranges: (primera..primitive_ranges.len()).collect(),
+                });
             }
         }
 
@@ -936,6 +1208,7 @@ impl MeshLoader {
             animations,
             vertex_joints,
             vertex_weights,
+            objects,
         })
     }
 

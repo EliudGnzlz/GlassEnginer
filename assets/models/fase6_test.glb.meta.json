@@ -1,0 +1,137 @@
+{
+  "source": "fase6_test.blend",
+  "source_sha256": "55b11ebba938b25fb996c2a9082cd2524c8a7130da3ddb43327835c38be6a24c",
+  "exported_at": "2026-11-12T03:15:54.787234+00:00",
+  "blender_version": "4.2.3 LTS",
+  "counts": {
+    "meshes": 5,
+    "nodes": 7,
+    "materials": 0,
+    "animations": 0,
+    "skins": 0,
+    "bytes": 166160
+  },
+  "objects": [
+    {
+      "name": "CajaPrefab",
+      "type": "MESH",
+      "mesh": "Cube.002",
+      "collections": [
+        "Prefab_Caja"
+      ],
+      "parent": null,
+      "lod": null,
+      "instance_of": null,
+      "location": [
+        5.2,
+        0.0,
+        0.4
+      ]
+    },
+    {
+      "name": "CuboF6",
+      "type": "MESH",
+      "mesh": "Cube",
+      "collections": [
+        "Scene Collection"
+      ],
+      "parent": null,
+      "lod": null,
+      "instance_of": "Cube",
+      "location": [
+        -2.5,
+        0.0,
+        0.5
+      ]
+    },
+    {
+      "name": "CuboF6.001",
+      "type": "MESH",
+      "mesh": "Cube",
+      "collections": [
+        "Scene Collection"
+      ],
+      "parent": null,
+      "lod": null,
+      "instance_of": "Cube",
+      "location": [
+        -1.2,
+        0.0,
+        0.5
+      ]
+    },
+    {
+      "name": "CuboF6.002",
+      "type": "MESH",
+      "mesh": "Cube",
+      "collections": [
+        "Scene Collection"
+      ],
+      "parent": null,
+      "lod": null,
+      "instance_of": "Cube",
+      "location": [
+        0.1,
+        0.0,
+        0.5
+      ]
+    },
+    {
+      "name": "EsferaF6_LOD0",
+      "type": "MESH",
+      "mesh": "Sphere",
+      "collections": [
+        "Scene Collection"
+      ],
+      "parent": null,
+      "lod": 0,
+      "instance_of": null,
+      "location": [
+        3.2,
+        0.0,
+        0.9
+      ]
+    },
+    {
+      "name": "EsferaF6_LOD1",
+      "type": "MESH",
+      "mesh": "Icosphere",
+      "collections": [
+        "Scene Collection"
+      ],
+      "parent": null,
+      "lod": 1,
+      "instance_of": null,
+      "location": [
+        3.2,
+        0.0,
+        0.9
+      ]
+    },
+    {
+      "name": "EsferaF6_LOD2",
+      "type": "MESH",
+      "mesh": "Cube.001",
+      "collections": [
+        "Scene Collection"
+      ],
+      "parent": null,
+      "lod": 2,
+      "instance_of": null,
+      "location": [
+        3.2,
+        0.0,
+        0.75
+      ]
+    }
+  ],
+  "collections": [
+    {
+      "name": "Prefab_Caja",
+      "prefab": "Caja",
+      "objects": [
+        "CajaPrefab"
+      ]
+    }
+  ]
+}

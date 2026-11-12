@@ -34,6 +34,7 @@ egui-winit = "0.36"
 egui-ash-renderer = { version = "0.13", features = ["gpu-allocator"] }
 gltf = "1.4"
 notify = "8.0"
+sha2 = "0.10"
 rapier3d = { version = "0.23", default-features = false, features = ["dim3", "f32"] }
 kira = { version = "0.10", default-features = false, features = ["cpal", "wav"] }
 crossbeam-queue = "0.3"

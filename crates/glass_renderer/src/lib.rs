@@ -19,6 +19,7 @@ pub use mesh::{
     generate_capsule, generate_cylinder, generate_plane, generate_sphere, GpuMesh, MeshLoader,
     Vertex, PLANE_SEGMENTS,
 };
+pub use mesh::{lod_level_for_distance, lod_suffix, ModelObject, LOD_FAR, LOD_NEAR};
 pub use offscreen::OffscreenTarget;
 pub use pipeline::GraphicsPipeline;
 pub use post::PostSettings;

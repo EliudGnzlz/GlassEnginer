@@ -1,8 +1,40 @@
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Mutex;
 use std::thread;
+
+/// SHA-256 del contenido ya exportado por ruta (Fase 6): si un
+/// guardado no cambia el contenido, no se re-exporta.
+static HASHES_EXPORTADOS: Mutex<Option<HashMap<PathBuf, String>>> = Mutex::new(None);
+
+/// SHA-256 hexadecimal de un archivo (None si no se puede leer).
+fn sha256_de_archivo(path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).ok()?;
+    let mut h = Sha256::new();
+    h.update(&bytes);
+    Some(format!("{:x}", h.finalize()))
+}
+
+/// true si el hash de `path` difiere del último exportado (y lo
+/// registra como el nuevo último). Si el archivo no se puede leer,
+/// devuelve true (se intenta la exportación como hasta ahora).
+fn contenido_cambio(path: &Path) -> bool {
+    let Some(hash) = sha256_de_archivo(path) else {
+        return true;
+    };
+    let mut guard = HASHES_EXPORTADOS.lock().unwrap();
+    let map = guard.get_or_insert_with(HashMap::new);
+    if map.get(path) == Some(&hash) {
+        false
+    } else {
+        map.insert(path.to_path_buf(), hash);
+        true
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum AssetReloadEvent {
@@ -60,6 +92,17 @@ impl AssetWatcher {
                     // binario propio que mantener.
                     "blend" | "fbx" => {
                         log::info!("Detectado cambio en archivo de modelo (blend/fbx): {:?}", path);
+                        // Fase 6: sin cambio de contenido no hay
+                        // re-exportación (los guardados en ráfaga de
+                        // Blender reescriben el archivo sin tocar la
+                        // escena).
+                        if !contenido_cambio(&path) {
+                            log::info!(
+                                "Sin cambios de contenido (SHA-256 idéntico), no se re-exporta: {:?}",
+                                path
+                            );
+                            continue;
+                        }
                         let glb_path = path.with_extension("glb");
                         let input_path = path.clone();
                         let tx_clone = tx.clone();
@@ -67,7 +110,17 @@ impl AssetWatcher {
                         // Ejecutar conversión desatendida en un hilo separado para no bloquear
                         thread::spawn(move || {
                             let bridge_script = "tools/headless_blender_bridge.py";
-                            if Path::new(bridge_script).exists() {
+                            if !Path::new(bridge_script).exists() {
+                                // Fase 6: nada de fallos silenciosos.
+                                log::error!(
+                                    "Bridge de Blender no encontrado en '{}': no se exporta {:?}. \
+                                     El .glb queda como estaba.",
+                                    bridge_script,
+                                    input_path
+                                );
+                                return;
+                            }
+                            {
                                 let output = Command::new("python3")
                                     .args([
                                         bridge_script,

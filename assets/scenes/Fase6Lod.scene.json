@@ -1,0 +1,300 @@
+[
+  {
+    "id": 1,
+    "name": "Camara",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "active": true,
+    "parent": null,
+    "children": [],
+    "transform": {
+      "position": [
+        0,
+        2,
+        9
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "components": [
+      "Transform",
+      "Camera"
+    ],
+    "mesh": null,
+    "camera": {
+      "fov": 60,
+      "near_clip": 0.1,
+      "far_clip": 200,
+      "is_main": true
+    },
+    "light": null,
+    "physics": null,
+    "script": null,
+    "script_data": null,
+    "audio": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "ui_image": null,
+    "ui_drag": null,
+    "portal": null,
+    "animator": null,
+    "fog": null
+  },
+  {
+    "id": 2,
+    "name": "Sol",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "active": true,
+    "parent": null,
+    "children": [],
+    "transform": {
+      "position": [
+        6,
+        10,
+        4
+      ],
+      "rotation": [
+        50,
+        30,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "components": [
+      "Transform",
+      "Light"
+    ],
+    "mesh": null,
+    "camera": null,
+    "light": {
+      "light_type": "Directional",
+      "color": [
+        1.0,
+        0.98,
+        0.92
+      ],
+      "intensity": 1.2,
+      "range": 0,
+      "cast_shadow": false
+    },
+    "physics": null,
+    "script": null,
+    "script_data": null,
+    "audio": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "ui_image": null,
+    "ui_drag": null,
+    "portal": null,
+    "animator": null,
+    "fog": null
+  },
+  {
+    "id": 3,
+    "name": "Suelo",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": true,
+    "active": true,
+    "parent": null,
+    "children": [],
+    "transform": {
+      "position": [
+        0,
+        -0.5,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        30,
+        1,
+        30
+      ]
+    },
+    "components": [
+      "Transform",
+      "MeshRenderer",
+      "Physics"
+    ],
+    "mesh": {
+      "model": "cube",
+      "color": [
+        0.35,
+        0.36,
+        0.4
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv"
+    },
+    "camera": null,
+    "light": null,
+    "physics": {
+      "body_type": "Static",
+      "mass": 1.0,
+      "friction": 0.7,
+      "restitution": 0.0,
+      "box_extents": [
+        15,
+        0.5,
+        15
+      ],
+      "linear_velocity": [
+        0,
+        0,
+        0
+      ],
+      "layer": 0,
+      "collision_mask": 4294967295,
+      "is_trigger": false,
+      "colliders": [],
+      "mesh_collider": "None"
+    },
+    "script": null,
+    "script_data": null,
+    "audio": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "ui_image": null,
+    "ui_drag": null,
+    "portal": null,
+    "animator": null,
+    "fog": null
+  },
+  {
+    "id": 10,
+    "name": "ModeloCerca",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "active": true,
+    "parent": null,
+    "children": [],
+    "transform": {
+      "position": [
+        0.0,
+        0.0,
+        2.5
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "components": [
+      "Transform",
+      "MeshRenderer"
+    ],
+    "mesh": {
+      "model": "fase6_test",
+      "color": [
+        1.0,
+        0.55,
+        0.15
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv"
+    },
+    "camera": null,
+    "light": null,
+    "physics": null,
+    "script": null,
+    "script_data": null,
+    "audio": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "ui_image": null,
+    "ui_drag": null,
+    "portal": null,
+    "animator": null,
+    "fog": null
+  },
+  {
+    "id": 11,
+    "name": "ModeloLejos",
+    "tag": "Untagged",
+    "layer": "Default",
+    "is_static": false,
+    "active": true,
+    "parent": null,
+    "children": [],
+    "transform": {
+      "position": [
+        0.0,
+        0.0,
+        -49.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "components": [
+      "Transform",
+      "MeshRenderer"
+    ],
+    "mesh": {
+      "model": "fase6_test",
+      "color": [
+        1.0,
+        0.55,
+        0.15
+      ],
+      "wireframe": false,
+      "shader": "pbr.vert.spv"
+    },
+    "camera": null,
+    "light": null,
+    "physics": null,
+    "script": null,
+    "script_data": null,
+    "audio": null,
+    "canvas": null,
+    "rect_transform": null,
+    "ui_text": null,
+    "ui_button": null,
+    "ui_image": null,
+    "ui_drag": null,
+    "portal": null,
+    "animator": null,
+    "fog": null
+  }
+]

@@ -298,6 +298,28 @@ impl McpServer {
                             }
                         },
                         {
+                            "name": "glass_asset_validate",
+                            "description": "Valida un asset de modelo (Fase 6): conteos del GLB, objetos, instancias enlazadas (nodos que comparten malla), grupos LOD por sufijo _LOD<n>, colecciones/prefabs del sidecar del bridge y frescura (si la fuente .blend/.fbx cambió desde la exportación, por SHA-256). Acepta la ruta del .blend/.fbx o la del .glb bajo assets/.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "path": { "type": "string" }
+                                },
+                                "required": ["path"]
+                            }
+                        },
+                        {
+                            "name": "glass_asset_reload",
+                            "description": "Re-exporta un .blend/.fbx con el bridge de Blender en el acto (Fase 6) y devuelve el resultado con el resumen del sidecar; la escritura del .glb dispara la recarga en caliente por el vigía. Para un .glb devuelve su validación. La ruta debe estar bajo assets/.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "path": { "type": "string" }
+                                },
+                                "required": ["path"]
+                            }
+                        },
+                        {
                             "name": "glass_get_audio_status",
                             "description": "Consulta el estado del subsistema de audio de GlassEngine (backend Kira, dispositivo CPAL/ALSA y clips en memoria).",
                             "inputSchema": {
@@ -2437,6 +2459,114 @@ impl McpServer {
                 )
             }
 
+            "glass_asset_validate" => {
+                let Some(path) = args.get("path").and_then(|v| v.as_str()) else {
+                    return McpResponse::invalid_params(id, "Field 'path' is required");
+                };
+                match validar_asset(path) {
+                    Ok(datos) => McpResponse::success(
+                        id,
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&datos).unwrap()
+                            }]
+                        }),
+                    ),
+                    Err(e) => McpResponse::error(id, -32005, e),
+                }
+            }
+
+            "glass_asset_reload" => {
+                let Some(path) = args.get("path").and_then(|v| v.as_str()) else {
+                    return McpResponse::invalid_params(id, "Field 'path' is required");
+                };
+                let ruta = std::path::Path::new(path);
+                let ext = ruta
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if !path.starts_with("assets/") || path.contains("..") {
+                    return McpResponse::error(
+                        id,
+                        -32005,
+                        "La ruta debe estar bajo assets/ y sin '..'",
+                    );
+                }
+                if ext == "glb" {
+                    return match validar_asset(path) {
+                        Ok(datos) => McpResponse::success(
+                            id,
+                            json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": serde_json::to_string_pretty(&datos).unwrap()
+                                }]
+                            }),
+                        ),
+                        Err(e) => McpResponse::error(id, -32005, e),
+                    };
+                }
+                if ext != "blend" && ext != "fbx" {
+                    return McpResponse::error(
+                        id,
+                        -32005,
+                        "Solo se re-exportan .blend/.fbx (o se valida un .glb)",
+                    );
+                }
+                let glb = ruta.with_extension("glb");
+                let salida = std::process::Command::new("python3")
+                    .args([
+                        "tools/headless_blender_bridge.py",
+                        path,
+                        glb.to_str().unwrap_or_default(),
+                    ])
+                    .output();
+                match salida {
+                    Ok(res) => {
+                        let stdout = String::from_utf8_lossy(&res.stdout).to_string();
+                        let resultado = stdout
+                            .lines()
+                            .rev()
+                            .find_map(|l| l.strip_prefix("GLASS_BRIDGE_RESULT "))
+                            .and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok());
+                        match resultado {
+                            Some(mut r) => {
+                                if let Some(obj) = r.as_object_mut() {
+                                    obj.insert(
+                                        "note".into(),
+                                        json!("La escritura del .glb dispara la recarga en caliente por el vigía."),
+                                    );
+                                }
+                                McpResponse::success(
+                                    id,
+                                    json!({
+                                        "content": [{
+                                            "type": "text",
+                                            "text": serde_json::to_string_pretty(&r).unwrap()
+                                        }]
+                                    }),
+                                )
+                            }
+                            None => McpResponse::error(
+                                id,
+                                -32005,
+                                format!(
+                                    "El bridge no devolvió resultado. Salida: {}",
+                                    stdout.chars().take(400).collect::<String>()
+                                ),
+                            ),
+                        }
+                    }
+                    Err(e) => McpResponse::error(
+                        id,
+                        -32005,
+                        format!("No se pudo lanzar el bridge: {e}"),
+                    ),
+                }
+            }
+
             "glass_get_audio_status" => {
                 let audio_sys = self.get_audio();
                 let backend_type = if audio_sys.is_null_backend {
@@ -2981,4 +3111,105 @@ mod tests_catchup {
         let _ = std::fs::remove_file("assets/lightmaps/TestMcp.lm.png");
         let _ = std::fs::remove_file("assets/lightmaps/TestMcp.lm.json");
     }
+}
+
+/// SHA-256 hexadecimal de un archivo (Fase 6, tools de assets).
+fn sha256_hex(path: &std::path::Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).ok()?;
+    let mut h = Sha256::new();
+    h.update(&bytes);
+    Some(format!("{:x}", h.finalize()))
+}
+
+/// Lee el chunk JSON de un GLB (Fase 6).
+fn glb_json(path: &std::path::Path) -> Result<serde_json::Value, String> {
+    let data = std::fs::read(path).map_err(|e| format!("No se pudo leer {path:?}: {e}"))?;
+    if data.len() < 20 || &data[0..4] != b"glTF" {
+        return Err(format!("{path:?} no es un GLB válido"));
+    }
+    let chunk_len = u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
+    if &data[16..20] != b"JSON" || 20 + chunk_len > data.len() {
+        return Err(format!("{path:?}: chunk JSON ausente o truncado"));
+    }
+    serde_json::from_slice(&data[20..20 + chunk_len])
+        .map_err(|e| format!("{path:?}: JSON ilegible: {e}"))
+}
+
+/// Validación de un asset de modelo (Fase 6): sirve a
+/// `glass_asset_validate` y a la rama .glb de `glass_asset_reload`.
+fn validar_asset(path: &str) -> Result<serde_json::Value, String> {
+    if !path.starts_with("assets/") || path.contains("..") {
+        return Err("La ruta debe estar bajo assets/ y sin '..'".into());
+    }
+    let ruta = std::path::Path::new(path);
+    let ext = ruta
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let glb_path = if ext == "glb" {
+        ruta.to_path_buf()
+    } else if ext == "blend" || ext == "fbx" {
+        ruta.with_extension("glb")
+    } else {
+        return Err("Extensión no soportada: se espera .blend, .fbx o .glb".into());
+    };
+    let doc = glb_json(&glb_path)?;
+    let contar = |k: &str| doc.get(k).and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+    // Nodos con malla: instancias (misma malla en ≥2 nodos) y LODs.
+    let mut por_malla: std::collections::HashMap<usize, Vec<String>> =
+        std::collections::HashMap::new();
+    let mut lods: std::collections::HashMap<String, Vec<u32>> = std::collections::HashMap::new();
+    if let Some(nodes) = doc.get("nodes").and_then(|v| v.as_array()) {
+        for n in nodes {
+            let nombre = n.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            if let Some(mi) = n.get("mesh").and_then(|v| v.as_u64()) {
+                por_malla.entry(mi as usize).or_default().push(nombre.to_string());
+            }
+            if let Some((base, nivel)) = glass_renderer::lod_suffix(nombre) {
+                lods.entry(base).or_default().push(nivel);
+            }
+        }
+    }
+    let instancias: Vec<serde_json::Value> = por_malla
+        .iter()
+        .filter(|(_, nombres)| nombres.len() > 1)
+        .map(|(mi, nombres)| json!({ "mesh": mi, "nodes": nombres }))
+        .collect();
+    // Sidecar del bridge (si existe): colecciones/prefabs y frescura.
+    let sidecar_path = std::path::PathBuf::from(format!("{}.meta.json", glb_path.display()));
+    let mut sidecar_info = json!({ "present": false });
+    if let Ok(texto) = std::fs::read_to_string(&sidecar_path) {
+        if let Ok(sc) = serde_json::from_str::<serde_json::Value>(&texto) {
+            let mut info = json!({
+                "present": true,
+                "source": sc.get("source"),
+                "exported_at": sc.get("exported_at"),
+                "blender_version": sc.get("blender_version"),
+                "collections": sc.get("collections"),
+            });
+            if ext == "blend" || ext == "fbx" {
+                let actual = sha256_hex(ruta);
+                let registrado = sc.get("source_sha256").and_then(|v| v.as_str()).map(|s| s.to_string());
+                info["fresh"] = json!(actual.is_some() && actual == registrado);
+                info["source_sha256"] = json!(registrado);
+            }
+            sidecar_info = info;
+        }
+    }
+    Ok(json!({
+        "path": path,
+        "glb": glb_path.to_string_lossy(),
+        "counts": {
+            "meshes": contar("meshes"),
+            "nodes": contar("nodes"),
+            "materials": contar("materials"),
+            "animations": contar("animations"),
+            "skins": contar("skins"),
+        },
+        "instances": instancias,
+        "lod_groups": lods,
+        "sidecar": sidecar_info,
+    }))
 }

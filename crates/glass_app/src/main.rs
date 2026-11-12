@@ -2484,6 +2484,7 @@ impl GlassEngineApp {
                                         primary,
                                         model.images.clone(),
                                         model.primitive_ranges.clone(),
+                                        model.objects.clone(),
                                     );
                                     // Geometría CPU retenida (Fase 1.5): los
                                     // colliders de malla la leen al reconstruir
@@ -4061,7 +4062,46 @@ let resueltos = colliders_resueltos(body, shape);
                         if draw_items.is_empty() {
                         if let (Some(key), Some(ranges)) = (model_key, ranges) {
                             let materials = cache.materials.get(key);
-                            for range in ranges {
+                            // Fase 6 (LOD): nivel activo por base según
+                            // la distancia de la entidad al ojo.
+                            let mut lod_de_rango: std::collections::HashMap<usize, (String, u32)> =
+                                std::collections::HashMap::new();
+                            let mut lod_activo: std::collections::HashMap<String, u32> =
+                                std::collections::HashMap::new();
+                            if let Some(objs) = cache.objects.get(key) {
+                                let mut disp: std::collections::HashMap<String, Vec<u32>> =
+                                    std::collections::HashMap::new();
+                                for o in objs {
+                                    if let Some((base, nivel)) =
+                                        glass_renderer::lod_suffix(&o.name)
+                                    {
+                                        disp.entry(base.clone()).or_default().push(nivel);
+                                        for &r in &o.ranges {
+                                            lod_de_rango.insert(r, (base.clone(), nivel));
+                                        }
+                                    }
+                                }
+                                if !disp.is_empty() {
+                                    let ojo = eye_game_opt.unwrap_or(eye_scene);
+                                    let dx = world[12] - ojo[0];
+                                    let dy = world[13] - ojo[1];
+                                    let dz = world[14] - ojo[2];
+                                    let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                                    for (base, niveles) in &disp {
+                                        lod_activo.insert(
+                                            base.clone(),
+                                            glass_renderer::lod_level_for_distance(niveles, dist),
+                                        );
+                                    }
+                                }
+                            }
+                            for (range_idx, range) in ranges.iter().enumerate() {
+                                if let Some((base, nivel)) = lod_de_rango.get(&range_idx) {
+                                    if lod_activo.get(base) != Some(nivel) {
+                                        continue;
+                                    }
+                                }
+                                let range = range;
                                 let mat = range.material.and_then(|i| materials.and_then(|ms| ms.get(i)));
                                 let (c, mp) = if let Some(m) = mat {
                                     (m.base_color_factor, [m.metallic, m.roughness, 1.0, has_light])
@@ -5569,6 +5609,7 @@ impl ApplicationHandler for GlassEngineApp {
                                     primary,
                                     model.images.clone(),
                                     model.primitive_ranges.clone(),
+                                        model.objects.clone(),
                                 );
                                 // Geometría CPU retenida (Fase 1.5), como en la
                                 // ruta de recarga en caliente.

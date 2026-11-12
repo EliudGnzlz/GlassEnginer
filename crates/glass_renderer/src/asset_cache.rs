@@ -38,6 +38,8 @@ pub struct AssetCache {
     /// que `meshes`: el bucle de dibujo emite un lote por primitiva, cada
     /// uno con su material y su textura.
     pub primitive_ranges: HashMap<String, Vec<PrimitiveRange>>,
+    /// Objetos del documento por modelo (Fase 6): instancias y LOD.
+    pub objects: HashMap<String, Vec<crate::mesh::ModelObject>>,
     /// Texturas ya subidas a VRAM, por (clave de modelo, índice de imagen
     /// dentro del .glb): cada material puede usar una imagen distinta.
     pub textures: HashMap<(String, usize), GpuTexture>,
@@ -71,6 +73,7 @@ impl Default for AssetCache {
             primary_materials: HashMap::new(),
             images: HashMap::new(),
             primitive_ranges: HashMap::new(),
+            objects: HashMap::new(),
             textures: HashMap::new(),
             texture_sets: HashMap::new(),
             default_set: None,
@@ -180,6 +183,7 @@ impl AssetCache {
         primary_material: Option<GltfMaterial>,
         images: Vec<GltfImageData>,
         primitive_ranges: Vec<PrimitiveRange>,
+        objects: Vec<crate::mesh::ModelObject>,
     ) {
         let key = name.into();
         if let Some(mat) = primary_material {
@@ -190,6 +194,7 @@ impl AssetCache {
         self.materials.insert(key.clone(), materials);
         self.images.insert(key.clone(), images);
         self.primitive_ranges.insert(key.clone(), primitive_ranges);
+        self.objects.insert(key.clone(), objects);
         self.touch(&key);
     }
 
@@ -518,6 +523,7 @@ impl AssetCache {
             self.primary_materials.remove(key);
             self.images.remove(key);
             self.primitive_ranges.remove(key);
+            self.objects.remove(key);
             if let Ok(mut map) = self.last_used.lock() {
                 map.remove(key);
             }
