@@ -46,6 +46,83 @@ pub struct StateDef {
     pub speed: f32,
     #[serde(default = "default_loop", rename = "loop")]
     pub r#loop: bool,
+    /// Blend tree 1D opcional (Fase 4): si está presente, `clip` se
+    /// ignora y la pose del estado mezcla los clips hijos según el
+    /// parámetro.
+    #[serde(default)]
+    pub blend: Option<BlendTree1D>,
+}
+
+/// Un hijo de un blend tree 1D: un clip que entra en la mezcla al
+/// llegar el parámetro a su umbral.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlendChild {
+    /// Nombre del clip dentro del .glb del modelo.
+    pub clip: String,
+    /// Valor del parámetro al que este hijo pesa 1.
+    pub threshold: f32,
+    #[serde(default = "default_speed")]
+    pub speed: f32,
+}
+
+/// Blend tree 1D (Fase 4): mezcla clips según un parámetro float,
+/// estilo Unity: cada hijo pesa según la distancia del parámetro a
+/// su umbral, con reparto lineal entre umbrales vecinos.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlendTree1D {
+    /// Nombre del parámetro float que gobierna la mezcla.
+    pub param: String,
+    pub children: Vec<BlendChild>,
+}
+
+/// Pesos de los hijos de un blend tree para un valor del parámetro.
+/// Los hijos se ordenan por umbral; fuera de rango manda el hijo
+/// extremo (peso 1); entre dos umbrales el reparto es lineal. Solo
+/// se devuelven los hijos con peso > 0. Función pura.
+pub fn blend_weights<'a>(tree: &'a BlendTree1D, value: f32) -> Vec<(&'a BlendChild, f32)> {
+    let mut sorted: Vec<&BlendChild> = tree.children.iter().collect();
+    sorted.sort_by(|a, b| a.threshold.partial_cmp(&b.threshold).unwrap_or(std::cmp::Ordering::Equal));
+    if sorted.is_empty() {
+        return Vec::new();
+    }
+    if sorted.len() == 1 || value <= sorted[0].threshold {
+        return vec![(sorted[0], 1.0)];
+    }
+    let last = sorted.len() - 1;
+    if value >= sorted[last].threshold {
+        return vec![(sorted[last], 1.0)];
+    }
+    for i in 0..last {
+        let (a, b) = (sorted[i], sorted[i + 1]);
+        if value >= a.threshold && value <= b.threshold {
+            let span = b.threshold - a.threshold;
+            let wb = if span > 1e-6 { (value - a.threshold) / span } else { 0.0 };
+            let wa = 1.0 - wb;
+            let mut out = Vec::new();
+            if wa > 0.0 {
+                out.push((a, wa));
+            }
+            if wb > 0.0 {
+                out.push((b, wb));
+            }
+            return out;
+        }
+    }
+    vec![(sorted[last], 1.0)]
+}
+
+/// Clip de referencia de un estado para `exit_time`: el suyo, o el
+/// hijo de menor umbral si es un estado con blend tree.
+fn state_main_clip(controller: &AnimatorController, state_name: &str) -> Option<String> {
+    let st = controller.state(state_name)?;
+    match &st.blend {
+        None => Some(st.clip.clone()),
+        Some(tree) => {
+            let mut sorted: Vec<&BlendChild> = tree.children.iter().collect();
+            sorted.sort_by(|a, b| a.threshold.partial_cmp(&b.threshold).unwrap_or(std::cmp::Ordering::Equal));
+            sorted.first().map(|c| c.clip.clone())
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,17 +191,23 @@ impl AnimatorController {
 // Salida de un paso de simulación
 // ---------------------------------------------------------------------------
 
-/// Qué hay que muestrear este frame. Durante un fundido, `clip_a`/`time_a`
-/// son el estado origen y `clip_b`/`time_b` el destino, con `weight_b` en
-/// [0,1] (peso del destino, listo para `evaluate_skin_matrices_blended`).
+/// Una muestra de clip con su reloj y su peso en la pose del frame.
+/// La suma de pesos de la salida es 1 (salvo pesos descartados por
+/// redondeo al filtrar los ~0).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClipSample {
+    pub clip: String,
+    pub time: f32,
+    pub weight: f32,
+}
+
+/// Qué hay que muestrear este frame: la lista de clips con sus
+/// tiempos y pesos. Un estado normal aporta un sample a peso 1; un
+/// estado con blend tree aporta sus hijos; durante un fundido van
+/// los samples del origen escalados por (1−w) y los del destino por w.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdvanceOutput {
-    pub clip_a: String,
-    pub time_a: f32,
-    pub clip_b: Option<String>,
-    pub time_b: f32,
-    /// Peso del clip B (0 = solo A, 1 = solo B). Ignorado si `clip_b` es None.
-    pub weight_b: f32,
+    pub samples: Vec<ClipSample>,
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +224,66 @@ impl AnimatorData {
     ///   en su defecto, evalúa transiciones del estado y de AnyState en orden.
     ///
     /// No conoce clips reales: la duración se pide por `clip_duration(clip)`.
+    /// Avanza los relojes de los hijos del blend tree de un estado.
+    fn advance_blend_clocks(
+        controller: &AnimatorController,
+        state_name: &str,
+        times: &mut std::collections::HashMap<String, f32>,
+        dt: f32,
+    ) {
+        let Some(st) = controller.state(state_name) else {
+            return;
+        };
+        let Some(tree) = &st.blend else {
+            return;
+        };
+        for child in &tree.children {
+            *times.entry(child.clip.clone()).or_insert(0.0) += dt * st.speed * child.speed;
+        }
+    }
+
+    /// Samples de un estado (sin fundido): su clip, o los hijos de su
+    /// blend tree con los pesos del parámetro y sus relojes propios.
+    fn state_samples(
+        &self,
+        controller: &AnimatorController,
+        state_name: &str,
+        times: &std::collections::HashMap<String, f32>,
+    ) -> Vec<ClipSample> {
+        let Some(st) = controller.state(state_name) else {
+            return Vec::new();
+        };
+        match &st.blend {
+            None => vec![ClipSample {
+                clip: st.clip.clone(),
+                time: self.state_time_for(state_name),
+                weight: 1.0,
+            }],
+            Some(tree) => {
+                let v = self.params.get(&tree.param).copied().unwrap_or(0.0);
+                blend_weights(tree, v)
+                    .into_iter()
+                    .map(|(child, w)| ClipSample {
+                        clip: child.clip.clone(),
+                        time: times.get(&child.clip).copied().unwrap_or(0.0),
+                        weight: w,
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// El reloj «del estado» usado para el sample de un estado sin
+    /// blend: state_time si es el actual, fade_from_time si es el
+    /// origen del fundido.
+    fn state_time_for(&self, state_name: &str) -> f32 {
+        if self.fade_from_state.as_deref() == Some(state_name) {
+            self.fade_from_time
+        } else {
+            self.state_time
+        }
+    }
+
     pub fn advance<F>(
         &mut self,
         dt: f32,
@@ -183,6 +326,9 @@ impl AnimatorData {
             }
         }
 
+        // Relojes de los hijos del blend tree del estado actual.
+        Self::advance_blend_clocks(controller, &self.current_state.clone(), &mut self.blend_times, dt);
+
         if self.fade_from_state.is_some() {
             // 2a) Fundido en curso: avanzar temporizadores y tiempo del origen.
             self.fade_elapsed += dt;
@@ -200,9 +346,13 @@ impl AnimatorData {
                     }
                 }
             }
+            if let Some(from) = self.fade_from_state.clone() {
+                Self::advance_blend_clocks(controller, &from, &mut self.fade_blend_times, dt);
+            }
             if self.fade_duration <= 0.0 || self.fade_elapsed >= self.fade_duration {
                 self.fade_from_state = None;
                 self.fade_from_time = 0.0;
+                self.fade_blend_times.clear();
             }
         } else {
             // 2b) Sin fundido: petición pendiente (Play/CrossFade) o transiciones.
@@ -222,34 +372,30 @@ impl AnimatorData {
 
         // 3) Construir la muestra del frame.
         if let Some(from) = self.fade_from_state.clone() {
-            let clip_a = controller
-                .state(&from)
-                .map(|s| s.clip.clone())
-                .unwrap_or_default();
-            let clip_b = controller.state(&self.current_state).map(|s| s.clip.clone());
             let w = if self.fade_duration > 0.0 {
                 (self.fade_elapsed / self.fade_duration).clamp(0.0, 1.0)
             } else {
                 1.0
             };
-            AdvanceOutput {
-                clip_a,
-                time_a: self.fade_from_time,
-                clip_b,
-                time_b: self.state_time,
-                weight_b: w,
+            let mut samples = Vec::new();
+            for mut s in self.state_samples(controller, &from, &self.fade_blend_times) {
+                s.weight *= 1.0 - w;
+                if s.weight > 0.0001 {
+                    samples.push(s);
+                }
             }
+            let destino = self.current_state.clone();
+            for mut s in self.state_samples(controller, &destino, &self.blend_times) {
+                s.weight *= w;
+                if s.weight > 0.0001 {
+                    samples.push(s);
+                }
+            }
+            AdvanceOutput { samples }
         } else {
-            let clip = controller
-                .state(&self.current_state)
-                .map(|s| s.clip.clone())
-                .unwrap_or_default();
+            let actual = self.current_state.clone();
             AdvanceOutput {
-                clip_a: clip,
-                time_a: self.state_time,
-                clip_b: None,
-                time_b: 0.0,
-                weight_b: 1.0,
+                samples: self.state_samples(controller, &actual, &self.blend_times),
             }
         }
     }
@@ -261,11 +407,16 @@ impl AnimatorData {
             self.state_time = 0.0;
             self.fade_from_state = None;
             self.fade_from_time = 0.0;
+            self.blend_times.clear();
+            self.fade_blend_times.clear();
         } else {
             self.fade_from_state = Some(self.current_state.clone());
             self.fade_from_time = self.state_time;
             self.fade_duration = fade;
             self.fade_elapsed = 0.0;
+            // Los relojes de blend del estado saliente pasan a ser
+            // los del origen del fundido; el destino arranca de cero.
+            self.fade_blend_times = std::mem::take(&mut self.blend_times);
             self.current_state = to;
             self.state_time = 0.0;
         }
@@ -317,9 +468,9 @@ impl AnimatorData {
             // (para AnyState se toma el clip del estado actual).
             if let Some(et) = tr.exit_time {
                 let src_clip = if tr.from == "*" {
-                    controller.state(&current).map(|s| s.clip.clone())
+                    state_main_clip(controller, &current)
                 } else {
-                    controller.state(&tr.from).map(|s| s.clip.clone())
+                    state_main_clip(controller, &tr.from)
                 };
                 let dur = src_clip.as_deref().and_then(|c| clip_duration(c));
                 match dur {
@@ -390,6 +541,7 @@ mod fsm_tests {
             clip: clip.to_string(),
             speed: 1.0,
             r#loop: looping,
+            blend: None,
         }
     }
 
@@ -441,9 +593,9 @@ mod fsm_tests {
         let mut a = animator();
         let out = a.advance(0.0, &c, clip_duration);
         assert_eq!(a.current_state, "Idle");
-        assert_eq!(out.clip_a, "idle");
-        assert!(out.clip_b.is_none());
-        assert_eq!(out.weight_b, 1.0);
+        assert_eq!(out.samples.len(), 1);
+        assert_eq!(out.samples[0].clip, "idle");
+        assert_eq!(out.samples[0].weight, 1.0);
     }
 
     #[test]
@@ -455,22 +607,23 @@ mod fsm_tests {
 
         // El frame que dispara la transición arranca el fundido (peso 0).
         let out = a.advance(0.125, &c, clip_duration);
-        assert_eq!(out.clip_a, "idle");
-        assert_eq!(out.clip_b.as_deref(), Some("walk"));
-        assert_eq!(out.weight_b, 0.0);
+        assert_eq!(out.samples.len(), 1);
+        assert_eq!(out.samples[0].clip, "idle");
         assert_eq!(a.current_state, "Walk");
 
         // A mitad del fundido (0,25 s): dos clips y peso intermedio.
         let out = a.advance(0.125, &c, clip_duration);
-        assert_eq!(out.clip_a, "idle");
-        assert_eq!(out.clip_b.as_deref(), Some("walk"));
-        assert!(out.weight_b > 0.0 && out.weight_b < 1.0, "peso {}", out.weight_b);
+        assert_eq!(out.samples.len(), 2);
+        let w_walk = out.samples.iter().find(|s| s.clip == "walk").map(|s| s.weight).unwrap_or(0.0);
+        assert!(w_walk > 0.0 && w_walk < 1.0, "peso walk {w_walk}");
+        let suma: f32 = out.samples.iter().map(|s| s.weight).sum();
+        assert!((suma - 1.0).abs() < 1e-4, "suma {suma}");
 
         // Completado el fundido: solo walk, peso 1.
         let out = a.advance(0.125, &c, clip_duration);
-        assert_eq!(out.clip_a, "walk");
-        assert!(out.clip_b.is_none());
-        assert_eq!(out.weight_b, 1.0);
+        assert_eq!(out.samples.len(), 1);
+        assert_eq!(out.samples[0].clip, "walk");
+        assert_eq!(out.samples[0].weight, 1.0);
     }
 
     #[test]
@@ -482,7 +635,14 @@ mod fsm_tests {
 
         let out = a.advance(0.01, &c, clip_duration);
         assert_eq!(a.current_state, "Jump");
-        assert_eq!(out.clip_b.as_deref(), Some("jump"));
+        // El frame que dispara abre el fundido con peso 0 del destino:
+        // la muestra sigue siendo solo idle.
+        assert_eq!(out.samples.len(), 1);
+        assert_eq!(out.samples[0].clip, "idle");
+        // A mitad del fundido de entrada, jump ya pesa.
+        let out = a.advance(0.05, &c, clip_duration);
+        let w_jump = out.samples.iter().find(|s| s.clip == "jump").map(|s| s.weight).unwrap_or(0.0);
+        assert!(w_jump > 0.0 && w_jump < 1.0, "peso jump {w_jump}");
         // El trigger quedó consumido al disparar.
         assert_eq!(a.params.get("jump").copied().unwrap_or(0.0), 0.0);
 
@@ -495,7 +655,8 @@ mod fsm_tests {
         // ...y no se re-dispara solo: el trigger ya no está.
         let out = a.advance(0.02, &c, clip_duration);
         assert_eq!(a.current_state, "Idle");
-        assert!(out.clip_b.is_none());
+        assert_eq!(out.samples.len(), 1);
+        assert_eq!(out.samples[0].clip, "idle");
     }
 
     #[test]
@@ -522,9 +683,49 @@ mod fsm_tests {
         let mut a = animator();
         for _ in 0..20 {
             let out = a.advance(0.1, &c, clip_duration);
-            assert!(out.clip_b.is_none());
-            assert_eq!(out.clip_a, "idle");
+            assert_eq!(out.samples.len(), 1);
+            assert_eq!(out.samples[0].clip, "idle");
             assert_eq!(a.current_state, "Idle");
         }
+    }
+
+    #[test]
+    fn blend_tree_mezcla_por_parametro() {
+        // Controlador con un único estado Locomocion (blend por Speed:
+        // idle@0, walk@2.5, jump@5 como tercer clip) y sin transiciones.
+        let mut c = controller();
+        c.default_state = "Locomocion".to_string();
+        c.parameters.push(ParamDef { name: "Speed".to_string(), kind: ParamKind::Float, default: 0.0 });
+        c.states.push(StateDef {
+            name: "Locomocion".to_string(),
+            clip: String::new(),
+            speed: 1.0,
+            r#loop: true,
+            blend: Some(BlendTree1D {
+                param: "Speed".to_string(),
+                children: vec![
+                    BlendChild { clip: "idle".to_string(), threshold: 0.0, speed: 1.0 },
+                    BlendChild { clip: "walk".to_string(), threshold: 2.5, speed: 1.0 },
+                    BlendChild { clip: "jump".to_string(), threshold: 5.0, speed: 1.0 },
+                ],
+            }),
+        });
+        c.transitions.clear();
+        let mut a = animator();
+        let out = a.advance(0.1, &c, clip_duration);
+        assert_eq!(out.samples.len(), 1);
+        assert_eq!(out.samples[0].clip, "idle");
+        a.params.insert("Speed".to_string(), 1.25);
+        let out = a.advance(0.1, &c, clip_duration);
+        assert_eq!(out.samples.len(), 2);
+        let w_idle = out.samples.iter().find(|s| s.clip == "idle").unwrap().weight;
+        let w_walk = out.samples.iter().find(|s| s.clip == "walk").unwrap().weight;
+        assert!((w_idle - 0.5).abs() < 1e-4, "idle {w_idle}");
+        assert!((w_walk - 0.5).abs() < 1e-4, "walk {w_walk}");
+        a.params.insert("Speed".to_string(), 9.0);
+        let out = a.advance(0.1, &c, clip_duration);
+        assert_eq!(out.samples.len(), 1);
+        assert_eq!(out.samples[0].clip, "jump");
+        assert_eq!(out.samples[0].weight, 1.0);
     }
 }

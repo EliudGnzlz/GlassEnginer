@@ -829,7 +829,7 @@ impl SceneBridge for EngineSceneBridge {
 /// peticiones, no toca nada: el camino clásico queda intacto.
 fn avanzar_animadores_fsm(
     animator_controllers: &mut std::collections::HashMap<String, glass_core::animator::AnimatorController>,
-    anim_pose: &mut std::collections::HashMap<u64, (String, f32, Option<String>, f32, f32)>,
+    anim_pose: &mut std::collections::HashMap<u64, Vec<(String, f32, f32)>>,
     anim_free_fade: &mut std::collections::HashMap<u64, FreeFadeRt>,
     anim_runtime: &mut std::collections::HashMap<u64, (String, f32)>,
     scene: &mut SceneState,
@@ -874,7 +874,10 @@ fn avanzar_animadores_fsm(
                 let out = anim.advance(dt * anim.speed.max(0.0), ctrl, duration);
                 anim_pose.insert(
                     ent.id,
-                    (out.clip_a, out.time_a, out.clip_b, out.time_b, out.weight_b),
+                    out.samples
+                        .iter()
+                        .map(|s| (s.clip.clone(), s.time, s.weight))
+                        .collect(),
                 );
                 continue;
             }
@@ -1424,7 +1427,7 @@ struct GlassEngineApp {
     /// el pase previo `avanzar_animadores_fsm` (con la escena en mutable)
     /// y la consume el bucle de dibujo, que itera la escena en inmutable.
     /// (clip_a, tiempo_a, clip_b, tiempo_b, peso_b).
-    anim_pose: std::collections::HashMap<u64, (String, f32, Option<String>, f32, f32)>,
+    anim_pose: std::collections::HashMap<u64, Vec<(String, f32, f32)>>,
     /// Fundidos libres clip→clip en curso (bloque FSM: `CrossFade` sin
     /// controlador), por entidad.
     anim_free_fade: std::collections::HashMap<u64, FreeFadeRt>,
@@ -4192,25 +4195,24 @@ let resueltos = colliders_resueltos(body, shape);
                             // crossfade libre en curso, se mezcla el clip
                             // saliente contra el entrante clásico. En
                             // cualquier otro caso, el camino de siempre.
-                            let matrices = if let Some((ca_name, ta, cb_name, tb, w)) =
-                                self.anim_pose.get(&ent.id)
-                            {
-                                let find_clip = |n: &str| clips.iter().find(|c| c.name == n);
-                                match cb_name {
-                                    Some(nb) => glass_renderer::skin::evaluate_skin_matrices_blended(
-                                        skin,
-                                        find_clip(ca_name),
-                                        *ta,
-                                        find_clip(nb),
-                                        *tb,
-                                        *w,
-                                    ),
-                                    None => glass_renderer::skin::evaluate_skin_matrices(
-                                        skin,
-                                        find_clip(ca_name),
-                                        *ta,
-                                    ),
-                                }
+                            let matrices = if let Some(samples) = self.anim_pose.get(&ent.id) {
+                                // Fase 4: la decisión del pase previo es
+                                // una lista de samples (clip, tiempo, peso):
+                                // un clip, dos en un fundido, o los hijos
+                                // de un blend tree.
+                                let resueltos: Vec<(
+                                    Option<&glass_renderer::skin::AnimationClip>,
+                                    f32,
+                                    f32,
+                                )> = samples
+                                    .iter()
+                                    .map(|(n, t, w)| {
+                                        (clips.iter().find(|c| &c.name == n), *t, *w)
+                                    })
+                                    .collect();
+                                glass_renderer::skin::evaluate_skin_matrices_multi(
+                                    skin, &resueltos,
+                                )
                             } else if self.anim_free_fade.contains_key(&ent.id) {
                                 let (from_name, from_t, w, done) = {
                                     let f = self.anim_free_fade.get_mut(&ent.id).unwrap();

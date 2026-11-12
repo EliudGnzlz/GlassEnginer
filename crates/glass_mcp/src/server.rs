@@ -252,6 +252,30 @@ impl McpServer {
                             }
                         },
                         {
+                            "name": "glass_animator_state",
+                            "description": "Estado del Animator de una entidad (Fase 4): controlador, estado actual, tiempo en el estado, fundido en curso con su origen y peso, parámetros y, si el estado es un blend tree 1D, los hijos con sus pesos y relojes según el parámetro.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "integer" }
+                                },
+                                "required": ["entity_id"]
+                            }
+                        },
+                        {
+                            "name": "glass_animator_set_param",
+                            "description": "Fija un parámetro (float/bool/trigger como número) del Animator de una entidad viva (Fase 4). Las transiciones y los blend trees reaccionan en el siguiente frame.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "integer" },
+                                    "param": { "type": "string" },
+                                    "value": { "type": "number" }
+                                },
+                                "required": ["entity_id", "param", "value"]
+                            }
+                        },
+                        {
                             "name": "glass_get_audio_status",
                             "description": "Consulta el estado del subsistema de audio de GlassEngine (backend Kira, dispositivo CPAL/ALSA y clips en memoria).",
                             "inputSchema": {
@@ -2142,6 +2166,119 @@ impl McpServer {
                         "content": [{
                             "type": "text",
                             "text": serde_json::to_string_pretty(&datos).unwrap()
+                        }]
+                    }),
+                )
+            }
+
+            "glass_animator_state" => {
+                let entity_id = match args.get("entity_id").and_then(|n| n.as_u64()) {
+                    Some(v) => v,
+                    None => return McpResponse::invalid_params(id, "Field 'entity_id' is required"),
+                };
+                let ent = match scene.entities.iter().find(|e| e.id == entity_id) {
+                    Some(e) => e,
+                    None => return McpResponse::error(id, -32004, "Entity not found"),
+                };
+                let anim = match &ent.animator {
+                    Some(a) => a,
+                    None => {
+                        return McpResponse::error(id, -32004, "La entidad no tiene Animator")
+                    }
+                };
+                let mut blend_json = serde_json::Value::Null;
+                if !anim.controller.is_empty() {
+                    let path = format!("assets/animators/{}.animator.json", anim.controller);
+                    if let Ok(ctrl) =
+                        glass_core::animator::AnimatorController::load_from_file(&path)
+                    {
+                        if let Some(st) = ctrl.state(&anim.current_state) {
+                            if let Some(tree) = &st.blend {
+                                let v = anim.params.get(&tree.param).copied().unwrap_or(0.0);
+                                let hijos: Vec<serde_json::Value> =
+                                    glass_core::animator::blend_weights(tree, v)
+                                        .into_iter()
+                                        .map(|(c, w)| {
+                                            json!({
+                                                "clip": c.clip,
+                                                "threshold": c.threshold,
+                                                "weight": w,
+                                                "time": anim
+                                                    .blend_times
+                                                    .get(&c.clip)
+                                                    .copied()
+                                                    .unwrap_or(0.0),
+                                            })
+                                        })
+                                        .collect();
+                                blend_json = json!({
+                                    "param": tree.param,
+                                    "value": v,
+                                    "children": hijos,
+                                });
+                            }
+                        }
+                    }
+                }
+                let fade_weight = if anim.fade_from_state.is_some() && anim.fade_duration > 0.0 {
+                    json!((anim.fade_elapsed / anim.fade_duration).clamp(0.0, 1.0))
+                } else {
+                    serde_json::Value::Null
+                };
+                let datos = json!({
+                    "entity_id": entity_id,
+                    "controller": anim.controller,
+                    "state": anim.current_state,
+                    "state_time": anim.state_time,
+                    "fading_from": anim.fade_from_state,
+                    "fade_weight": fade_weight,
+                    "params": anim.params,
+                    "blend": blend_json,
+                });
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&datos).unwrap()
+                        }]
+                    }),
+                )
+            }
+
+            "glass_animator_set_param" => {
+                let entity_id = match args.get("entity_id").and_then(|n| n.as_u64()) {
+                    Some(v) => v,
+                    None => return McpResponse::invalid_params(id, "Field 'entity_id' is required"),
+                };
+                let param = match args.get("param").and_then(|p| p.as_str()) {
+                    Some(s) => s.to_string(),
+                    None => return McpResponse::invalid_params(id, "Field 'param' is required"),
+                };
+                let value = match args.get("value").and_then(|v| v.as_f64()) {
+                    Some(n) => n as f32,
+                    None => return McpResponse::invalid_params(id, "Field 'value' is required"),
+                };
+                let ent = match scene.entities.iter_mut().find(|e| e.id == entity_id) {
+                    Some(e) => e,
+                    None => return McpResponse::error(id, -32004, "Entity not found"),
+                };
+                let anim = match &mut ent.animator {
+                    Some(a) => a,
+                    None => {
+                        return McpResponse::error(id, -32004, "La entidad no tiene Animator")
+                    }
+                };
+                anim.params.insert(param.clone(), value);
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": format!(
+                                "Parámetro '{}' del Animator de la entidad {} fijado a {}.",
+                                param, entity_id, value
+                            )
                         }]
                     }),
                 )

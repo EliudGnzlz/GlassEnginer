@@ -586,6 +586,14 @@ pub struct AnimatorData {
     /// (clip_destino, duración). La consume el bucle de dibujo.
     #[serde(skip)]
     pub pending_free_crossfade: Option<(String, f32)>,
+    /// Relojes por clip de los hijos del blend tree del estado actual
+    /// (Fase 4): clave = nombre de clip.
+    #[serde(skip)]
+    pub blend_times: std::collections::HashMap<String, f32>,
+    /// Relojes de los hijos del blend tree del estado origen durante
+    /// un fundido (Fase 4).
+    #[serde(skip)]
+    pub fade_blend_times: std::collections::HashMap<String, f32>,
 }
 
 impl Default for AnimatorData {
@@ -604,6 +612,8 @@ impl Default for AnimatorData {
             params: std::collections::HashMap::new(),
             pending_play: None,
             pending_free_crossfade: None,
+            blend_times: std::collections::HashMap::new(),
+            fade_blend_times: std::collections::HashMap::new(),
         }
     }
 }

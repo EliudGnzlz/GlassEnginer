@@ -320,6 +320,60 @@ pub fn evaluate_skin_matrices(
 /// clip tiene menos nodos animados que el otro, el que falta aporta la
 /// pose de reposo de ese nodo (igual que `sample_local_pose` hace con
 /// nodos sin canal).
+/// Evalúa las matrices de piel mezclando N clips (Fase 4: estados con
+/// blend tree y fundidos desde/hacia ellos). `samples` trae tuplas
+/// (clip, tiempo, peso); los pesos se normalizan por su suma. Por
+/// nodo: traslación y escala = media ponderada; rotación = slerp
+/// iterativo por el camino corto (cada sample entra con fracción
+/// peso_i / peso_acumulado, que reproduce el slerp de dos poses
+/// cuando N=2). Un clip `None` aporta la pose de reposo. Lista
+/// vacía o pesos que sumen ~0 = pose de reposo exacta.
+pub fn evaluate_skin_matrices_multi(
+    skin: &SkinData,
+    samples: &[(Option<&AnimationClip>, f32, f32)],
+) -> Vec<[f32; 16]> {
+    let node_count = skin.nodes.len();
+    let total: f32 = samples.iter().map(|s| s.2.max(0.0)).sum();
+    if samples.is_empty() || total <= 1e-6 {
+        return evaluate_skin_matrices(skin, None, 0.0);
+    }
+    // Pose acumulada: se parte del primer sample y se mezcla el resto.
+    let mut translations: Vec<[f32; 3]> = Vec::with_capacity(node_count);
+    let mut rotations: Vec<[f32; 4]> = Vec::with_capacity(node_count);
+    let mut scales: Vec<[f32; 3]> = Vec::with_capacity(node_count);
+    let mut acumulado: f32 = 0.0;
+    let mut iniciado = false;
+    for &(clip, time, peso) in samples {
+        let w = peso.max(0.0) / total;
+        if w <= 0.0 {
+            continue;
+        }
+        let pose = sample_local_pose(skin, clip, time);
+        if !iniciado {
+            translations = pose.translations;
+            rotations = pose.rotations;
+            scales = pose.scales;
+            acumulado = w;
+            iniciado = true;
+            continue;
+        }
+        let f = w / (acumulado + w);
+        for i in 0..node_count {
+            translations[i] = lerp_vec3(translations[i], pose.translations[i], f);
+            rotations[i] = slerp_shortest_normalized(rotations[i], pose.rotations[i], f);
+            scales[i] = lerp_vec3(scales[i], pose.scales[i], f);
+        }
+        acumulado += w;
+    }
+    let pose = LocalPose {
+        translations,
+        rotations,
+        scales,
+    };
+    let globals = compute_globals(skin, &pose);
+    compose_skin_matrices(skin, &globals)
+}
+
 pub fn evaluate_skin_matrices_blended(
     skin: &SkinData,
     clip_a: Option<&AnimationClip>,
@@ -329,37 +383,10 @@ pub fn evaluate_skin_matrices_blended(
     w: f32,
 ) -> Vec<[f32; 16]> {
     let w = w.clamp(0.0, 1.0);
-
-    let pose_a = sample_local_pose(skin, clip_a, time_a);
-    let pose_b = sample_local_pose(skin, clip_b, time_b);
-
-    // Ambas poses tienen un elemento por nodo de `skin` (sample_local_pose
-    // siempre produce `skin.nodes.len()` entradas, con reposo donde no hay
-    // canal), así que no hace falta igualar longitudes aquí: el "máximo de
-    // nodos, reposo donde falte" ya lo resuelve `sample_local_pose` al
-    // partir del reposo de `skin.nodes`.
-    let node_count = skin.nodes.len();
-    let mut translations = Vec::with_capacity(node_count);
-    let mut rotations = Vec::with_capacity(node_count);
-    let mut scales = Vec::with_capacity(node_count);
-
-    for i in 0..node_count {
-        translations.push(lerp_vec3(pose_a.translations[i], pose_b.translations[i], w));
-        rotations.push(slerp_shortest_normalized(
-            pose_a.rotations[i],
-            pose_b.rotations[i],
-            w,
-        ));
-        scales.push(lerp_vec3(pose_a.scales[i], pose_b.scales[i], w));
-    }
-
-    let pose = LocalPose {
-        translations,
-        rotations,
-        scales,
-    };
-    let globals = compute_globals(skin, &pose);
-    compose_skin_matrices(skin, &globals)
+    evaluate_skin_matrices_multi(
+        skin,
+        &[(clip_a, time_a, 1.0 - w), (clip_b, time_b, w)],
+    )
 }
 
 /// Interpolación lineal de un vec3.
@@ -666,6 +693,33 @@ mod tests {
     }
 
 // Insertar dentro de `mod tests`, junto a los tests existentes.
+
+#[test]
+fn multi_un_sample_reproduce_evaluate() {
+    let skin = skin_simple();
+    let clip_a = clip_rotacion_z(90.0, 1.0);
+    let solo = evaluate_skin_matrices(&skin, Some(&clip_a), 0.5);
+    let multi = evaluate_skin_matrices_multi(&skin, &[(Some(&clip_a), 0.5, 1.0)]);
+    for i in 0..16 {
+        assert!((solo[0][i] - multi[0][i]).abs() < 1e-5, "elemento {i}");
+    }
+}
+
+#[test]
+fn multi_dos_samples_equivale_a_blended() {
+    let skin = skin_simple();
+    let clip_a = clip_rotacion_z(90.0, 1.0);
+    let clip_b = clip_rotacion_z(30.0, 1.0);
+    let mezclado =
+        evaluate_skin_matrices_blended(&skin, Some(&clip_a), 0.5, Some(&clip_b), 0.5, 0.35);
+    let multi = evaluate_skin_matrices_multi(
+        &skin,
+        &[(Some(&clip_a), 0.5, 0.65), (Some(&clip_b), 0.5, 0.35)],
+    );
+    for i in 0..16 {
+        assert!((mezclado[0][i] - multi[0][i]).abs() < 1e-4, "elemento {i}");
+    }
+}
 
 #[test]
 fn blended_w0_reproduce_clip_a_solo() {
