@@ -1,0 +1,390 @@
+[
+ {
+  "id": 1,
+  "name": "Camara",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "transform": {
+   "position": [
+    0.0,
+    2.4,
+    10.5
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ]
+  },
+  "components": [
+   "Transform",
+   "Camera"
+  ],
+  "mesh": null,
+  "camera": {
+   "fov": 60,
+   "near_clip": 0.1,
+   "far_clip": 200,
+   "is_main": true
+  },
+  "light": null,
+  "physics": null,
+  "script": null,
+  "script_data": null,
+  "audio": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "portal": null,
+  "animator": null,
+  "fog": null
+ },
+ {
+  "id": 2,
+  "name": "Sol",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "transform": {
+   "position": [
+    6,
+    10,
+    4
+   ],
+   "rotation": [
+    50,
+    30,
+    0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ]
+  },
+  "components": [
+   "Transform",
+   "Light"
+  ],
+  "mesh": null,
+  "camera": null,
+  "light": {
+   "light_type": "Directional",
+   "color": [
+    1.0,
+    0.98,
+    0.92
+   ],
+   "intensity": 1.2,
+   "range": 0,
+   "cast_shadow": false
+  },
+  "physics": null,
+  "script": null,
+  "script_data": null,
+  "audio": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "portal": null,
+  "animator": null,
+  "fog": null
+ },
+ {
+  "id": 3,
+  "name": "Suelo",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "transform": {
+   "position": [
+    0.0,
+    -0.55,
+    0.0
+   ],
+   "rotation": [
+    0,
+    0,
+    0
+   ],
+   "scale": [
+    30.0,
+    1.0,
+    30.0
+   ]
+  },
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Physics"
+  ],
+  "mesh": {
+   "model": "cube",
+   "color": [
+    0.35,
+    0.36,
+    0.4
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
+  },
+  "camera": null,
+  "light": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    15,
+    0.5,
+    15
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": [],
+   "mesh_collider": "None"
+  },
+  "script": null,
+  "script_data": null,
+  "audio": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "portal": null,
+  "animator": null,
+  "fog": null
+ },
+ {
+  "id": 10,
+  "name": "BaseFuego",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "transform": {
+   "position": [
+    0.0,
+    0.15,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "mesh": {
+   "model": "cube",
+   "color": [
+    0.16,
+    0.12,
+    0.1
+   ],
+   "wireframe": false,
+   "shader": "pbr"
+  },
+  "camera": null,
+  "light": null,
+  "physics": null,
+  "script": null,
+  "script_data": null,
+  "audio": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "portal": null,
+  "animator": null,
+  "fog": null
+ },
+ {
+  "id": 11,
+  "name": "Fuego",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "transform": {
+   "position": [
+    0.0,
+    0.3,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "components": [
+   "Transform",
+   "ParticleEmitter"
+  ],
+  "mesh": null,
+  "camera": null,
+  "light": null,
+  "physics": null,
+  "script": null,
+  "script_data": null,
+  "audio": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "portal": null,
+  "animator": null,
+  "fog": null,
+  "particles": {
+   "rate": 1000.0,
+   "max_particles": 2000,
+   "lifetime": [
+    1.8,
+    2.6
+   ],
+   "seed": 7
+  }
+ },
+ {
+  "id": 12,
+  "name": "Trazadora",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "transform": {
+   "position": [
+    -5.5,
+    2.6,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    -90.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "components": [
+   "Transform",
+   "ParticleEmitter"
+  ],
+  "mesh": null,
+  "camera": null,
+  "light": null,
+  "physics": null,
+  "script": null,
+  "script_data": null,
+  "audio": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "portal": null,
+  "animator": null,
+  "fog": null,
+  "particles": {
+   "rate": 26.0,
+   "max_particles": 300,
+   "lifetime": [
+    0.55,
+    0.75
+   ],
+   "start_speed": [
+    13.0,
+    16.0
+   ],
+   "start_size": [
+    0.16,
+    0.2
+   ],
+   "gravity": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "drag": 0.0,
+   "shape": "point",
+   "stretched": true,
+   "stretch_factor": 0.32,
+   "color_start": [
+    0.65,
+    0.95,
+    1.0,
+    0.9
+   ],
+   "color_end": [
+    0.2,
+    0.5,
+    1.0,
+    0.0
+   ],
+   "size_end_factor": 0.7,
+   "rotation_speed": [
+    0.0,
+    0.0
+   ],
+   "seed": 3
+  }
+ }
+]

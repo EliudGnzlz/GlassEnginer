@@ -24,6 +24,8 @@ const OUTLINE_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/outline.
 const OUTLINE_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/outline.frag.spv");
 const PORTAL_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/portal.vert.spv");
 const PORTAL_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/portal.frag.spv");
+const PARTICLE_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/particles.vert.spv");
+const PARTICLE_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/particles.frag.spv");
 const PBR_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/pbr.frag.spv");
 const PBR_SKINNED_VERT_SPV: &[u8] =
     include_bytes!("../../../assets/shaders/pbr_skinned.vert.spv");
@@ -111,6 +113,42 @@ pub struct MeshPushConstants {
 /// Tamaño en bytes que el `pipeline_layout` debe declarar y que
 /// `context.rs` valida contra `maxPushConstantsSize`.
 pub const MESH_PUSH_CONSTANTS_SIZE: u32 = std::mem::size_of::<MeshPushConstants>() as u32;
+
+/// Vértice de partícula ya expandido por la CPU (Fase 8P): la
+/// posición es la esquina del billboard en espacio de mundo.
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct ParticleVertex {
+    pub position: [f32; 3],
+    pub color: [f32; 4],
+    pub uv: [f32; 2],
+}
+
+/// Buffers dinámicos de partículas de UNA vista: se reescriben
+/// cada frame por memoria mapeada y crecen por duplicación.
+pub struct ParticleBuffers {
+    pub vertex_buffer: vk::Buffer,
+    pub vertex_allocation: Option<Allocation>,
+    pub index_buffer: vk::Buffer,
+    pub index_allocation: Option<Allocation>,
+    pub index_count: u32,
+    pub vertex_capacity: usize,
+    pub index_capacity: usize,
+}
+
+impl Default for ParticleBuffers {
+    fn default() -> Self {
+        Self {
+            vertex_buffer: vk::Buffer::null(),
+            vertex_allocation: None,
+            index_buffer: vk::Buffer::null(),
+            index_allocation: None,
+            index_count: 0,
+            vertex_capacity: 0,
+            index_capacity: 0,
+        }
+    }
+}
 
 /// Push constants de la superficie de un portal (144 B):
 /// el MVP de la vista que la dibuja, el MVP de la CÁMARA
@@ -341,6 +379,14 @@ pub struct GlassRenderer {
     /// en el PBR/piel, con el fragmento `pbr_legacy.frag` (ACES dentro):
     /// el camino sin post, bit a bit el de antes del bloque.
     pub triangle_pipeline_legacy: GraphicsPipeline,
+    /// Pipeline de partículas (Fase 8P) y su gemelo legacy.
+    pub particle_pipeline: GraphicsPipeline,
+    pub particle_pipeline_legacy: GraphicsPipeline,
+    /// Geometría de partículas del frame, por vista.
+    pub particle_scene: ParticleBuffers,
+    pub particle_game: ParticleBuffers,
+    /// Draws de partículas grabados en el último render_views.
+    pub particle_draws: std::cell::Cell<u32>,
     pub mesh_pipeline_legacy: GraphicsPipeline,
     pub pbr_pipeline_legacy: GraphicsPipeline,
     pub skinned_pipeline_legacy: GraphicsPipeline,
@@ -677,6 +723,8 @@ impl GlassRenderer {
         // con el fragmento que lleva el ACES dentro).
         let pipeline = GraphicsPipeline::new(device.clone(), offscreen.render_pass, VERT_SPV, FRAG_SPV)?;
         let triangle_pipeline_legacy = GraphicsPipeline::new(device.clone(), final_offscreen.render_pass, VERT_SPV, FRAG_SPV)?;
+        let particle_pipeline = GraphicsPipeline::new_particle_pipeline(device.clone(), offscreen.render_pass, PARTICLE_VERT_SPV, PARTICLE_FRAG_SPV)?;
+        let particle_pipeline_legacy = GraphicsPipeline::new_particle_pipeline(device.clone(), final_offscreen.render_pass, PARTICLE_VERT_SPV, PARTICLE_FRAG_SPV)?;
         // Layout del set 3 (luces puntuales): lo comparten los pipelines
         // PBR y de piel, en sus dos variantes de pase.
         let point_lights_layout = create_point_lights_set_layout(&device)?;
@@ -1270,6 +1318,11 @@ impl GlassRenderer {
             pbr_pipeline,
             skinned_pipeline,
             triangle_pipeline_legacy,
+            particle_pipeline,
+            particle_pipeline_legacy,
+            particle_scene: ParticleBuffers::default(),
+            particle_game: ParticleBuffers::default(),
+            particle_draws: std::cell::Cell::new(0),
             mesh_pipeline_legacy,
             pbr_pipeline_legacy,
             skinned_pipeline_legacy,
@@ -2422,6 +2475,7 @@ impl GlassRenderer {
         portal_draws: &[PortalDrawItem],
         _legacy: bool,
         _fallback_triangle: bool,
+        particle_vp: Option<([f32; 16], bool)>,
     ) {
         unsafe {
             // Con post: el 3D va al objetivo HDR y los pipelines son
@@ -2593,8 +2647,158 @@ impl GlassRenderer {
                 self.device.cmd_draw(cmd, 3, 1, 0, 0);
             }
 
+            // Partículas (Fase 8P): al final del pase, tras las
+            // mallas, con su pipeline transparente. La geometría
+            // la subió la app con set_particle_frame y el VP es el
+            // de ESTA vista.
+            if let Some((vp, is_game)) = particle_vp {
+                let buffers = if is_game {
+                    &self.particle_game
+                } else {
+                    &self.particle_scene
+                };
+                if buffers.index_count > 0 && buffers.vertex_buffer != vk::Buffer::null() {
+                    let pipe = if legacy {
+                        &self.particle_pipeline_legacy
+                    } else {
+                        &self.particle_pipeline
+                    };
+                    let push = MeshPushConstants::new(vp);
+                    self.device.cmd_bind_pipeline(
+                        cmd,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        pipe.pipeline,
+                    );
+                    self.device.cmd_push_constants(
+                        cmd,
+                        pipe.layout,
+                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                        0,
+                        bytemuck::bytes_of(&push),
+                    );
+                    self.device
+                        .cmd_bind_vertex_buffers(cmd, 0, &[buffers.vertex_buffer], &[0]);
+                    self.device.cmd_bind_index_buffer(
+                        cmd,
+                        buffers.index_buffer,
+                        0,
+                        vk::IndexType::UINT32,
+                    );
+                    self.device
+                        .cmd_draw_indexed(cmd, buffers.index_count, 1, 0, 0, 0);
+                    self.particle_draws.set(self.particle_draws.get() + 1);
+                }
+            }
+
             self.device.cmd_end_render_pass(cmd);
         }
+    }
+
+
+    /// Sube la geometría de partículas de una vista (Fase 8P):
+    /// buffers mapeados que crecen por duplicación; la escritura
+    /// es segura porque la app llama entre frames, con el fence
+    /// del frame anterior ya esperado.
+    pub fn set_particle_frame(
+        &mut self,
+        game: bool,
+        verts: &[ParticleVertex],
+        indices: &[u32],
+    ) {
+        let device = self.device.clone();
+        let allocator = self.allocator.clone();
+        let buffers = if game {
+            &mut self.particle_game
+        } else {
+            &mut self.particle_scene
+        };
+        buffers.index_count = indices.len() as u32;
+        if verts.is_empty() || indices.is_empty() {
+            return;
+        }
+        unsafe {
+            if verts.len() > buffers.vertex_capacity || indices.len() > buffers.index_capacity {
+                // Crecer: destruir lo viejo y crear con el doble.
+                if buffers.vertex_buffer != vk::Buffer::null() {
+                    device.destroy_buffer(buffers.vertex_buffer, None);
+                }
+                if buffers.index_buffer != vk::Buffer::null() {
+                    device.destroy_buffer(buffers.index_buffer, None);
+                }
+                let mut alloc = allocator.lock().unwrap();
+                if let Some(a) = buffers.vertex_allocation.take() {
+                    let _ = alloc.free(a);
+                }
+                if let Some(a) = buffers.index_allocation.take() {
+                    let _ = alloc.free(a);
+                }
+                buffers.vertex_capacity = verts.len().next_power_of_two().max(1024);
+                buffers.index_capacity = indices.len().next_power_of_two().max(1536);
+                let mut mk = |size: u64,
+                          usage: vk::BufferUsageFlags,
+                          nombre: &'static str|
+                 -> Option<(vk::Buffer, Allocation)> {
+                    let info = vk::BufferCreateInfo::default()
+                        .size(size)
+                        .usage(usage)
+                        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+                    let buffer = device.create_buffer(&info, None).ok()?;
+                    let mem_reqs = device.get_buffer_memory_requirements(buffer);
+                    let allocation = alloc
+                        .allocate(&AllocationCreateDesc {
+                            name: nombre,
+                            requirements: mem_reqs,
+                            location: MemoryLocation::CpuToGpu,
+                            linear: true,
+                            allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+                        })
+                        .ok()?;
+                    device
+                        .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
+                        .ok()?;
+                    Some((buffer, allocation))
+                };
+                if let Some((b, a)) = mk(
+                    (buffers.vertex_capacity * std::mem::size_of::<ParticleVertex>()) as u64,
+                    vk::BufferUsageFlags::VERTEX_BUFFER,
+                    "particles_vertices",
+                ) {
+                    buffers.vertex_buffer = b;
+                    buffers.vertex_allocation = Some(a);
+                }
+                if let Some((b, a)) = mk(
+                    (buffers.index_capacity * std::mem::size_of::<u32>()) as u64,
+                    vk::BufferUsageFlags::INDEX_BUFFER,
+                    "particles_indices",
+                ) {
+                    buffers.index_buffer = b;
+                    buffers.index_allocation = Some(a);
+                }
+            }
+            if let Some(alloc) = &buffers.vertex_allocation {
+                if let Some(ptr) = alloc.mapped_ptr() {
+                    std::ptr::copy_nonoverlapping(
+                        verts.as_ptr() as *const u8,
+                        ptr.as_ptr() as *mut u8,
+                        verts.len() * std::mem::size_of::<ParticleVertex>(),
+                    );
+                }
+            }
+            if let Some(alloc) = &buffers.index_allocation {
+                if let Some(ptr) = alloc.mapped_ptr() {
+                    std::ptr::copy_nonoverlapping(
+                        indices.as_ptr() as *const u8,
+                        ptr.as_ptr() as *mut u8,
+                        indices.len() * std::mem::size_of::<u32>(),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Draws de partículas del último render_views.
+    pub fn particle_draws_last_frame(&self) -> u32 {
+        self.particle_draws.get()
     }
 
     pub fn render_views(
@@ -2607,12 +2811,14 @@ impl GlassRenderer {
         shadow_casters: Option<&ShadowCasters<'_>>,
         scene_portal_draws: &[PortalDrawItem],
         game_portal_draws: Option<&[PortalDrawItem]>,
+        particle_vps: Option<([f32; 16], [f32; 16])>,
     ) -> Result<(), RendererError> {
         unsafe {
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
             self.device.reset_fences(&[self.fence])?;
             // Contadores de enlaces del frame (Fase 2S, S6).
             self.frame_pipeline_binds.set(0);
+            self.particle_draws.set(0);
             self.frame_descriptor_binds.set(0);
 
             // Lectura de la query del frame anterior: el fence ya garantizó
@@ -2675,6 +2881,7 @@ impl GlassRenderer {
                     scene_portal_draws,
                     legacy,
                     true,
+                    particle_vps.map(|(vp, _)| (vp, false)),
                 );
             }
 
@@ -2693,6 +2900,7 @@ impl GlassRenderer {
                     game_portal_draws.unwrap_or(&[]),
                     legacy,
                     false,
+                    particle_vps.map(|(_, vp)| (vp, true)),
                 );
             }
 
@@ -2749,9 +2957,9 @@ impl GlassRenderer {
             // Se clona la referencia al objetivo para no pelear
             // con el préstamo de &self de record_view_pass.
             let target_a = &self.portal_targets[0];
-            self.record_view_pass(cmd, target_a, clear, view_a.0, view_a.1, &[], false, false);
+            self.record_view_pass(cmd, target_a, clear, view_a.0, view_a.1, &[], false, false, None);
             let target_b = &self.portal_targets[1];
-            self.record_view_pass(cmd, target_b, clear, view_b.0, view_b.1, &[], false, false);
+            self.record_view_pass(cmd, target_b, clear, view_b.0, view_b.1, &[], false, false, None);
 
             self.device.end_command_buffer(cmd)?;
             let command_buffers = [cmd];
@@ -2779,7 +2987,7 @@ impl GlassRenderer {
             .iter()
             .map(|(m, mvp)| (*m, MeshPushConstants::new(*mvp), self.fallback_set, None, (0, m.index_count), None))
             .collect();
-        self.render_views(queue, &pc_list, None, &[], None, None, &[], None)
+        self.render_views(queue, &pc_list, None, &[], None, None, &[], None, None)
     }
 
     /// Renderiza la escena 3D a la textura offscreen desacoplada (con soporte opcional de malla 3D indexada)
@@ -3150,6 +3358,21 @@ impl Drop for GlassRenderer {
             }
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_descriptor_pool(self.joints_pool, None);
+            for buffers in [&mut self.particle_scene, &mut self.particle_game] {
+                if buffers.vertex_buffer != vk::Buffer::null() {
+                    self.device.destroy_buffer(buffers.vertex_buffer, None);
+                }
+                if buffers.index_buffer != vk::Buffer::null() {
+                    self.device.destroy_buffer(buffers.index_buffer, None);
+                }
+                let mut alloc = self.allocator.lock().unwrap();
+                if let Some(a) = buffers.vertex_allocation.take() {
+                    let _ = alloc.free(a);
+                }
+                if let Some(a) = buffers.index_allocation.take() {
+                    let _ = alloc.free(a);
+                }
+            }
             self.device.destroy_buffer(self.graph_globals_buffer, None);
             self.device.destroy_buffer(self.graph_props_dummy_buffer, None);
             self.device

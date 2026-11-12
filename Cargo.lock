@@ -1591,6 +1591,7 @@ dependencies = [
  "glass_core",
  "glass_editor",
  "glass_mcp",
+ "glass_particles",
  "glass_physics",
  "glass_renderer",
  "glass_scripting",
@@ -1655,6 +1656,7 @@ dependencies = [
  "base64 0.22.1",
  "glass_audio",
  "glass_core",
+ "glass_particles",
  "glass_physics",
  "glass_renderer",
  "glass_scripting",
@@ -1663,6 +1665,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "glass_particles"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -1707,6 +1716,7 @@ dependencies = [
  "env_logger",
  "glass_audio",
  "glass_core",
+ "glass_particles",
  "glass_physics",
  "log",
  "netcorehost",

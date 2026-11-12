@@ -33,6 +33,12 @@ type InitAudioBridgeFn = unsafe extern "system" fn(
     *const c_void,
 );
 
+type InitParticleBridgeFn = unsafe extern "system" fn(
+    *const c_void,
+    *const c_void,
+    *const c_void,
+);
+
 #[repr(C)]
 struct PhysicsBridgeCallbacks {
     create_body: *const c_void,
@@ -283,6 +289,22 @@ impl ScriptHost {
                     glass_audio::glass_audio_set_source_position as *const c_void,
                     glass_audio::glass_audio_set_listener_transform as *const c_void,
                     glass_audio::glass_audio_stop as *const c_void,
+                );
+            }
+        }
+
+        if let Ok(init_particles_fn) = loader
+            .get_function_with_unmanaged_callers_only::<InitParticleBridgeFn>(
+                bridge_type,
+                pdcstr!("InitParticleBridge"),
+            )
+        {
+            log::info!("Vinculando callbacks Rust <-> C# Particles FFI...");
+            unsafe {
+                init_particles_fn(
+                    glass_particles::glass_particles_play as *const c_void,
+                    glass_particles::glass_particles_stop as *const c_void,
+                    glass_particles::glass_particles_burst as *const c_void,
                 );
             }
         }

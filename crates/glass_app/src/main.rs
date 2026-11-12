@@ -1428,6 +1428,13 @@ struct GlassEngineApp {
     /// y la consume el bucle de dibujo, que itera la escena en inmutable.
     /// (clip_a, tiempo_a, clip_b, tiempo_b, peso_b).
     anim_pose: std::collections::HashMap<u64, Vec<(String, f32, f32)>>,
+    /// Emisores de partículas de runtime (Fase 8P), por entidad.
+    particle_emitters: std::collections::HashMap<u64, glass_particles::Emitter>,
+    /// Último dato de escena aplicado a cada emisor (si cambia, el
+    /// pool se reinicia con la configuración nueva).
+    particle_applied: std::collections::HashMap<u64, glass_core::scene::ParticleEmitterData>,
+    /// Origen del emisor en el frame anterior (espacio local).
+    particle_prev_origin: std::collections::HashMap<u64, [f32; 3]>,
     /// Fundidos libres clip→clip en curso (bloque FSM: `CrossFade` sin
     /// controlador), por entidad.
     anim_free_fade: std::collections::HashMap<u64, FreeFadeRt>,
@@ -1727,6 +1734,9 @@ impl GlassEngineApp {
             anim_runtime: std::collections::HashMap::new(),
             animator_controllers: std::collections::HashMap::new(),
             anim_pose: std::collections::HashMap::new(),
+            particle_emitters: std::collections::HashMap::new(),
+            particle_applied: std::collections::HashMap::new(),
+            particle_prev_origin: std::collections::HashMap::new(),
             anim_free_fade: std::collections::HashMap::new(),
             graph_props_state: std::collections::HashMap::new(),
             graph_tex_state: std::collections::HashMap::new(),
@@ -2889,6 +2899,7 @@ let resueltos = colliders_resueltos(body, shape);
     // `impl`) porque `render_frame` retiene un préstamo mutable del
     // renderer durante todo el frame: ahí dentro solo se pueden tocar
     // campos sueltos de `self`, nunca `&mut self` entero.
+
 
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Command Queue del MCP (Fase 8): los comandos encolados se
@@ -4905,7 +4916,32 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 )?;
             }
 
-            renderer.render_views(vk_ctx.graphics_queue, &scene_batches, game_meshes_arg, &scene_skinned, game_skinned_arg, Some(&shadow_casters), &scene_portal_draws, Some(&game_portal_draws))?;
+            // Partículas (Fase 8P): simular, expandir por vista y
+            // subir la geometría antes de renderizar. Los draws del
+            // frame anterior se registran aquí (los contó el
+            // renderer durante el render_views previo).
+            glass_core::particle_stats::record_draws(renderer.particle_draws_last_frame());
+            let particle_out = avanzar_particulas(
+                &mut self.particle_emitters,
+                &mut self.particle_applied,
+                &mut self.particle_prev_origin,
+                &self.scene_state,
+                anim_dt,
+                vp_scene,
+                vp_game_opt,
+                eye_scene,
+                eye_game_opt,
+                #[cfg(feature = "editor")]
+                Some(self.editor_layout.viewport.editor_cam_center),
+                #[cfg(not(feature = "editor"))]
+                None,
+            );
+            let particle_vps = particle_out.as_ref().map(|o| {
+                renderer.set_particle_frame(false, &o.scene.0, &o.scene.1);
+                renderer.set_particle_frame(true, &o.game.0, &o.game.1);
+                o.vps
+            });
+            renderer.render_views(vk_ctx.graphics_queue, &scene_batches, game_meshes_arg, &scene_skinned, game_skinned_arg, Some(&shadow_casters), &scene_portal_draws, Some(&game_portal_draws), particle_vps)?;
 
             // Post-procesado de las vistas renderizadas (sin post
             // activo, estas llamadas no hacen nada). La vista de juego
@@ -7339,3 +7375,343 @@ mod standalone_launch_tests {
         assert!(is_standalone_launch(false, &args(&["glass_app", "--game"])));
     }
 }
+
+/// Base (right/up/forward) de una matriz de mundo: columnas
+/// normalizadas (sin la escala).
+fn base_de_mundo(world: &[f32; 16]) -> [[f32; 3]; 3] {
+    let col = |i: usize| {
+        let v = [world[i * 4], world[i * 4 + 1], world[i * 4 + 2]];
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if l > 1e-6 {
+            [v[0] / l, v[1] / l, v[2] / l]
+        } else {
+            [0.0, 0.0, 0.0]
+        }
+    };
+    [col(0), col(1), col(2)]
+}
+
+/// Convierte el dato de escena en la configuración del emisor.
+fn particulas_config_desde(
+    d: &glass_core::scene::ParticleEmitterData,
+) -> glass_particles::EmitterConfig {
+    use glass_particles::EmitterShape;
+    let shape = match d.shape.as_str() {
+        "sphere" => EmitterShape::Sphere {
+            radius: d.shape_radius,
+        },
+        "box" => EmitterShape::Box {
+            extents: d.shape_extents,
+        },
+        "cone" => EmitterShape::Cone {
+            angle_deg: d.cone_angle,
+            radius: d.shape_radius,
+        },
+        _ => EmitterShape::Point,
+    };
+    glass_particles::EmitterConfig {
+        max_particles: d.max_particles,
+        rate: d.rate,
+        lifetime: d.lifetime,
+        start_speed: d.start_speed,
+        start_size: d.start_size,
+        gravity: d.gravity,
+        drag: d.drag,
+        shape,
+        local_space: d.local_space,
+        color_start: d.color_start,
+        color_end: d.color_end,
+        size_end_factor: d.size_end_factor,
+        rotation_speed: d.rotation_speed,
+        stretched: d.stretched,
+        stretch_factor: d.stretch_factor,
+        seed: d.seed,
+    }
+}
+
+/// Base de la cámara de la vista de escena: con centro de órbita
+/// del editor, ojo → centro; sin él coincide con la de juego.
+fn base_camara_escena(
+    centro_editor: Option<[f32; 3]>,
+    eye_scene: [f32; 4],
+    base_juego: ([f32; 3], [f32; 3], [f32; 3]),
+) -> ([f32; 3], [f32; 3], [f32; 3]) {
+    if let Some(centro) = centro_editor {
+        let eye = [eye_scene[0], eye_scene[1], eye_scene[2]];
+        let fwd = [centro[0] - eye[0], centro[1] - eye[1], centro[2] - eye[2]];
+        let fl = (fwd[0] * fwd[0] + fwd[1] * fwd[1] + fwd[2] * fwd[2]).sqrt();
+        if fl > 1e-5 {
+            let f = [fwd[0] / fl, fwd[1] / fl, fwd[2] / fl];
+            // right = normalize(cross(f, [0,1,0])) = normalize([f.z, 0, -f.x])
+            let rl = (f[2] * f[2] + f[0] * f[0]).sqrt();
+            let right = if rl > 1e-5 {
+                [f[2] / rl, 0.0, -f[0] / rl]
+            } else {
+                [1.0, 0.0, 0.0]
+            };
+            // up = cross(right, f)
+            let up = [
+                right[1] * f[2] - right[2] * f[1],
+                right[2] * f[0] - right[0] * f[2],
+                right[0] * f[1] - right[1] * f[0],
+            ];
+            return (right, up, f);
+        }
+    }
+    base_juego
+}
+
+/// Expande los billboards de todos los emisores para UNA vista
+/// (base = right/up/forward de su cámara) en vértices e índices.
+fn expandir_particulas(
+    emisores: &std::collections::HashMap<u64, glass_particles::Emitter>,
+    base: ([f32; 3], [f32; 3], [f32; 3]),
+    verts: &mut Vec<glass_renderer::ParticleVertex>,
+    indices: &mut Vec<u32>,
+) {
+    let (right, up, fwd) = base;
+    for emisor in emisores.values() {
+        let pool = &emisor.pool;
+        for i in 0..pool.alive {
+            let centro = pool.pos[i];
+            let size = emisor.size_at(i);
+            let color = emisor.color_at(i);
+            let base_idx = verts.len() as u32;
+            let esquinas: [([f32; 3], [f32; 2]); 4];
+            if emisor.config.stretched {
+                let vel = pool.vel[i];
+                // Eje: velocidad proyectada en el plano de cámara.
+                let d = vel[0] * fwd[0] + vel[1] * fwd[1] + vel[2] * fwd[2];
+                let eje = [
+                    vel[0] - fwd[0] * d,
+                    vel[1] - fwd[1] * d,
+                    vel[2] - fwd[2] * d,
+                ];
+                let el = (eje[0] * eje[0] + eje[1] * eje[1] + eje[2] * eje[2]).sqrt();
+                if el < 1e-4 {
+                    continue;
+                }
+                let eje = [eje[0] / el, eje[1] / el, eje[2] / el];
+                // Perp en el plano: cross(fwd, eje).
+                let perp = [
+                    fwd[1] * eje[2] - fwd[2] * eje[1],
+                    fwd[2] * eje[0] - fwd[0] * eje[2],
+                    fwd[0] * eje[1] - fwd[1] * eje[0],
+                ];
+                let speed = (vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]).sqrt();
+                let hl = size * 0.5 + speed * emisor.config.stretch_factor;
+                let hw = size * 0.5;
+                let esquina = |sa: f32, sp: f32| {
+                    [
+                        centro[0] + eje[0] * sa * hl + perp[0] * sp * hw,
+                        centro[1] + eje[1] * sa * hl + perp[1] * sp * hw,
+                        centro[2] + eje[2] * sa * hl + perp[2] * sp * hw,
+                    ]
+                };
+                esquinas = [
+                    (esquina(-1.0, -1.0), [0.0, 0.0]),
+                    (esquina(-1.0, 1.0), [1.0, 0.0]),
+                    (esquina(1.0, 1.0), [1.0, 1.0]),
+                    (esquina(1.0, -1.0), [0.0, 1.0]),
+                ];
+            } else {
+                let rot = emisor.rotation_at(i);
+                let (s, c) = rot.sin_cos();
+                let esquina = |cx: f32, cy: f32| {
+                    let lx = (cx * c - cy * s) * size;
+                    let ly = (cx * s + cy * c) * size;
+                    [
+                        centro[0] + right[0] * lx + up[0] * ly,
+                        centro[1] + right[1] * lx + up[1] * ly,
+                        centro[2] + right[2] * lx + up[2] * ly,
+                    ]
+                };
+                esquinas = [
+                    (esquina(-0.5, -0.5), [0.0, 0.0]),
+                    (esquina(0.5, -0.5), [1.0, 0.0]),
+                    (esquina(0.5, 0.5), [1.0, 1.0]),
+                    (esquina(-0.5, 0.5), [0.0, 1.0]),
+                ];
+            }
+            for (pos, uv) in esquinas {
+                verts.push(glass_renderer::ParticleVertex {
+                    position: pos,
+                    color,
+                    uv,
+                });
+            }
+            indices.extend_from_slice(&[
+                base_idx,
+                base_idx + 1,
+                base_idx + 2,
+                base_idx,
+                base_idx + 2,
+                base_idx + 3,
+            ]);
+        }
+    }
+}
+
+/// Overdraw estimado (proxy): suma del área en píxeles de cada
+/// quad (con la proyección nominal 1280×720, FOV 60°) dividida
+/// por el área del viewport.
+fn overdraw_proxy(
+    emisores: &std::collections::HashMap<u64, glass_particles::Emitter>,
+    eye: [f32; 4],
+) -> f32 {
+    let tan_medio = (60.0_f32.to_radians() * 0.5).tan();
+    let mut area = 0.0f32;
+    for emisor in emisores.values() {
+        for i in 0..emisor.pool.alive {
+            let p = emisor.pool.pos[i];
+            let d = ((p[0] - eye[0]).powi(2) + (p[1] - eye[1]).powi(2) + (p[2] - eye[2]).powi(2))
+                .sqrt()
+                .max(0.1);
+            let px = emisor.size_at(i) * 360.0 / (d * tan_medio);
+            area += px * px;
+        }
+    }
+    area / (1280.0 * 720.0)
+}
+
+/// Salida del paso de partículas: los VP de dibujo y la
+/// geometría expandida de cada vista.
+struct ParticleFrameOut {
+vps: ([f32; 16], [f32; 16]),
+scene: (Vec<glass_renderer::ParticleVertex>, Vec<u32>),
+game: (Vec<glass_renderer::ParticleVertex>, Vec<u32>),
+}
+
+/// Partículas (Fase 8P): avanza los emisores de la escena un paso,
+/// drena los comandos externos (MCP/C#) y expande los billboards
+/// por vista. Función libre (patrón de `avanzar_animadores_fsm`):
+/// trabaja sobre los campos sueltos para no pelear con el
+/// préstamo del renderer que mantiene `render_frame`.
+#[allow(clippy::too_many_arguments)]
+fn avanzar_particulas(
+emisores_rt: &mut std::collections::HashMap<u64, glass_particles::Emitter>,
+aplicados: &mut std::collections::HashMap<u64, glass_core::scene::ParticleEmitterData>,
+prev_origen: &mut std::collections::HashMap<u64, [f32; 3]>,
+scene_state: &std::sync::Arc<std::sync::Mutex<glass_core::scene::SceneState>>,
+dt: f32,
+vp_scene: [f32; 16],
+vp_game_opt: Option<[f32; 16]>,
+eye_scene: [f32; 4],
+eye_game_opt: Option<[f32; 4]>,
+centro_editor: Option<[f32; 3]>,
+) -> Option<ParticleFrameOut> {
+    use glass_particles::ParticleCommand;
+    let inicio = std::time::Instant::now();
+    // Recoger emisores de la escena con su matriz de mundo.
+    let (entidades, cam_world): (
+        Vec<(u64, glass_core::scene::ParticleEmitterData, [f32; 16])>,
+        Option<[f32; 16]>,
+    ) = match scene_state.lock() {
+        Ok(scene) => {
+            let world_matrices = scene.compute_world_matrices();
+            let lista = scene
+                .entities
+                .iter()
+                .filter(|e| e.active && e.particles.is_some())
+                .filter_map(|e| {
+                    world_matrices
+                        .get(&e.id)
+                        .map(|w| (e.id, e.particles.clone().unwrap(), *w))
+                })
+                .collect();
+            let cam = scene
+                .active_camera()
+                .and_then(|c| world_matrices.get(&c.id).copied());
+            (lista, cam)
+        }
+        Err(_) => (Vec::new(), None),
+    };
+    if entidades.is_empty() {
+        emisores_rt.clear();
+        aplicados.clear();
+        prev_origen.clear();
+        glass_core::particle_stats::record_frame(0, 0, 0, 0.0);
+        return None;
+    }
+    // Crear/reiniciar emisores cuyo dato cambió y simular.
+    let mut marcos: std::collections::HashMap<u64, ([f32; 3], [[f32; 3]; 3])> =
+        std::collections::HashMap::new();
+    for (id, data, world) in &entidades {
+        if aplicados.get(id) != Some(data) {
+            let mut emisor = glass_particles::Emitter::new(particulas_config_desde(data));
+            emisor.playing = data.playing;
+            emisores_rt.insert(*id, emisor);
+            aplicados.insert(*id, data.clone());
+            prev_origen.remove(id);
+        }
+        let origin = [world[12], world[13], world[14]];
+        let basis = base_de_mundo(world);
+        let prev = prev_origen
+            .get(id)
+            .copied()
+            .unwrap_or(origin);
+        if let Some(emisor) = emisores_rt.get_mut(id) {
+            emisor.update(dt, origin, &basis, prev);
+        }
+        prev_origen.insert(*id, origin);
+        marcos.insert(*id, (origin, basis));
+    }
+    // Comandos externos (MCP y scripts C#).
+    for cmd in glass_particles::drain_commands() {
+        match cmd {
+            ParticleCommand::Play(id) => {
+                if let Some(e) = emisores_rt.get_mut(&id) {
+                    e.play();
+                }
+            }
+            ParticleCommand::Stop(id) => {
+                if let Some(e) = emisores_rt.get_mut(&id) {
+                    e.stop();
+                }
+            }
+            ParticleCommand::Burst(id, n) => {
+                if let Some((origin, basis)) = marcos.get(&id) {
+                    if let Some(e) = emisores_rt.get_mut(&id) {
+                        e.burst(n as usize, *origin, basis);
+                    }
+                }
+            }
+        }
+    }
+    // Bases de cámara por vista (right, up, forward en mundo).
+    // La de juego sale de la cámara activa; la de escena, en el
+    // editor, de la cámara orbital; sin editor, ambas coinciden.
+    let base_juego: ([f32; 3], [f32; 3], [f32; 3]) = match cam_world {
+        Some(w) => {
+            let b = base_de_mundo(&w);
+            (b[0], b[1], [-b[2][0], -b[2][1], -b[2][2]])
+        }
+        None => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]),
+    };
+    let base_escena = base_camara_escena(centro_editor, eye_scene, base_juego);
+    // Expansión por vista y overdraw proxy con la de juego.
+    let mut verts_e = Vec::new();
+    let mut idx_e = Vec::new();
+    let mut verts_j = Vec::new();
+    let mut idx_j = Vec::new();
+    expandir_particulas(emisores_rt, base_escena, &mut verts_e, &mut idx_e);
+    expandir_particulas(emisores_rt, base_juego, &mut verts_j, &mut idx_j);
+    let eye_j = eye_game_opt.unwrap_or(eye_scene);
+    let overdraw = overdraw_proxy(emisores_rt, eye_j);
+    let vivas: usize = emisores_rt
+        .values()
+        .map(|e| e.pool.alive)
+        .sum();
+    glass_core::particle_stats::record_frame(
+        vivas as u32,
+        emisores_rt.len() as u32,
+        inicio.elapsed().as_micros() as u64,
+        overdraw,
+    );
+    Some(ParticleFrameOut {
+        vps: (vp_scene, vp_game_opt.unwrap_or(vp_scene)),
+        scene: (verts_e, idx_e),
+        game: (verts_j, idx_j),
+    })
+}
+

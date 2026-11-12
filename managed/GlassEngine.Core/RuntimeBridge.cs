@@ -36,6 +36,10 @@ public static class RuntimeBridge
     private static SetListenerTransformDelegate? _setListenerTransform;
     private static StopAudioDelegate? _stopAudio;
 
+    private static PlayParticlesDelegate? _playParticles;
+    private static StopParticlesDelegate? _stopParticles;
+    private static BurstParticlesDelegate? _burstParticles;
+
     private static CreateRigidBodyDelegate? _createRigidBody;
     private static AttachBoxColliderDelegate? _attachBoxCollider;
     private static AttachSphereColliderDelegate? _attachSphereCollider;
@@ -148,6 +152,37 @@ public static class RuntimeBridge
     public static void StopAudio(ulong handle)
     {
         _stopAudio?.Invoke(handle);
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "InitParticleBridge")]
+    public static void InitParticleBridge(
+        IntPtr playFn,
+        IntPtr stopFn,
+        IntPtr burstFn)
+    {
+        if (playFn != IntPtr.Zero)
+            _playParticles = Marshal.GetDelegateForFunctionPointer<PlayParticlesDelegate>(playFn);
+        if (stopFn != IntPtr.Zero)
+            _stopParticles = Marshal.GetDelegateForFunctionPointer<StopParticlesDelegate>(stopFn);
+        if (burstFn != IntPtr.Zero)
+            _burstParticles = Marshal.GetDelegateForFunctionPointer<BurstParticlesDelegate>(burstFn);
+
+        Log(2, "GlassEngine.Core ParticleBridge inicializado exitosamente desde Rust.");
+    }
+
+    public static void PlayParticles(ulong entityId)
+    {
+        _playParticles?.Invoke(entityId);
+    }
+
+    public static void StopParticles(ulong entityId)
+    {
+        _stopParticles?.Invoke(entityId);
+    }
+
+    public static void BurstParticles(ulong entityId, uint count)
+    {
+        _burstParticles?.Invoke(entityId, count);
     }
 
     [StructLayout(LayoutKind.Sequential)]

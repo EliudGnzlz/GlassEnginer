@@ -7,6 +7,7 @@ members = [
     "crates/glass_mcp",
     "crates/glass_audio",
     "crates/glass_physics",
+    "crates/glass_particles",
     "crates/glass_app",
 ]
 resolver = "2"
@@ -48,3 +49,4 @@ glass_scripting = { path = "crates/glass_scripting" }
 glass_mcp = { path = "crates/glass_mcp" }
 glass_audio = { path = "crates/glass_audio" }
 glass_physics = { path = "crates/glass_physics" }
+glass_particles = { path = "crates/glass_particles" }

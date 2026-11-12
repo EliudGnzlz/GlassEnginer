@@ -255,6 +255,104 @@ fn default_audio_bus() -> String {
     "sfx".to_string()
 }
 
+/// Datos de un emisor de partículas (Fase 8P): espejo serializado
+/// de `glass_particles::EmitterConfig` más el `playing` autorado.
+/// La app lo convierte en el emisor de runtime; si el dato cambia
+/// en vivo (MCP), el pool se reinicia con la configuración nueva.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParticleEmitterData {
+    #[serde(default = "default_particle_max")]
+    pub max_particles: usize,
+    #[serde(default = "default_particle_rate")]
+    pub rate: f32,
+    #[serde(default = "default_particle_lifetime")]
+    pub lifetime: [f32; 2],
+    #[serde(default = "default_particle_speed")]
+    pub start_speed: [f32; 2],
+    #[serde(default = "default_particle_size")]
+    pub start_size: [f32; 2],
+    #[serde(default = "default_particle_gravity")]
+    pub gravity: [f32; 3],
+    #[serde(default = "default_particle_drag")]
+    pub drag: f32,
+    /// "point" | "sphere" | "box" | "cone".
+    #[serde(default = "default_particle_shape")]
+    pub shape: String,
+    /// Radio de la esfera o del disco del cono.
+    #[serde(default = "default_particle_radius")]
+    pub shape_radius: f32,
+    /// Semiejes de la caja.
+    #[serde(default = "default_particle_extents")]
+    pub shape_extents: [f32; 3],
+    /// Apertura del cono, en grados.
+    #[serde(default = "default_particle_angle")]
+    pub cone_angle: f32,
+    #[serde(default)]
+    pub local_space: bool,
+    #[serde(default = "default_particle_color_start")]
+    pub color_start: [f32; 4],
+    #[serde(default = "default_particle_color_end")]
+    pub color_end: [f32; 4],
+    #[serde(default = "default_particle_size_end")]
+    pub size_end_factor: f32,
+    #[serde(default = "default_particle_rotation_speed")]
+    pub rotation_speed: [f32; 2],
+    #[serde(default)]
+    pub stretched: bool,
+    #[serde(default = "default_particle_stretch")]
+    pub stretch_factor: f32,
+    #[serde(default = "default_particle_seed")]
+    pub seed: u32,
+    #[serde(default = "default_particle_playing")]
+    pub playing: bool,
+}
+
+fn default_particle_max() -> usize { 2000 }
+fn default_particle_rate() -> f32 { 700.0 }
+fn default_particle_lifetime() -> [f32; 2] { [1.6, 2.8] }
+fn default_particle_speed() -> [f32; 2] { [1.2, 2.4] }
+fn default_particle_size() -> [f32; 2] { [0.35, 0.6] }
+fn default_particle_gravity() -> [f32; 3] { [0.0, 1.2, 0.0] }
+fn default_particle_drag() -> f32 { 0.6 }
+fn default_particle_shape() -> String { "cone".to_string() }
+fn default_particle_radius() -> f32 { 0.45 }
+fn default_particle_extents() -> [f32; 3] { [0.5, 0.5, 0.5] }
+fn default_particle_angle() -> f32 { 18.0 }
+fn default_particle_color_start() -> [f32; 4] { [1.0, 0.55, 0.12, 0.85] }
+fn default_particle_color_end() -> [f32; 4] { [0.75, 0.08, 0.02, 0.0] }
+fn default_particle_size_end() -> f32 { 0.25 }
+fn default_particle_rotation_speed() -> [f32; 2] { [-1.2, 1.2] }
+fn default_particle_stretch() -> f32 { 0.08 }
+fn default_particle_seed() -> u32 { 1 }
+fn default_particle_playing() -> bool { true }
+
+impl Default for ParticleEmitterData {
+    fn default() -> Self {
+        Self {
+            max_particles: default_particle_max(),
+            rate: default_particle_rate(),
+            lifetime: default_particle_lifetime(),
+            start_speed: default_particle_speed(),
+            start_size: default_particle_size(),
+            gravity: default_particle_gravity(),
+            drag: default_particle_drag(),
+            shape: default_particle_shape(),
+            shape_radius: default_particle_radius(),
+            shape_extents: default_particle_extents(),
+            cone_angle: default_particle_angle(),
+            local_space: false,
+            color_start: default_particle_color_start(),
+            color_end: default_particle_color_end(),
+            size_end_factor: default_particle_size_end(),
+            rotation_speed: default_particle_rotation_speed(),
+            stretched: false,
+            stretch_factor: default_particle_stretch(),
+            seed: default_particle_seed(),
+            playing: default_particle_playing(),
+        }
+    }
+}
+
 impl Default for AudioSourceData {
     fn default() -> Self {
         Self {
@@ -903,6 +1001,9 @@ pub struct EntityData {
     pub script_data: Option<ScriptComponentData>,
     pub physics: Option<PhysicsData>,
     pub audio: Option<AudioSourceData>,
+    /// Emisor de partículas (Fase 8P).
+    #[serde(default)]
+    pub particles: Option<ParticleEmitterData>,
     pub camera: Option<CameraData>,
     pub light: Option<LightData>,
     /// Bloque de niebla de escena (Fase 2). `#[serde(default)]`: las
@@ -981,6 +1082,11 @@ impl EntityData {
         } else {
             None
         };
+        let particles = if components.iter().any(|c| c == "ParticleEmitter") {
+            Some(ParticleEmitterData::default())
+        } else {
+            None
+        };
         let camera = if components.iter().any(|c| c == "Camera") {
             Some(CameraData::default())
         } else {
@@ -1044,6 +1150,7 @@ impl EntityData {
             script_data,
             physics,
             audio,
+            particles,
             camera,
             light,
             fog: None,

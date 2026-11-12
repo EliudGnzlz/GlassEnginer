@@ -51,6 +51,8 @@ pub fn is_mutating_tool(name: &str) -> bool {
             | "glass_bake_lightmap"
             | "glass_setup_platformer_scene"
             | "glass_asset_reload"
+            | "glass_particle_emitter"
+            | "glass_particle_emit"
     )
 }
 
@@ -396,6 +398,42 @@ impl McpServer {
                                 "properties": {
                                     "command_id": { "type": "number" }
                                 }
+                            }
+                        },
+                        {
+                            "name": "glass_particle_emitter",
+                            "description": "Crea o configura el emisor de partículas de una entidad (Fase 8P): sin campos de configuración devuelve el actual; con ellos, los aplica sobre el dato de escena (la app reinicia el pool con la configuración nueva). Campos: rate, max_particles, lifetime [min,max], start_speed, start_size, gravity [x,y,z], drag, shape (point|sphere|box|cone), shape_radius, shape_extents, cone_angle, local_space, color_start, color_end, size_end_factor, rotation_speed, stretched, stretch_factor, seed, playing.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "number" },
+                                    "rate": { "type": "number" },
+                                    "max_particles": { "type": "number" },
+                                    "shape": { "type": "string" },
+                                    "playing": { "type": "boolean" }
+                                },
+                                "required": ["entity_id"]
+                            }
+                        },
+                        {
+                            "name": "glass_particle_emit",
+                            "description": "Control de un emisor de partículas en runtime (Fase 8P): action play|stop|burst (burst emite 'count' partículas al momento). El comando viaja a la app por la cola de comandos del sistema y se aplica en el siguiente frame.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "number" },
+                                    "action": { "type": "string" },
+                                    "count": { "type": "number" }
+                                },
+                                "required": ["entity_id", "action"]
+                            }
+                        },
+                        {
+                            "name": "glass_particle_stats",
+                            "description": "Presupuestos del sistema de partículas (Fase 8P): partículas vivas, emisores activos, draws del último frame, coste de simulación en microsegundos y overdraw estimado.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
                             }
                         },
                         {
@@ -2849,6 +2887,124 @@ impl McpServer {
                         }),
                     )
                 }
+            }
+
+            "glass_particle_emitter" => {
+                let Some(entity_id) = args.get("entity_id").and_then(|n| n.as_u64()) else {
+                    return McpResponse::invalid_params(id, "Field 'entity_id' is required");
+                };
+                let Some(ent) = scene.entities.iter_mut().find(|e| e.id == entity_id) else {
+                    return McpResponse::error(id, -32004, "Entity not found");
+                };
+                if ent.particles.is_none() {
+                    ent.particles = Some(crate::scene::ParticleEmitterData::default());
+                    if !ent.components.iter().any(|c| c == "ParticleEmitter") {
+                        ent.components.push("ParticleEmitter".to_string());
+                    }
+                }
+                let d = ent.particles.as_mut().unwrap();
+                // Aplicar los campos presentes (los demás quedan).
+                let num = |args: &serde_json::Value, k: &str| args.get(k).and_then(|v| v.as_f64()).map(|v| v as f32);
+                let arr3 = |args: &serde_json::Value, k: &str| -> Option<[f32; 3]> {
+                    args.get(k).and_then(|v| v.as_array()).and_then(|a| {
+                        if a.len() == 3 {
+                            Some([a[0].as_f64()? as f32, a[1].as_f64()? as f32, a[2].as_f64()? as f32])
+                        } else { None }
+                    })
+                };
+                let arr2 = |args: &serde_json::Value, k: &str| -> Option<[f32; 2]> {
+                    args.get(k).and_then(|v| v.as_array()).and_then(|a| {
+                        if a.len() == 2 {
+                            Some([a[0].as_f64()? as f32, a[1].as_f64()? as f32])
+                        } else { None }
+                    })
+                };
+                let arr4 = |args: &serde_json::Value, k: &str| -> Option<[f32; 4]> {
+                    args.get(k).and_then(|v| v.as_array()).and_then(|a| {
+                        if a.len() == 4 {
+                            Some([a[0].as_f64()? as f32, a[1].as_f64()? as f32, a[2].as_f64()? as f32, a[3].as_f64()? as f32])
+                        } else { None }
+                    })
+                };
+                if let Some(v) = num(&args, "rate") { d.rate = v.max(0.0); }
+                if let Some(v) = args.get("max_particles").and_then(|v| v.as_u64()) { d.max_particles = (v as usize).max(1); }
+                if let Some(v) = arr2(&args, "lifetime") { d.lifetime = v; }
+                if let Some(v) = arr2(&args, "start_speed") { d.start_speed = v; }
+                if let Some(v) = arr2(&args, "start_size") { d.start_size = v; }
+                if let Some(v) = arr3(&args, "gravity") { d.gravity = v; }
+                if let Some(v) = num(&args, "drag") { d.drag = v.max(0.0); }
+                if let Some(v) = args.get("shape").and_then(|v| v.as_str()) { d.shape = v.to_string(); }
+                if let Some(v) = num(&args, "shape_radius") { d.shape_radius = v.max(0.0); }
+                if let Some(v) = arr3(&args, "shape_extents") { d.shape_extents = v; }
+                if let Some(v) = num(&args, "cone_angle") { d.cone_angle = v.clamp(0.0, 180.0); }
+                if let Some(v) = args.get("local_space").and_then(|v| v.as_bool()) { d.local_space = v; }
+                if let Some(v) = arr4(&args, "color_start") { d.color_start = v; }
+                if let Some(v) = arr4(&args, "color_end") { d.color_end = v; }
+                if let Some(v) = num(&args, "size_end_factor") { d.size_end_factor = v.max(0.0); }
+                if let Some(v) = arr2(&args, "rotation_speed") { d.rotation_speed = v; }
+                if let Some(v) = args.get("stretched").and_then(|v| v.as_bool()) { d.stretched = v; }
+                if let Some(v) = num(&args, "stretch_factor") { d.stretch_factor = v.max(0.0); }
+                if let Some(v) = args.get("seed").and_then(|v| v.as_u64()) { d.seed = v as u32; }
+                if let Some(v) = args.get("playing").and_then(|v| v.as_bool()) { d.playing = v; }
+                let datos = serde_json::to_value(&*d).unwrap_or(json!({}));
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&datos).unwrap()
+                        }]
+                    }),
+                )
+            }
+
+            "glass_particle_emit" => {
+                let Some(entity_id) = args.get("entity_id").and_then(|n| n.as_u64()) else {
+                    return McpResponse::invalid_params(id, "Field 'entity_id' is required");
+                };
+                if !scene.entities.iter().any(|e| e.id == entity_id && e.particles.is_some()) {
+                    return McpResponse::error(id, -32004, "Entity not found or has no particle emitter");
+                }
+                let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+                let cmd = match action {
+                    "play" => glass_particles::ParticleCommand::Play(entity_id),
+                    "stop" => glass_particles::ParticleCommand::Stop(entity_id),
+                    "burst" => {
+                        let n = args.get("count").and_then(|v| v.as_u64()).unwrap_or(50) as u32;
+                        glass_particles::ParticleCommand::Burst(entity_id, n)
+                    }
+                    _ => return McpResponse::invalid_params(id, "Field 'action' must be play|stop|burst"),
+                };
+                glass_particles::push_command(cmd);
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": format!("Comando {action} encolado para la entidad {entity_id}; se aplica en el siguiente frame")
+                        }]
+                    }),
+                )
+            }
+
+            "glass_particle_stats" => {
+                let s = glass_core::particle_stats::snapshot();
+                let datos = json!({
+                    "alive": s.alive,
+                    "emitters": s.emitters,
+                    "draws": s.draws,
+                    "sim_micros": s.sim_micros,
+                    "overdraw": s.overdraw,
+                });
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&datos).unwrap()
+                        }]
+                    }),
+                )
             }
 
             "glass_get_audio_status" => {

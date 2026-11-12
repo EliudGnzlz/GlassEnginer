@@ -26,6 +26,7 @@ pub use post::PostSettings;
 pub use renderer::{
     GlassRenderer, MeshDrawItem, MeshPushConstants, PointLightsUbo, PointShadowLight, PortalDrawItem,
     PortalPushConstants, PostView, ShadowCasters, SkinnedDrawItem, MAX_POINT_LIGHTS,
+    ParticleBuffers, ParticleVertex,
 };
 pub use skin::{AnimationClip, JointBuffer, SkinData};
 pub use swapchain::SwapchainContext;

@@ -9,6 +9,7 @@ license.workspace = true
 glass_core.workspace = true
 glass_audio.workspace = true
 glass_physics.workspace = true
+glass_particles.workspace = true
 log.workspace = true
 netcorehost = "0.22.0"
 serde.workspace = true
