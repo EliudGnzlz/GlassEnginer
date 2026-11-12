@@ -77,14 +77,15 @@ pub fn build_canvas_batch(
     screen_h: f32,
 ) -> Vec<UiSegment> {
     let mut segs: Vec<UiSegment> = Vec::new();
+    // Fase 5: rects resueltos con jerarquía, Canvas Scaler y layout.
+    let rects = glass_core::resolve_scene_ui_rects(scene, screen_w, screen_h);
 
     for ent in scene
         .entities
         .iter()
         .filter(|e| e.active && e.rect_transform.is_some())
     {
-        let rt = ent.rect_transform.as_ref().expect("filtrado arriba");
-        let rect = glass_core::resolve_ui_rect(rt, screen_w, screen_h);
+        let rect = rects.get(&ent.id).copied().unwrap_or([0.0, 0.0, 0.0, 0.0]);
 
         // (1) imagen de la escena con su tinte (segmento Image)
         if let Some(img) = &ent.ui_image {
@@ -196,17 +197,18 @@ pub fn hit_test_button(
     screen_w: f32,
     screen_h: f32,
 ) -> Option<u64> {
+    let rects = glass_core::resolve_scene_ui_rects(scene, screen_w, screen_h);
     for ent in scene.entities.iter().rev() {
         if !ent.active {
             continue;
         }
-        let (Some(rt), Some(btn)) = (&ent.rect_transform, &ent.ui_button) else {
+        let (Some(_rt), Some(btn)) = (&ent.rect_transform, &ent.ui_button) else {
             continue;
         };
         if !btn.interactable {
             continue;
         }
-        let [rx, ry, w, h] = glass_core::resolve_ui_rect(rt, screen_w, screen_h);
+        let [rx, ry, w, h] = rects.get(&ent.id).copied().unwrap_or([0.0, 0.0, 0.0, 0.0]);
         if x >= rx && x < rx + w && y >= ry && y < ry + h {
             return Some(ent.id);
         }
@@ -734,6 +736,7 @@ pub fn drag_press(
     screen_w: f32,
     screen_h: f32,
 ) -> Option<DragSession> {
+    let rects = glass_core::resolve_scene_ui_rects(scene, screen_w, screen_h);
     // El último dibujado es el de encima: iteramos en orden inverso.
     for e in scene.entities.iter().rev() {
         if !e.active {
@@ -750,7 +753,7 @@ pub fn drag_press(
             continue;
         }
 
-        let [rx, ry, rw, rh] = glass_core::resolve_ui_rect(rt, screen_w, screen_h);
+        let [rx, ry, rw, rh] = rects.get(&e.id).copied().unwrap_or([0.0, 0.0, 0.0, 0.0]);
         if x >= rx && x < rx + rw && y >= ry && y < ry + rh {
             return Some(DragSession {
                 entity_id: e.id,
@@ -801,6 +804,7 @@ pub fn drag_drop_target(
     screen_w: f32,
     screen_h: f32,
 ) -> Option<DropHit> {
+    let rects = glass_core::resolve_scene_ui_rects(scene, screen_w, screen_h);
     for e in scene.entities.iter().rev() {
         if !e.active || e.id == dragged_id {
             continue;
@@ -816,7 +820,7 @@ pub fn drag_drop_target(
             continue;
         }
 
-        let [rx, ry, rw, rh] = glass_core::resolve_ui_rect(rt, screen_w, screen_h);
+        let [rx, ry, rw, rh] = rects.get(&e.id).copied().unwrap_or([0.0, 0.0, 0.0, 0.0]);
         if x >= rx && x < rx + rw && y >= ry && y < ry + rh {
             return Some(DropHit {
                 entity_id: e.id,

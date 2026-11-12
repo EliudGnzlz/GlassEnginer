@@ -349,6 +349,98 @@ pub struct RectTransformData {
     pub pivot: [f32; 2],
 }
 
+/// Grupo de layout (Fase 5): recoloca a los hijos UI directos de la
+/// entidad en fila o columna dentro de su rect, estilo Unity
+/// (Horizontal/VerticalLayoutGroup reducido: sin Control Size — cada
+/// hijo conserva su tamaño — y con padding y alineación del bloque).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayoutGroupData {
+    /// "horizontal" o "vertical".
+    #[serde(default = "default_layout_direction")]
+    pub direction: String,
+    /// Separación entre hijos (px de referencia).
+    #[serde(default)]
+    pub spacing: f32,
+    /// Márgenes interiores [izquierda, arriba, derecha, abajo].
+    #[serde(default)]
+    pub padding: [f32; 4],
+    /// Alineación del bloque: "start", "center" o "end".
+    #[serde(default = "default_layout_alignment")]
+    pub alignment: String,
+}
+
+fn default_layout_direction() -> String {
+    "horizontal".into()
+}
+
+fn default_layout_alignment() -> String {
+    "start".into()
+}
+
+impl Default for LayoutGroupData {
+    fn default() -> Self {
+        Self {
+            direction: "horizontal".into(),
+            spacing: 8.0,
+            padding: [0.0, 0.0, 0.0, 0.0],
+            alignment: "start".into(),
+        }
+    }
+}
+
+/// Recoloca los rects de los hijos dentro del rect del grupo
+/// (Fase 5): eje principal en orden, con el espaciado y el bloque
+/// alineado; eje cruzado alineado por hijo. Los tamaños no cambian.
+/// Función pura.
+pub fn layout_group_rects(
+    group_rect: [f32; 4],
+    group: &LayoutGroupData,
+    children: &[[f32; 4]],
+) -> Vec<[f32; 4]> {
+    if children.is_empty() {
+        return Vec::new();
+    }
+    let inner = [
+        group_rect[0] + group.padding[0],
+        group_rect[1] + group.padding[1],
+        (group_rect[2] - group.padding[0] - group.padding[2]).max(0.0),
+        (group_rect[3] - group.padding[1] - group.padding[3]).max(0.0),
+    ];
+    let horizontal = group.direction != "vertical";
+    let main = |r: &[f32; 4]| if horizontal { r[2] } else { r[3] };
+    let total: f32 = children.iter().map(main).sum::<f32>()
+        + group.spacing * (children.len() as f32 - 1.0);
+    let inner_main = if horizontal { inner[2] } else { inner[3] };
+    let bloque = match group.alignment.as_str() {
+        "center" => (inner_main - total) * 0.5,
+        "end" => inner_main - total,
+        _ => 0.0,
+    };
+    let mut cursor = (if horizontal { inner[0] } else { inner[1] }) + bloque;
+    let mut out = Vec::with_capacity(children.len());
+    for r in children {
+        let cross_size = if horizontal { r[3] } else { r[2] };
+        let inner_cross = if horizontal { inner[3] } else { inner[2] };
+        let off_cross = match group.alignment.as_str() {
+            "center" => (inner_cross - cross_size) * 0.5,
+            "end" => inner_cross - cross_size,
+            _ => 0.0,
+        };
+        let mut nr = *r;
+        if horizontal {
+            nr[0] = cursor;
+            nr[1] = inner[1] + off_cross;
+            cursor += r[2] + group.spacing;
+        } else {
+            nr[1] = cursor;
+            nr[0] = inner[0] + off_cross;
+            cursor += r[3] + group.spacing;
+        }
+        out.push(nr);
+    }
+    out
+}
+
 impl Default for RectTransformData {
     fn default() -> Self {
         Self {
@@ -631,14 +723,169 @@ impl Default for AnimatorData {
 ///
 /// No compone jerarquías: cada entidad se resuelve contra la pantalla
 /// completa, que es también lo que hace hoy el editor.
+/// Resuelve el rectángulo de un RectTransform dentro de un rect
+/// PADRE (en píxeles, origen arriba-izquierda, Y hacia abajo), con
+/// anclas completas (Fase 5): el span entre anchor_min y anchor_max
+/// se estira con el padre y `size_delta` se suma al span. La
+/// posición se calcula con el tamaño sin clamar y el tamaño de
+/// salida se clampa a ≥10 px, como en la fórmula histórica.
+pub fn resolve_ui_rect_in(rt: &RectTransformData, parent: [f32; 4]) -> [f32; 4] {
+    let ax0 = parent[0] + parent[2] * rt.anchor_min[0];
+    let ax1 = parent[0] + parent[2] * rt.anchor_max[0];
+    let ay0 = parent[1] + parent[3] * (1.0 - rt.anchor_max[1]);
+    let ay1 = parent[1] + parent[3] * (1.0 - rt.anchor_min[1]);
+    let w = (ax1 - ax0) + rt.size_delta[0];
+    let h = (ay1 - ay0) + rt.size_delta[1];
+    let px = ax0 + (ax1 - ax0) * rt.pivot[0] + rt.anchored_position[0];
+    let py = ay0 + (ay1 - ay0) * rt.pivot[1] - rt.anchored_position[1];
+    let x = px - w * rt.pivot[0];
+    let y = py - h * (1.0 - rt.pivot[1]);
+    [x, y, w.max(10.0), h.max(10.0)]
+}
+
+/// Resuelve contra la pantalla completa (la fórmula histórica: un
+/// envoltorio de `resolve_ui_rect_in` con el padre = pantalla; con
+/// anclas puntuales da exactamente lo mismo que siempre).
 pub fn resolve_ui_rect(rt: &RectTransformData, screen_w: f32, screen_h: f32) -> [f32; 4] {
-    let anchor_x = screen_w * rt.anchor_min[0];
-    let anchor_y = screen_h * (1.0 - rt.anchor_min[1]);
-    let x = anchor_x + rt.anchored_position[0] - rt.size_delta[0] * rt.pivot[0];
-    let y = anchor_y - rt.anchored_position[1] - rt.size_delta[1] * (1.0 - rt.pivot[1]);
-    let w = rt.size_delta[0].max(10.0);
-    let h = rt.size_delta[1].max(10.0);
-    [x, y, w, h]
+    resolve_ui_rect_in(rt, [0.0, 0.0, screen_w, screen_h])
+}
+
+/// Resuelve los rectángulos EN PÍXELES de todas las entidades UI de
+/// la escena (Fase 5): aplica el Canvas Scaler del primer Canvas,
+/// compone la jerarquía (cada hijo contra el rect de su ancestro UI
+/// más cercano) y aplica los layout groups por profundidad
+/// ascendente. Las entidades sin `rect_transform` no aparecen.
+pub fn resolve_scene_ui_rects(
+    scene: &SceneState,
+    screen_w: f32,
+    screen_h: f32,
+) -> std::collections::HashMap<u64, [f32; 4]> {
+    let scale = scene
+        .entities
+        .iter()
+        .find_map(|e| e.canvas.as_ref())
+        .map(|c| canvas_scale_factor(c, screen_w, screen_h))
+        .unwrap_or(1.0);
+    let root: [f32; 4] = [0.0, 0.0, screen_w / scale, screen_h / scale];
+    let by_id: std::collections::HashMap<u64, &EntityData> =
+        scene.entities.iter().map(|e| (e.id, e)).collect();
+
+    fn resolver(
+        ent: &EntityData,
+        by_id: &std::collections::HashMap<u64, &EntityData>,
+        root: [f32; 4],
+        memo: &mut std::collections::HashMap<u64, [f32; 4]>,
+        visitando: &mut Vec<u64>,
+    ) -> [f32; 4] {
+        if let Some(r) = memo.get(&ent.id) {
+            return *r;
+        }
+        // El Canvas ES el espacio raíz (como en Unity: su
+        // RectTransform es la pantalla en unidades de referencia,
+        // no su rect autorado).
+        if ent.canvas.is_some() {
+            memo.insert(ent.id, root);
+            return root;
+        }
+        if visitando.contains(&ent.id) {
+            return root; // ciclo en la jerarquía: se corta contra la raíz
+        }
+        visitando.push(ent.id);
+        // Padre: el ancestro UI más cercano (con rect_transform o Canvas).
+        let mut padre_rect = root;
+        let mut cur = ent.parent;
+        while let Some(pid) = cur {
+            let Some(p) = by_id.get(&pid) else { break };
+            if p.rect_transform.is_some() || p.canvas.is_some() {
+                if p.rect_transform.is_some() {
+                    padre_rect = resolver(p, by_id, root, memo, visitando);
+                }
+                break;
+            }
+            cur = p.parent;
+        }
+        let r = resolve_ui_rect_in(ent.rect_transform.as_ref().unwrap(), padre_rect);
+        visitando.pop();
+        memo.insert(ent.id, r);
+        r
+    }
+
+    let mut memo: std::collections::HashMap<u64, [f32; 4]> =
+        std::collections::HashMap::new();
+    for ent in scene
+        .entities
+        .iter()
+        .filter(|e| e.rect_transform.is_some())
+    {
+        let mut visitando = Vec::new();
+        resolver(ent, &by_id, root, &mut memo, &mut visitando);
+    }
+
+    // Layout groups por profundidad ascendente (los exteriores primero).
+    fn profundidad(ent: &EntityData, by_id: &std::collections::HashMap<u64, &EntityData>) -> u32 {
+        let mut d = 0;
+        let mut cur = ent.parent;
+        while let Some(pid) = cur {
+            d += 1;
+            match by_id.get(&pid) {
+                Some(p) => cur = p.parent,
+                None => break,
+            }
+            if d > 64 {
+                break;
+            }
+        }
+        d
+    }
+    let mut grupos: Vec<&EntityData> = scene
+        .entities
+        .iter()
+        .filter(|e| e.layout_group.is_some() && memo.contains_key(&e.id))
+        .collect();
+    grupos.sort_by_key(|e| profundidad(e, &by_id));
+    for g in grupos {
+        let grect = memo[&g.id];
+        let hijos: Vec<u64> = scene
+            .entities
+            .iter()
+            .filter(|e| e.parent == Some(g.id) && memo.contains_key(&e.id))
+            .map(|e| e.id)
+            .collect();
+        if hijos.is_empty() {
+            continue;
+        }
+        let rects: Vec<[f32; 4]> = hijos.iter().map(|id| memo[id]).collect();
+        let nuevos = layout_group_rects(grect, g.layout_group.as_ref().unwrap(), &rects);
+        for (id, nr) in hijos.iter().zip(nuevos) {
+            memo.insert(*id, nr);
+        }
+    }
+
+    // A píxeles.
+    memo.values_mut().for_each(|r| {
+        r[0] *= scale;
+        r[1] *= scale;
+        r[2] *= scale;
+        r[3] *= scale;
+    });
+    memo
+}
+
+/// Factor de escala del Canvas Scaler (Fase 5, modo «Scale With
+/// Screen Size» de Unity): interpola logarítmicamente entre el
+/// factor por ancho y el factor por alto según
+/// `match_width_or_height` (0 = manda el ancho, 1 = manda el alto).
+/// Referencia o pantalla inválidas → 1.
+pub fn canvas_scale_factor(canvas: &CanvasData, screen_w: f32, screen_h: f32) -> f32 {
+    let ref_w = canvas.reference_resolution[0];
+    let ref_h = canvas.reference_resolution[1];
+    if ref_w <= 0.0 || ref_h <= 0.0 || screen_w <= 0.0 || screen_h <= 0.0 {
+        return 1.0;
+    }
+    let m = canvas.match_width_or_height.clamp(0.0, 1.0);
+    let lw = (screen_w / ref_w).ln();
+    let lh = (screen_h / ref_h).ln();
+    (lw + (lh - lw) * m).exp()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -670,6 +917,11 @@ pub struct EntityData {
     /// escenas anteriores a la UI v2 no traen el campo.
     #[serde(default)]
     pub ui_image: Option<UIImageData>,
+
+    /// Grupo de layout del Canvas (Fase 5). `#[serde(default)]`: las
+    /// escenas anteriores no traen el campo.
+    #[serde(default)]
+    pub layout_group: Option<LayoutGroupData>,
 /// Drag & drop de UI (Canvas v2). `#[serde(default)]`: las
     /// escenas anteriores no traen el campo.
     #[serde(default)]
@@ -764,6 +1016,12 @@ impl EntityData {
         } else {
             None
         };
+        let layout_group = if components.iter().any(|c| c == "LayoutGroup") {
+            Some(LayoutGroupData::default())
+        } else {
+            None
+        };
+
         let tag = if name.contains("Player") {
             "Player".into()
         } else if name.contains("Camera") {
@@ -795,6 +1053,7 @@ impl EntityData {
             ui_button,
             ui_image: None,
             ui_drag: None,
+            layout_group,
             portal: None,
             animator,
             parent: None,
@@ -1447,6 +1706,112 @@ mod tests {
             back.ui_image.unwrap().sprite,
             "textures/icono.png"
         );
+    }
+
+    #[test]
+    fn ancla_estirada_ocupa_el_span_del_padre() {
+        // Anclas de esquina a esquina (0,0)-(1,1) con size_delta 0:
+        // el rect ES el padre entero.
+        let rt = RectTransformData {
+            anchored_position: [0.0, 0.0],
+            size_delta: [0.0, 0.0],
+            anchor_min: [0.0, 0.0],
+            anchor_max: [1.0, 1.0],
+            pivot: [0.5, 0.5],
+        };
+        let r = resolve_ui_rect_in(&rt, [10.0, 20.0, 400.0, 300.0]);
+        assert_eq!(r, [10.0, 20.0, 400.0, 300.0]);
+        // Banda superior: anclas (0,1)-(1,1), alto fijo de 50 por size_delta.
+        let rt = RectTransformData {
+            anchored_position: [0.0, 0.0],
+            size_delta: [0.0, 50.0],
+            anchor_min: [0.0, 1.0],
+            anchor_max: [1.0, 1.0],
+            pivot: [0.5, 1.0],
+        };
+        let r = resolve_ui_rect_in(&rt, [0.0, 0.0, 1280.0, 720.0]);
+        assert_eq!(r, [0.0, 0.0, 1280.0, 50.0]);
+    }
+
+    #[test]
+    fn canvas_scale_factor_interpolado() {
+        let c = CanvasData::default(); // 1920×1080, match 0.5
+        // Misma resolución que la referencia: factor 1.
+        assert!((canvas_scale_factor(&c, 1920.0, 1080.0) - 1.0).abs() < 1e-5);
+        // Mitad en ambas: 0.5 con cualquier match.
+        assert!((canvas_scale_factor(&c, 960.0, 540.0) - 0.5).abs() < 1e-5);
+        // 1280×720 frente a 1920×1080: 2/3 en ambos ejes.
+        assert!((canvas_scale_factor(&c, 1280.0, 720.0) - 2.0 / 3.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn layout_horizontal_recoloca_en_fila() {
+        let g = LayoutGroupData {
+            direction: "horizontal".into(),
+            spacing: 10.0,
+            padding: [5.0, 5.0, 5.0, 5.0],
+            alignment: "start".into(),
+        };
+        let hijos = [[0.0, 0.0, 100.0, 40.0], [0.0, 0.0, 50.0, 40.0]];
+        let out = layout_group_rects([0.0, 0.0, 300.0, 100.0], &g, &hijos);
+        assert_eq!(out[0], [5.0, 5.0, 100.0, 40.0]);
+        assert_eq!(out[1], [115.0, 5.0, 50.0, 40.0]);
+    }
+
+    #[test]
+    fn escena_ui_jerarquia_y_layout() {
+        // Canvas + panel hijo + dos botones dentro de un grupo.
+        let mut scene = SceneState::new();
+        let canvas_id = scene.create_entity("Canvas".into(), vec!["Canvas".into()]);
+        let panel_id = scene.create_entity("Panel".into(), vec!["RectTransform".into(), "LayoutGroup".into()]);
+        let b1 = scene.create_entity("B1".into(), vec!["Button".into()]);
+        let b2 = scene.create_entity("B2".into(), vec!["Button".into()]);
+        let mut fijar = |id: u64, f: &dyn Fn(&mut EntityData)| {
+            let e = scene.entities.iter_mut().find(|e| e.id == id).unwrap();
+            f(e);
+        };
+        fijar(canvas_id, &|e: &mut EntityData| {
+            e.canvas = Some(CanvasData {
+                render_mode: "ScreenSpaceOverlay".into(),
+                reference_resolution: [1280.0, 720.0],
+                match_width_or_height: 0.5,
+            });
+        });
+        fijar(panel_id, &|e: &mut EntityData| {
+            e.parent = Some(canvas_id);
+            e.layout_group = Some(LayoutGroupData {
+                direction: "horizontal".into(),
+                spacing: 10.0,
+                padding: [0.0, 0.0, 0.0, 0.0],
+                alignment: "start".into(),
+            });
+            e.rect_transform = Some(RectTransformData {
+                anchored_position: [0.0, 0.0],
+                size_delta: [400.0, 60.0],
+                anchor_min: [0.0, 0.0],
+                anchor_max: [0.0, 0.0],
+                pivot: [0.0, 0.0],
+            });
+        });
+        for b in [b1, b2] {
+            fijar(b, &|e: &mut EntityData| {
+                e.parent = Some(panel_id);
+                e.rect_transform = Some(RectTransformData {
+                    anchored_position: [0.0, 0.0],
+                    size_delta: [100.0, 40.0],
+                    anchor_min: [0.0, 0.0],
+                    anchor_max: [0.0, 0.0],
+                    pivot: [0.0, 0.0],
+                });
+            });
+        }
+        let rects = resolve_scene_ui_rects(&scene, 1280.0, 720.0);
+        // Referencia = pantalla: factor 1. El panel va a la esquina
+        // inferior izquierda (ancla 0,0, pivote 0,0): y = 720-60.
+        assert_eq!(rects[&panel_id], [0.0, 660.0, 400.0, 60.0]);
+        // Los botones, en fila dentro del panel por el layout.
+        assert_eq!(rects[&b1], [0.0, 660.0, 100.0, 40.0]);
+        assert_eq!(rects[&b2], [110.0, 660.0, 100.0, 40.0]);
     }
 
     #[test]

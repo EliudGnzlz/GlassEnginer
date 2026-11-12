@@ -276,6 +276,28 @@ impl McpServer {
                             }
                         },
                         {
+                            "name": "glass_ui_tree",
+                            "description": "Árbol de UI de la escena viva (Fase 5): factor de escala del Canvas Scaler y, por cada entidad UI, su rectángulo resuelto en píxeles (jerarquía, anclas completas y layout groups aplicados) para la resolución dada (defecto 1280x720).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "width": { "type": "number" },
+                                    "height": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "glass_ui_stats",
+                            "description": "Conteos de la UI de la escena viva (Fase 5): canvas, elementos, textos, botones, imágenes, layout groups, profundidad máxima de la jerarquía y factor de escala para la resolución dada (defecto 1280x720).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "width": { "type": "number" },
+                                    "height": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
                             "name": "glass_get_audio_status",
                             "description": "Consulta el estado del subsistema de audio de GlassEngine (backend Kira, dispositivo CPAL/ALSA y clips en memoria).",
                             "inputSchema": {
@@ -2279,6 +2301,137 @@ impl McpServer {
                                 "Parámetro '{}' del Animator de la entidad {} fijado a {}.",
                                 param, entity_id, value
                             )
+                        }]
+                    }),
+                )
+            }
+
+            "glass_ui_tree" => {
+                let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(1280.0) as f32;
+                let height = args.get("height").and_then(|v| v.as_f64()).unwrap_or(720.0) as f32;
+                let rects = glass_core::resolve_scene_ui_rects(&scene, width, height);
+                let scale = scene
+                    .entities
+                    .iter()
+                    .find_map(|e| e.canvas.as_ref())
+                    .map(|c| glass_core::canvas_scale_factor(c, width, height))
+                    .unwrap_or(1.0);
+                let redondea = |r: [f32; 4]| -> [f32; 4] {
+                    [
+                        (r[0] * 10.0).round() / 10.0,
+                        (r[1] * 10.0).round() / 10.0,
+                        (r[2] * 10.0).round() / 10.0,
+                        (r[3] * 10.0).round() / 10.0,
+                    ]
+                };
+                let elementos: Vec<serde_json::Value> = scene
+                    .entities
+                    .iter()
+                    .filter(|e| e.rect_transform.is_some() || e.canvas.is_some())
+                    .map(|e| {
+                        let mut kinds: Vec<&str> = Vec::new();
+                        if e.canvas.is_some() {
+                            kinds.push("Canvas");
+                        }
+                        if e.ui_text.is_some() {
+                            kinds.push("Text");
+                        }
+                        if e.ui_button.is_some() {
+                            kinds.push("Button");
+                        }
+                        if e.ui_image.is_some() {
+                            kinds.push("Image");
+                        }
+                        if e.layout_group.is_some() {
+                            kinds.push("LayoutGroup");
+                        }
+                        let rect = rects
+                            .get(&e.id)
+                            .map(|r| json!(redondea(*r)))
+                            .unwrap_or_else(|| json!([0.0, 0.0, width, height]));
+                        json!({
+                            "entity_id": e.id,
+                            "name": e.name,
+                            "parent": e.parent,
+                            "active": e.active,
+                            "rect": rect,
+                            "kinds": kinds,
+                        })
+                    })
+                    .collect();
+                let datos = json!({
+                    "width": width,
+                    "height": height,
+                    "scale_factor": scale,
+                    "elements": elementos,
+                });
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&datos).unwrap()
+                        }]
+                    }),
+                )
+            }
+
+            "glass_ui_stats" => {
+                let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(1280.0) as f32;
+                let height = args.get("height").and_then(|v| v.as_f64()).unwrap_or(720.0) as f32;
+                let scale = scene
+                    .entities
+                    .iter()
+                    .find_map(|e| e.canvas.as_ref())
+                    .map(|c| glass_core::canvas_scale_factor(c, width, height))
+                    .unwrap_or(1.0);
+                let cuenta = |f: &dyn Fn(&glass_core::EntityData) -> bool| {
+                    scene.entities.iter().filter(|e| f(e)).count()
+                };
+                let by_id: std::collections::HashMap<u64, &glass_core::EntityData> =
+                    scene.entities.iter().map(|e| (e.id, e)).collect();
+                let mut max_depth = 0u32;
+                for e in scene
+                    .entities
+                    .iter()
+                    .filter(|e| e.rect_transform.is_some() || e.canvas.is_some())
+                {
+                    let mut d = 0u32;
+                    let mut cur = e.parent;
+                    while let Some(pid) = cur {
+                        d += 1;
+                        match by_id.get(&pid) {
+                            Some(p) => cur = p.parent,
+                            None => break,
+                        }
+                        if d > 64 {
+                            break;
+                        }
+                    }
+                    max_depth = max_depth.max(d);
+                }
+                let datos = json!({
+                    "canvases": cuenta(&|e: &glass_core::EntityData| e.canvas.is_some()),
+                    "elements": cuenta(&|e: &glass_core::EntityData| {
+                        e.rect_transform.is_some() || e.canvas.is_some()
+                    }),
+                    "texts": cuenta(&|e: &glass_core::EntityData| e.ui_text.is_some()),
+                    "buttons": cuenta(&|e: &glass_core::EntityData| e.ui_button.is_some()),
+                    "images": cuenta(&|e: &glass_core::EntityData| e.ui_image.is_some()),
+                    "layout_groups": cuenta(&|e: &glass_core::EntityData| {
+                        e.layout_group.is_some()
+                    }),
+                    "max_depth": max_depth,
+                    "scale_factor": scale,
+                    "width": width,
+                    "height": height,
+                });
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&datos).unwrap()
                         }]
                     }),
                 )
