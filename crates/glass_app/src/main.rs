@@ -1548,6 +1548,7 @@ impl GlassEngineApp {
         register_global_audio_system(audio_system.clone());
         let physics_world = Arc::new(Mutex::new(PhysicsWorld::new()));
         register_global_physics_world(physics_world.clone());
+        glass_renderer::register_global_asset_cache(asset_cache.clone());
 
         // Clips de audio de los juegos (Plat3D): todo `.wav` bajo
         // `assets/audio/` (recursivo) se registra en el AudioSystem con el
@@ -3763,6 +3764,12 @@ let resueltos = colliders_resueltos(body, shape);
             // set de articulaciones (la sombra sigue la pose).
             let mut shadow_statics: Vec<(&glass_renderer::GpuMesh, [f32; 16])> = Vec::new();
             let mut shadow_skinned: Vec<(&glass_renderer::GpuMesh, [f32; 16], vk::DescriptorSet)> = Vec::new();
+            // Fase 2: frustums de las dos vistas y contadores del frame
+            // para la tool glass_render_stats.
+            let frustum_scene = glass_core::math::Frustum::from_view_proj(&vp_scene);
+            let frustum_game = vp_game_opt.map(|vp| glass_core::math::Frustum::from_view_proj(&vp));
+            let mut stats_considered: u32 = 0;
+            let mut stats_culled: u32 = 0;
 
             if let Ok(scene) = self.scene_state.lock() {
                 // ITERACIÓN 4: matrices de mundo compuestas por jerarquía
@@ -3819,6 +3826,29 @@ let resueltos = colliders_resueltos(body, shape);
                         } else {
                             glass_core::mat4_mul(world, scale_half)
                         };
+                        // Fase 2: frustum culling por entidad y vista.
+                        // Cotas locales: las de la geometría retenida del
+                        // modelo; sin modelo, el cubo de respaldo (vértices
+                        // -1..+1 y `model` ya lleva su media escala); sin
+                        // cotas retenidas, el cubo unitario. Las sombras no
+                        // se filtran: algo fuera de vista puede proyectar
+                        // dentro.
+                        let (lmin, lmax) = if using_model {
+                            model_key
+                                .and_then(|k| cache.bounds(k))
+                                .unwrap_or(([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]))
+                        } else {
+                            ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0])
+                        };
+                        let (wmin, wmax) = glass_core::math::aabb_transform(lmin, lmax, &model);
+                        let vis_scene = frustum_scene.intersects_aabb(wmin, wmax);
+                        let vis_game = frustum_game
+                            .map(|f| f.intersects_aabb(wmin, wmax))
+                            .unwrap_or(true);
+                        stats_considered += 1;
+                        if frustum_game.is_some() && !vis_game {
+                            stats_culled += 1;
+                        }
                         // Uso registrado para la expulsión de ociosos (P2).
                         cache.touch(if using_model { model_key.unwrap() } else { "cube" });
 
@@ -4127,7 +4157,7 @@ let resueltos = colliders_resueltos(body, shape);
                                     continue;
                                 }
                                 shadow_skinned.push((skinned_mesh, model, joints_set));
-                                scene_skinned.push((skinned_mesh, glass_renderer::MeshPushConstants {
+                                if vis_scene { scene_skinned.push((skinned_mesh, glass_renderer::MeshPushConstants {
                                     mvp: mvp_scene,
                                     model,
                                     light_dir,
@@ -4138,8 +4168,8 @@ let resueltos = colliders_resueltos(body, shape);
                                     lm_params,
                                     emissive: em_item,
                                     uv_transform: uv_item,
-                                }, tex, joints_set, range));
-                                if let Some(vp_game) = vp_game_opt {
+                                }, tex, joints_set, range)); }
+                                if let Some(vp_game) = vp_game_opt.filter(|_| vis_game) {
                                     let mvp_game = matmul(&vp_game, &model);
                                     game_skinned.push((skinned_mesh, glass_renderer::MeshPushConstants {
                                         mvp: mvp_game,
@@ -4156,7 +4186,7 @@ let resueltos = colliders_resueltos(body, shape);
                                 }
                                 continue;
                             }
-                            scene_batches.push((ent_mesh, glass_renderer::MeshPushConstants {
+                            if vis_scene { scene_batches.push((ent_mesh, glass_renderer::MeshPushConstants {
                                 mvp: mvp_scene,
                                 model,
                                 light_dir,
@@ -4167,9 +4197,9 @@ let resueltos = colliders_resueltos(body, shape);
                                 lm_params,
                                 emissive: em_item,
                                 uv_transform: uv_item,
-                            }, tex_set, shader_name.clone(), range));
+                            }, tex_set, shader_name.clone(), range)); }
 
-                            if let Some(vp_game) = vp_game_opt {
+                            if let Some(vp_game) = vp_game_opt.filter(|_| vis_game) {
                                 let mvp_game = matmul(&vp_game, &model);
                                 game_batches.push((ent_mesh, glass_renderer::MeshPushConstants {
                                     mvp: mvp_game,
@@ -4192,6 +4222,15 @@ let resueltos = colliders_resueltos(body, shape);
                 }
             }
 
+
+            // Fase 2: estadísticas del frame para la tool MCP.
+            glass_core::render_stats::record_render_stats(glass_core::render_stats::RenderStatsSnapshot {
+                entities_considered: stats_considered,
+                entities_culled: stats_culled,
+                game_draw_calls: (game_batches.len() + game_skinned.len()) as u32,
+                scene_draw_calls: (scene_batches.len() + scene_skinned.len()) as u32,
+                shadow_draw_calls: (shadow_statics.len() + shadow_skinned.len()) as u32,
+            });
 
             // ------------------------------------------------------------
             // Portales (bloque Portales): si la escena tiene una
@@ -4385,11 +4424,21 @@ let resueltos = colliders_resueltos(body, shape);
             // ojo activo, publicadas en el renderer antes de dibujar.
             {
                 let pl_eye = eye_game_opt.unwrap_or(eye_scene);
-                let ubo_luces = match self.scene_state.lock() {
+let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                     Ok(scene) => recolectar_luces_puntuales(&scene, [pl_eye[0], pl_eye[1], pl_eye[2]]),
-                    Err(_) => glass_renderer::PointLightsUbo::default(),
+                    Err(_) => (glass_renderer::PointLightsUbo::default(), Vec::new()),
                 };
                 renderer.set_point_lights(ubo_luces);
+                renderer.set_point_shadow_lights(luces_sombra);
+                // Niebla de la escena (Fase 2): la publica la primera
+                // entidad con FogData; sin ella, niebla desactivada.
+                match self.scene_state.lock() {
+                    Ok(scene) => match scene.fog_settings() {
+                        Some(fog) => renderer.set_fog(fog.color, fog.near, fog.far, true),
+                        None => renderer.set_fog([0.0, 0.0, 0.0], 0.0, 1.0, false),
+                    },
+                    Err(_) => renderer.set_fog([0.0, 0.0, 0.0], 0.0, 1.0, false),
+                }
             }
 
             if let Some((items_a, piel_a, items_b, piel_b)) = &portal_render {
@@ -6246,11 +6295,11 @@ fn empujar_draw_portal<'x>(
 }
 
 fn recolectar_luces_puntuales(
-    scene: &glass_core::SceneState,
+    scene: &SceneState,
     eye: [f32; 3],
-) -> glass_renderer::PointLightsUbo {
+) -> (glass_renderer::PointLightsUbo, Vec<glass_renderer::PointShadowLight>) {
     let mundos = scene.compute_world_matrices();
-    let mut candidatas: Vec<(f32, [f32; 4], [f32; 4])> = Vec::new();
+    let mut candidatas: Vec<(f32, [f32; 4], [f32; 4], bool)> = Vec::new();
     for ent in &scene.entities {
         if !ent.active {
             continue;
@@ -6270,17 +6319,34 @@ fn recolectar_luces_puntuales(
             dx * dx + dy * dy + dz * dz,
             [p[0], p[1], p[2], l.range.max(0.0)],
             [l.color[0], l.color[1], l.color[2], l.intensity.max(0.0)],
+            l.cast_shadow,
         ));
     }
+
     candidatas.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
     let mut ubo = glass_renderer::PointLightsUbo::default();
+    let mut luces_sombra: Vec<glass_renderer::PointShadowLight> = Vec::new();
+    let mut slot: usize = 0;
     let n = candidatas.len().min(glass_renderer::MAX_POINT_LIGHTS);
+
     for i in 0..n {
         ubo.pos_range[i] = candidatas[i].1;
         ubo.color_intensity[i] = candidatas[i].2;
+
+        if candidatas[i].3 && slot < 4 {
+            ubo.shadow[i] = [slot as f32, candidatas[i].1[3].max(0.1), 0.0025, 0.1];
+            luces_sombra.push(glass_renderer::PointShadowLight {
+                pos: [candidatas[i].1[0], candidatas[i].1[1], candidatas[i].1[2]],
+                far: candidatas[i].1[3].max(0.1),
+            });
+            slot += 1;
+        }
     }
+
     ubo.count = n as u32;
-    ubo
+
+    (ubo, luces_sombra)
 }
 
 /// Registro de la muestra de frame de la Fase 0: alimenta el registro global

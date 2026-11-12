@@ -182,28 +182,43 @@ const _: () = assert!(std::mem::size_of::<MeshPushConstants>() == 256);
 const _: () = assert!(std::mem::align_of::<MeshPushConstants>() == 4);
 
 pub const MAX_POINT_LIGHTS: usize = 8;
-pub const POINT_LIGHTS_UBO_SIZE: u64 = 272;
+pub const POINT_LIGHTS_UBO_SIZE: u64 = 400;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PointLightsUbo {
     pub pos_range: [[f32; 4]; MAX_POINT_LIGHTS],
     pub color_intensity: [[f32; 4]; MAX_POINT_LIGHTS],
+    /// Sombra por luz (Fase 2): x = índice de cubo en el atlas o -1 sin
+    /// sombra; y = plano lejano (el rango); z = bias en profundidad
+    /// NDC; w = plano cercano de la proyección del cubo.
+    pub shadow: [[f32; 4]; MAX_POINT_LIGHTS],
     pub count: u32,
     pub _pad: [u32; 3],
 }
 
-const _: () = assert!(std::mem::size_of::<PointLightsUbo>() == 272);
+const _: () = assert!(std::mem::size_of::<PointLightsUbo>() == 400);
 
 impl Default for PointLightsUbo {
     fn default() -> Self {
         Self {
             pos_range: [[0.0; 4]; MAX_POINT_LIGHTS],
+            shadow: [[-1.0, 0.0, 0.0, 0.0]; MAX_POINT_LIGHTS],
             color_intensity: [[0.0; 4]; MAX_POINT_LIGHTS],
             count: 0,
             _pad: [0; 3],
         }
     }
+}
+
+/// Una luz puntual con sombra para los pases de cubos (Fase 2): la app
+/// publica hasta 4 por frame con set_point_shadow_lights, en el MISMO
+/// orden en que asignó los índices de cubo del PointLightsUbo.
+#[derive(Debug, Clone, Copy)]
+pub struct PointShadowLight {
+    pub pos: [f32; 3],
+    /// Plano lejano de la proyección del cubo (el rango de la luz).
+    pub far: f32,
 }
 
 /// UBO del lightmap (set 5 del PBR): por entidad horneada (máx. 64),
@@ -327,6 +342,14 @@ pub struct GlassRenderer {
     shadow_vp: [f32; 16],
     /// Parámetros del UBO de sombras del frame (lado CPU).
     shadow_params: [f32; 4],
+    /// Niebla del frame (Fase 2): viaja en el UBO de frame junto a la
+    /// sombra; la publica la app con set_fog antes de render_views.
+    fog_color_dist: [f32; 4],
+    fog_far_mode: [f32; 4],
+    /// Atlas de cubos de las sombras puntuales (Fase 2).
+    point_shadows: crate::shadow::PointShadowResources,
+    /// Luces con sombra del frame, en orden de ranura del UBO.
+    point_shadow_lights: Vec<PointShadowLight>,
     /// Pool de sets del set 1 (SSBO de articulaciones) de los
     /// `JointBuffer` por entidad. Los sets se liberan con
     /// FREE_DESCRIPTOR_SET cuando el buffer de una entidad se destruye.
@@ -707,6 +730,18 @@ impl GlassRenderer {
             PBR_VERT_SPV,
             PBR_SKINNED_VERT_SPV,
         )?;
+
+// post-procesado.
+        // Atlas de cubos de las sombras puntuales (Fase 2): se crea tras
+        // los recursos del sol porque sus framebuffers usan su render
+        // pass, y su vista se escribe en el binding 2 del set 2 real
+        // antes del primer frame.
+        let point_shadows = crate::shadow::PointShadowResources::new(
+            &device,
+            &mut *allocator.lock().unwrap(),
+            shadow.render_pass,
+        )?;
+        shadow.write_point_shadow_set(&device, point_shadows.sample_view, point_shadows.sampler);
 
         // Cadena de post-procesado: bright/blur a media resolución y la
         // pasada final contra el render pass LDR de presentación.
@@ -1095,6 +1130,8 @@ impl GlassRenderer {
             pbr_pipeline_legacy,
             skinned_pipeline_legacy,
             shadow,
+            point_shadows,
+            point_shadow_lights: Vec::new(),
             post,
             post_enabled,
             post_settings,
@@ -1106,6 +1143,8 @@ impl GlassRenderer {
                 crate::shadow::SHADOW_NORMAL_BIAS,
                 0.0,
             ],
+            fog_color_dist: [0.0; 4],
+            fog_far_mode: [0.0; 4],
             joints_pool,
             custom_pipelines: std::collections::HashMap::from([(
                 "material_transparent".to_string(),
@@ -1313,6 +1352,20 @@ impl GlassRenderer {
     /// `render_views` lo vuelca al buffer tras la espera del fence.
     pub fn set_point_lights(&mut self, lights: PointLightsUbo) {
         self.point_lights = lights;
+    }
+
+    /// Publica la niebla del frame (Fase 2): color lineal, distancias de
+    /// inicio y total en metros y si está activa. Viaja en el UBO de
+    /// frame (set 2) junto a los parámetros de sombra.
+    pub fn set_fog(&mut self, color: [f32; 3], near: f32, far: f32, enabled: bool) {
+        self.fog_color_dist = [color[0], color[1], color[2], near];
+        self.fog_far_mode = [far, if enabled { 1.0 } else { 0.0 }, 0.0, 0.0];
+    }
+
+/// Publica las luces puntuales con sombra del frame (Fase 2), en el
+    /// mismo orden de ranuras que el PointLightsUbo.
+    pub fn set_point_shadow_lights(&mut self, lights: Vec<PointShadowLight>) {
+        self.point_shadow_lights = lights;
     }
 
     /// Enlaza el set 3 en un dibujo cuyo pipeline lo declara (PBR; la
@@ -1719,6 +1772,8 @@ impl GlassRenderer {
         self.shadow.write_ubo(&crate::shadow::ShadowUbo {
             light_vp: self.shadow_vp,
             params: shadow_params,
+            fog_color_dist: self.fog_color_dist,
+            fog_far_mode: self.fog_far_mode,
         });
             shadow_params
         }
@@ -1797,6 +1852,88 @@ impl GlassRenderer {
                     }
                 }
                 self.device.cmd_end_render_pass(cmd);
+            }
+        }
+    }
+
+    /// Pases de profundidad de los cubos de las luces puntuales con
+    /// sombra (Fase 2): por cada luz publicada (máx. 4) se renderizan
+    /// las 6 caras de su cubo del atlas con los mismos pipelines de
+    /// profundidad del sol y los proyectores del frame. Sin luces con
+    /// sombra o sin proyectores no se graba nada.
+    fn record_point_shadow_passes(&self, cmd: vk::CommandBuffer, casters: &ShadowCasters) {
+        if self.point_shadow_lights.is_empty()
+            || (casters.statics.is_empty() && casters.skinned.is_empty())
+        {
+            return;
+        }
+        unsafe {
+            for (slot, luz) in self.point_shadow_lights.iter().enumerate() {
+                let vps = crate::shadow::point_shadow_face_vps(luz.pos, 0.1, luz.far);
+                for (cara, vp) in vps.iter().enumerate() {
+                    self.point_shadows.begin_face_pass(&self.device, cmd, slot * 6 + cara);
+                    if !casters.statics.is_empty() {
+                        self.device.cmd_bind_pipeline(
+                            cmd,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            self.shadow.depth_pipeline,
+                        );
+                        for (mesh, model) in casters.statics {
+                            let pc = MeshPushConstants {
+                                mvp: glass_core::mat4_mul(*vp, *model),
+                                model: *model,
+                                ..Default::default()
+                            };
+                            self.device.cmd_push_constants(
+                                cmd,
+                                self.shadow.depth_layout,
+                                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                                0,
+                                bytemuck::bytes_of(&pc),
+                            );
+                            self.device
+                                .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
+                            self.device
+                                .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
+                            self.device.cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                        }
+                    }
+                    if !casters.skinned.is_empty() {
+                        self.device.cmd_bind_pipeline(
+                            cmd,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            self.shadow.depth_skinned_pipeline,
+                        );
+                        for (mesh, model, joints_set) in casters.skinned {
+                            self.device.cmd_bind_descriptor_sets(
+                                cmd,
+                                vk::PipelineBindPoint::GRAPHICS,
+                                self.shadow.depth_skinned_layout,
+                                1,
+                                &[*joints_set],
+                                &[],
+                            );
+                            let pc = MeshPushConstants {
+                                mvp: glass_core::mat4_mul(*vp, *model),
+                                model: *model,
+                                ..Default::default()
+                            };
+                            self.device.cmd_push_constants(
+                                cmd,
+                                self.shadow.depth_skinned_layout,
+                                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                                0,
+                                bytemuck::bytes_of(&pc),
+                            );
+                            self.device
+                                .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
+                            self.device
+                                .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
+                            self.device.cmd_draw_indexed(cmd, mesh.index_count, 1, 0, 0, 0);
+                        }
+                    }
+                    self.device.cmd_end_render_pass(cmd);
+                }
             }
         }
     }
@@ -2032,6 +2169,7 @@ impl GlassRenderer {
             // --------------------------------------------------------------------
             if let Some(casters) = shadow_casters {
                 self.record_shadow_pass(cmd, casters, shadow_params);
+                self.record_point_shadow_passes(cmd, casters);
             }
 
             // --------------------------------------------------------------------
@@ -2538,6 +2676,10 @@ impl Drop for GlassRenderer {
             &self.device,
             &mut *self.allocator.lock().unwrap(),
         );
+        self.point_shadows.destroy_with_device(
+            &self.device,
+            &mut *self.allocator.lock().unwrap(),
+        );
         self.offscreen
             .destroy(&mut *self.allocator.lock().unwrap());
         self.game_offscreen
@@ -2657,10 +2799,11 @@ mod point_lights_ubo_tests {
     fn point_lights_ubo_respeta_std140() {
         assert_eq!(offset_of!(PointLightsUbo, pos_range), 0);
         assert_eq!(offset_of!(PointLightsUbo, color_intensity), 128);
-        assert_eq!(offset_of!(PointLightsUbo, count), 256);
-        assert_eq!(offset_of!(PointLightsUbo, _pad), 260);
-        assert_eq!(std::mem::size_of::<PointLightsUbo>(), 272);
-        assert_eq!(POINT_LIGHTS_UBO_SIZE, 272);
+        assert_eq!(offset_of!(PointLightsUbo, shadow), 256);
+        assert_eq!(offset_of!(PointLightsUbo, count), 384);
+        assert_eq!(offset_of!(PointLightsUbo, _pad), 388);
+        assert_eq!(std::mem::size_of::<PointLightsUbo>(), 400);
+        assert_eq!(POINT_LIGHTS_UBO_SIZE, 400);
     }
 
     #[test]
@@ -2672,9 +2815,9 @@ mod point_lights_ubo_tests {
     }
 
     #[test]
-    fn point_lights_bytemuck_serializa_272_bytes() {
+    fn point_lights_bytemuck_serializa_400_bytes() {
         let ubo = PointLightsUbo::default();
-        assert_eq!(bytemuck::bytes_of(&ubo).len(), 272);
+        assert_eq!(bytemuck::bytes_of(&ubo).len(), 400);
         assert_eq!(bytemuck::bytes_of(&ubo).len(), POINT_LIGHTS_UBO_SIZE as usize);
     }
 }

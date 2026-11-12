@@ -32,6 +32,10 @@ layout(set = 0, binding = 0) uniform sampler2D base_color_tex;
 layout(set = 2, binding = 0) uniform ShadowUbo {
     mat4 light_vp;
     vec4 shadow_params;
+    // Niebla (Fase 2): rgb = color, w = inicio; en fog_far_mode:
+    // x = distancia total, y = 1 si activa.
+    vec4 fog_color_dist;
+    vec4 fog_far_mode;
 } u_shadow;
 layout(set = 2, binding = 1) uniform sampler2DShadow shadow_map;
 
@@ -41,11 +45,30 @@ layout(set = 2, binding = 1) uniform sampler2DShadow shadow_map;
 layout(set = 3, binding = 0, std140) uniform PointLights {
     vec4 pos_range[8];        // xyz = posición mundo, w = rango
     vec4 color_intensity[8];  // xyz = color, w = intensidad
+    vec4 shadow[8];           // Fase 2: x = cubo o -1, y = lejos, z = bias, w = cerca
     uint count;               // nº de luces válidas [0..8]
     uint _pad0;
     uint _pad1;
     uint _pad2;
 } u_point_lights;
+
+// Atlas de sombras puntuales (Fase 2): 4 cubos compartidos; el índice
+// de cubo de cada luz va en u_point_lights.shadow[i].x (-1 = sin sombra).
+layout(set = 2, binding = 2) uniform samplerCubeArray u_point_shadow_cubes;
+
+// Factor de sombra de la luz puntual i para el fragmento: compara la
+// profundidad NDC del fragmento en la proyección del cubo (90°, cerca
+// en shadow.w, lejos en shadow.y) contra la guardada en el atlas.
+float point_shadow_factor(int i) {
+    vec4 sh = u_point_lights.shadow[i];
+    if (sh.x < -0.5) return 1.0;
+    vec3 dir = v_world_pos - u_point_lights.pos_range[i].xyz;
+    float dist = length(dir);
+    if (dist > sh.y || dist < 0.0001) return 1.0;
+    float current = sh.y * (dist - sh.w) / ((sh.y - sh.w) * dist);
+    float sampled = texture(u_point_shadow_cubes, vec4(dir, int(sh.x + 0.5))).r;
+    return (current - sh.z > sampled) ? 0.0 : 1.0;
+}
 
 // Lightmap horneado (bake): atlas con la luz estática ya quemada y,
 // por entidad, los sub-rects de sus 6 grupos (eje, signo). El índice
@@ -214,7 +237,7 @@ void main() {
         // --- Puntuales: mismo BRDF Cook-Torrance que la direccional ---------
     // Atenuación: corte suave a 0 en el rango y caída 1/d², coherente
     // con el tono físico del PBR y sin borde duro.
-    // Sin sombras para puntuales en esta v1.
+    // Con sombra: hasta 4 puntuales la proyectan (atlas de cubos).
     vec3 Lo_points = vec3(0.0);
     for (int i = 0; i < int(u_point_lights.count); ++i) {
         vec3 to_light = u_point_lights.pos_range[i].xyz - v_world_pos;
@@ -243,6 +266,7 @@ void main() {
         vec3 radiance_p = u_point_lights.color_intensity[i].rgb
                         * u_point_lights.color_intensity[i].w
                         * atten;
+        radiance_p *= point_shadow_factor(i);
 
         Lo_points += (kDp * albedo / PI + specular_p) * radiance_p * NdotLp;
     }
@@ -259,6 +283,17 @@ void main() {
 
     vec3 final_color = ambient + Lo + Lo_points * has_light
         + u_push.emissive.rgb * u_push.emissive.w;
+
+    // Niebla analítica lineal (Fase 2): mezcla hacia el color de niebla
+    // entre la distancia de inicio y la total, con la distancia al ojo.
+    if (u_shadow.fog_far_mode.y > 0.5) {
+        float fog_dist = length(u_push.camera_pos.xyz - v_world_pos);
+        float fog_f = clamp(
+            (fog_dist - u_shadow.fog_color_dist.w)
+                / max(u_shadow.fog_far_mode.x - u_shadow.fog_color_dist.w, 0.001),
+            0.0, 1.0);
+        final_color = mix(final_color, u_shadow.fog_color_dist.rgb, fog_f);
+    }
 
     // SIN mapeo de tono en este shader (camino con post-procesado): la
     // escena se escribe LINEAL y sin comprimir en el objetivo HDR

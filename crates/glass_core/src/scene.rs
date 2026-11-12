@@ -272,12 +272,29 @@ impl Default for CameraData {
     }
 }
 
+/// Niebla analítica lineal de la escena (Fase 2): vive en una entidad
+/// (normalmente la cámara o una entidad «Environment»); la primera
+/// entidad con este bloque manda. Presencia = niebla activa.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct FogData {
+    /// Color de la niebla en RGB lineal.
+    pub color: [f32; 3],
+    /// Distancia (m) a la que empieza la niebla.
+    pub near: f32,
+    /// Distancia (m) a la que la niebla es total.
+    pub far: f32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LightData {
     pub light_type: String, // "Directional", "Point", "Spot"
     pub color: [f32; 3],
     pub intensity: f32,
     pub range: f32,
+    /// Si esta luz puntual proyecta sombra (Fase 2): el motor le asigna
+    /// uno de los 4 cubos del atlas compartido por orden de cercanía.
+    #[serde(default)]
+    pub cast_shadow: bool,
 }
 
 impl Default for LightData {
@@ -287,6 +304,7 @@ impl Default for LightData {
             color: [1.0, 0.98, 0.92],
             intensity: 1.0,
             range: 10.0,
+            cast_shadow: false,
         }
     }
 }
@@ -616,6 +634,10 @@ pub struct EntityData {
     pub audio: Option<AudioSourceData>,
     pub camera: Option<CameraData>,
     pub light: Option<LightData>,
+    /// Bloque de niebla de escena (Fase 2). `#[serde(default)]`: las
+    /// escenas anteriores no traen el campo.
+    #[serde(default)]
+    pub fog: Option<FogData>,
     pub canvas: Option<CanvasData>,
     pub rect_transform: Option<RectTransformData>,
     pub ui_text: Option<UITextData>,
@@ -742,6 +764,7 @@ impl EntityData {
             audio,
             camera,
             light,
+            fog: None,
             canvas,
             rect_transform,
             ui_text,
@@ -1259,6 +1282,12 @@ impl SceneState {
     /// la invariante de `next_entity_id` (siempre mayor que cualquier id vivo,
     /// para que una entidad nueva no colisione con una cargada de disco) se
     /// mantiene en un solo sitio y no puede divergir entre ambos caminos.
+    /// Ajustes de niebla de la escena (Fase 2): el FogData de la primera
+    /// entidad que lo lleve, si alguna.
+    pub fn fog_settings(&self) -> Option<FogData> {
+        self.entities.iter().find_map(|e| e.fog)
+    }
+
     pub fn replace_entities(&mut self, entities: Vec<EntityData>) {
         self.entities = entities;
         self.next_entity_id = self.entities.iter().map(|e| e.id).max().unwrap_or(0) + 1;

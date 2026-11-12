@@ -53,9 +53,13 @@ pub const SHADOW_NORMAL_BIAS: f32 = 0.05;
 pub struct ShadowUbo {
     pub light_vp: [f32; 16],
     pub params: [f32; 4],
+    /// Niebla (Fase 2): rgb = color, w = distancia de inicio.
+    pub fog_color_dist: [f32; 4],
+    /// Niebla: x = distancia total, y = 1 si activa.
+    pub fog_far_mode: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<ShadowUbo>() == 80);
+const _: () = assert!(std::mem::size_of::<ShadowUbo>() == 112);
 
 fn pipe_err(e: PipelineError) -> OffscreenError {
     match e {
@@ -134,6 +138,11 @@ impl ShadowResources {
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(1)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(2)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
@@ -277,7 +286,7 @@ impl ShadowResources {
                     .descriptor_count(1),
                 vk::DescriptorPoolSize::default()
                     .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .descriptor_count(1),
+                    .descriptor_count(2),
             ];
             let pool_info = vk::DescriptorPoolCreateInfo::default()
                 .pool_sizes(&pool_sizes)
@@ -318,6 +327,8 @@ impl ShadowResources {
             let initial = ShadowUbo {
                 light_vp: [0.0; 16],
                 params: [1.0 / size as f32, SHADOW_DEPTH_BIAS, SHADOW_NORMAL_BIAS, 0.0],
+                fog_color_dist: [0.0; 4],
+                fog_far_mode: [0.0; 4],
             };
             std::ptr::copy_nonoverlapping(
                 bytemuck::bytes_of(&initial).as_ptr(),
@@ -416,6 +427,30 @@ impl ShadowResources {
         }
     }
 
+    /// Escribe el binding 2 del set real con el atlas de cubos de las
+    /// luces puntuales (Fase 2). Lo llama el renderer justo tras crear
+    /// ambos recursos, antes del primer frame: ningún shader debe
+    /// ejecutarse con el binding sin escribir.
+    pub fn write_point_shadow_set(
+        &self,
+        device: &ash::Device,
+        cube_view: vk::ImageView,
+        sampler: vk::Sampler,
+    ) {
+        let image_info = [vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL)
+            .image_view(cube_view)
+            .sampler(sampler)];
+        let writes = [vk::WriteDescriptorSet::default()
+            .dst_set(self.set)
+            .dst_binding(2)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&image_info)];
+        unsafe {
+            device.update_descriptor_sets(&writes, &[]);
+        }
+    }
+
     /// Comienza el pase de profundidad en el command buffer: limpia el
     /// mapa a 1,0 y fija viewport/scissor al tamaño del mapa.
     pub unsafe fn begin_pass(&self, device: &ash::Device, cmd: vk::CommandBuffer) {
@@ -475,6 +510,309 @@ impl ShadowResources {
             }
             device.destroy_descriptor_set_layout(self.set_layout, None);
             device.destroy_descriptor_set_layout(self.dummy_layout, None);
+        }
+    }
+}
+
+/// Tamaño de cada cara del atlas de sombras puntuales.
+pub const POINT_SHADOW_SIZE: u32 = 512;
+/// Cubos del atlas (luces puntuales con sombra simultáneas).
+pub const POINT_SHADOW_CUBES: usize = 4;
+/// Caras totales del atlas: 4 cubos × 6 caras.
+pub const POINT_SHADOW_LAYERS: usize = POINT_SHADOW_CUBES * 6;
+
+/// Atlas de sombras de luces puntuales (Fase 2): una sola imagen D32
+/// cube-compatible de 24 capas; cada luz con sombra posee un cubo
+/// (6 capas) y el shader lo muestrea como samplerCubeArray. Las caras
+/// se renderizan con el render pass del mapa del sol (mismo formato).
+pub struct PointShadowResources {
+    pub size: u32,
+    image: vk::Image,
+    allocation: Option<Allocation>,
+    render_pass: vk::RenderPass,
+    /// Vista cube-array para el muestreo del PBR.
+    pub sample_view: vk::ImageView,
+    pub sampler: vk::Sampler,
+    /// Vistas 2D por capa, usadas solo para construir los framebuffers.
+    /// Se guardan para destruirlas de forma segura en destroy_with_device.
+    layer_views: Vec<vk::ImageView>,
+    framebuffers: Vec<vk::Framebuffer>,
+}
+
+impl PointShadowResources {
+    pub fn new(
+        device: &ash::Device,
+        allocator: &mut Allocator,
+        render_pass: vk::RenderPass,
+    ) -> Result<Self, OffscreenError> {
+        let size = POINT_SHADOW_SIZE;
+
+        let image_info = vk::ImageCreateInfo::default()
+            .flags(vk::ImageCreateFlags::CUBE_COMPATIBLE)
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(vk::Format::D32_SFLOAT)
+            .extent(vk::Extent3D {
+                width: size,
+                height: size,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(POINT_SHADOW_LAYERS as u32)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+        let image = unsafe { device.create_image(&image_info, None) }?;
+
+        let requirements = unsafe { device.get_image_memory_requirements(image) };
+        let allocation = allocator.allocate(&AllocationCreateDesc {
+            name: "point_shadow_atlas",
+            requirements,
+            location: MemoryLocation::GpuOnly,
+            linear: false,
+            allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+        })?;
+        unsafe { device.bind_image_memory(image, allocation.memory(), allocation.offset()) }?;
+
+        let sample_view_info = vk::ImageViewCreateInfo::default()
+            .image(image)
+            .view_type(vk::ImageViewType::CUBE_ARRAY)
+            .format(vk::Format::D32_SFLOAT)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::DEPTH,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: POINT_SHADOW_LAYERS as u32,
+            });
+        let sample_view = unsafe { device.create_image_view(&sample_view_info, None) }?;
+
+        let sampler_info = vk::SamplerCreateInfo::default()
+            .mag_filter(vk::Filter::LINEAR)
+            .min_filter(vk::Filter::LINEAR)
+            .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .compare_enable(false)
+            .compare_op(vk::CompareOp::ALWAYS)
+            .border_color(vk::BorderColor::FLOAT_OPAQUE_WHITE)
+            .min_lod(0.0)
+            .max_lod(0.0);
+        let sampler = unsafe { device.create_sampler(&sampler_info, None) }?;
+
+        let mut layer_views = Vec::with_capacity(POINT_SHADOW_LAYERS);
+        let mut framebuffers = Vec::with_capacity(POINT_SHADOW_LAYERS);
+        for layer in 0..POINT_SHADOW_LAYERS as u32 {
+            let layer_view_info = vk::ImageViewCreateInfo::default()
+                .image(image)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(vk::Format::D32_SFLOAT)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::DEPTH,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: layer,
+                    layer_count: 1,
+                });
+            let layer_view = unsafe { device.create_image_view(&layer_view_info, None) }?;
+
+            let attachments = [layer_view];
+            let fb_info = vk::FramebufferCreateInfo::default()
+                .render_pass(render_pass)
+                .attachments(&attachments)
+                .width(size)
+                .height(size)
+                .layers(1);
+            let framebuffer = unsafe { device.create_framebuffer(&fb_info, None) }?;
+
+            layer_views.push(layer_view);
+            framebuffers.push(framebuffer);
+        }
+
+        Ok(Self {
+            size,
+            image,
+            allocation: Some(allocation),
+            render_pass,
+            sample_view,
+            sampler,
+            layer_views,
+            framebuffers,
+        })
+    }
+
+    /// Comienza el pase de una cara del atlas (layer = cubo*6 + cara).
+    pub unsafe fn begin_face_pass(&self, device: &ash::Device, cmd: vk::CommandBuffer, layer: usize) {
+        let clear_values = [vk::ClearValue {
+            depth_stencil: vk::ClearDepthStencilValue {
+                depth: 1.0,
+                stencil: 0,
+            },
+        }];
+        let render_area = vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: vk::Extent2D {
+                width: self.size,
+                height: self.size,
+            },
+        };
+        let begin_info = vk::RenderPassBeginInfo::default()
+            .render_pass(self.render_pass)
+            .framebuffer(self.framebuffers[layer])
+            .render_area(render_area)
+            .clear_values(&clear_values);
+        device.cmd_begin_render_pass(cmd, &begin_info, vk::SubpassContents::INLINE);
+
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: self.size as f32,
+            height: self.size as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+        device.cmd_set_viewport(cmd, 0, &[viewport]);
+        device.cmd_set_scissor(cmd, 0, &[render_area]);
+    }
+
+    pub fn destroy_with_device(&mut self, device: &ash::Device, allocator: &mut Allocator) {
+        unsafe {
+            for fb in self.framebuffers.drain(..).rev() {
+                device.destroy_framebuffer(fb, None);
+            }
+            for view in self.layer_views.drain(..).rev() {
+                device.destroy_image_view(view, None);
+            }
+            device.destroy_image_view(self.sample_view, None);
+            device.destroy_sampler(self.sampler, None);
+            device.destroy_image(self.image, None);
+        }
+        if let Some(allocation) = self.allocation.take() {
+            let _ = allocator.free(allocation);
+        }
+    }
+}
+
+fn vec3_sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn vec3_dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn vec3_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn vec3_normalize(v: [f32; 3]) -> [f32; 3] {
+    let len = vec3_dot(v, v).sqrt();
+    [v[0] / len, v[1] / len, v[2] / len]
+}
+
+fn point_shadow_perspective(near: f32, far: f32) -> [f32; 16] {
+    // fov 90°, aspect 1: f = 1 / tan(45°) = 1.
+    let f = 1.0f32;
+    [
+        f, 0.0, 0.0, 0.0,
+        0.0, -f, 0.0, 0.0,
+        0.0, 0.0, far / (near - far), -1.0,
+        0.0, 0.0, near * far / (near - far), 0.0,
+    ]
+}
+
+fn point_shadow_look_at(eye: [f32; 3], target: [f32; 3], up: [f32; 3]) -> [f32; 16] {
+    let f = vec3_normalize(vec3_sub(target, eye));
+    let r = vec3_normalize(vec3_cross(f, up));
+    let u = vec3_cross(r, f);
+    [
+        r[0], u[0], -f[0], 0.0,
+        r[1], u[1], -f[1], 0.0,
+        r[2], u[2], -f[2], 0.0,
+        -vec3_dot(r, eye), -vec3_dot(u, eye), vec3_dot(f, eye), 1.0,
+    ]
+}
+
+/// VP de las 6 caras del cubo de una luz puntual (Fase 2), en el orden
+/// de capas de Vulkan (+X, -X, +Y, -Y, +Z, -Z): perspectiva de 90° con
+/// la convención del motor (Y invertida, profundidad [0, 1]) por la
+/// vista look_at de cada eje. Los pares (dirección, up) son los
+/// habituales de los cubos de sombras; la verificación visual de la
+/// orientación se hace en el test físico de la fase.
+pub fn point_shadow_face_vps(pos: [f32; 3], near: f32, far: f32) -> [[f32; 16]; 6] {
+    const FACES: [([f32; 3], [f32; 3]); 6] = [
+        ([1.0, 0.0, 0.0], [0.0, -1.0, 0.0]),
+        ([-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]),
+        ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+        ([0.0, -1.0, 0.0], [0.0, 0.0, -1.0]),
+        ([0.0, 0.0, 1.0], [0.0, -1.0, 0.0]),
+        ([0.0, 0.0, -1.0], [0.0, -1.0, 0.0]),
+    ];
+    let proj = point_shadow_perspective(near, far);
+    let mut out = [[0.0f32; 16]; 6];
+    for (i, (dir, up)) in FACES.iter().enumerate() {
+        let target = [pos[0] + dir[0], pos[1] + dir[1], pos[2] + dir[2]];
+        let view = point_shadow_look_at(pos, target, *up);
+        out[i] = glass_core::mat4_mul(proj, view);
+    }
+    out
+}
+
+#[cfg(test)]
+mod point_shadow_face_tests {
+    use super::*;
+    use glass_core::math::Frustum;
+
+    #[test]
+    fn cada_cara_mira_a_su_propio_eje() {
+        const FACES: [[f32; 3]; 6] = [
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ];
+        let pos = [0.0f32, 0.0, 0.0];
+        let vps = point_shadow_face_vps(pos, 0.1, 25.0);
+        for (k, dir) in FACES.iter().enumerate() {
+            let vp = vps[k];
+            let frustum = Frustum::from_view_proj(&vp);
+
+            let in_front = [
+                pos[0] + dir[0] * 5.0,
+                pos[1] + dir[1] * 5.0,
+                pos[2] + dir[2] * 5.0,
+            ];
+            // intersects_aabb recibe (min, max): la caja es el punto ± 0,1.
+            let caja = |c: [f32; 3]| {
+                (
+                    [c[0] - 0.1, c[1] - 0.1, c[2] - 0.1],
+                    [c[0] + 0.1, c[1] + 0.1, c[2] + 0.1],
+                )
+            };
+            let (mn, mx) = caja(in_front);
+            assert!(
+                frustum.intersects_aabb(mn, mx),
+                "cara {k}: el punto delante de su eje debe estar dentro del frustum"
+            );
+
+            let behind = [
+                pos[0] - dir[0] * 5.0,
+                pos[1] - dir[1] * 5.0,
+                pos[2] - dir[2] * 5.0,
+            ];
+            let (mn, mx) = caja(behind);
+            assert!(
+                !frustum.intersects_aabb(mn, mx),
+                "cara {k}: el punto detrás de su eje no debe estar dentro del frustum"
+            );
         }
     }
 }

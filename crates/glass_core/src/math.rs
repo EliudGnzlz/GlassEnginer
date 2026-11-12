@@ -559,8 +559,215 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     ]
 }
 
+/// Transforma una AABB local (min, max) por una matriz de mundo `m` y
+/// devuelve la AABB envolvente en espacio de mundo: transforma las 8
+/// esquinas y toma el min/max componente a componente.
+pub fn aabb_transform(min: [f32; 3], max: [f32; 3], m: &[f32; 16]) -> ([f32; 3], [f32; 3]) {
+    let corners = [
+        [min[0], min[1], min[2]],
+        [max[0], min[1], min[2]],
+        [min[0], max[1], min[2]],
+        [max[0], max[1], min[2]],
+        [min[0], min[1], max[2]],
+        [max[0], min[1], max[2]],
+        [min[0], max[1], max[2]],
+        [max[0], max[1], max[2]],
+    ];
+
+    let mut out_min = [f32::INFINITY; 3];
+    let mut out_max = [f32::NEG_INFINITY; 3];
+
+    for c in &corners {
+        let x = m[0] * c[0] + m[4] * c[1] + m[8] * c[2] + m[12];
+        let y = m[1] * c[0] + m[5] * c[1] + m[9] * c[2] + m[13];
+        let z = m[2] * c[0] + m[6] * c[1] + m[10] * c[2] + m[14];
+
+        out_min[0] = out_min[0].min(x);
+        out_min[1] = out_min[1].min(y);
+        out_min[2] = out_min[2].min(z);
+        out_max[0] = out_max[0].max(x);
+        out_max[1] = out_max[1].max(y);
+        out_max[2] = out_max[2].max(z);
+    }
+
+    (out_min, out_max)
+}
+
+/// Frustum de una vista: 6 planos (a, b, c, d) con la convención de que
+/// un punto está DENTRO si a*x + b*y + c*z + d >= 0 en los 6.
+#[derive(Debug, Clone, Copy)]
+pub struct Frustum {
+    pub planes: [[f32; 4]; 6],
+}
+
+impl Frustum {
+    /// Extrae los planos de una matriz vista-proyección del motor
+    /// (Gribb-Hartmann adaptado a la profundidad [0, 1] de Vulkan):
+    /// izquierda = fila0 + fila3 · derecha = fila3 - fila0 ·
+    /// abajo = fila1 + fila3 · arriba = fila3 - fila1 ·
+    /// cerca = fila2 · lejos = fila3 - fila2. Cada plano se normaliza
+    /// por la longitud de su normal.
+    pub fn from_view_proj(vp: &[f32; 16]) -> Self {
+        // Filas matemáticas de la matriz en orden columna-mayor.
+        let row = |i: usize| -> [f32; 4] {
+            [vp[i], vp[4 + i], vp[8 + i], vp[12 + i]]
+        };
+        let row0 = row(0);
+        let row1 = row(1);
+        let row2 = row(2);
+        let row3 = row(3);
+
+        let add = |a: [f32; 4], b: [f32; 4]| -> [f32; 4] {
+            [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]]
+        };
+        let sub = |a: [f32; 4], b: [f32; 4]| -> [f32; 4] {
+            [a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3]]
+        };
+
+        let mut planes = [
+            add(row0, row3), // izquierda
+            sub(row3, row0), // derecha
+            add(row1, row3), // abajo
+            sub(row3, row1), // arriba
+            row2,            // cerca
+            sub(row3, row2), // lejos
+        ];
+
+        for p in &mut planes {
+            let len = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+            if len > 0.0 {
+                p[0] /= len;
+                p[1] /= len;
+                p[2] /= len;
+                p[3] /= len;
+            }
+        }
+
+        Self { planes }
+    }
+
+    /// Test AABB contra los 6 planos con el vértice positivo: si para
+    /// algún plano la esquina más favorable está fuera, la caja está
+    /// fuera. Conservador: nunca descarta una caja visible.
+    pub fn intersects_aabb(&self, min: [f32; 3], max: [f32; 3]) -> bool {
+        for p in &self.planes {
+            // Esquina que maximiza a*x + b*y + c*z según el signo de a, b, c.
+            let px = if p[0] >= 0.0 { max[0] } else { min[0] };
+            let py = if p[1] >= 0.0 { max[1] } else { min[1] };
+            let pz = if p[2] >= 0.0 { max[2] } else { min[2] };
+
+            if p[0] * px + p[1] * py + p[2] * pz + p[3] < 0.0 {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+
+    // Proyección de Vulkan con Y invertida y profundidad [0, 1],
+    // orden columna-mayor, replicando la convención del motor.
+    fn perspective(fov_y_rad: f32, aspect: f32, near: f32, far: f32) -> [f32; 16] {
+        let f = 1.0 / (fov_y_rad / 2.0).tan();
+        let mut m = [0.0f32; 16];
+        m[0] = f / aspect;
+        m[5] = -f;
+        m[10] = far / (near - far);
+        m[11] = -1.0;
+        m[14] = (far * near) / (near - far);
+        m
+    }
+
+    fn identity() -> [f32; 16] {
+        let mut m = [0.0f32; 16];
+        m[0] = 1.0;
+        m[5] = 1.0;
+        m[10] = 1.0;
+        m[15] = 1.0;
+        m
+    }
+
+    fn make_vp() -> [f32; 16] {
+        let proj = perspective(std::f32::consts::FRAC_PI_2, 1.0, 0.1, 100.0);
+        let view = identity();
+        mat4_mul(proj, view)
+    }
+
+    #[test]
+    fn aabb_intersects_box_in_front() {
+        let frustum = Frustum::from_view_proj(&make_vp());
+        let min = [-0.5 - 0.0, -0.5, -5.5];
+        let max = [0.5, 0.5, -4.5];
+        assert!(frustum.intersects_aabb(min, max));
+    }
+
+    #[test]
+    fn aabb_rejects_box_behind_camera() {
+        let frustum = Frustum::from_view_proj(&make_vp());
+        let min = [-0.5, -0.5, 4.5];
+        let max = [0.5, 0.5, 5.5];
+        assert!(!frustum.intersects_aabb(min, max));
+    }
+
+    #[test]
+    fn aabb_rejects_box_outside_right() {
+        let frustum = Frustum::from_view_proj(&make_vp());
+        // fov 90 a z=-5: semiancho = 5, por lo que x=10 queda fuera.
+        let min = [9.5, -0.5, -5.5];
+        let max = [10.5, 0.5, -4.5];
+        assert!(!frustum.intersects_aabb(min, max));
+    }
+
+    #[test]
+    fn aabb_rejects_box_beyond_far_plane() {
+        let frustum = Frustum::from_view_proj(&make_vp());
+        let min = [-0.5, -0.5, -150.5];
+        let max = [0.5, 0.5, -149.5];
+        assert!(!frustum.intersects_aabb(min, max));
+    }
+
+    #[test]
+    fn aabb_huge_box_wrapping_camera_intersects() {
+        let frustum = Frustum::from_view_proj(&make_vp());
+        let min = [-1000.0, -1000.0, -1000.0];
+        let max = [1000.0, 1000.0, 1000.0];
+        assert!(frustum.intersects_aabb(min, max));
+    }
+
+    #[test]
+    fn aabb_crossing_near_plane_intersects() {
+        let frustum = Frustum::from_view_proj(&make_vp());
+        let min = [-0.5, -0.5, -0.55];
+        let max = [0.5, 0.5, 0.45];
+        assert!(frustum.intersects_aabb(min, max));
+    }
+
+    #[test]
+    fn aabb_transform_pure_translation() {
+        let mut m = identity();
+        m[12] = 1.0;
+        m[13] = 2.0;
+        m[14] = 3.0;
+
+        let (min, max) = aabb_transform([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], &m);
+        assert_eq!(min, [0.0, 1.0, 2.0]);
+        assert_eq!(max, [2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn aabb_transform_uniform_scale() {
+        let mut m = identity();
+        m[0] = 2.0;
+        m[5] = 2.0;
+        m[10] = 2.0;
+
+        let (min, max) = aabb_transform([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0], &m);
+        assert_eq!(min, [-2.0, -2.0, -2.0]);
+        assert_eq!(max, [2.0, 2.0, 2.0]);
+    }
     use super::*;
 
     const EPS: f32 = 1.0e-4;

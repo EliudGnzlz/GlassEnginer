@@ -2,6 +2,7 @@
 
 pub mod animator;
 pub mod profiling;
+pub mod render_stats;
 pub mod lightmap;
 pub mod events;
 pub mod math;

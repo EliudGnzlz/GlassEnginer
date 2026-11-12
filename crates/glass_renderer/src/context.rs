@@ -358,7 +358,20 @@ impl VulkanContext {
             .collect();
 
         let device_extensions = [ash::khr::swapchain::NAME.as_ptr()];
-        let device_features = vk::PhysicalDeviceFeatures::default();
+        // Fase 2: compresión BC de texturas solo si el dispositivo la
+        // soporta; el feature hay que ACTIVARLO en la creación y avisar a
+        // la ruta de subida, que si no sigue en RGBA8.
+        let supported_features = unsafe { instance.get_physical_device_features(physical_device) };
+        let bc_ok = supported_features.texture_compression_bc != vk::FALSE;
+        let mut device_features = vk::PhysicalDeviceFeatures::default();
+        if bc_ok {
+            device_features.texture_compression_bc = vk::TRUE;
+            crate::mesh::set_texture_bc_enabled(true);
+        }
+        log::info!(
+            "Compresión BC de texturas: {}",
+            if bc_ok { "activada" } else { "no soportada; texturas en RGBA8" }
+        );
 
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_create_infos)

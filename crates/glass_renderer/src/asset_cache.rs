@@ -12,6 +12,9 @@ pub struct AssetCache {
     /// se descarta tras la subida a GPU y la malla sería irrecuperable.
     pub geometries: HashMap<String, (Vec<[f32; 3]>, Vec<u32>)>,
 
+    /// Cotas locales (min, max) de la geometría retenida, para el
+    /// frustum culling de la Fase 2.
+    pub bounds: HashMap<String, ([f32; 3], [f32; 3])>,
     pub meshes: HashMap<String, GpuMesh>,
     /// Mallas GPU de los modelos CON piel, bajo la misma clave que en
     /// `meshes`: misma geometría pero con el formato `SkinnedVertex`
@@ -59,6 +62,7 @@ impl Default for AssetCache {
     fn default() -> Self {
         Self {
             geometries: HashMap::new(),
+            bounds: HashMap::new(),
             meshes: HashMap::new(),
             skinned_meshes: HashMap::new(),
             skins: HashMap::new(),
@@ -88,7 +92,21 @@ impl AssetCache {
     /// justo tras cargarlo, con la misma clave/stem que insert_mesh).
     pub fn insert_geometry(&mut self, name: impl Into<String>, model: &crate::mesh::LoadedModel) {
         let positions: Vec<[f32; 3]> = model.vertices.iter().map(|v| v.position).collect();
-        self.geometries.insert(name.into(), (positions, model.indices.clone()));
+        let name = name.into();
+        if let Some(first) = positions.first() {
+            let mut min = *first;
+            let mut max = *first;
+            for p in &positions[1..] {
+                min[0] = min[0].min(p[0]);
+                min[1] = min[1].min(p[1]);
+                min[2] = min[2].min(p[2]);
+                max[0] = max[0].max(p[0]);
+                max[1] = max[1].max(p[1]);
+                max[2] = max[2].max(p[2]);
+            }
+            self.bounds.insert(name.clone(), (min, max));
+        }
+        self.geometries.insert(name, (positions, model.indices.clone()));
         // (no tocar touch(): la geometría sigue el ciclo de vida del modelo;
         // si la entrada GPU se expulsa por inactividad, la geometría debe
         // expulsarse en el mismo sitio: ver evict_idle.)
@@ -97,6 +115,11 @@ impl AssetCache {
     /// Geometría retenida de un modelo, si la hay.
     pub fn geometry(&self, name: &str) -> Option<&(Vec<[f32; 3]>, Vec<u32>)> {
         self.geometries.get(name)
+    }
+
+    /// Cotas locales (min, max) de la geometría retenida de un modelo.
+    pub fn bounds(&self, name: &str) -> Option<([f32; 3], [f32; 3])> {
+        self.bounds.get(name).copied()
     }
 
     pub fn insert_mesh(
@@ -394,6 +417,7 @@ impl AssetCache {
         let keys = self.select_evictions(max_idle_ticks, protected);
         for key in &keys {
             self.geometries.remove(key);
+            self.bounds.remove(key);
             if let Some(mut mesh) = self.meshes.remove(key) {
                 mesh.destroy(device, allocator);
             }
@@ -519,4 +543,21 @@ mod tests {
         let evictions = cache.select_evictions(600, &HashSet::new());
         assert!(evictions.is_empty());
     }
+}
+
+static GLOBAL_ASSET_CACHE: std::sync::OnceLock<
+    std::sync::Arc<std::sync::RwLock<AssetCache>>,
+> = std::sync::OnceLock::new();
+
+/// Registra la caché de assets global (la llama la app al arrancar,
+/// junto al mundo físico global): la leen las tools MCP de inspección.
+pub fn register_global_asset_cache(
+    cache: std::sync::Arc<std::sync::RwLock<AssetCache>>,
+) {
+    let _ = GLOBAL_ASSET_CACHE.set(cache);
+}
+
+/// La caché global registrada, si la app ya arrancó.
+pub fn global_asset_cache() -> Option<std::sync::Arc<std::sync::RwLock<AssetCache>>> {
+    GLOBAL_ASSET_CACHE.get().cloned()
 }

@@ -1,6 +1,7 @@
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme, Allocator};
 use gpu_allocator::MemoryLocation;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 #[repr(C)]
@@ -48,6 +49,12 @@ pub struct GpuTexture {
     pub image_view: vk::ImageView,
     pub width: u32,
     pub height: u32,
+    /// Formato Vulkan de la imagen (Fase 2: RGBA8 o BC según la ruta).
+    pub format: vk::Format,
+    /// Niveles de la cadena de mip-maps subida.
+    pub mip_levels: u32,
+    /// Bytes que ocupa la cadena completa en VRAM (todos los niveles).
+    pub vram_bytes: u64,
 }
 
 impl GpuTexture {
@@ -662,6 +669,125 @@ pub fn mip_level_count(width: u32, height: u32) -> u32 {
     32 - max_side.leading_zeros()
 }
 
+/// Sin BC la textura seguirá subiendo en RGBA8 SRGB.
+static TEXTURE_BC_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Lo fija el contexto al crear el dispositivo según el feature
+/// textureCompressionBC de la GPU; sin BC, todo sigue en RGBA8.
+pub fn set_texture_bc_enabled(enabled: bool) {
+    TEXTURE_BC_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+pub fn texture_bc_enabled() -> bool {
+    TEXTURE_BC_ENABLED.load(Ordering::Relaxed)
+}
+
+/// ¿Algún píxel con alfa < 255? Decide BC3 frente a BC1.
+pub fn rgba_has_alpha(rgba: &[u8]) -> bool {
+    rgba.chunks_exact(4).any(|p| p[3] < 255)
+}
+
+/// Downsample 2x2 (media de caja) de un nivel RGBA; las dimensiones de
+/// salida son ceil(w/2) y ceil(h/2) con el borde repetido (clamp).
+pub fn downsample_rgba(rgba: &[u8], width: u32, height: u32) -> (Vec<u8>, u32, u32) {
+    debug_assert_eq!(rgba.len(), (width * height * 4) as usize);
+    let dw = (width + 1) / 2;
+    let dh = (height + 1) / 2;
+    let mut out = vec![0u8; (dw * dh * 4) as usize];
+
+    for y in 0..dh {
+        for x in 0..dw {
+            // Índices del bloque 2x2 con clamp en el borde derecho/inferior.
+            let x0 = (x * 2).min(width - 1);
+            let x1 = (x * 2 + 1).min(width - 1);
+            let y0 = (y * 2).min(height - 1);
+            let y1 = (y * 2 + 1).min(height - 1);
+
+            let mut acc = [0u32; 4];
+            for (px, py) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
+                let i = ((py * width + px) * 4) as usize;
+                for c in 0..4 {
+                    acc[c] += rgba[i + c] as u32;
+                }
+            }
+
+            let o = ((y * dw + x) * 4) as usize;
+            for c in 0..4 {
+                out[o + c] = ((acc[c] + 2) / 4) as u8; // media redondeada
+            }
+        }
+    }
+
+    (out, dw, dh)
+}
+
+/// Bytes de un nivel en el formato dado: para BC, bloques de 4x4
+/// (BC1: 8 bytes/bloque; BC3: 16).
+pub fn texture_level_bytes(width: u32, height: u32, format: vk::Format) -> u64 {
+    match format {
+        vk::Format::BC1_RGB_SRGB_BLOCK | vk::Format::BC1_RGBA_SRGB_BLOCK => {
+            let bw = ((width + 3) / 4) as u64;
+            let bh = ((height + 3) / 4) as u64;
+            bw * bh * 8
+        }
+        vk::Format::BC3_SRGB_BLOCK => {
+            let bw = ((width + 3) / 4) as u64;
+            let bh = ((height + 3) / 4) as u64;
+            bw * bh * 16
+        }
+        // Respaldo RGBA8 (ruta clásica).
+        _ => width as u64 * height as u64 * 4,
+    }
+}
+
+/// Prepara la subida BC de una imagen: genera la cadena de mips en CPU
+/// (downsample sucesivo desde el nivel 0), comprime cada nivel y
+/// devuelve (formato, bytes concatenados, [(offset, ancho, alto) por
+/// nivel]). Formato: BC3_SRGB si hay alfa, BC1_SRGB si no.
+pub fn prepare_bc_upload(img: &GltfImageData) -> (vk::Format, Vec<u8>, Vec<(u64, u32, u32)>) {
+    let levels = mip_level_count(img.width, img.height);
+    let format = if rgba_has_alpha(&img.rgba) {
+        vk::Format::BC3_SRGB_BLOCK
+    } else {
+        vk::Format::BC1_RGBA_SRGB_BLOCK
+    };
+    let bc_format = match format {
+        vk::Format::BC3_SRGB_BLOCK => texpresso::Format::Bc3,
+        _ => texpresso::Format::Bc1,
+    };
+
+    let mut data: Vec<u8> = Vec::new();
+    let mut levels_info: Vec<(u64, u32, u32)> = Vec::with_capacity(levels as usize);
+
+    // Nivel 0 tal cual; el resto por downsample sucesivo.
+    let mut current = img.rgba.clone();
+    let (mut w, mut h) = (img.width, img.height);
+
+    for _ in 0..levels {
+        let size = bc_format.compressed_size(w as usize, h as usize);
+        let offset = data.len() as u64;
+        data.resize(offset as usize + size, 0);
+        bc_format.compress(
+            &current,
+            w as usize,
+            h as usize,
+            texpresso::Params::default(),
+            &mut data[offset as usize..offset as usize + size],
+        );
+        levels_info.push((offset, w, h));
+
+        if levels_info.len() as u32 == levels {
+            break;
+        }
+        let (next, nw, nh) = downsample_rgba(&current, w, h);
+        current = next;
+        w = nw;
+        h = nh;
+    }
+
+    (format, data, levels_info)
+}
+
 impl MeshLoader {
     /// Carga vértices e índices desde un buffer binario glTF (.glb).
     /// Compatibilidad: equivale a `load_model_from_glb_bytes` descartando
@@ -1012,6 +1138,10 @@ impl MeshLoader {
         if size == 0 || img.width == 0 || img.height == 0 {
             return Err("Textura vacía".into());
         }
+        // Fase 2: si la GPU soporta BC, se comprime en CPU y se sube en BC.
+        if texture_bc_enabled() && img.width >= 4 && img.height >= 4 {
+            return Self::upload_texture_to_gpu_bc(device, allocator, img, queue, command_pool);
+        }
         let mip_levels = mip_level_count(img.width, img.height);
         unsafe {
             // 1. Staging con los píxeles.
@@ -1238,15 +1368,199 @@ impl MeshLoader {
                 .create_image_view(&view_info, None)
                 .map_err(|e| format!("Fallo al crear vista de textura: {}", e))?;
 
+            // VRAM en RGBA8: suma por nivel de (w>>l).max(1) * (h>>l).max(1) * 4.
+            let mut vram_bytes = 0u64;
+            for level in 0..mip_levels {
+                let w = (img.width >> level).max(1) as u64;
+                let h = (img.height >> level).max(1) as u64;
+                vram_bytes += w * h * 4;
+            }
             Ok(GpuTexture {
                 image,
                 allocation: Some(allocation),
                 image_view,
                 width: img.width,
                 height: img.height,
+                format: vk::Format::R8G8B8A8_SRGB,
+                mip_levels,
+                vram_bytes,
             })
         }
     }
+
+    /// Ruta BC de subida (Fase 2): imagen en formato BC con la cadena de
+    /// mips generada y comprimida en CPU; una copia por nivel desde un
+    /// único buffer staging. Mismo patrón de comandos de un solo uso y
+    /// de barreras que upload_texture_to_gpu (que queda como respaldo
+    /// para dispositivos sin textureCompressionBC).
+    pub fn upload_texture_to_gpu_bc(
+        device: &ash::Device,
+        allocator: &mut Allocator,
+        img: &GltfImageData,
+        queue: vk::Queue,
+        command_pool: vk::CommandPool,
+    ) -> Result<GpuTexture, String> {
+        let (format, data, levels) = prepare_bc_upload(img);
+        let mip_levels = levels.len() as u32;
+        let total_bytes = data.len() as u64;
+        unsafe {
+            // 1. Staging con la cadena comprimida completa.
+            let (stage_buf, stage_alloc) = Self::create_buffer(
+                device,
+                allocator,
+                total_bytes,
+                vk::BufferUsageFlags::TRANSFER_SRC,
+                MemoryLocation::CpuToGpu,
+                "texture_bc_staging_buffer",
+            )?;
+            if let Some(ptr) = stage_alloc.mapped_ptr() {
+                std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.as_ptr() as *mut u8, data.len());
+            }
+
+            // 2. Imagen GPU en el formato BC elegido.
+            let image_info = vk::ImageCreateInfo::default()
+                .image_type(vk::ImageType::TYPE_2D)
+                .format(format)
+                .extent(vk::Extent3D { width: img.width, height: img.height, depth: 1 })
+                .mip_levels(mip_levels)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            let image = device
+                .create_image(&image_info, None)
+                .map_err(|e| format!("Fallo al crear imagen de textura BC: {}", e))?;
+            let mem_reqs = device.get_image_memory_requirements(image);
+            let allocation = allocator
+                .allocate(&AllocationCreateDesc {
+                    name: "texture_bc_image",
+                    requirements: mem_reqs,
+                    location: MemoryLocation::GpuOnly,
+                    linear: false,
+                    allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+                })
+                .map_err(|e| format!("Fallo de asignación de memoria de textura BC: {}", e))?;
+            device
+                .bind_image_memory(image, allocation.memory(), allocation.offset())
+                .map_err(|e| format!("Fallo al enlazar memoria de textura BC: {}", e))?;
+
+            // 3. Transiciones y copias por nivel en un solo uso.
+            let alloc_info = vk::CommandBufferAllocateInfo::default()
+                .command_pool(command_pool)
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_buffer_count(1);
+            let cmd = device
+                .allocate_command_buffers(&alloc_info)
+                .map_err(|e| format!("Fallo al asignar command buffer de textura BC: {}", e))?[0];
+            let begin_info = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            device
+                .begin_command_buffer(cmd, &begin_info)
+                .map_err(|e| format!("Error en begin_command_buffer de textura BC: {}", e))?;
+
+            let subresource = vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .level_count(mip_levels)
+                .layer_count(1);
+            let barrier_to_dst = [vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .src_access_mask(vk::AccessFlags::empty())
+                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .image(image)
+                .subresource_range(subresource)];
+            device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &barrier_to_dst,
+            );
+
+            let regions: Vec<vk::BufferImageCopy> = levels
+                .iter()
+                .enumerate()
+                .map(|(level, (offset, w, h))| {
+                    vk::BufferImageCopy::default()
+                        .buffer_offset(*offset)
+                        .image_subresource(vk::ImageSubresourceLayers::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .mip_level(level as u32)
+                            .layer_count(1))
+                        .image_extent(vk::Extent3D { width: *w, height: *h, depth: 1 })
+                })
+                .collect();
+            device.cmd_copy_buffer_to_image(
+                cmd,
+                stage_buf,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &regions,
+            );
+
+            let barrier_to_read = [vk::ImageMemoryBarrier::default()
+                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                .image(image)
+                .subresource_range(subresource)];
+            device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &barrier_to_read,
+            );
+
+            device
+                .end_command_buffer(cmd)
+                .map_err(|e| format!("Error en end_command_buffer de textura BC: {}", e))?;
+            let fence = device
+                .create_fence(&vk::FenceCreateInfo::default(), None)
+                .map_err(|e| format!("Error creando fence de textura BC: {}", e))?;
+            let command_buffers = [cmd];
+            let submit_info = [vk::SubmitInfo::default().command_buffers(&command_buffers)];
+            device
+                .queue_submit(queue, &submit_info, fence)
+                .map_err(|e| format!("Error en queue_submit de textura BC: {}", e))?;
+            device
+                .wait_for_fences(&[fence], true, u64::MAX)
+                .map_err(|e| format!("Error esperando fence de textura BC: {}", e))?;
+            device.destroy_fence(fence, None);
+            device.free_command_buffers(command_pool, &[cmd]);
+
+            // 4. Liberar staging y crear la vista.
+            let _ = allocator.free(stage_alloc);
+            device.destroy_buffer(stage_buf, None);
+
+            let view_info = vk::ImageViewCreateInfo::default()
+                .image(image)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(format)
+                .subresource_range(subresource);
+            let image_view = device
+                .create_image_view(&view_info, None)
+                .map_err(|e| format!("Fallo al crear vista de textura BC: {}", e))?;
+
+            Ok(GpuTexture {
+                image,
+                allocation: Some(allocation),
+                image_view,
+                width: img.width,
+                height: img.height,
+                format,
+                mip_levels,
+                vram_bytes: total_bytes,
+            })
+        }
+    }
+
 
     unsafe fn create_buffer(
         device: &ash::Device,
@@ -1340,6 +1654,127 @@ impl MeshLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+/// 4x4 con rejilla conocida: R = 4*(x + 4y); salida 2x2 con medias exactas.
+    #[test]
+    fn downsample_4x4_medias_exactas() {
+        let mut rgba = vec![0u8; 4 * 4 * 4];
+        for y in 0..4u32 {
+            for x in 0..4u32 {
+                let i = ((y * 4 + x) * 4) as usize;
+                rgba[i] = (4 * (x + 4 * y)) as u8;
+                rgba[i + 3] = 255;
+            }
+        }
+
+        let (out, w, h) = downsample_rgba(&rgba, 4, 4);
+        assert_eq!((w, h), (2, 2));
+        // (0,0)=10, (1,0)=18, (0,1)=42, (1,1)=50
+        let esperado = vec![
+            10, 0, 0, 255, //
+            18, 0, 0, 255, //
+            42, 0, 0, 255, //
+            50, 0, 0, 255, //
+        ];
+        assert_eq!(out, esperado);
+    }
+
+    /// 3x3 -> 2x2 con clamp del borde en la última columna/fila.
+    #[test]
+    fn downsample_3x3_clamp() {
+        let mut rgba = vec![0u8; 3 * 3 * 4];
+        for y in 0..3u32 {
+            for x in 0..3u32 {
+                let i = ((y * 3 + x) * 4) as usize;
+                rgba[i] = (10 * (x + 3 * y)) as u8;
+                rgba[i + 3] = 255;
+            }
+        }
+
+        let (out, w, h) = downsample_rgba(&rgba, 3, 3);
+        assert_eq!((w, h), (2, 2));
+        // R: 20, 35, 65, 80 (los bordes se repiten)
+        let esperado = vec![
+            20, 0, 0, 255, //
+            35, 0, 0, 255, //
+            65, 0, 0, 255, //
+            80, 0, 0, 255, //
+        ];
+        assert_eq!(out, esperado);
+    }
+
+    #[test]
+    fn level_bytes_bc_y_rgba() {
+        let bc1 = vk::Format::BC1_RGB_SRGB_BLOCK;
+        let bc3 = vk::Format::BC3_SRGB_BLOCK;
+        let rgba = vk::Format::R8G8B8A8_SRGB;
+
+        assert_eq!(texture_level_bytes(256, 256, bc1), 32768);
+        assert_eq!(texture_level_bytes(256, 256, bc3), 65536);
+        assert_eq!(texture_level_bytes(256, 256, rgba), 262144);
+        assert_eq!(texture_level_bytes(4, 4, bc1), 8);
+        // 5x5 -> ceil(5/4)=2 bloques por eje = 4 bloques * 8 bytes.
+        assert_eq!(texture_level_bytes(5, 5, bc1), 32);
+    }
+
+    #[test]
+    fn prepare_bc_upload_opaca_64x64() {
+        let (w, h) = (64u32, 64u32);
+        let mut rgba = vec![128u8; (w * h * 4) as usize];
+        for px in rgba.chunks_exact_mut(4) {
+            px[3] = 255; // alfa opaco de verdad (128 en los 4 canales incluía el alfa)
+        }
+        let img = GltfImageData {
+            rgba, // opaca
+            width: w,
+            height: h,
+        };
+
+        let (format, data, levels) = prepare_bc_upload(&img);
+        assert_eq!(format, vk::Format::BC1_RGBA_SRGB_BLOCK);
+        assert_eq!(levels.len() as u32, mip_level_count(w, h)); // 7
+        assert_eq!(levels.len(), 7);
+        assert_eq!(levels[0], (0, 64, 64));
+
+        let total: u64 = levels
+            .iter()
+            .map(|&(_, lw, lh)| texture_level_bytes(lw, lh, format))
+            .sum();
+        assert_eq!(data.len() as u64, total);
+
+        // Offsets contiguos y en orden.
+        let mut esperado = 0u64;
+        for &(offset, _, _) in &levels {
+            assert_eq!(offset, esperado);
+            esperado += texture_level_bytes(
+                levels.iter().find(|l| l.0 == offset).unwrap().1,
+                levels.iter().find(|l| l.0 == offset).unwrap().2,
+                format,
+            );
+        }
+    }
+
+    #[test]
+    fn prepare_bc_upload_con_alfa_usa_bc3() {
+        let (w, h) = (64u32, 64u32);
+        let mut rgba = vec![255u8; (w * h * 4) as usize];
+        rgba[3] = 128; // un solo píxel semitransparente
+        let img = GltfImageData { rgba, width: w, height: h };
+
+        let (format, _, levels) = prepare_bc_upload(&img);
+        assert_eq!(format, vk::Format::BC3_SRGB_BLOCK);
+        assert_eq!(levels.len(), 7);
+    }
+
+    #[test]
+    fn rgba_has_alpha_detecta_transparencia() {
+        let opaca = vec![10u8, 20, 30, 255, 40, 50, 60, 255];
+        assert!(!rgba_has_alpha(&opaca));
+
+        let mut con_alfa = opaca.clone();
+        con_alfa[7] = 254;
+        assert!(rgba_has_alpha(&con_alfa));
+    }
 
     #[test]
     fn plano_conteos_y_esquinas() {

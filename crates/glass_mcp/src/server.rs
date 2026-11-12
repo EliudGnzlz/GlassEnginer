@@ -434,6 +434,21 @@ impl McpServer {
                                     "limit": {"type": "integer", "default": 32, "description": "Máximo de eventos recientes a devolver."}
                                 }
                             }
+                        },
+                        {
+                            "name": "glass_render_stats",
+                            "description": "Estadísticas de render del último frame recolectado (Fase 2): entidades consideradas y descartadas por frustum culling en la vista de juego, y draw calls por vista y del pase de sombras.",
+                            "inputSchema": {"type": "object", "properties": {}}
+                        },
+                        {
+                            "name": "glass_texture_info",
+                            "description": "Texturas cargadas en VRAM (Fase 2): formato Vulkan (RGBA8 o BC), dimensiones, niveles de mip y bytes por textura, con el total. Parámetro opcional model para filtrar por clave de modelo.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "model": {"type": "string", "description": "Clave de modelo a filtrar (opcional)."}
+                                }
+                            }
                         }
                     ]
                 }),
@@ -912,6 +927,87 @@ impl McpServer {
                     "process": serde_json::to_value(&pm).unwrap_or(json!({})),
                     "gpu": serde_json::to_value(&gpu).unwrap_or(serde_json::Value::Null)
                 });
+                let texto = serde_json::to_string_pretty(&datos).unwrap_or_default();
+                McpResponse::success(id, json!({"content": [{"type": "text", "text": texto}]}))
+            }
+
+            // Estadísticas de render del último frame (Fase 2): culling
+            // por frustum y draw calls por vista, del registro global
+            // que alimenta la app al recolectar los draws.
+            "glass_render_stats" => {
+                let stats = glass_core::render_stats::render_stats_snapshot();
+                let drawn = stats.entities_considered.saturating_sub(stats.entities_culled);
+                let pct = if stats.entities_considered > 0 {
+                    (stats.entities_culled as f64 * 1000.0 / stats.entities_considered as f64).round() / 10.0
+                } else {
+                    0.0
+                };
+                let mut datos = json!({
+                    "entities_considered": stats.entities_considered,
+                    "entities_culled": stats.entities_culled,
+                    "entities_drawn": drawn,
+                    "culling_pct": pct,
+                    "game_draw_calls": stats.game_draw_calls,
+                    "scene_draw_calls": stats.scene_draw_calls,
+                    "shadow_draw_calls": stats.shadow_draw_calls
+                });
+                if stats.entities_considered == 0 {
+                    datos.as_object_mut().unwrap().insert(
+                        "note".to_string(),
+                        json!("sin datos: ningún frame recolectado en este proceso (modo MCP headless o motor aún sin frames)"),
+                    );
+                }
+                let texto = serde_json::to_string_pretty(&datos).unwrap_or_default();
+                McpResponse::success(id, json!({"content": [{"type": "text", "text": texto}]}))
+            }
+
+            // Texturas en VRAM (Fase 2): formato, tamaño y bytes de la
+            // caché de assets global que registra la app al arrancar.
+            "glass_texture_info" => {
+                let filtro = args.get("model").and_then(|m| m.as_str()).map(|s| s.to_string());
+                let datos = match glass_renderer::global_asset_cache() {
+                    Some(cache) => match cache.read() {
+                        Ok(cache) => {
+                            let mut lista: Vec<serde_json::Value> = cache
+                                .textures
+                                .iter()
+                                .filter(|((modelo, _), _)| {
+                                    filtro.as_ref().map(|f| f == modelo).unwrap_or(true)
+                                })
+                                .map(|((modelo, indice), tex)| {
+                                    json!({
+                                        "model": modelo,
+                                        "image_index": indice,
+                                        "format": format!("{:?}", tex.format),
+                                        "width": tex.width,
+                                        "height": tex.height,
+                                        "mip_levels": tex.mip_levels,
+                                        "vram_bytes": tex.vram_bytes
+                                    })
+                                })
+                                .collect();
+                            lista.sort_by(|a, b| {
+                                let ma = a["model"].as_str().unwrap_or("");
+                                let mb = b["model"].as_str().unwrap_or("");
+                                ma.cmp(mb).then(
+                                    a["image_index"].as_u64().unwrap_or(0)
+                                        .cmp(&b["image_index"].as_u64().unwrap_or(0)),
+                                )
+                            });
+                            let total: u64 = lista
+                                .iter()
+                                .map(|t| t["vram_bytes"].as_u64().unwrap_or(0))
+                                .sum();
+                            json!({
+                                "textures": lista,
+                                "count": lista.len(),
+                                "total_vram_bytes": total
+                            })
+                        }
+                        Err(_) => json!({"note": "la caché de assets está bloqueada (lock envenenado)"}),
+                    },
+                    None => json!({"note": "la caché de assets no está registrada: esta tool requiere el motor en marcha (modo --mcp-live)"}),
+                };
                 let texto = serde_json::to_string_pretty(&datos).unwrap_or_default();
                 McpResponse::success(id, json!({"content": [{"type": "text", "text": texto}]}))
             }

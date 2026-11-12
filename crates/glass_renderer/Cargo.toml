@@ -21,6 +21,7 @@ ab_glyph = "0.2.32"
 log.workspace = true
 thiserror.workspace = true
 raw-window-handle.workspace = true
+texpresso = "2.0"
 
 [dev-dependencies]
 image.workspace = true
