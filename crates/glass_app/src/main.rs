@@ -3023,6 +3023,9 @@ let resueltos = colliders_resueltos(body, shape);
         // Command Queue del MCP (Fase 8): los comandos encolados se
         // ejecutan AQUÍ, al inicio del frame y en orden de envío —
         // nunca a mitad de frame ni en el hilo del cliente MCP.
+        // Solo existe servidor MCP (y cola) en la build con editor:
+        // en el juego puro el campo no está y no hay nada que bombear.
+        #[cfg(feature = "editor")]
         self.mcp_server.pump_queue();
 
         // Antes de recargar o expulsar activos hay que garantizar que la GPU

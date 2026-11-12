@@ -80,7 +80,7 @@ fn compute_phase_stats(values: &mut [u64]) -> PhaseStats {
     let avg_us = values.iter().map(|&v| v as f64).sum::<f64>() / n as f64;
 
     values.sort_unstable();
-    let rank = (95 * n + 99) / 100; // ceil(0.95 * n) en aritmética entera
+    let rank = (95 * n).div_ceil(100); // ceil(0.95 * n) en aritmética entera
     let idx = rank.saturating_sub(1).min(n - 1);
 
     PhaseStats {

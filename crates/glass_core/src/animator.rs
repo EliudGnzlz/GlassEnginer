@@ -79,7 +79,7 @@ pub struct BlendTree1D {
 /// Los hijos se ordenan por umbral; fuera de rango manda el hijo
 /// extremo (peso 1); entre dos umbrales el reparto es lineal. Solo
 /// se devuelven los hijos con peso > 0. Función pura.
-pub fn blend_weights<'a>(tree: &'a BlendTree1D, value: f32) -> Vec<(&'a BlendChild, f32)> {
+pub fn blend_weights(tree: &BlendTree1D, value: f32) -> Vec<(&BlendChild, f32)> {
     let mut sorted: Vec<&BlendChild> = tree.children.iter().collect();
     sorted.sort_by(|a, b| a.threshold.partial_cmp(&b.threshold).unwrap_or(std::cmp::Ordering::Equal));
     // Auditoría M-22: thresholds duplicados se colapsan (manda el
@@ -564,7 +564,7 @@ impl AnimatorData {
             // del tiempo clamped.
             if let Some(et) = tr.exit_time {
                 let src_clip = state_reference_clip(controller, &current, &self.params);
-                let dur = src_clip.as_deref().and_then(|c| clip_duration(c));
+                let dur = src_clip.as_deref().and_then(clip_duration);
                 match dur {
                     Some(d) if d > 0.0 => {
                         let en_loop = controller
