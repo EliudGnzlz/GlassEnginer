@@ -7854,6 +7854,38 @@ centro_editor: Option<[f32; 3]>,
         glass_core::particle_stats::record_frame(0, 0, 0, 0.0);
         return None;
     }
+    // Emisores cuya entidad se desactivó o salió de la escena (Fase
+    // 9: el cambio de clima apaga la lluvia así): dejan de emitir
+    // pero sus partículas TERMINAN su vida y se desvanecen; antes el
+    // runtime no se tocaba y la cortina quedaba congelada en el aire
+    // para siempre. Al agotarse el pool, el emisor se retira.
+    {
+        let vivos: std::collections::HashSet<u64> =
+            entidades.iter().map(|(id, _, _)| *id).collect();
+        let ausentes: Vec<u64> = emisores_rt
+            .keys()
+            .filter(|id| !vivos.contains(id))
+            .copied()
+            .collect();
+        const IDENTIDAD: [[f32; 3]; 3] =
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        for id in ausentes {
+            let origen = prev_origen.get(&id).copied().unwrap_or([0.0; 3]);
+            let vacio = match emisores_rt.get_mut(&id) {
+                Some(e) => {
+                    e.stop();
+                    e.update(dt, origen, &IDENTIDAD, origen);
+                    e.pool.alive == 0
+                }
+                None => true,
+            };
+            if vacio {
+                emisores_rt.remove(&id);
+                aplicados.remove(&id);
+                prev_origen.remove(&id);
+            }
+        }
+    }
     // Crear/reiniciar emisores cuyo dato cambió y simular.
     let mut marcos: std::collections::HashMap<u64, ([f32; 3], [[f32; 3]; 3])> =
         std::collections::HashMap::new();
@@ -7872,6 +7904,10 @@ centro_editor: Option<[f32; 3]>,
             .copied()
             .unwrap_or(origin);
         if let Some(emisor) = emisores_rt.get_mut(id) {
+            // Reactivación tras un desvanecido en curso: reanudar.
+            if data.playing && !emisor.playing {
+                emisor.play();
+            }
             emisor.update(dt, origin, &basis, prev);
         }
         prev_origen.insert(*id, origin);
@@ -7936,3 +7972,77 @@ centro_editor: Option<[f32; 3]>,
     })
 }
 
+
+#[cfg(test)]
+mod particle_fade_tests {
+    use super::*;
+
+    const IDENT: [f32; 16] = [
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    ];
+
+    fn escena_con_emisor() -> Arc<Mutex<SceneState>> {
+        let ent: glass_core::scene::EntityData = serde_json::from_str(
+            r#"{"id": 11, "name": "Fuego", "tag": "Untagged", "layer": "Default",
+                "is_static": false, "active": true, "parent": null, "children": [],
+                "transform": {"position": [0.0, 0.3, 0.0], "rotation": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]},
+                "components": ["Transform", "ParticleEmitter"], "mesh": null,
+                "camera": null, "light": null, "physics": null, "script": null,
+                "script_data": null, "audio": null, "canvas": null,
+                "rect_transform": null, "ui_text": null, "ui_button": null,
+                "ui_image": null, "ui_drag": null, "portal": null,
+                "animator": null, "fog": null,
+                "particles": {"rate": 1000.0, "max_particles": 500,
+                              "lifetime": [0.2, 0.3], "seed": 7}}"#,
+        )
+        .expect("entidad de prueba válida");
+        let scene = SceneState::new();
+        let scene = Arc::new(Mutex::new(scene));
+        scene.lock().unwrap().entities.push(ent);
+        scene
+    }
+
+    /// Fase 9: al desactivar la entidad de un emisor, sus partículas
+    /// terminan su vida y el emisor se retira del runtime (antes la
+    /// cortina quedaba congelada en el aire para siempre).
+    #[test]
+    fn emisor_desactivado_se_desvanece_y_se_retira() {
+        let scene = escena_con_emisor();
+        let mut rt: std::collections::HashMap<u64, glass_particles::Emitter> =
+            std::collections::HashMap::new();
+        let mut ap: std::collections::HashMap<u64, glass_core::scene::ParticleEmitterData> =
+            std::collections::HashMap::new();
+        let mut po: std::collections::HashMap<u64, [f32; 3]> =
+            std::collections::HashMap::new();
+        let eye = [0.0, 1.0, 5.0, 1.0];
+        for _ in 0..20 {
+            avanzar_particulas(&mut rt, &mut ap, &mut po, &scene, 0.05, IDENT, None, eye, None, None);
+        }
+        let vivas = rt.get(&11).map(|e| e.pool.alive).unwrap_or(0);
+        assert!(vivas > 0, "el emisor activo debió emitir (vivas={vivas})");
+
+        // Ojo: SceneState::default() ya trae 4 entidades semilla;
+        // se desactiva EL EMISOR por id, no por posición.
+        if let Some(e) = scene
+            .lock()
+            .unwrap()
+            .entities
+            .iter_mut()
+            .find(|e| e.id == 11)
+        {
+            e.active = false;
+        }
+        for _ in 0..40 {
+            avanzar_particulas(&mut rt, &mut ap, &mut po, &scene, 0.1, IDENT, None, eye, None, None);
+        }
+        assert!(
+            rt.is_empty() && ap.is_empty(),
+            "el emisor desactivado debió desvanecerse y retirarse (rt={}, ap={})",
+            rt.len(),
+            ap.len()
+        );
+    }
+}

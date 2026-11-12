@@ -356,6 +356,20 @@ pub extern "C" fn glass_physics_cast_ray(
     false
 }
 
+/// Handle del cuerpo de una entidad de la escena (Fase 9: los
+/// scripts mueven cuerpos de escena por handle, pero no tenían
+/// forma de resolver entidad → handle; el mapa ya existía en el
+/// mundo para uso de la app). 0 si la entidad no tiene cuerpo.
+#[no_mangle]
+pub extern "C" fn glass_physics_body_handle(entity_id: u64) -> u64 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            return world.get_body_by_entity(entity_id).unwrap_or(0);
+        }
+    }
+    0
+}
+
 /// Barrido de esfera contra los colliders del mundo (auditoría C5:
 /// las consultas extendidas de la Fase 1 solo existían por MCP; esto
 /// las abre a los scripts C#). Misma forma y salidas que el raycast.

@@ -55,6 +55,7 @@ public static class RuntimeBridge
     private static CastRayDelegate? _castRay;
     private static CastSphereDelegate? _castSphere;
     private static OverlapSphereDelegate? _overlapSphere;
+    private static GetBodyHandleDelegate? _getBodyHandle;
     private static AttachCapsuleColliderDelegate? _attachCapsuleCollider;
     private static AttachCylinderColliderDelegate? _attachCylinderCollider;
 
@@ -259,6 +260,8 @@ public static class RuntimeBridge
         // barrido y solape de esfera para los scripts.
         public IntPtr CastSphere;
         public IntPtr OverlapSphere;
+        // Decimosexto, AL FINAL (Fase 9): entidad → handle de cuerpo.
+        public IntPtr GetBodyHandle;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitPhysicsBridge")]
@@ -295,6 +298,8 @@ public static class RuntimeBridge
             _castSphere = Marshal.GetDelegateForFunctionPointer<CastSphereDelegate>(callbacks->CastSphere);
         if (callbacks->OverlapSphere != IntPtr.Zero)
             _overlapSphere = Marshal.GetDelegateForFunctionPointer<OverlapSphereDelegate>(callbacks->OverlapSphere);
+        if (callbacks->GetBodyHandle != IntPtr.Zero)
+            _getBodyHandle = Marshal.GetDelegateForFunctionPointer<GetBodyHandleDelegate>(callbacks->GetBodyHandle);
 
         Log(2, "GlassEngine.Core PhysicsBridge inicializado exitosamente desde Rust.");
     }
@@ -1184,6 +1189,18 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
             hitNormal = new Vector3(nx, ny, nz);
         }
         return ok;
+    }
+
+    /// <summary>
+    /// Handle del cuerpo físico de una entidad de la escena (Fase
+    /// 9). Las operaciones de velocidad/impulso van por handle; sin
+    /// esto un script no podía mover un cuerpo creado por la escena.
+    /// 0 si la entidad no tiene cuerpo o el host no lo enlazó.
+    /// </summary>
+    public static ulong GetBodyHandle(ulong entityId)
+    {
+        if (_getBodyHandle is null) return 0;
+        return _getBodyHandle(entityId);
     }
 
     /// <summary>

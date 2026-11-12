@@ -153,3 +153,8 @@ public delegate int OverlapSphereDelegate(
     ulong excludeEntityId,
     IntPtr outEntities,
     uint capacity);
+
+// Entidad → handle de cuerpo (Fase 9): espejo de
+// `glass_physics_body_handle`. Devuelve 0 si no hay cuerpo.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate ulong GetBodyHandleDelegate(ulong entityId);

@@ -73,6 +73,8 @@ struct PhysicsBridgeCallbacks {
     // Añadidos AL FINAL (auditoría C5): consultas extendidas para C#.
     cast_sphere: *const c_void,
     overlap_sphere: *const c_void,
+    // Añadido AL FINAL (Fase 9): resolver entidad → handle de cuerpo.
+    get_body_handle: *const c_void,
 }
 
 type InitPhysicsBridgeFn = unsafe extern "system" fn(*const PhysicsBridgeCallbacks);
@@ -345,6 +347,7 @@ impl ScriptHost {
                 attach_cylinder: glass_physics::glass_physics_attach_cylinder_collider as *const c_void,
                 cast_sphere: glass_physics::glass_physics_cast_sphere as *const c_void,
                 overlap_sphere: glass_physics::glass_physics_overlap_sphere as *const c_void,
+                get_body_handle: glass_physics::glass_physics_body_handle as *const c_void,
             };
             unsafe {
                 init_physics_fn(&callbacks as *const PhysicsBridgeCallbacks);
