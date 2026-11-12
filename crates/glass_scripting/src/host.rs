@@ -181,6 +181,20 @@ type InitSpawnBridgeFn = unsafe extern "system" fn(
 type InitPrefabBridgeFn = unsafe extern "system" fn(
     *const c_void, // entity_instantiate_prefab
 );
+/// Puente de niebla en vivo (afinado visual de la Fase 9): entrega a
+/// C# el callback para fijar la niebla de la escena desde un script
+/// (`RuntimeBridge.SetFog`, sistemas de clima). Export NUEVO y
+/// separado, como los demás.
+type InitFogBridgeFn = unsafe extern "system" fn(
+    *const c_void, // scene_set_fog
+);
+/// Puente de FOV de la cámara principal (Fase 10): entrega a C# el
+/// callback para fijar el FOV desde un script
+/// (`RuntimeBridge.SetCameraFov`, miras con zoom). Export NUEVO y
+/// separado, como los demás.
+type InitCameraFovBridgeFn = unsafe extern "system" fn(
+    *const c_void, // scene_set_camera_fov
+);
 type CreateScriptInstanceFn = unsafe extern "system" fn(u64, *const c_char) -> i32;
 type UpdateScriptInstanceFn = unsafe extern "system" fn(i32, f32);
 type DestroyScriptInstanceFn = unsafe extern "system" fn(i32);
@@ -616,6 +630,51 @@ impl ScriptHost {
             log::warn!(
                 "GameObject.InstantiatePrefab no estara disponible: el ensamblado managed \
                  no exporta InitPrefabBridge (¿GlassEngine.Core.dll desactualizado?)."
+            );
+        }
+
+        // Puente de niebla en vivo: opcional e independiente, como los
+        // demás. Un ensamblado anterior no exporta `InitFogBridge`; el
+        // motor arranca igual y `RuntimeBridge.SetFog` devolverá false.
+        if let Ok(init_fog_fn) = loader
+            .get_function_with_unmanaged_callers_only::<InitFogBridgeFn>(
+                bridge_type,
+                pdcstr!("InitFogBridge"),
+            )
+        {
+            log::info!("Vinculando callbacks Rust <-> C# Fog FFI...");
+            unsafe {
+                init_fog_fn(
+                    crate::bindings::scene_set_fog as *const c_void,
+                );
+            }
+        } else {
+            log::warn!(
+                "RuntimeBridge.SetFog no estara disponible: el ensamblado managed \
+                 no exporta InitFogBridge (¿GlassEngine.Core.dll desactualizado?)."
+            );
+        }
+
+        // Puente de FOV de cámara: opcional e independiente, como los
+        // demás. Un ensamblado anterior no exporta
+        // `InitCameraFovBridge`; el motor arranca igual y
+        // `RuntimeBridge.SetCameraFov` devolverá false.
+        if let Ok(init_fov_fn) = loader
+            .get_function_with_unmanaged_callers_only::<InitCameraFovBridgeFn>(
+                bridge_type,
+                pdcstr!("InitCameraFovBridge"),
+            )
+        {
+            log::info!("Vinculando callbacks Rust <-> C# CameraFov FFI...");
+            unsafe {
+                init_fov_fn(
+                    crate::bindings::scene_set_camera_fov as *const c_void,
+                );
+            }
+        } else {
+            log::warn!(
+                "RuntimeBridge.SetCameraFov no estara disponible: el ensamblado managed \
+                 no exporta InitCameraFovBridge (¿GlassEngine.Core.dll desactualizado?)."
             );
         }
 

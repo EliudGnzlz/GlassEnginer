@@ -1,0 +1,65 @@
+{
+  "armas": [
+    {
+      "nombre": "Pistola 9mm",
+      "proyectil": true,
+      "velocidad": 120.0,
+      "dispersion_grados": 0.4,
+      "alcance": 60.0,
+      "dano": 10.0,
+      "perdigones": 1,
+      "cadencia_seg": 0.35,
+      "zoom_fov": 50.0,
+      "cargador": 12
+    },
+    {
+      "nombre": "AR 5.56",
+      "proyectil": false,
+      "velocidad": 0.0,
+      "dispersion_grados": 0.15,
+      "alcance": 120.0,
+      "dano": 12.0,
+      "perdigones": 1,
+      "cadencia_seg": 0.12,
+      "zoom_fov": 35.0,
+      "cargador": 30
+    },
+    {
+      "nombre": "Escopeta 12",
+      "proyectil": true,
+      "velocidad": 90.0,
+      "dispersion_grados": 3.5,
+      "alcance": 30.0,
+      "dano": 6.0,
+      "perdigones": 8,
+      "cadencia_seg": 0.9,
+      "zoom_fov": 55.0,
+      "cargador": 6
+    },
+    {
+      "nombre": "Francotirador .308",
+      "proyectil": true,
+      "velocidad": 260.0,
+      "dispersion_grados": 0.02,
+      "alcance": 220.0,
+      "dano": 50.0,
+      "perdigones": 1,
+      "cadencia_seg": 1.4,
+      "zoom_fov": 18.0,
+      "cargador": 5
+    },
+    {
+      "nombre": "RPG-7",
+      "proyectil": true,
+      "velocidad": 55.0,
+      "dispersion_grados": 0.1,
+      "alcance": 150.0,
+      "dano": 100.0,
+      "perdigones": 1,
+      "cadencia_seg": 2.2,
+      "zoom_fov": 45.0,
+      "cargador": 4,
+      "radio_explosion": 9.0
+    }
+  ]
+}

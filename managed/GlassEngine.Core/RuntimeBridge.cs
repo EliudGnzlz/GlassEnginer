@@ -1033,6 +1033,70 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         return _entitySetActive(entityId, (byte)(active ? 1 : 0)) == 0;
     }
 
+    // -----------------------------------------------------------------------
+    // Puente de niebla en vivo (RuntimeBridge.SetFog)
+    // -----------------------------------------------------------------------
+    // Export NUEVO e independiente (InitFogBridge): si el motor es un
+    // binario anterior a este bloque, el delegado queda nulo y SetFog
+    // devuelve false, como el resto de puentes ante un motor viejo.
+
+    private static SceneSetFogDelegate? _sceneSetFog;
+
+    /// <summary>True cuando Rust conectó el puente de niebla.</summary>
+    public static bool FogBridgeAvailable => _sceneSetFog is not null;
+
+    [UnmanagedCallersOnly(EntryPoint = "InitFogBridge")]
+    public static void InitFogBridge(IntPtr fogFn)
+    {
+        if (fogFn != IntPtr.Zero)
+            _sceneSetFog = Marshal.GetDelegateForFunctionPointer<SceneSetFogDelegate>(fogFn);
+
+        Log(2, "GlassEngine.Core FogBridge inicializado exitosamente desde Rust.");
+    }
+
+    /// <summary>
+    /// Fija la niebla de la escena en vivo: color RGB lineal y
+    /// distancias de inicio (near) y niebla total (far), en metros.
+    /// Pensado para sistemas de clima. Devuelve true si la escena
+    /// tenía una entidad con niebla que actualizar.
+    /// </summary>
+    public static bool SetFog(float r, float g, float b, float near, float far)
+    {
+        if (_sceneSetFog is null) return false;
+        return _sceneSetFog(r, g, b, near, far) == 0;
+    }
+
+    // -----------------------------------------------------------------------
+    // Puente de FOV de cámara (RuntimeBridge.SetCameraFov, Fase 10)
+    // -----------------------------------------------------------------------
+    // Export NUEVO e independiente (InitCameraFovBridge): si el motor
+    // es un binario anterior a este bloque, el delegado queda nulo y
+    // SetCameraFov devuelve false.
+
+    private static SceneSetCameraFovDelegate? _sceneSetCameraFov;
+
+    /// <summary>True cuando Rust conectó el puente de FOV.</summary>
+    public static bool CameraFovBridgeAvailable => _sceneSetCameraFov is not null;
+
+    [UnmanagedCallersOnly(EntryPoint = "InitCameraFovBridge")]
+    public static void InitCameraFovBridge(IntPtr fovFn)
+    {
+        if (fovFn != IntPtr.Zero)
+            _sceneSetCameraFov = Marshal.GetDelegateForFunctionPointer<SceneSetCameraFovDelegate>(fovFn);
+
+        Log(2, "GlassEngine.Core CameraFovBridge inicializado exitosamente desde Rust.");
+    }
+
+    /// <summary>
+    /// Fija el FOV (grados) de la cámara principal en vivo. Pensado
+    /// para miras con zoom. Devuelve true si había cámara principal.
+    /// </summary>
+    public static bool SetCameraFov(float fov)
+    {
+        if (_sceneSetCameraFov is null) return false;
+        return _sceneSetCameraFov(fov) == 0;
+    }
+
     /// <summary>Número de entidades de la escena viva, o -1 sin puente.</summary>
     public static int GetEntityCount()
     {

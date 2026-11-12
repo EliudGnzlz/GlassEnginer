@@ -125,6 +125,20 @@ public delegate int EntityDestroyDelegate(ulong entityId);
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate int EntitySetActiveDelegate(ulong entityId, byte active);
 
+/// <summary>
+/// Fija la niebla de la escena en vivo (color RGB lineal, cerca y
+/// lejos en metros). Devuelve 0 si la escena tenía niebla que fijar.
+/// </summary>
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SceneSetFogDelegate(float r, float g, float b, float near, float far);
+
+/// <summary>
+/// Fija el FOV (grados) de la cámara principal en vivo. Devuelve 0
+/// si la escena tenía cámara principal que ajustar.
+/// </summary>
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SceneSetCameraFovDelegate(float fov);
+
 /// <summary>Número de entidades de la escena viva, o -1 sin puente.</summary>
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate int EntityCountDelegate();

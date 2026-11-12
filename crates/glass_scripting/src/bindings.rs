@@ -815,6 +815,35 @@ pub unsafe extern "C" fn entity_set_active(entity_id: u64, active: u8) -> i32 {
     }
 }
 
+/// Callback invocado por C# (`RuntimeBridge.SetFog`) para fijar la
+/// niebla de la escena en vivo desde un script (sistemas de clima).
+/// Devuelve `BRIDGE_OK` / `BRIDGE_ERR_NOT_FOUND`.
+pub unsafe extern "C" fn scene_set_fog(r: f32, g: f32, b: f32, near: f32, far: f32) -> i32 {
+    if !r.is_finite() || !g.is_finite() || !b.is_finite() || !near.is_finite() || !far.is_finite()
+    {
+        return BRIDGE_ERR_NOT_FOUND;
+    }
+    if crate::bridge::set_fog([r, g, b], near, far) {
+        BRIDGE_OK
+    } else {
+        BRIDGE_ERR_NOT_FOUND
+    }
+}
+
+/// Callback invocado por C# (`RuntimeBridge.SetCameraFov`) para fijar
+/// el FOV de la cámara principal desde un script (miras con zoom).
+/// Devuelve `BRIDGE_OK` / `BRIDGE_ERR_NOT_FOUND`.
+pub unsafe extern "C" fn scene_set_camera_fov(fov: f32) -> i32 {
+    if !fov.is_finite() {
+        return BRIDGE_ERR_NOT_FOUND;
+    }
+    if crate::bridge::set_camera_fov(fov) {
+        BRIDGE_OK
+    } else {
+        BRIDGE_ERR_NOT_FOUND
+    }
+}
+
 /// Número de entidades de la escena viva; `BRIDGE_ERR_NOT_FOUND` si el
 /// puente no está disponible (p. ej. antes de cargar el proyecto).
 pub unsafe extern "C" fn entity_count() -> i32 {

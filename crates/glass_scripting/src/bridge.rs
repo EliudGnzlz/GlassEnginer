@@ -252,6 +252,22 @@ pub trait SceneBridge: Send + Sync + 'static {
         false
     }
 
+    /// Fija la niebla de la escena en vivo (color RGB lineal, cerca y
+    /// lejos): escribe el `FogData` de la primera entidad que lo
+    /// tenga (la app lo lee cada frame). Pensado para sistemas de
+    /// clima en scripts. Devuelve `true` si había niebla que fijar.
+    fn set_fog(&self, _color: [f32; 3], _near: f32, _far: f32) -> bool {
+        false
+    }
+
+    /// Fija el FOV (grados) de la cámara principal en vivo: escribe
+    /// el `CameraData` de la cámara main (la app lo lee cada frame).
+    /// Pensado para miras con zoom en scripts. Devuelve `true` si
+    /// había cámara principal que ajustar.
+    fn set_camera_fov(&self, _fov: f32) -> bool {
+        false
+    }
+
     /// Número de entidades de la escena viva, o `None` sin puente.
     fn entity_count(&self) -> Option<usize> {
         None
@@ -540,6 +556,24 @@ pub(crate) fn destroy_entity(entity_id: u64) -> bool {
 pub(crate) fn set_entity_active(entity_id: u64, active: bool) -> bool {
     if let Ok(cell) = get_bridge_cell().read() {
         cell.set_entity_active(entity_id, active)
+    } else {
+        false
+    }
+}
+
+/// Reenvía al motor un cambio de niebla procedente de C#.
+pub(crate) fn set_fog(color: [f32; 3], near: f32, far: f32) -> bool {
+    if let Ok(cell) = get_bridge_cell().read() {
+        cell.set_fog(color, near, far)
+    } else {
+        false
+    }
+}
+
+/// Reenvía al motor un cambio de FOV de la cámara principal.
+pub(crate) fn set_camera_fov(fov: f32) -> bool {
+    if let Ok(cell) = get_bridge_cell().read() {
+        cell.set_camera_fov(fov)
     } else {
         false
     }

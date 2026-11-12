@@ -886,6 +886,47 @@ impl SceneBridge for EngineSceneBridge {
         true
     }
 
+    /// Niebla en vivo desde C# (afinado visual Fase 9): escribe el
+    /// `FogData` de la primera entidad que lo tenga; el render lo lee
+    /// cada frame vía `SceneState::fog_settings`.
+    fn set_fog(&self, color: [f32; 3], near: f32, far: f32) -> bool {
+        let Ok(mut state) = self.scene_state.lock() else {
+            return false;
+        };
+        match state.entities.iter_mut().find(|e| e.fog.is_some()) {
+            Some(ent) => {
+                ent.fog = Some(glass_core::scene::FogData { color, near, far });
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// FOV de la cámara principal desde C# (Fase 10): escribe el
+    /// `fov` del `CameraData` de la cámara main (o de la primera
+    /// cámara si ninguna está marcada), con el rango sano de la
+    /// casa. El render lo lee cada frame al construir la vista.
+    fn set_camera_fov(&self, fov: f32) -> bool {
+        let Ok(mut state) = self.scene_state.lock() else {
+            return false;
+        };
+        let fov = fov.clamp(5.0, 170.0);
+        let objetivo = state
+            .entities
+            .iter()
+            .position(|e| e.camera.as_ref().is_some_and(|c| c.is_main))
+            .or_else(|| state.entities.iter().position(|e| e.camera.is_some()));
+        match objetivo {
+            Some(i) => {
+                if let Some(cam) = state.entities[i].camera.as_mut() {
+                    cam.fov = fov;
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
     fn entity_count(&self) -> Option<usize> {
         self.scene_state.lock().ok().map(|s| s.entities.len())
     }
