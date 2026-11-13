@@ -46,6 +46,8 @@ layout(set = 3, binding = 0, std140) uniform PointLights {
     vec4 pos_range[8];        // xyz = posición mundo, w = rango
     vec4 color_intensity[8];  // xyz = color, w = intensidad
     vec4 shadow[8];           // Fase 2: x = cubo o -1, y = lejos, z = bias, w = cerca
+    vec4 dir_cos[8];          // Spot: xyz = dirección mundo, w = cos(ángulo exterior)
+    vec4 cone[8];             // Spot: x = cos(ángulo interior), y = 1 si Spot
     uint count;               // nº de luces válidas [0..8]
     uint _pad0;
     uint _pad1;
@@ -266,6 +268,16 @@ void main() {
         vec3 radiance_p = u_point_lights.color_intensity[i].rgb
                         * u_point_lights.color_intensity[i].w
                         * atten;
+        // Cono Spot: fuera del ángulo exterior no llega luz; entre el
+        // interior y el exterior cae lineal en coseno (penumbra).
+        if (u_point_lights.cone[i].y > 0.5) {
+            float cos_a = dot(-Lp, u_point_lights.dir_cos[i].xyz);
+            float f_cono = clamp(
+                (cos_a - u_point_lights.dir_cos[i].w)
+                    / max(u_point_lights.cone[i].x - u_point_lights.dir_cos[i].w, 0.0001),
+                0.0, 1.0);
+            radiance_p *= f_cono;
+        }
         radiance_p *= point_shadow_factor(i);
 
         Lo_points += (kDp * albedo / PI + specular_p) * radiance_p * NdotLp;

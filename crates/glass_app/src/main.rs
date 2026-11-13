@@ -7040,11 +7040,11 @@ fn is_standalone_launch(pure_build: bool, args: &[String]) -> bool {
 }
 
 /// Recolecta las luces puntuales de la escena en el UBO del frame: las
-/// `MAX_POINT_LIGHTS` entidades con luz «Point» más cercanas al ojo,
-/// con su posición de MUNDO (matriz jerárquica, no el Transform local).
-/// La «Spot» se reconoce pero en esta v1 no emite (queda fuera del UBO,
-/// como si no estuviera). La direccional no pasa por aquí: sigue en los
-/// push constants de siempre.
+/// `MAX_POINT_LIGHTS` entidades con luz «Point» o «Spot» más cercanas
+/// al ojo, con su posición de MUNDO (matriz jerárquica, no el
+/// Transform local). La Spot emite con su cono: la dirección es el
+/// forward (−Z) de su matriz de mundo. La direccional no pasa por
+/// aquí: sigue en los push constants de siempre.
 /// Clona los lotes de mallas con otra VP (las vistas de
 /// portal): cada push ya trae su `model`, así que basta
 /// Resuelve el descriptor set de propiedades de grafo para una entidad,
@@ -7184,13 +7184,13 @@ fn recolectar_luces_puntuales(
     eye: [f32; 3],
 ) -> (glass_renderer::PointLightsUbo, Vec<glass_renderer::PointShadowLight>) {
     let mundos = scene.compute_world_matrices();
-    let mut candidatas: Vec<(f32, [f32; 4], [f32; 4], bool)> = Vec::new();
+    let mut candidatas: Vec<(f32, [f32; 4], [f32; 4], bool, [f32; 4], [f32; 4])> = Vec::new();
     for ent in &scene.entities {
         if !ent.active {
             continue;
         }
         let Some(l) = ent.light.as_ref() else { continue };
-        if l.light_type != "Point" {
+        if l.light_type != "Point" && l.light_type != "Spot" {
             continue;
         }
         let p = mundos
@@ -7200,11 +7200,34 @@ fn recolectar_luces_puntuales(
         let dx = p[0] - eye[0];
         let dy = p[1] - eye[1];
         let dz = p[2] - eye[2];
+        let (dir_cos, cone) = if l.light_type == "Spot" {
+            let m_opt = mundos.get(&ent.id);
+            let dir = if let Some(m) = m_opt {
+                let z = [m[8], m[9], m[10]];
+                let fwd = [-z[0], -z[1], -z[2]];
+                let len = (fwd[0] * fwd[0] + fwd[1] * fwd[1] + fwd[2] * fwd[2])
+                    .sqrt()
+                    .max(0.0001);
+                [fwd[0] / len, fwd[1] / len, fwd[2] / len]
+            } else {
+                [0.0, 0.0, -1.0]
+            };
+            let (cos_outer, cos_inner) = l.spot_cone_cos();
+            (
+                [dir[0], dir[1], dir[2], cos_outer],
+                [cos_inner, 1.0, 0.0, 0.0],
+            )
+        } else {
+            ([0.0; 4], [0.0; 4])
+        };
+
         candidatas.push((
             dx * dx + dy * dy + dz * dz,
             [p[0], p[1], p[2], l.range.max(0.0)],
             [l.color[0], l.color[1], l.color[2], l.intensity.max(0.0)],
             l.cast_shadow,
+            dir_cos,
+            cone,
         ));
     }
 
@@ -7218,6 +7241,8 @@ fn recolectar_luces_puntuales(
     for i in 0..n {
         ubo.pos_range[i] = candidatas[i].1;
         ubo.color_intensity[i] = candidatas[i].2;
+        ubo.dir_cos[i] = candidatas[i].4;
+        ubo.cone[i] = candidatas[i].5;
 
         if candidatas[i].3 && slot < 4 {
             ubo.shadow[i] = [slot as f32, candidatas[i].1[3].max(0.1), 0.0025, 0.1];

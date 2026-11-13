@@ -1,0 +1,288 @@
+[
+ {
+  "id": 1,
+  "name": "Camara",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "transform": {
+   "position": [
+    10.0,
+    8.0,
+    12.0
+   ],
+   "rotation": [
+    -28.0,
+    40.0,
+    0.0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ]
+  },
+  "components": [
+   "Transform",
+   "Camera",
+   "Script"
+  ],
+  "mesh": null,
+  "camera": {
+   "fov": 60,
+   "near_clip": 0.1,
+   "far_clip": 300,
+   "is_main": true
+  },
+  "light": null,
+  "physics": null,
+  "script": null,
+  "script_data": null,
+  "audio": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "portal": null,
+  "animator": null,
+  "fog": null
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.98,
+    0.92
+   ],
+   "intensity": 0.12,
+   "light_type": "Directional",
+   "range": 10.0,
+   "cast_shadow": true
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 2,
+  "name": "Sol",
+  "components": [
+   "Transform",
+   "Light",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    3.0,
+    0.0
+   ],
+   "rotation": [
+    -50.0,
+    30.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.75,
+    0.75,
+    0.78
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 3,
+  "name": "Suelo",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -0.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    30.0,
+    1.0,
+    30.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "light_type": "Spot",
+   "color": [
+    1.0,
+    0.85,
+    0.6
+   ],
+   "intensity": 60.0,
+   "range": 20.0,
+   "cast_shadow": false,
+   "spot_outer_deg": 35.0,
+   "spot_inner_deg": 25.0
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 4,
+  "name": "Foco",
+  "components": [
+   "Transform",
+   "Light",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    7.0,
+    0.0
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    1.0,
+    0.9,
+    0.5
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 5,
+  "name": "MarcaFoco",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    7.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.4,
+    0.4,
+    0.4
+   ]
+  }
+ }
+]

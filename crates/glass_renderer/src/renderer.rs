@@ -233,7 +233,7 @@ const _: () = assert!(std::mem::size_of::<MeshPushConstants>() == 256);
 const _: () = assert!(std::mem::align_of::<MeshPushConstants>() == 4);
 
 pub const MAX_POINT_LIGHTS: usize = 8;
-pub const POINT_LIGHTS_UBO_SIZE: u64 = 400;
+pub const POINT_LIGHTS_UBO_SIZE: u64 = 656;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -244,11 +244,18 @@ pub struct PointLightsUbo {
     /// sombra; y = plano lejano (el rango); z = bias en profundidad
     /// NDC; w = plano cercano de la proyección del cubo.
     pub shadow: [[f32; 4]; MAX_POINT_LIGHTS],
+    /// Cono Spot (integración de iluminación): xyz = dirección de
+    /// mundo normalizada, w = coseno del ángulo exterior. En Point
+    /// queda a cero y no se usa.
+    pub dir_cos: [[f32; 4]; MAX_POINT_LIGHTS],
+    /// Cono Spot: x = coseno del ángulo interior, y = 1.0 si la luz
+    /// es Spot (0.0 si es Point), zw sin uso.
+    pub cone: [[f32; 4]; MAX_POINT_LIGHTS],
     pub count: u32,
     pub _pad: [u32; 3],
 }
 
-const _: () = assert!(std::mem::size_of::<PointLightsUbo>() == 400);
+const _: () = assert!(std::mem::size_of::<PointLightsUbo>() == 656);
 
 impl Default for PointLightsUbo {
     fn default() -> Self {
@@ -256,6 +263,8 @@ impl Default for PointLightsUbo {
             pos_range: [[0.0; 4]; MAX_POINT_LIGHTS],
             shadow: [[-1.0, 0.0, 0.0, 0.0]; MAX_POINT_LIGHTS],
             color_intensity: [[0.0; 4]; MAX_POINT_LIGHTS],
+            dir_cos: [[0.0; 4]; MAX_POINT_LIGHTS],
+            cone: [[0.0; 4]; MAX_POINT_LIGHTS],
             count: 0,
             _pad: [0; 3],
         }
@@ -502,8 +511,8 @@ pub struct GlassRenderer {
     /// `glass_core::shader_graph::INTERACTION_GLOBALS_INACTIVE`.
     graph_globals: [f32; 8],
     /// Set 3 de los pipelines PBR y de piel: el UBO de luces puntuales
-    /// del frame (hasta 8 Point; las Spot se reconocen pero en esta v1
-    /// no emiten). Mismo patrón de buffer mapeado CpuToGpu y de volcado
+    /// del frame (hasta 8 Point/Spot; la Spot emite con su cono).
+    /// Mismo patrón de buffer mapeado CpuToGpu y de volcado
     /// por frame que el canal de grafos. El renderer posee layout, pool,
     /// buffer y set; el valor CPU vive en `point_lights` y la app lo
     /// publica con `set_point_lights` antes de `render_views`.
@@ -3583,10 +3592,12 @@ mod point_lights_ubo_tests {
         assert_eq!(offset_of!(PointLightsUbo, pos_range), 0);
         assert_eq!(offset_of!(PointLightsUbo, color_intensity), 128);
         assert_eq!(offset_of!(PointLightsUbo, shadow), 256);
-        assert_eq!(offset_of!(PointLightsUbo, count), 384);
-        assert_eq!(offset_of!(PointLightsUbo, _pad), 388);
-        assert_eq!(std::mem::size_of::<PointLightsUbo>(), 400);
-        assert_eq!(POINT_LIGHTS_UBO_SIZE, 400);
+        assert_eq!(offset_of!(PointLightsUbo, dir_cos), 384);
+        assert_eq!(offset_of!(PointLightsUbo, cone), 512);
+        assert_eq!(offset_of!(PointLightsUbo, count), 640);
+        assert_eq!(offset_of!(PointLightsUbo, _pad), 644);
+        assert_eq!(std::mem::size_of::<PointLightsUbo>(), 656);
+        assert_eq!(POINT_LIGHTS_UBO_SIZE, 656);
     }
 
     #[test]
@@ -3598,9 +3609,9 @@ mod point_lights_ubo_tests {
     }
 
     #[test]
-    fn point_lights_bytemuck_serializa_400_bytes() {
+    fn point_lights_bytemuck_serializa_656_bytes() {
         let ubo = PointLightsUbo::default();
-        assert_eq!(bytemuck::bytes_of(&ubo).len(), 400);
+        assert_eq!(bytemuck::bytes_of(&ubo).len(), 656);
         assert_eq!(bytemuck::bytes_of(&ubo).len(), POINT_LIGHTS_UBO_SIZE as usize);
     }
 }
