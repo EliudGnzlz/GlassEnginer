@@ -402,6 +402,14 @@ pub struct GlassRenderer {
     /// `render_views` dibuja en los objetivos LDR con los pipelines
     /// legacy.
     pub post_enabled: bool,
+    /// ¿La presentación (blit al swapchain y overlay del Canvas)
+    /// usa la vista de JUEGO en vez de la de escena? Solo lo activa
+    /// el binario con editor en modo standalone: allí la app es un
+    /// juego, no el editor, y presentar la vista de escena dejaba
+    /// fuera el FOV de la cámara de juego (la mira no se veía). En
+    /// el binario puro no hace falta: su «vista de escena» ya es la
+    /// de juego (vp_scene == vp_game).
+    pub present_game: bool,
     /// Parámetros del post (umbral/intensidad del bloom, viñeta,
     /// exposición), con overrides de entorno al crear el renderer.
     pub post_settings: crate::post::PostSettings,
@@ -1334,6 +1342,7 @@ impl GlassRenderer {
             point_shadow_lights: Vec::new(),
             post,
             post_enabled,
+            present_game: false,
             post_settings,
             shadows_enabled,
             shadow_vp: IDENTITY_MAT4,
@@ -3130,7 +3139,11 @@ impl GlassRenderer {
                 if seg.batch.is_empty() {
                     continue;
                 }
-                let target = &self.final_offscreen;
+                let target = if self.present_game {
+                    &self.final_game_offscreen
+                } else {
+                    &self.final_offscreen
+                };
                 match &seg.atlas {
                     UiAtlasKind::Font => self.ui.record(cmd, target, &seg.batch),
                     UiAtlasKind::Image => {
@@ -3223,7 +3236,11 @@ impl GlassRenderer {
         image_index: u32,
     ) -> Result<(), RendererError> {
         let swapchain_image = self.swapchain.images[image_index as usize];
-        let offscreen_image = self.final_offscreen.color_image;
+        let offscreen_image = if self.present_game {
+            self.final_game_offscreen.color_image
+        } else {
+            self.final_offscreen.color_image
+        };
 
         unsafe {
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;

@@ -5205,6 +5205,15 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
         let render_standalone = self.is_standalone;
         #[cfg(not(feature = "editor"))]
         let render_standalone = true;
+        // En el binario CON editor, el standalone presenta la vista
+        // de JUEGO (blit + Canvas), como el binario puro: sin esto
+        // se presentaba la vista de escena del editor y el FOV de
+        // la cámara de juego (la mira con zoom) nunca llegaba a
+        // pantalla.
+        #[cfg(feature = "editor")]
+        {
+            renderer.present_game = render_standalone;
+        }
 
         // Canvas de juego (UI) en el standalone: dentro del editor lo
         // pinta la superposición de egui sobre la vista de juego, pero el
