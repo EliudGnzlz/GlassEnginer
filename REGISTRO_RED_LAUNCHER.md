@@ -114,3 +114,32 @@ https://github.com/EliudGnzlz/GlassEnginer/releases/tag/v0.1.0-alpha
 - Sigue pendiente SU decisión de visibilidad: con el repo privado,
   el enlace funciona con su sesión, pero la comprobación automática
   del Launcher recibe 404 sin autenticar (sin tokens por diseño).
+
+## Addenda 2026-11-13 (tarde) — Instaladores y Release v0.1.1-alpha
+
+- Orden suya (13:49): instaladores del Launcher para probar en
+  distintos sistemas. Workflow `.github/workflows/release.yml`
+  (commit `8c0a9e4`, CI #50 verde): jobs windows (Inno Setup) y
+  linux (zip + AppImage) + publish con `checksums.txt` en el
+  formato que el propio Launcher verifica. `ENGINE_VERSION`
+  0.1.1-alpha.
+- Corrida 1: Linux OK (artefacto 44,9 MB); Windows FALLÓ — la
+  primera compilación en Windows de la historia del motor destapó
+  5 errores E0425 en `main.rs`: el bloque de señales POSIX
+  (SIGHUP/sigaction/__errno_location) era Unix puro. Arreglo
+  mínimo (commit `4c8265f`, CI #53 verde): `cfg(unix)` sobre el
+  handler y el instalador, no-op `cfg(not(unix))`.
+- Corrida 2 (sobre `4c8265f`): LOS TRES JOBS EN VERDE (Windows
+  17m 3s, Linux 7m 41s, publish 12s). **Release v0.1.1-alpha
+  PUBLICADO**: `GlassEnginer-Launcher-0.1.1-alpha-windows-x64-setup.exe`
+  (15,9 MB), `...-linux-x64.zip` (22,6 MB), `...-linux-x64.AppImage`
+  (22,8 MB) y `checksums.txt`, cada uno con su SHA-256 en la API.
+  El paquete lleva el payload completo (binario + managed/ +
+  assets/), no solo el ejecutable como el de v0.1.0-alpha.
+- Nota conocida del propio workflow: este release no trae zip de
+  Windows, así que el auto-update en Windows no encontrará paquete
+  (el .exe es instalación manual); en Linux el zip/AppImage sí
+  alimentan la ruta de descarga. Y con el repo privado, la
+  descarga automática sigue dando 404 sin autenticar (decisión de
+  visibilidad pendiente de él).
+- Consumo del bloque: Opus 5.5: 18.551 · resto 0.
