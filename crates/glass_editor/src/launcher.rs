@@ -102,10 +102,11 @@ pub enum LauncherTab {
 ///
 /// Regla del proyecto: el Launcher es SIEMPRE offline. Las dos únicas
 /// secciones que usarán internet cuando exista el repositorio oficial son
-/// Instalaciones (descargar el motor y sus actualizaciones) y Comunidad
-/// (compartir creaciones, shaders, mapas y juegos). Hoy ambas muestran su
-/// estado real: todavía no hay repositorio en línea, así que sus botones de
-/// red están deshabilitados y el resto del Launcher funciona sin conexión.
+/// Instalaciones (descargar el motor y sus actualizaciones desde
+/// GitHub Releases, módulo `updates`) y Comunidad (compartir
+/// creaciones, shaders, mapas y juegos; aún sin red, botón
+/// deshabilitado). El resto del Launcher funciona sin conexión:
+/// Instalaciones solo se conecta cuando el usuario lo pide.
 pub struct LauncherPanel {
     pub active_tab: LauncherTab,
     pub search_filter: String,
@@ -119,6 +120,31 @@ pub struct LauncherPanel {
     /// Miniaturas ya intentadas por proyecto: `Some` si el `thumbnail.png`
     /// se cargó, `None` si no existe o no se pudo leer (no se reintenta).
     thumb_cache: HashMap<String, Option<egui::TextureHandle>>,
+    /// Registro de versiones descargadas y repo de actualizaciones
+    /// (módulo `updates`); se carga al abrir el Launcher.
+    pub update_store: crate::updates::LauncherStore,
+    /// Texto editable del ajuste «owner/repo».
+    pub update_repo_edit: String,
+    /// Estado de la comprobación/descarga en curso.
+    pub update_state: UpdateUiState,
+    /// Canal con el hilo que comprueba o instala (uno a la vez).
+    update_rx: Option<std::sync::mpsc::Receiver<UpdateMsg>>,
+}
+
+/// Estado visible de las actualizaciones en la pestaña Instalaciones.
+pub enum UpdateUiState {
+    Idle,
+    Checking,
+    UpToDate,
+    Available(crate::updates::ReleaseInfo),
+    Working(String),
+    Error(String),
+}
+
+/// Mensajes del hilo de red al Launcher.
+pub enum UpdateMsg {
+    Checked(Result<crate::updates::UpdateCheck, String>),
+    Installed(Result<crate::updates::Installation, String>),
 }
 
 fn default_projects_dir() -> PathBuf {
@@ -132,6 +158,8 @@ impl Default for LauncherPanel {
     fn default() -> Self {
         let name = "MyGlassGame".to_string();
         let path = default_projects_dir().join(&name);
+        let update_store = crate::updates::LauncherStore::load();
+        let update_repo_edit = update_store.repo.clone();
         Self {
             // Como el Hub viejo: se abre en la lista de proyectos.
             active_tab: LauncherTab::Projects,
@@ -142,6 +170,10 @@ impl Default for LauncherPanel {
             new_template: ProjectTemplate::Platformer3D,
             status_message: None,
             thumb_cache: HashMap::new(),
+            update_store,
+            update_repo_edit,
+            update_state: UpdateUiState::Idle,
+            update_rx: None,
         }
     }
 }
@@ -299,7 +331,7 @@ impl LauncherPanel {
                     });
                     ui.horizontal(|ui| {
                         ui.add_space(16.0);
-                        ui.label(RichText::new("v0.1.0-alpha • Vulkan 1.3").size(11.0).color(TEXT_DIM));
+                        ui.label(RichText::new(format!("v{} • Vulkan 1.3", crate::updates::ENGINE_VERSION)).size(11.0).color(TEXT_DIM));
                     });
                     ui.add_space(8.0);
                     ui.separator();
@@ -584,7 +616,7 @@ impl LauncherPanel {
     fn render_create_view(&mut self, ui: &mut Ui, action: &mut Option<LauncherAction>) {
         ui.label(RichText::new("Crear un proyecto nuevo").size(20.0).strong().color(TEXT_MAIN));
         ui.label(
-            RichText::new("GlassEnginer v0.1.0-alpha • Todo se crea en tu equipo, sin conexión.")
+            RichText::new(format!("GlassEnginer v{} • Todo se crea en tu equipo, sin conexión.", crate::updates::ENGINE_VERSION))
                 .size(12.0)
                 .color(TEXT_DIM),
         );
@@ -786,7 +818,7 @@ impl LauncherPanel {
                         ui.add_space(6.0);
                         ui.label(RichText::new("Aquí podrás subir y descargar creaciones de otros usuarios: juegos, mapas, shaders del grafo (como los prefabricados de agua o láser) y proyectos de ejemplo.").size(12.5).color(TEXT_DIM));
                         ui.add_space(6.0);
-                        ui.label(RichText::new("El Launcher trabaja siempre sin conexión; esta sección y la de Instalaciones serán las únicas que usen internet, y solo cuando el repositorio oficial del motor esté publicado.").size(12.5).color(TEXT_DIM));
+                        ui.label(RichText::new("El Launcher trabaja sin conexión; la única parte que usa internet es Instalaciones, y solo cuando tú pides buscar actualizaciones.").size(12.5).color(TEXT_DIM));
                         ui.add_space(12.0);
                         // Sin repositorio en línea, el botón queda deshabilitado:
                         // nada de prometer una red que aún no existe.
@@ -799,18 +831,132 @@ impl LauncherPanel {
     }
 
     fn render_installs_tab(&mut self, ui: &mut Ui) {
-        Self::tab_title(ui, "Instalaciones", "Versiones del motor en este equipo. Desde aquí se descargará el motor y sus actualizaciones cuando el repositorio oficial esté en línea.");
-        Self::render_row(ui, "🧊 GlassEnginer v0.1.0-alpha",
+        Self::tab_title(ui, "Instalaciones", "Versiones del motor en este equipo y actualizaciones desde GitHub Releases. Es la única parte del Launcher que usa internet, y solo cuando tú lo pides.");
+        Self::render_row(ui, &format!("🧊 GlassEnginer v{}", crate::updates::ENGINE_VERSION),
             "Instalada • Esta copia del motor (Vulkan 1.3, Rapier3D, Kira, CoreCLR 8)",
             "✓ En uso", OK_GREEN,
             || {});
+        let instalaciones = self.update_store.installations.clone();
+        for inst in &instalaciones {
+            Self::render_row(ui, &format!("🧊 GlassEnginer v{}", inst.version),
+                &format!("Descargada • {}", inst.path),
+                "✓ Instalada", OK_GREEN,
+                || {});
+        }
         ui.add_space(12.0);
+
+        // Ajuste del repositorio de actualizaciones (owner/repo).
         ui.horizontal(|ui| {
-            // Igual que en Comunidad: sin repositorio publicado, no hay
-            // comprobación de actualizaciones que ofrecer.
-            ui.add_enabled(false, egui::Button::new(RichText::new("⬇ Buscar actualizaciones (próximamente)").size(13.0)));
+            ui.label(RichText::new("Repositorio (owner/repo):").size(12.5).color(TEXT_MAIN));
+            ui.add(egui::TextEdit::singleline(&mut self.update_repo_edit).desired_width(230.0));
+            if ui.button("Guardar").clicked() {
+                let repo = self.update_repo_edit.trim().trim_matches('/').to_string();
+                if repo.is_empty() {
+                    self.status_message = Some("El repositorio no puede estar vacío.".to_string());
+                } else {
+                    self.update_store.repo = repo.clone();
+                    self.update_repo_edit = repo;
+                    match self.update_store.save() {
+                        Ok(()) => self.status_message = Some("Repositorio de actualizaciones guardado.".to_string()),
+                        Err(e) => self.status_message = Some(format!("No se pudo guardar: {e}")),
+                    }
+                }
+            }
         });
+        ui.label(RichText::new("Sin cuentas ni tokens: solo se pueden leer repositorios públicos.").size(11.5).color(TEXT_DIM));
+        ui.add_space(10.0);
+
+        // Recoger el resultado del hilo de red, si ya llegó.
+        if let Some(rx) = &self.update_rx {
+            match rx.try_recv() {
+                Ok(UpdateMsg::Checked(Ok(crate::updates::UpdateCheck::UpToDate))) => {
+                    self.update_state = UpdateUiState::UpToDate;
+                    self.update_rx = None;
+                }
+                Ok(UpdateMsg::Checked(Ok(crate::updates::UpdateCheck::Available(rel)))) => {
+                    self.update_state = UpdateUiState::Available(rel);
+                    self.update_rx = None;
+                }
+                Ok(UpdateMsg::Checked(Err(e))) => {
+                    self.update_state = UpdateUiState::Error(e);
+                    self.update_rx = None;
+                }
+                Ok(UpdateMsg::Installed(Ok(inst))) => {
+                    self.update_store = crate::updates::LauncherStore::load();
+                    self.update_state = UpdateUiState::Idle;
+                    self.update_rx = None;
+                    self.status_message = Some(format!("✅ GlassEnginer v{} descargado e instalado.", inst.version));
+                }
+                Ok(UpdateMsg::Installed(Err(e))) => {
+                    self.update_state = UpdateUiState::Error(e);
+                    self.update_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    ui.ctx().request_repaint();
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.update_rx = None;
+                    if matches!(self.update_state, UpdateUiState::Checking | UpdateUiState::Working(_)) {
+                        self.update_state = UpdateUiState::Error("El hilo de red terminó sin responder.".to_string());
+                    }
+                }
+            }
+        }
+
+        // Instantáneas propias del estado para no pelear con el
+        // préstamo mientras se dibujan los botones.
+        let ocupado = self.update_rx.is_some();
+        let (es_checking, fase_working, disponible, error_txt, al_dia) = match &self.update_state {
+            UpdateUiState::Checking => (true, None, None, None, false),
+            UpdateUiState::Working(f) => (false, Some(f.clone()), None, None, false),
+            UpdateUiState::Available(rel) => (false, None, Some(rel.clone()), None, false),
+            UpdateUiState::Error(e) => (false, None, None, Some(e.clone()), false),
+            UpdateUiState::UpToDate => (false, None, None, None, true),
+            UpdateUiState::Idle => (false, None, None, None, false),
+        };
+
+        if es_checking {
+            ui.add_enabled(false, egui::Button::new(RichText::new("⏳ Comprobando…").size(13.0)));
+        } else if let Some(fase) = &fase_working {
+            ui.add_enabled(false, egui::Button::new(RichText::new(format!("⏳ {fase}")).size(13.0)));
+        } else if ui.add_enabled(!ocupado, egui::Button::new(RichText::new("⬇ Buscar actualizaciones").size(13.0))).clicked() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.update_rx = Some(rx);
+            self.update_state = UpdateUiState::Checking;
+            let repo = self.update_store.repo.clone();
+            std::thread::spawn(move || {
+                let r = crate::updates::check_update(&crate::updates::api_base(), &repo);
+                let _ = tx.send(UpdateMsg::Checked(r));
+            });
+        }
+
+        if al_dia {
+            ui.add_space(6.0);
+            ui.label(RichText::new(format!("✓ Estás en la última versión publicada (v{}).", crate::updates::ENGINE_VERSION)).size(12.5).color(OK_GREEN));
+        }
+        if let Some(rel) = &disponible {
+            let tag = rel.tag_name.clone();
+            ui.add_space(6.0);
+            ui.label(RichText::new(format!("⬆ Hay una versión nueva: {tag} (esta copia es v{}).", crate::updates::ENGINE_VERSION)).size(13.0).strong().color(TEXT_MAIN));
+            if crate::updates::is_installed(&self.update_store, &tag) {
+                ui.label(RichText::new("Ya está descargada en este equipo (mira la lista de arriba).").size(12.5).color(TEXT_DIM));
+            } else if !ocupado && ui.button(RichText::new(format!("⬇ Descargar e instalar {tag}")).size(13.0)).clicked() {
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.update_rx = Some(rx);
+                self.update_state = UpdateUiState::Working(format!("Descargando {tag}, verificando su SHA-256 e instalando…"));
+                let rel2 = rel.clone();
+                std::thread::spawn(move || {
+                    let mut store = crate::updates::LauncherStore::load();
+                    let r = crate::updates::install_release(&rel2, &mut store);
+                    let _ = tx.send(UpdateMsg::Installed(r));
+                });
+            }
+        }
+        if let Some(e) = &error_txt {
+            ui.add_space(6.0);
+            ui.label(RichText::new(format!("⚠ {e}")).size(12.5).color(Color32::from_rgb(176, 42, 42)));
+        }
         ui.add_space(8.0);
-        ui.label(RichText::new("El plan de distribución: el Launcher se baja de GitHub y desde esta sección descarga el motor completo con sus ejemplos.").size(12.0).color(TEXT_DIM));
+        ui.label(RichText::new("Cada versión se instala en su propia carpeta y queda registrada: las anteriores no se borran y los proyectos no se tocan. Una descarga solo se instala si su SHA-256 coincide con el publicado.").size(12.0).color(TEXT_DIM));
     }
 }

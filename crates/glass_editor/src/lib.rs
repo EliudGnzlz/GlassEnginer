@@ -4,6 +4,7 @@ pub mod docking;
 pub mod launcher;
 pub mod panels;
 pub mod undo;
+pub mod updates;
 
 pub use docking::EditorDockingLayout;
 pub use launcher::{AppMode, LauncherAction, LauncherPanel, ProjectTemplate, SampleScenePreset};

@@ -21,3 +21,11 @@ image.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 egui_dock = "0.21.1"
+# Actualizaciones del Launcher desde GitHub Releases (módulo
+# `updates`): cliente HTTP con TLS, lectura de .zip, SHA-256 y
+# comparación semver. Las versiones ya están resueltas en el
+# árbol (las traía nethost-sys como build-dependency).
+ureq = "3"
+zip = "8"
+semver = "1"
+sha2.workspace = true
