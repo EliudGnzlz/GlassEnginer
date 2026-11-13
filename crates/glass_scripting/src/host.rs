@@ -85,6 +85,16 @@ struct PhysicsBridgeCallbacks {
     character_info: *const c_void,
     set_locked_axes: *const c_void,
     get_locked_axes: *const c_void,
+    set_mass: *const c_void,
+    get_mass: *const c_void,
+    set_linear_damping: *const c_void,
+    get_linear_damping: *const c_void,
+    set_gravity_scale: *const c_void,
+    get_gravity_scale: *const c_void,
+    set_ccd_enabled: *const c_void,
+    get_ccd_enabled: *const c_void,
+    set_body_type: *const c_void,
+    move_position: *const c_void,
 }
 
 type InitPhysicsBridgeFn = unsafe extern "system" fn(*const PhysicsBridgeCallbacks);
@@ -404,6 +414,16 @@ impl ScriptHost {
                 character_info: glass_physics::glass_character_info as *const c_void,
                 set_locked_axes: glass_physics::glass_physics_set_locked_axes as *const c_void,
                 get_locked_axes: glass_physics::glass_physics_get_locked_axes as *const c_void,
+                set_mass: glass_physics::glass_physics_set_mass as *const c_void,
+                get_mass: glass_physics::glass_physics_get_mass as *const c_void,
+                set_linear_damping: glass_physics::glass_physics_set_linear_damping as *const c_void,
+                get_linear_damping: glass_physics::glass_physics_get_linear_damping as *const c_void,
+                set_gravity_scale: glass_physics::glass_physics_set_gravity_scale as *const c_void,
+                get_gravity_scale: glass_physics::glass_physics_get_gravity_scale as *const c_void,
+                set_ccd_enabled: glass_physics::glass_physics_set_ccd_enabled as *const c_void,
+                get_ccd_enabled: glass_physics::glass_physics_get_ccd_enabled as *const c_void,
+                set_body_type: glass_physics::glass_physics_set_body_type as *const c_void,
+                move_position: glass_physics::glass_physics_move_position as *const c_void,
             };
             unsafe {
                 init_physics_fn(&callbacks as *const PhysicsBridgeCallbacks);

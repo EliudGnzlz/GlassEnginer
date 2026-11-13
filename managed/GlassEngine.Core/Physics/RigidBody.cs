@@ -10,6 +10,20 @@ public enum RigidBodyType
     Kinematic = 2
 }
 
+public enum ForceMode
+{
+    Force = 0,
+    Impulse = 1,
+    Acceleration = 2,
+    VelocityChange = 3
+}
+
+public enum CollisionDetectionMode
+{
+    Discrete = 0,
+    Continuous = 1
+}
+
 /// <summary>Restricciones por ejes, con los mismos bits que Unity
 /// (RigidbodyConstraints). Por defecto None: el cuerpo se mueve y
 /// rota libre; el bloqueo es una opción por cuerpo, no global.</summary>
@@ -41,10 +55,98 @@ public sealed class RigidBody
         EntityId = entityId;
         BodyType = type;
         Handle = RuntimeBridge.CreateRigidBody(entityId, (int)type, position, rotation);
+        _isKinematic = type == RigidBodyType.Kinematic;
         if (_constraints != RigidBodyConstraints.None)
         {
             RuntimeBridge.SetLockedAxes(Handle, (int)_constraints);
         }
+    }
+
+    private float _mass = 1.0f;
+
+    public float Mass
+    {
+        get => RuntimeBridge.GetMass(Handle);
+        set
+        {
+            _mass = value;
+            if (IsValid)
+            {
+                RuntimeBridge.SetMass(Handle, value);
+            }
+        }
+    }
+
+    public float LinearDamping
+    {
+        get => RuntimeBridge.GetLinearDamping(Handle);
+        set
+        {
+            if (IsValid)
+            {
+                RuntimeBridge.SetLinearDamping(Handle, value);
+            }
+        }
+    }
+
+    private bool _useGravity = true;
+
+    public bool UseGravity
+    {
+        get => _useGravity;
+        set
+        {
+            _useGravity = value;
+            if (IsValid)
+            {
+                RuntimeBridge.SetGravityScale(Handle, value ? 1f : 0f);
+            }
+        }
+    }
+
+    public float GravityScale
+    {
+        get => RuntimeBridge.GetGravityScale(Handle);
+        set
+        {
+            if (IsValid)
+            {
+                RuntimeBridge.SetGravityScale(Handle, value);
+            }
+        }
+    }
+
+    public CollisionDetectionMode CollisionDetection
+    {
+        get => RuntimeBridge.GetCcdEnabled(Handle) == 1 ? CollisionDetectionMode.Continuous : CollisionDetectionMode.Discrete;
+        set
+        {
+            if (IsValid)
+            {
+                RuntimeBridge.SetCcdEnabled(Handle, value == CollisionDetectionMode.Continuous);
+            }
+        }
+    }
+
+    private bool _isKinematic;
+
+    public bool IsKinematic
+    {
+        get => _isKinematic;
+        set
+        {
+            _isKinematic = value;
+            if (IsValid)
+            {
+                RuntimeBridge.SetBodyType(Handle, value ? 2 : 0);
+            }
+        }
+    }
+
+    public void MovePosition(Vector3 position)
+    {
+        if (!IsValid) return;
+        RuntimeBridge.MovePosition(Handle, position);
     }
 
     private RigidBodyConstraints _constraints;
@@ -73,13 +175,17 @@ public sealed class RigidBody
     public ulong AttachBoxCollider(Vector3 halfExtents, float restitution = 0.0f, float friction = 0.5f)
     {
         if (!IsValid) return 0;
-        return RuntimeBridge.AttachBoxCollider(Handle, halfExtents, restitution, friction);
+        ulong result = RuntimeBridge.AttachBoxCollider(Handle, halfExtents, restitution, friction);
+        if (_mass > 0f) RuntimeBridge.SetMass(Handle, _mass);
+        return result;
     }
 
     public ulong AttachSphereCollider(float radius, float restitution = 0.0f, float friction = 0.5f)
     {
         if (!IsValid) return 0;
-        return RuntimeBridge.AttachSphereCollider(Handle, radius, restitution, friction);
+        ulong result = RuntimeBridge.AttachSphereCollider(Handle, radius, restitution, friction);
+        if (_mass > 0f) RuntimeBridge.SetMass(Handle, _mass);
+        return result;
     }
 
     /// <summary>Cápsula sobre el eje Y: halfHeight = mitad del tramo recto
@@ -87,26 +193,50 @@ public sealed class RigidBody
     public ulong AttachCapsuleCollider(float halfHeight, float radius, float restitution = 0.0f, float friction = 0.5f)
     {
         if (!IsValid) return 0;
-        return RuntimeBridge.AttachCapsuleCollider(Handle, halfHeight, radius, restitution, friction);
+        ulong result = RuntimeBridge.AttachCapsuleCollider(Handle, halfHeight, radius, restitution, friction);
+        if (_mass > 0f) RuntimeBridge.SetMass(Handle, _mass);
+        return result;
     }
 
     /// <summary>Cilindro sobre el eje Y: halfHeight = mitad de la altura total.</summary>
     public ulong AttachCylinderCollider(float halfHeight, float radius, float restitution = 0.0f, float friction = 0.5f)
     {
         if (!IsValid) return 0;
-        return RuntimeBridge.AttachCylinderCollider(Handle, halfHeight, radius, restitution, friction);
+        ulong result = RuntimeBridge.AttachCylinderCollider(Handle, halfHeight, radius, restitution, friction);
+        if (_mass > 0f) RuntimeBridge.SetMass(Handle, _mass);
+        return result;
     }
 
-    public bool ApplyImpulse(Vector3 impulse)
+    public bool ApplyImpulse(Vector3 impulse, ForceMode mode = ForceMode.Impulse)
     {
         if (!IsValid) return false;
-        return RuntimeBridge.ApplyImpulse(Handle, impulse);
+        switch (mode)
+        {
+            case ForceMode.VelocityChange:
+                if (!GetLinearVelocity(out Vector3 currentVelocity)) return false;
+                return RuntimeBridge.SetLinearVelocity(Handle, currentVelocity + impulse);
+            case ForceMode.Impulse:
+            default:
+                return RuntimeBridge.ApplyImpulse(Handle, impulse);
+        }
     }
 
-    public bool ApplyForce(Vector3 force)
+    public bool ApplyForce(Vector3 force, ForceMode mode = ForceMode.Force)
     {
         if (!IsValid) return false;
-        return RuntimeBridge.ApplyForce(Handle, force);
+        switch (mode)
+        {
+            case ForceMode.Acceleration:
+                return RuntimeBridge.ApplyForce(Handle, force * Mass);
+            case ForceMode.Impulse:
+                return RuntimeBridge.ApplyImpulse(Handle, force);
+            case ForceMode.VelocityChange:
+                if (!GetLinearVelocity(out Vector3 currentVelocity)) return false;
+                return RuntimeBridge.SetLinearVelocity(Handle, currentVelocity + force);
+            case ForceMode.Force:
+            default:
+                return RuntimeBridge.ApplyForce(Handle, force);
+        }
     }
 
     public bool GetTransform(out Vector3 position, out Quaternion rotation)

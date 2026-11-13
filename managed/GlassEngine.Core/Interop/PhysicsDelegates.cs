@@ -178,3 +178,39 @@ public delegate bool CharacterDestroyDelegate(ulong entityId);
 // Consulta un personaje kinemático: espejo de `glass_character_info`.
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate bool CharacterInfoDelegate(ulong entityId, out float posX, out float posY, out float posZ, out int grounded, out int sliding);
+
+// Masa del cuerpo: espejo de `glass_physics_set_mass`/`glass_physics_get_mass`.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetMassDelegate(ulong handle, float value);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate float GetMassDelegate(ulong handle);
+
+// Amortiguación lineal: espejo de `glass_physics_set_linear_damping`/`glass_physics_get_linear_damping`.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetLinearDampingDelegate(ulong handle, float value);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate float GetLinearDampingDelegate(ulong handle);
+
+// Escala de gravedad: espejo de `glass_physics_set_gravity_scale`/`glass_physics_get_gravity_scale`.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetGravityScaleDelegate(ulong handle, float value);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate float GetGravityScaleDelegate(ulong handle);
+
+// CCD: espejo de `glass_physics_set_ccd_enabled`/`glass_physics_get_ccd_enabled`.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetCcdEnabledDelegate(ulong handle, int enabled);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int GetCcdEnabledDelegate(ulong handle);
+
+// Tipo de cuerpo: espejo de `glass_physics_set_body_type`.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetBodyTypeDelegate(ulong handle, int bodyType);
+
+// Teletransporte de posición: espejo de `glass_physics_move_position`.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int MovePositionDelegate(ulong handle, float x, float y, float z);

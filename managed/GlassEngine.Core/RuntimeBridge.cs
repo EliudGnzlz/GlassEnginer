@@ -68,6 +68,16 @@ public static class RuntimeBridge
     private static GetLockedAxesDelegate? _getLockedAxes;
     private static AttachCapsuleColliderDelegate? _attachCapsuleCollider;
     private static AttachCylinderColliderDelegate? _attachCylinderCollider;
+    private static SetMassDelegate? _setMass;
+    private static GetMassDelegate? _getMass;
+    private static SetLinearDampingDelegate? _setLinearDamping;
+    private static GetLinearDampingDelegate? _getLinearDamping;
+    private static SetGravityScaleDelegate? _setGravityScale;
+    private static GetGravityScaleDelegate? _getGravityScale;
+    private static SetCcdEnabledDelegate? _setCcdEnabled;
+    private static GetCcdEnabledDelegate? _getCcdEnabled;
+    private static SetBodyTypeDelegate? _setBodyType;
+    private static MovePositionDelegate? _movePosition;
 
     private static readonly Dictionary<int, GlassBehaviour> _instances = new();
     private static int _nextHandle = 1;
@@ -282,6 +292,19 @@ public static class RuntimeBridge
         public IntPtr CharacterInfo;
         public IntPtr SetLockedAxes;
         public IntPtr GetLockedAxes;
+
+        // Superficie de Rigidbody (bloque de huecos beta): masa,
+        // damping, gravedad, CCD, tipo mutable y MovePosition.
+        public IntPtr SetMass;
+        public IntPtr GetMass;
+        public IntPtr SetLinearDamping;
+        public IntPtr GetLinearDamping;
+        public IntPtr SetGravityScale;
+        public IntPtr GetGravityScale;
+        public IntPtr SetCcdEnabled;
+        public IntPtr GetCcdEnabled;
+        public IntPtr SetBodyType;
+        public IntPtr MovePosition;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitPhysicsBridge")]
@@ -343,6 +366,26 @@ public static class RuntimeBridge
             {
                 _getLockedAxes = Marshal.GetDelegateForFunctionPointer<GetLockedAxesDelegate>(callbacks->GetLockedAxes);
             }
+        if (callbacks->SetMass != IntPtr.Zero)
+            _setMass = Marshal.GetDelegateForFunctionPointer<SetMassDelegate>(callbacks->SetMass);
+        if (callbacks->GetMass != IntPtr.Zero)
+            _getMass = Marshal.GetDelegateForFunctionPointer<GetMassDelegate>(callbacks->GetMass);
+        if (callbacks->SetLinearDamping != IntPtr.Zero)
+            _setLinearDamping = Marshal.GetDelegateForFunctionPointer<SetLinearDampingDelegate>(callbacks->SetLinearDamping);
+        if (callbacks->GetLinearDamping != IntPtr.Zero)
+            _getLinearDamping = Marshal.GetDelegateForFunctionPointer<GetLinearDampingDelegate>(callbacks->GetLinearDamping);
+        if (callbacks->SetGravityScale != IntPtr.Zero)
+            _setGravityScale = Marshal.GetDelegateForFunctionPointer<SetGravityScaleDelegate>(callbacks->SetGravityScale);
+        if (callbacks->GetGravityScale != IntPtr.Zero)
+            _getGravityScale = Marshal.GetDelegateForFunctionPointer<GetGravityScaleDelegate>(callbacks->GetGravityScale);
+        if (callbacks->SetCcdEnabled != IntPtr.Zero)
+            _setCcdEnabled = Marshal.GetDelegateForFunctionPointer<SetCcdEnabledDelegate>(callbacks->SetCcdEnabled);
+        if (callbacks->GetCcdEnabled != IntPtr.Zero)
+            _getCcdEnabled = Marshal.GetDelegateForFunctionPointer<GetCcdEnabledDelegate>(callbacks->GetCcdEnabled);
+        if (callbacks->SetBodyType != IntPtr.Zero)
+            _setBodyType = Marshal.GetDelegateForFunctionPointer<SetBodyTypeDelegate>(callbacks->SetBodyType);
+        if (callbacks->MovePosition != IntPtr.Zero)
+            _movePosition = Marshal.GetDelegateForFunctionPointer<MovePositionDelegate>(callbacks->MovePosition);
 
         Log(2, "GlassEngine.Core PhysicsBridge inicializado exitosamente desde Rust.");
     }
@@ -1376,6 +1419,66 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
     {
         if (_characterCreate is null) return false;
         return _characterCreate(entityId, position.X, position.Y, position.Z, radius, height, skin, stepOffset, slopeLimitDeg, snap);
+    }
+
+    public static bool SetMass(ulong handle, float value)
+    {
+        if (_setMass is null) return false;
+        return _setMass(handle, value) != 0;
+    }
+
+    public static float GetMass(ulong handle)
+    {
+        if (_getMass is null) return -1f;
+        return _getMass(handle);
+    }
+
+    public static bool SetLinearDamping(ulong handle, float value)
+    {
+        if (_setLinearDamping is null) return false;
+        return _setLinearDamping(handle, value) != 0;
+    }
+
+    public static float GetLinearDamping(ulong handle)
+    {
+        if (_getLinearDamping is null) return -1f;
+        return _getLinearDamping(handle);
+    }
+
+    public static bool SetGravityScale(ulong handle, float value)
+    {
+        if (_setGravityScale is null) return false;
+        return _setGravityScale(handle, value) != 0;
+    }
+
+    public static float GetGravityScale(ulong handle)
+    {
+        if (_getGravityScale is null) return -1f;
+        return _getGravityScale(handle);
+    }
+
+    public static bool SetCcdEnabled(ulong handle, bool enabled)
+    {
+        if (_setCcdEnabled is null) return false;
+        return _setCcdEnabled(handle, enabled ? 1 : 0) != 0;
+    }
+
+    public static int GetCcdEnabled(ulong handle)
+    {
+        if (_getCcdEnabled is null) return -1;
+        return _getCcdEnabled(handle);
+    }
+
+    public static bool SetBodyType(ulong handle, int bodyType)
+    {
+        if (_setBodyType is null) return false;
+        return _setBodyType(handle, bodyType) != 0;
+    }
+
+    public static bool MovePosition(ulong handle, Vector3 position)
+    {
+        if (_movePosition is null) return false;
+        return _movePosition(handle, position.X, position.Y, position.Z) != 0;
     }
 
     public static bool CharacterMove(ulong entityId, Vector3 motion, float dt, out Vector3 applied, out bool grounded, out bool sliding)

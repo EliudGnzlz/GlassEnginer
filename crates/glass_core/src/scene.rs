@@ -193,6 +193,23 @@ pub struct PhysicsData {
     /// Collider de malla sobre la geometría del modelo (Fase 1.5).
     #[serde(default)]
     pub mesh_collider: MeshColliderMode,
+    /// Amortiguación lineal (freno de velocidad). Defecto histórico 1.5.
+    #[serde(default = "default_linear_damping")]
+    pub linear_damping: f32,
+    /// Si el cuerpo responde a la gravedad del mundo.
+    #[serde(default = "default_true")]
+    pub use_gravity: bool,
+    /// Detección continua de colisiones (CCD).
+    #[serde(default)]
+    pub ccd: bool,
+}
+
+fn default_linear_damping() -> f32 {
+    1.5
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for PhysicsData {
@@ -210,6 +227,9 @@ impl Default for PhysicsData {
             constraints: 0,
             colliders: Vec::new(),
             mesh_collider: MeshColliderMode::None,
+            linear_damping: 1.5,
+            use_gravity: true,
+            ccd: false,
         }
     }
 }
@@ -1262,6 +1282,9 @@ impl EntityData {
                 collision_mask: u32::MAX,
                 is_trigger: false,
                 constraints: 0,
+                linear_damping: 1.5,
+                use_gravity: true,
+                ccd: false,
                 colliders: Vec::new(),
                 mesh_collider: MeshColliderMode::None,
             })

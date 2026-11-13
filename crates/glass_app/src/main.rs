@@ -92,6 +92,10 @@ struct SpawnedBodySpec {
     world_scale: [f32; 3],
     /// Restricciones por ejes estilo Unity (PhysicsData.constraints).
     constraints: u8,
+    pub mass: f32,
+    pub linear_damping: f32,
+    pub use_gravity: bool,
+    pub ccd: bool,
 }
 
 impl EngineSceneBridge {
@@ -133,6 +137,10 @@ impl EngineSceneBridge {
             model: model.to_string(),
             world_scale: glass_core::mat4_scale(world),
             constraints: body.constraints,
+            mass: body.mass,
+            linear_damping: body.linear_damping,
+            use_gravity: body.use_gravity,
+            ccd: body.ccd,
         })
     }
 
@@ -161,6 +169,15 @@ impl EngineSceneBridge {
         if spec.constraints != 0 {
             physics.set_locked_axes(handle, spec.constraints);
         }
+        physics.set_linear_damping(handle, spec.linear_damping);
+        if !spec.use_gravity {
+            physics.set_gravity_scale(handle, 0.0);
+        }
+        if spec.ccd {
+            physics.set_ccd_enabled(handle, true);
+        }
+        // La masa se aplica AL FINAL de esta función, con los
+        // colliders ya adjuntos (set_mass rescales densidades).
         // El collider de malla, si cuela, SUSTITUYE a los primitivos
         // (la misma semántica que rebuild_physics_from_scene). OJO,
         // orden deliberado: se pasa (friction, restitution) a la firma
@@ -238,6 +255,10 @@ impl EngineSceneBridge {
             }
         }
         if via_mesh {
+            // Masa con el collider de malla ya adjunto.
+            if spec.body_type == BodyType::Dynamic {
+                physics.set_mass(handle, spec.mass);
+            }
             return;
         }
         // OJO, orden deliberado: se pasa (friction, restitution) a la
@@ -255,6 +276,10 @@ impl EngineSceneBridge {
                 cfg,
                 offset,
             );
+        }
+        // Masa al final: los colliders primitivos ya están adjuntos.
+        if spec.body_type == BodyType::Dynamic {
+            physics.set_mass(handle, spec.mass);
         }
     }
 
@@ -1916,6 +1941,9 @@ type DescriptorCuerpo = (
     f32,
     [f32; 3],
     Option<(glass_core::MeshColliderMode, String, [f32; 3], bool)>,
+    // Superficie de Rigidbody (huecos beta): masa, damping lineal,
+    // usa gravedad, CCD.
+    (f32, f32, bool, bool),
 );
 
 /// Elemento de dibujo de un lote del Canvas: (rect destino, rect
@@ -3140,6 +3168,7 @@ let resueltos = colliders_resueltos(body, shape);
                     body.restitution,
                     body.linear_velocity,
                     mesh,
+                    (body.mass, body.linear_damping, body.use_gravity, body.ccd),
                 ));
             }
         }
@@ -3165,9 +3194,17 @@ let resueltos = colliders_resueltos(body, shape);
             return;
         };
         *physics = PhysicsWorld::new();
-        for (id, body_type, pos, rot, resueltos, friction, restitution, linvel, mesh) in descriptors
+        for (id, body_type, pos, rot, resueltos, friction, restitution, linvel, mesh, superficie) in descriptors
         {
             let handle = physics.create_rigid_body(id, body_type, pos, rot);
+            let (masa, damping, usa_gravedad, ccd) = superficie;
+            physics.set_linear_damping(handle, damping);
+            if !usa_gravedad {
+                physics.set_gravity_scale(handle, 0.0);
+            }
+            if ccd {
+                physics.set_ccd_enabled(handle, true);
+            }
 
             let mut via_mesh = false;
             if let Some((modo, model_name, escala, es_estatico)) = &mesh {
@@ -3243,6 +3280,10 @@ let resueltos = colliders_resueltos(body, shape);
                 }
             }
 
+            // Masa al final del cuerpo: los colliders ya están adjuntos.
+            if body_type == BodyType::Dynamic {
+                physics.set_mass(handle, masa);
+            }
             physics.set_linear_velocity(handle, linvel);
         }
         log::info!(
