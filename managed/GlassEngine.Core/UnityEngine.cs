@@ -871,10 +871,21 @@ namespace UnityEngine
         }
     }
 
+public enum LightType
+    {
+        Directional = 0,
+        Point = 1,
+        Spot = 2
+    }
+
     public class Light : Component
     {
         private Color _color = Color.white;
         private float _intensity = 1.0f;
+        private LightType _type = LightType.Directional;
+        private float _range = 10.0f;
+        private float _spotAngle = 45.0f;
+        private float _innerSpotAngle = 35.0f;
 
         // El constructor NO llama al puente: la instancia C# puede
         // crearse antes de que la entidad esté viva en la escena (o con
@@ -901,8 +912,47 @@ namespace UnityEngine
                 RuntimeBridge.LightSetIntensity(EntityId, value);
             }
         }
-    }
 
+        public LightType type
+        {
+            get => _type;
+            set
+            {
+                _type = value;
+                RuntimeBridge.LightSetType(EntityId, (int)value);
+            }
+        }
+
+        public float range
+        {
+            get => _range;
+            set
+            {
+                _range = value;
+                RuntimeBridge.LightSetRange(EntityId, value);
+            }
+        }
+
+        public float spotAngle
+        {
+            get => _spotAngle;
+            set
+            {
+                _spotAngle = value;
+                RuntimeBridge.LightSetSpotAngles(EntityId, _spotAngle, _innerSpotAngle);
+            }
+        }
+
+        public float innerSpotAngle
+        {
+            get => _innerSpotAngle;
+            set
+            {
+                _innerSpotAngle = value;
+                RuntimeBridge.LightSetSpotAngles(EntityId, _spotAngle, _innerSpotAngle);
+            }
+        }
+    }
 public class Text : Component
 {
     private string _text = "";

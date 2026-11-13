@@ -650,6 +650,65 @@ impl SceneBridge for EngineSceneBridge {
         light.intensity = intensity.max(0.0);
         true
     }
+
+    /// `Light.type` de C#: escribe el tipo del componente Light de la
+    /// entidad. 0 = Directional, 1 = Point, 2 = Spot.
+    fn light_set_type(&self, entity_id: u64, tipo: i32) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(light) = ent.light.as_mut() else {
+            return false;
+        };
+        let nuevo_tipo = match tipo {
+            0 => "Directional",
+            1 => "Point",
+            2 => "Spot",
+            _ => return false,
+        };
+        light.light_type = nuevo_tipo.to_string();
+        true
+    }
+
+    /// `Light.range` de C#: escribe el rango del componente Light de
+    /// la entidad, acotado a >= 0.0.
+    fn light_set_range(&self, entity_id: u64, range: f32) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(light) = ent.light.as_mut() else {
+            return false;
+        };
+        light.range = range.max(0.0);
+        true
+    }
+
+    /// `Light.spotOuterAngle`/`spotInnerAngle` de C#: escribe los
+    /// ángulos (en grados) del cono Spot del componente Light de la
+    /// entidad. El saneado vive en `spot_cone_cos` al recolectar.
+    fn light_set_spot_angles(&self, entity_id: u64, outer_deg: f32, inner_deg: f32) -> bool {
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(light) = ent.light.as_mut() else {
+            return false;
+        };
+        light.spot_outer_deg = outer_deg;
+        light.spot_inner_deg = inner_deg;
+        true
+    }
     fn spawn_entity(&self, spec: &SpawnSpec) -> Option<u64> {
         // Fase 1, candado de escena: crear y configurar la entidad y
         // capturar su cuerpo. El candado se suelta antes de tocar física.

@@ -641,6 +641,68 @@ private static InputAxisCountDelegate? _inputAxisCount;
         return _lightSetIntensity(entityId, intensity);
     }
 
+// Export NUEVO y separado del puente de luces original (InitLightBridge).
+    // Rust lo registra de forma independiente mediante InitLightPropsBridge; si el
+    // motor no encuentra InitLightPropsBridge, los delegados quedan nulos y los
+    // setters devuelven -4.
+    private static LightSetTypeDelegate? _lightSetType;
+    private static LightSetRangeDelegate? _lightSetRange;
+    private static LightSetSpotAnglesDelegate? _lightSetSpotAngles;
+
+    /// <summary>
+    /// Indica si el puente de propiedades extendidas de luz (tipo, rango, ángulos) está conectado.
+    /// </summary>
+    public static bool LightPropsBridgeAvailable => _lightSetType is not null;
+
+    [UnmanagedCallersOnly(EntryPoint = "InitLightPropsBridge")]
+    public static void InitLightPropsBridge(IntPtr setTypeFn, IntPtr setRangeFn, IntPtr setSpotAnglesFn)
+    {
+        if (setTypeFn != IntPtr.Zero)
+        {
+            _lightSetType = Marshal.GetDelegateForFunctionPointer<LightSetTypeDelegate>(setTypeFn);
+        }
+
+        if (setRangeFn != IntPtr.Zero)
+        {
+            _lightSetRange = Marshal.GetDelegateForFunctionPointer<LightSetRangeDelegate>(setRangeFn);
+        }
+
+        if (setSpotAnglesFn != IntPtr.Zero)
+        {
+            _lightSetSpotAngles = Marshal.GetDelegateForFunctionPointer<LightSetSpotAnglesDelegate>(setSpotAnglesFn);
+        }
+
+        Log(2, "GlassEngine.Core LightPropsBridge inicializado exitosamente desde Rust.");
+    }
+
+    /// <summary>
+    /// Establece el tipo de una luz. Devuelve 0 si tuvo éxito, -1 si la entidad no existe
+    /// o no tiene componente de luz, -4 si el puente no está conectado.
+    /// </summary>
+    public static int LightSetType(ulong entityId, int type)
+    {
+        return _lightSetType is null ? -4 : _lightSetType(entityId, type);
+    }
+
+    /// <summary>
+    /// Establece el rango de una luz. Devuelve 0 si tuvo éxito, -1 si la entidad no existe
+    /// o no tiene componente de luz, -4 si el puente no está conectado.
+    /// </summary>
+    public static int LightSetRange(ulong entityId, float range)
+    {
+        return _lightSetRange is null ? -4 : _lightSetRange(entityId, range);
+    }
+
+    /// <summary>
+    /// Establece los ángulos del cono (exterior e interior) de una luz tipo Spot. Devuelve 0
+    /// si tuvo éxito, -1 si la entidad no existe o no tiene componente de luz, -4 si el
+    /// puente no está conectado.
+    /// </summary>
+    public static int LightSetSpotAngles(ulong entityId, float outerDeg, float innerDeg)
+    {
+        return _lightSetSpotAngles is null ? -4 : _lightSetSpotAngles(entityId, outerDeg, innerDeg);
+    }
+
 [StructLayout(LayoutKind.Sequential)]
 public struct UiBridgeCallbacks
 {

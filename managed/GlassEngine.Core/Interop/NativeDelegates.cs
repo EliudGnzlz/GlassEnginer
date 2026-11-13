@@ -168,6 +168,24 @@ public delegate int LightSetColorDelegate(ulong entityId, float r, float g, floa
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate int LightSetIntensityDelegate(ulong entityId, float intensity);
 
+/// <summary>
+/// Delegado para establecer el tipo de una luz (Directional/Point/Spot) desde Rust.
+/// </summary>
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int LightSetTypeDelegate(ulong entityId, int type);
+
+/// <summary>
+/// Delegado para establecer el rango (radio de influencia) de una luz desde Rust.
+/// </summary>
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int LightSetRangeDelegate(ulong entityId, float range);
+
+/// <summary>
+/// Delegado para establecer los ángulos del cono de una luz tipo Spot (exterior e interior) desde Rust.
+/// </summary>
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int LightSetSpotAnglesDelegate(ulong entityId, float outerDeg, float innerDeg);
+
 public delegate int UiSetTextDelegate(ulong entityId, IntPtr textUtf8);
 public delegate int UiSetFontSizeDelegate(ulong entityId, float fontSize);
 public delegate int UiSetTextColorDelegate(ulong entityId, float r, float g, float b, float a);

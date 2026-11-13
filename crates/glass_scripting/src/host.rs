@@ -112,6 +112,15 @@ type InitLightBridgeFn = unsafe extern "system" fn(
     *const c_void, // light_set_color
     *const c_void, // light_set_intensity
 );
+
+/// Puente de propiedades de luz (integración de iluminación): tipo,
+/// rango y ángulos Spot de `Light`. Export NUEVO y separado, como los
+/// demás.
+type InitLightPropsBridgeFn = unsafe extern "system" fn(
+    *const c_void, // light_set_type
+    *const c_void, // light_set_range
+    *const c_void, // light_set_spot_angles
+);
 /// Puente de UI dinámica (Canvas v2): entrega a C# los callbacks
 /// para mutar texto, imagen y rect de las entidades con UI
 /// (clases Text, Image y RectTransform). Export NUEVO y separado.
@@ -499,6 +508,25 @@ impl ScriptHost {
             log::warn!(
                 "Luces no estará disponible: el ensamblado managed \
                  no exporta InitLightBridge (¿GlassEngine.Core.dll desactualizado?)."
+            );
+        }
+
+        if let Ok(init_light_props_fn) = loader.get_function_with_unmanaged_callers_only::<InitLightPropsBridgeFn>(
+            bridge_type,
+            pdcstr!("InitLightPropsBridge"),
+        ) {
+            log::info!("Vinculando callbacks Rust <-> C# LightProps FFI...");
+            unsafe {
+                init_light_props_fn(
+                    crate::bindings::light_set_type as *const c_void,
+                    crate::bindings::light_set_range as *const c_void,
+                    crate::bindings::light_set_spot_angles as *const c_void,
+                );
+            }
+        } else {
+            log::warn!(
+                "Propiedades de luz no estarán disponibles: el ensamblado managed \
+                 no exporta InitLightPropsBridge (¿GlassEngine.Core.dll desactualizado?)."
             );
         }
         // Puente de UI dinámica: opcional como los demás; los

@@ -146,6 +146,27 @@ pub trait SceneBridge: Send + Sync + 'static {
     fn light_set_intensity(&self, _entity_id: u64, _intensity: f32) -> bool {
         false
     }
+
+    /// Tipo de la luz de la entidad (bloque de luces): muta
+    /// `light.light_type` del componente. 0 = Directional, 1 = Point,
+    /// 2 = Spot. Por defecto no hace nada, como `animator_set_param`.
+    fn light_set_type(&self, _entity_id: u64, _tipo: i32) -> bool {
+        false
+    }
+
+    /// Rango de la luz de la entidad (bloque de luces): muta
+    /// `light.range` del componente (el motor la acota a >= 0.0).
+    /// Por defecto no hace nada, como `animator_set_param`.
+    fn light_set_range(&self, _entity_id: u64, _range: f32) -> bool {
+        false
+    }
+
+    /// Ángulos del cono Spot de la luz de la entidad (bloque de luces):
+    /// muta los ángulos exterior e interior (en grados) del componente.
+    /// Por defecto no hace nada, como `animator_set_param`.
+    fn light_set_spot_angles(&self, _entity_id: u64, _outer_deg: f32, _inner_deg: f32) -> bool {
+        false
+    }
     /// Muta el campo `ui_text.text` de la entidad indicada.
     /// Devuelve `false` si el puente no está vinculado o la entidad no existe.
     fn ui_set_text(&self, _entity_id: u64, _text: &str) -> bool {
@@ -429,6 +450,36 @@ pub(crate) fn light_set_color(entity_id: u64, r: f32, g: f32, b: f32) -> bool {
 pub(crate) fn light_set_intensity(entity_id: u64, intensity: f32) -> bool {
     if let Ok(cell) = get_bridge_cell().read() {
         cell.light_set_intensity(entity_id, intensity)
+    } else {
+        false
+    }
+}
+
+/// Fija el tipo de la luz de la entidad a través del puente activo;
+/// sin puente, no hace nada.
+pub(crate) fn light_set_type(entity_id: u64, tipo: i32) -> bool {
+    if let Ok(cell) = get_bridge_cell().read() {
+        cell.light_set_type(entity_id, tipo)
+    } else {
+        false
+    }
+}
+
+/// Fija el rango de la luz de la entidad a través del puente activo;
+/// sin puente, no hace nada.
+pub(crate) fn light_set_range(entity_id: u64, range: f32) -> bool {
+    if let Ok(cell) = get_bridge_cell().read() {
+        cell.light_set_range(entity_id, range)
+    } else {
+        false
+    }
+}
+
+/// Fija los ángulos del cono Spot de la luz de la entidad a través del
+/// puente activo; sin puente, no hace nada.
+pub(crate) fn light_set_spot_angles(entity_id: u64, outer_deg: f32, inner_deg: f32) -> bool {
+    if let Ok(cell) = get_bridge_cell().read() {
+        cell.light_set_spot_angles(entity_id, outer_deg, inner_deg)
     } else {
         false
     }

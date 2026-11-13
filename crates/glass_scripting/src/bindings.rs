@@ -519,6 +519,43 @@ pub unsafe extern "C" fn light_set_intensity(entity_id: u64, intensity: f32) -> 
     }
 }
 
+/// Fija el tipo de la luz de la entidad. Mismos códigos que
+/// `light_set_color`.
+#[no_mangle]
+pub unsafe extern "C" fn light_set_type(entity_id: u64, tipo: i32) -> i32 {
+    if crate::bridge::light_set_type(entity_id, tipo) {
+        BRIDGE_OK
+    } else {
+        BRIDGE_ERR_NOT_FOUND
+    }
+}
+
+/// Fija el rango de la luz de la entidad (acotado a >= 0.0 en el
+/// motor). Mismos códigos que `light_set_color`.
+#[no_mangle]
+pub unsafe extern "C" fn light_set_range(entity_id: u64, range: f32) -> i32 {
+    if crate::bridge::light_set_range(entity_id, range) {
+        BRIDGE_OK
+    } else {
+        BRIDGE_ERR_NOT_FOUND
+    }
+}
+
+/// Fija los ángulos del cono Spot de la luz de la entidad. Mismos
+/// códigos que `light_set_color`.
+#[no_mangle]
+pub unsafe extern "C" fn light_set_spot_angles(
+    entity_id: u64,
+    outer_deg: f32,
+    inner_deg: f32,
+) -> i32 {
+    if crate::bridge::light_set_spot_angles(entity_id, outer_deg, inner_deg) {
+        BRIDGE_OK
+    } else {
+        BRIDGE_ERR_NOT_FOUND
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn ui_set_text(entity_id: u64, text: *const c_char) -> i32 {
     if text.is_null() {
