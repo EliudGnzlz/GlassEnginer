@@ -217,8 +217,8 @@ fn reducir_nivel(anterior: &[[f32; 4]], lado_anterior: u32) -> Vec<[f32; 4]> {
 fn empaquetar_nivel(nivel: &[[f32; 4]]) -> Vec<u8> {
     let mut salida = Vec::with_capacity(nivel.len() * 8);
     for texel in nivel {
-        for canal in 0..4 {
-            let h = f32_a_f16(texel[canal]);
+        for &valor in texel {
+            let h = f32_a_f16(valor);
             salida.push((h & 0xff) as u8);
             salida.push((h >> 8) as u8);
         }
@@ -250,21 +250,13 @@ pub fn generar_cubemapa(sol_dir: [f32; 3], sol_color: [f32; 3]) -> Vec<u8> {
 }
 
 /// Estado para decidir cuándo regenerar el cubemap de IBL.
+#[derive(Default)]
 pub struct EstadoIbl {
     pub ultimo_sol: Option<([f32; 3], [f32; 3])>,
     pub ultimo_instante: Option<std::time::Instant>,
     pub hay_entorno: bool,
 }
 
-impl Default for EstadoIbl {
-    fn default() -> Self {
-        EstadoIbl {
-            ultimo_sol: None,
-            ultimo_instante: None,
-            hay_entorno: false,
-        }
-    }
-}
 
 impl EstadoIbl {
     /// ¿Toca regenerar? Sí si nunca se generó, si el sol se movió más
@@ -318,10 +310,10 @@ mod tests {
         for i in 0..num_texeles {
             let base = i * 8;
             let mut c = [0.0f32; 4];
-            for canal in 0..4 {
+            for (canal, comp) in c.iter_mut().enumerate() {
                 let off = base + canal * 2;
                 let h = (bytes[off] as u16) | ((bytes[off + 1] as u16) << 8);
-                c[canal] = f16_a_f32(h);
+                *comp = f16_a_f32(h);
             }
             datos.push(c);
         }

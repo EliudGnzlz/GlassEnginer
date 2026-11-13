@@ -306,7 +306,6 @@ pub fn evaluate_skin_matrices(
     let globals = compute_globals(skin, &pose);
     compose_skin_matrices(skin, &globals)
 }
-///
 
 /// Evalúa las matrices de piel mezclando DOS clips (crossfade) antes de
 /// componer globales: la pose local de cada nodo se interpola (lerp en
@@ -540,9 +539,11 @@ mod tests {
     /// global de la articulación en reposo es T(1,0,0) y su IBM, T(-1,0,0):
     /// en bind pose la matriz de piel debe ser la identidad.
     fn skin_simple() -> SkinData {
-        let mut joint = GltfNodeData::default();
-        joint.parent = Some(0);
-        joint.translation = [1.0, 0.0, 0.0];
+        let joint = GltfNodeData {
+            parent: Some(0),
+            translation: [1.0, 0.0, 0.0],
+            ..Default::default()
+        };
         SkinData {
             nodes: vec![GltfNodeData::default(), joint, GltfNodeData::default()],
             joints: vec![1],
@@ -640,15 +641,26 @@ mod tests {
         // identidad; con la fórmula anterior (que multiplicaba por la
         // inversa de la global del nodo-malla) el personaje salía
         // deformado por esa transformada (×100 en el caso de Mixamo).
-        let qx90 = [0.70710678f32, 0.0, 0.0, 0.70710678];
-        let mut root = GltfNodeData::default();
-        root.rotation = qx90;
-        root.scale = [0.01, 0.01, 0.01];
-        let mut joint = GltfNodeData::default();
-        joint.parent = Some(0);
-        joint.translation = [100.0, 0.0, 0.0];
-        let mut mesh = GltfNodeData::default();
-        mesh.parent = Some(0);
+        let qx90 = [
+            std::f32::consts::FRAC_1_SQRT_2,
+            0.0,
+            0.0,
+            std::f32::consts::FRAC_1_SQRT_2,
+        ];
+        let root = GltfNodeData {
+            rotation: qx90,
+            scale: [0.01, 0.01, 0.01],
+            ..Default::default()
+        };
+        let joint = GltfNodeData {
+            parent: Some(0),
+            translation: [100.0, 0.0, 0.0],
+            ..Default::default()
+        };
+        let mesh = GltfNodeData {
+            parent: Some(0),
+            ..Default::default()
+        };
         let root_m =
             glass_core::math::mat4_from_trs_quat([0.0, 0.0, 0.0], qx90, [0.01, 0.01, 0.01]);
         let joint_global = glass_core::math::mat4_mul(

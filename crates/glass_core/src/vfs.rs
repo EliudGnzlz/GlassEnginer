@@ -335,7 +335,7 @@ mod tests {
         // Y desde un árbol sin proyecto no debe inventarse una raíz.
         let orphan = std::env::temp_dir().join(format!("glass_vfs_orphan_{}", std::process::id()));
         std::fs::create_dir_all(&orphan).unwrap();
-        assert!(AssetVfs::locate_from(&orphan.join("nada")).is_none());
+        assert!(AssetVfs::locate_from(orphan.join("nada")).is_none());
 
         std::fs::remove_dir_all(&base).ok();
         std::fs::remove_dir_all(&orphan).ok();

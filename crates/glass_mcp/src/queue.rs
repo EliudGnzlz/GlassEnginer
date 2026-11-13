@@ -153,12 +153,11 @@ impl CommandQueue {
         let inicio = Instant::now();
         let mut g = self.inner.lock().unwrap();
         loop {
-            if let Some(c) = g.commands.iter().find(|c| c.id == id) {
+            {
+                let c = g.commands.iter().find(|c| c.id == id)?;
                 if c.state == CmdState::Done || c.state == CmdState::Error {
                     return Some(c.state);
                 }
-            } else {
-                return None;
             }
             if inicio.elapsed() >= timeout {
                 return None;

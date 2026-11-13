@@ -135,7 +135,7 @@ fn lm_extent_px(extent: f32, density: f32) -> u32 {
     if !px.is_finite() {
         return 4;
     }
-    px.max(4.0).min(1024.0) as u32
+    px.clamp(4.0, 1024.0) as u32
 }
 
 fn lm_pack_rects(rects: Vec<AtlasRect>) -> Result<(u32, Vec<AtlasRect>), BakeError> {
@@ -243,7 +243,7 @@ pub fn expand_and_layout(
         let mut tri_axes = Vec::with_capacity(m.indices.len() / 3);
         let mut bounds: [Option<(f32, f32, f32, f32)>; 6] = [None; 6];
 
-        for tri in m.indices.chunks_exact(3) {
+        for tri in m.indices.as_chunks::<3>().0 {
             let i0 = tri[0] as usize;
             let i1 = tri[1] as usize;
             let i2 = tri[2] as usize;
@@ -524,8 +524,8 @@ mod tests {
 
         let atlas = layout.atlas_size as f32;
         for &[u, v] in &layout.uv2[0] {
-            assert!(u >= 0.0 && u <= 1.0);
-            assert!(v >= 0.0 && v <= 1.0);
+            assert!((0.0..=1.0).contains(&u));
+            assert!((0.0..=1.0).contains(&v));
 
             let x = u * atlas;
             let y = v * atlas;
@@ -549,7 +549,7 @@ mod tests {
         // El grupo de cada vértice lo marca la normal de su CARA
         // (recalculada de las posiciones expandidas), no la normal de
         // sombreador: la expansión proyecta por caras.
-        for tri in expanded[0].indices.chunks_exact(3) {
+        for tri in expanded[0].indices.as_chunks::<3>().0 {
             let p0 = expanded[0].positions[tri[0] as usize];
             let p1 = expanded[0].positions[tri[1] as usize];
             let p2 = expanded[0].positions[tri[2] as usize];
@@ -747,7 +747,7 @@ pub fn bake_lightmap(
         };
         let uvs: &[[f32; 2]] = uvs;
 
-        for tri in mesh.indices.chunks_exact(3) {
+        for tri in mesh.indices.as_chunks::<3>().0 {
             let i0 = tri[0] as usize;
             let i1 = tri[1] as usize;
             let i2 = tri[2] as usize;
@@ -942,15 +942,12 @@ pub fn bake_lightmap(
                     }
                 }
 
-                if count > 0 {
-                    updates.push((
-                        idx,
-                        [
-                            (sum[0] / count) as u8,
-                            (sum[1] / count) as u8,
-                            (sum[2] / count) as u8,
-                        ],
-                    ));
+                if let (Some(r), Some(g), Some(b)) = (
+                    sum[0].checked_div(count),
+                    sum[1].checked_div(count),
+                    sum[2].checked_div(count),
+                ) {
+                    updates.push((idx, [r as u8, g as u8, b as u8]));
                 }
             }
         }
@@ -1059,7 +1056,7 @@ mod bake_tests {
         assert!(!reds.is_empty());
         for r in reds {
             let f = r as f32 / 255.0;
-            assert!(f >= 0.05 && f <= 0.2);
+            assert!((0.05..=0.2).contains(&f));
         }
     }
 
@@ -1085,7 +1082,7 @@ mod bake_tests {
         assert!(!reds.is_empty());
         for r in reds {
             let f = r as f32 / 255.0;
-            assert!(f >= 0.05 && f <= 0.2);
+            assert!((0.05..=0.2).contains(&f));
         }
     }
 

@@ -1305,7 +1305,7 @@ impl McpServer {
             // últimas 240 muestras registradas por el motor en ESTE proceso.
             "glass_frame_timing" => {
                 let snap = glass_core::profiling::frame_timing_snapshot();
-                let mut datos = serde_json::to_value(&snap).unwrap_or(json!({}));
+                let mut datos = serde_json::to_value(snap).unwrap_or(json!({}));
                 if snap.samples == 0 {
                     // Sin motor gráfico en el proceso no hay muestras: se
                     // declara en vez de devolver una tabla de ceros.
@@ -1326,8 +1326,8 @@ impl McpServer {
                 let pm = glass_core::profiling::process_memory_snapshot();
                 let gpu = glass_core::profiling::gpu_memory_snapshot();
                 let datos = json!({
-                    "process": serde_json::to_value(&pm).unwrap_or(json!({})),
-                    "gpu": serde_json::to_value(&gpu).unwrap_or(serde_json::Value::Null)
+                    "process": serde_json::to_value(pm).unwrap_or(json!({})),
+                    "gpu": serde_json::to_value(gpu).unwrap_or(serde_json::Value::Null)
                 });
                 let texto = serde_json::to_string_pretty(&datos).unwrap_or_default();
                 McpResponse::success(id, json!({"content": [{"type": "text", "text": texto}]}))
@@ -1504,7 +1504,7 @@ impl McpServer {
                             .map(|p| {
                                 json!({
                                     "name": p.name,
-                                    "kind": serde_json::to_value(&p.kind).unwrap(),
+                                    "kind": serde_json::to_value(p.kind).unwrap(),
                                     "default": serde_json::to_value(&p.default).unwrap()
                                 })
                             })
@@ -1648,7 +1648,7 @@ impl McpServer {
                         return McpResponse::error(
                             id,
                             -32000,
-                            &format!("no se pudo leer el archivo {}: {}", path, e),
+                            format!("no se pudo leer el archivo {}: {}", path, e),
                         )
                     }
                 };
@@ -1658,7 +1658,7 @@ impl McpServer {
                         return McpResponse::error(
                             id,
                             -32000,
-                            &format!("JSON inválido en {}: {}", path, e),
+                            format!("JSON inválido en {}: {}", path, e),
                         )
                     }
                 };
@@ -1674,7 +1674,7 @@ impl McpServer {
                         return McpResponse::error(
                             id,
                             -32000,
-                            &format!("no se pudo serializar el grafo: {}", e),
+                            format!("no se pudo serializar el grafo: {}", e),
                         )
                     }
                 };
@@ -1682,7 +1682,7 @@ impl McpServer {
                     return McpResponse::error(
                         id,
                         -32000,
-                        &format!("no se pudo escribir el archivo {}: {}", path, e),
+                        format!("no se pudo escribir el archivo {}: {}", path, e),
                     );
                 }
                 let total = shader_graph.nodes.len();
@@ -1975,7 +1975,11 @@ impl McpServer {
                         };
                         let half_height = args.get("half_height").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                         let radius = args.get("radius").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-                        let hit = physics.cast_capsule(origin, half_height, radius, dir, max_dist, mask, exclude);
+                        let hit = physics.cast_capsule(
+                            glass_physics::BarridoCapsula { origin, half_height, radius, dir, max_dist },
+                            mask,
+                            exclude,
+                        );
                         json!({"hit": hit.map(|h| hit_json(h.entity_id, h.point, h.normal, h.distance))})
                     }
                     "overlap_sphere" => {
@@ -3221,7 +3225,9 @@ impl McpServer {
                     .get("density")
                     .and_then(|d| d.as_f64())
                     .unwrap_or(8.0) as f32;
-                if !(densidad > 0.0) || densidad > 256.0 {
+                if !matches!(densidad.partial_cmp(&0.0), Some(std::cmp::Ordering::Greater))
+                    || densidad > 256.0
+                {
                     return McpResponse::invalid_params(
                         id,
                         "Field 'density' must be in (0, 256]",
@@ -3419,8 +3425,10 @@ impl McpServer {
                         t.text = texto.clone();
                     }
                     None => {
-                        let mut t = glass_core::UITextData::default();
-                        t.text = texto.clone();
+                        let t = glass_core::UITextData {
+                            text: texto.clone(),
+                            ..Default::default()
+                        };
                         ent.ui_text = Some(t);
                         if !ent.components.iter().any(|c| c == "UIText") {
                             ent.components.push("UIText".to_string());
@@ -3514,90 +3522,6 @@ impl McpServer {
                 Err(_) => break,
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests_catchup {
-    use super::*;
-    use std::sync::{Arc, Mutex};
-
-    fn servidor() -> McpServer {
-        McpServer::new(Arc::new(Mutex::new(SceneState::new())))
-    }
-
-    fn llamar(srv: &McpServer, tool: &str, args: serde_json::Value) -> String {
-        let req = format!(
-            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{}","arguments":{}}}}}"#,
-            tool, args
-        );
-        srv.handle_json(&req).unwrap_or_default()
-    }
-
-    #[test]
-    fn lista_incluye_las_tools_nuevas() {
-        let srv = servidor();
-        let resp = srv
-            .handle_json(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
-            .unwrap_or_default();
-        for nombre in [
-            "glass_bake_lightmap",
-            "glass_get_input_axes",
-            "glass_list_materials",
-            "glass_set_entity_material",
-            "glass_set_ui_text",
-        ] {
-            assert!(resp.contains(nombre), "falta {nombre} en tools/list");
-        }
-    }
-
-    #[test]
-    fn input_axes_devuelve_los_registrados() {
-        glass_scripting::input_axes::set_axis_defs(
-            glass_scripting::input_axes::default_input_axes(),
-        );
-        let srv = servidor();
-        let resp = llamar(&srv, "glass_get_input_axes", json!({}));
-        assert!(resp.contains("Horizontal"), "resp: {resp}");
-        assert!(resp.contains("Jump"), "resp: {resp}");
-    }
-
-    #[test]
-    fn set_material_y_texto_ui_sobre_entidad() {
-        let srv = servidor();
-        let id = {
-            let mut sc = srv.scene.lock().unwrap();
-            sc.create_entity("Cubo MCP".to_string(), vec!["Transform".into()])
-        };
-        // Sin Mesh, asignar material es un error claro (-32005).
-        let resp = llamar(
-            &srv,
-            "glass_set_entity_material",
-            json!({ "entity_id": id, "material": "oro" }),
-        );
-        assert!(resp.contains("-32005"), "resp: {resp}");
-        // El texto UI sí se crea sobre la entidad.
-        let resp = llamar(
-            &srv,
-            "glass_set_ui_text",
-            json!({ "entity_id": id, "text": "Hola MCP" }),
-        );
-        assert!(resp.contains("Hola MCP"), "resp: {resp}");
-        let sc = srv.scene.lock().unwrap();
-        let ent = sc.entities.iter().find(|e| e.id == id).unwrap();
-        assert_eq!(ent.ui_text.as_ref().unwrap().text, "Hola MCP");
-    }
-
-    #[test]
-    fn bake_escena_vacia_hornea_cero_entidades() {
-        // SceneState::new() trae su luz principal por defecto: el
-        // horneado de una escena sin estáticos tiene éxito con 0
-        // entidades y escribe los dos archivos (se limpian aquí).
-        let srv = servidor();
-        let resp = llamar(&srv, "glass_bake_lightmap", json!({ "name": "TestMcp" }));
-        assert!(resp.contains("0 entidades"), "resp: {resp}");
-        let _ = std::fs::remove_file("assets/lightmaps/TestMcp.lm.png");
-        let _ = std::fs::remove_file("assets/lightmaps/TestMcp.lm.json");
     }
 }
 
@@ -3719,4 +3643,88 @@ fn validar_asset(path: &str) -> Result<serde_json::Value, String> {
         "lod_groups": lods,
         "sidecar": sidecar_info,
     }))
+}
+
+#[cfg(test)]
+mod tests_catchup {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn servidor() -> McpServer {
+        McpServer::new(Arc::new(Mutex::new(SceneState::new())))
+    }
+
+    fn llamar(srv: &McpServer, tool: &str, args: serde_json::Value) -> String {
+        let req = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{}","arguments":{}}}}}"#,
+            tool, args
+        );
+        srv.handle_json(&req).unwrap_or_default()
+    }
+
+    #[test]
+    fn lista_incluye_las_tools_nuevas() {
+        let srv = servidor();
+        let resp = srv
+            .handle_json(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+            .unwrap_or_default();
+        for nombre in [
+            "glass_bake_lightmap",
+            "glass_get_input_axes",
+            "glass_list_materials",
+            "glass_set_entity_material",
+            "glass_set_ui_text",
+        ] {
+            assert!(resp.contains(nombre), "falta {nombre} en tools/list");
+        }
+    }
+
+    #[test]
+    fn input_axes_devuelve_los_registrados() {
+        glass_scripting::input_axes::set_axis_defs(
+            glass_scripting::input_axes::default_input_axes(),
+        );
+        let srv = servidor();
+        let resp = llamar(&srv, "glass_get_input_axes", json!({}));
+        assert!(resp.contains("Horizontal"), "resp: {resp}");
+        assert!(resp.contains("Jump"), "resp: {resp}");
+    }
+
+    #[test]
+    fn set_material_y_texto_ui_sobre_entidad() {
+        let srv = servidor();
+        let id = {
+            let mut sc = srv.scene.lock().unwrap();
+            sc.create_entity("Cubo MCP".to_string(), vec!["Transform".into()])
+        };
+        // Sin Mesh, asignar material es un error claro (-32005).
+        let resp = llamar(
+            &srv,
+            "glass_set_entity_material",
+            json!({ "entity_id": id, "material": "oro" }),
+        );
+        assert!(resp.contains("-32005"), "resp: {resp}");
+        // El texto UI sí se crea sobre la entidad.
+        let resp = llamar(
+            &srv,
+            "glass_set_ui_text",
+            json!({ "entity_id": id, "text": "Hola MCP" }),
+        );
+        assert!(resp.contains("Hola MCP"), "resp: {resp}");
+        let sc = srv.scene.lock().unwrap();
+        let ent = sc.entities.iter().find(|e| e.id == id).unwrap();
+        assert_eq!(ent.ui_text.as_ref().unwrap().text, "Hola MCP");
+    }
+
+    #[test]
+    fn bake_escena_vacia_hornea_cero_entidades() {
+        // SceneState::new() trae su luz principal por defecto: el
+        // horneado de una escena sin estáticos tiene éxito con 0
+        // entidades y escribe los dos archivos (se limpian aquí).
+        let srv = servidor();
+        let resp = llamar(&srv, "glass_bake_lightmap", json!({ "name": "TestMcp" }));
+        assert!(resp.contains("0 entidades"), "resp: {resp}");
+        let _ = std::fs::remove_file("assets/lightmaps/TestMcp.lm.png");
+        let _ = std::fs::remove_file("assets/lightmaps/TestMcp.lm.json");
+    }
 }

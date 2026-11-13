@@ -152,13 +152,12 @@ impl ConsolePanel {
                     ui.label(egui::RichText::new(name).strong());
                     ui.separator();
 
-                    if *is_dir {
-                        if ui.button("📂 Abrir carpeta").clicked() {
+                    if *is_dir
+                        && ui.button("📂 Abrir carpeta").clicked() {
                             self.current_dir = self.current_dir.join(name);
                             self.refresh_assets();
                             ui.close();
                         }
-                    }
 
                     if ui.button("📋 Copiar ruta al portapapeles").clicked() {
                         let full = self.current_dir.join(name);

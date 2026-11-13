@@ -44,7 +44,7 @@ impl Prefab {
             std::fs::create_dir_all(parent)?;
         }
         let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         std::fs::write(p, json)
     }
 
@@ -52,7 +52,7 @@ impl Prefab {
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
         let json = std::fs::read_to_string(path)?;
         let prefab: Self = serde_json::from_str(&json)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         Ok(prefab)
     }
 }

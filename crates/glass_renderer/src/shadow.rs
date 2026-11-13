@@ -453,6 +453,11 @@ impl ShadowResources {
 
     /// Comienza el pase de profundidad en el command buffer: limpia el
     /// mapa a 1,0 y fija viewport/scissor al tamaño del mapa.
+    ///
+    /// # Safety
+    /// `device` y `cmd` deben ser válidos: `cmd` en estado de
+    /// grabación y fuera de un render pass, y los recursos de
+    /// sombras vivos durante el pase.
     pub unsafe fn begin_pass(&self, device: &ash::Device, cmd: vk::CommandBuffer) {
         let clear = [vk::ClearValue {
             depth_stencil: vk::ClearDepthStencilValue { depth: 1.0, stencil: 0 },
@@ -644,6 +649,11 @@ impl PointShadowResources {
     }
 
     /// Comienza el pase de una cara del atlas (layer = cubo*6 + cara).
+    ///
+    /// # Safety
+    /// `device` y `cmd` deben ser válidos: `cmd` en estado de
+    /// grabación y fuera de un render pass, `layer` dentro del
+    /// atlas y los recursos de sombras vivos durante el pase.
     pub unsafe fn begin_face_pass(&self, device: &ash::Device, cmd: vk::CommandBuffer, layer: usize) {
         let clear_values = [vk::ClearValue {
             depth_stencil: vk::ClearDepthStencilValue {

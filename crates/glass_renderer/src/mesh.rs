@@ -281,12 +281,12 @@ fn image_to_rgba(data: &gltf::image::Data) -> Vec<u8> {
     match data.format {
         Format::R8G8B8A8 => out.extend_from_slice(&data.pixels),
         Format::R8G8B8 => {
-            for px in data.pixels.chunks_exact(3) {
+            for px in data.pixels.as_chunks::<3>().0 {
                 out.extend_from_slice(&[px[0], px[1], px[2], 255]);
             }
         }
         Format::R8G8 => {
-            for px in data.pixels.chunks_exact(2) {
+            for px in data.pixels.as_chunks::<2>().0 {
                 out.extend_from_slice(&[px[0], px[1], 0, 255]);
             }
         }
@@ -296,7 +296,7 @@ fn image_to_rgba(data: &gltf::image::Data) -> Vec<u8> {
             }
         }
         Format::R16G16B16A16 => {
-            for px in data.pixels.chunks_exact(8) {
+            for px in data.pixels.as_chunks::<8>().0 {
                 for c in 0..4 {
                     let v = u16::from_le_bytes([px[c * 2], px[c * 2 + 1]]);
                     out.push((v / 257) as u8);
@@ -304,7 +304,7 @@ fn image_to_rgba(data: &gltf::image::Data) -> Vec<u8> {
             }
         }
         Format::R16G16B16 => {
-            for px in data.pixels.chunks_exact(6) {
+            for px in data.pixels.as_chunks::<6>().0 {
                 for c in 0..3 {
                     let v = u16::from_le_bytes([px[c * 2], px[c * 2 + 1]]);
                     out.push((v / 257) as u8);
@@ -313,7 +313,7 @@ fn image_to_rgba(data: &gltf::image::Data) -> Vec<u8> {
             }
         }
         Format::R16G16 => {
-            for px in data.pixels.chunks_exact(4) {
+            for px in data.pixels.as_chunks::<4>().0 {
                 for c in 0..2 {
                     let v = u16::from_le_bytes([px[c * 2], px[c * 2 + 1]]);
                     out.push((v / 257) as u8);
@@ -322,14 +322,14 @@ fn image_to_rgba(data: &gltf::image::Data) -> Vec<u8> {
             }
         }
         Format::R16 => {
-            for px in data.pixels.chunks_exact(2) {
+            for px in data.pixels.as_chunks::<2>().0 {
                 let v = u16::from_le_bytes([px[0], px[1]]);
                 let b = (v / 257) as u8;
                 out.extend_from_slice(&[b, b, b, 255]);
             }
         }
         Format::R32G32B32A32FLOAT => {
-            for px in data.pixels.chunks_exact(16) {
+            for px in data.pixels.as_chunks::<16>().0 {
                 for c in 0..4 {
                     let v = f32::from_le_bytes([px[c * 4], px[c * 4 + 1], px[c * 4 + 2], px[c * 4 + 3]]);
                     out.push((v.clamp(0.0, 1.0) * 255.0) as u8);
@@ -337,7 +337,7 @@ fn image_to_rgba(data: &gltf::image::Data) -> Vec<u8> {
             }
         }
         Format::R32G32B32FLOAT => {
-            for px in data.pixels.chunks_exact(12) {
+            for px in data.pixels.as_chunks::<12>().0 {
                 for c in 0..3 {
                     let v = f32::from_le_bytes([px[c * 4], px[c * 4 + 1], px[c * 4 + 2], px[c * 4 + 3]]);
                     out.push((v.clamp(0.0, 1.0) * 255.0) as u8);
@@ -800,7 +800,7 @@ pub fn texture_bc_enabled() -> bool {
 /// (antes < 255) evita pagar BC3 por texturas «casi opacas» cuyo
 /// único píxel no-255 es ruido de 1 nivel (auditoría, menor).
 pub fn rgba_has_alpha(rgba: &[u8]) -> bool {
-    rgba.chunks_exact(4).any(|p| p[3] < 250)
+    rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 250)
 }
 
 fn srgb_byte_to_linear(v: u8) -> f32 {
@@ -870,13 +870,13 @@ pub fn downsample_rgba(rgba: &[u8], width: u32, height: u32) -> (Vec<u8>, u32, u
 pub fn texture_level_bytes(width: u32, height: u32, format: vk::Format) -> u64 {
     match format {
         vk::Format::BC1_RGB_SRGB_BLOCK | vk::Format::BC1_RGBA_SRGB_BLOCK => {
-            let bw = ((width + 3) / 4) as u64;
-            let bh = ((height + 3) / 4) as u64;
+            let bw = width.div_ceil(4) as u64;
+            let bh = height.div_ceil(4) as u64;
             bw * bh * 8
         }
         vk::Format::BC3_SRGB_BLOCK => {
-            let bw = ((width + 3) / 4) as u64;
-            let bh = ((height + 3) / 4) as u64;
+            let bw = width.div_ceil(4) as u64;
+            let bh = height.div_ceil(4) as u64;
             bw * bh * 16
         }
         // Respaldo RGBA8 (ruta clásica).
@@ -1074,9 +1074,9 @@ fn merge_primitive(
 
     let base_index = vertices.len() as u32;
 
-    for i in 0..positions.len() {
+    for (i, &position) in positions.iter().enumerate() {
         vertices.push(Vertex {
-            position: positions[i],
+            position,
             normal: normals.get(i).copied().unwrap_or([0.0, 1.0, 0.0]),
             uv: uvs.get(i).copied().unwrap_or([0.0, 0.0]),
         });
@@ -1491,7 +1491,7 @@ impl MeshLoader {
         command_pool: vk::CommandPool,
     ) -> Result<GpuMesh, String> {
         let vertex_size = vertex_bytes.len() as u64;
-        let index_size = (indices.len() * std::mem::size_of::<u32>()) as u64;
+        let index_size = std::mem::size_of_val(indices) as u64;
 
         log::info!("upload_to_gpu: Creando staging buffers...");
         unsafe {
@@ -2031,6 +2031,10 @@ impl MeshLoader {
     }
 
 
+    /// # Safety
+    /// `device` y `allocator` deben ser los del contexto Vulkan del
+    /// motor y seguir vivos durante la llamada; el buffer y la
+    /// asignación devueltos quedan en manos del llamante.
     pub unsafe fn create_buffer(
         device: &ash::Device,
         allocator: &mut Allocator,
@@ -2188,7 +2192,7 @@ mod tests {
     fn prepare_bc_upload_opaca_64x64() {
         let (w, h) = (64u32, 64u32);
         let mut rgba = vec![128u8; (w * h * 4) as usize];
-        for px in rgba.chunks_exact_mut(4) {
+        for px in rgba.as_chunks_mut::<4>().0 {
             px[3] = 255; // alfa opaco de verdad (128 en los 4 canales incluía el alfa)
         }
         let img = GltfImageData {
@@ -2239,7 +2243,7 @@ mod tests {
         // (floor), nunca por encima del mip que Vulkan calcula.
         let (w, h) = (18u32, 10u32);
         let mut rgba = vec![90u8; (w * h * 4) as usize];
-        for px in rgba.chunks_exact_mut(4) {
+        for px in rgba.as_chunks_mut::<4>().0 {
             px[3] = 255;
         }
         let img = GltfImageData { rgba, width: w, height: h };
@@ -2287,7 +2291,7 @@ mod tests {
         }
         // La normal GEOMÉTRICA de cada triángulo (producto cruz de sus
         // aristas) también apunta a +Y: el enrollado declarado es el real.
-        for tri in indices.chunks_exact(3) {
+        for tri in indices.as_chunks::<3>().0 {
             let p = |i: u32| vertices[i as usize].position;
             let (a, b, c) = (p(tri[0]), p(tri[1]), p(tri[2]));
             let e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
@@ -2335,8 +2339,8 @@ mod tests {
             assert!((longitud(v.position) - r).abs() < 1e-5, "vértice fuera de la esfera: {:?}", v.position);
             assert!((longitud(v.normal) - 1.0).abs() < 1e-5);
             let esperada = [v.position[0] / r, v.position[1] / r, v.position[2] / r];
-            for c in 0..3 {
-                assert!((v.normal[c] - esperada[c]).abs() < 1e-5);
+            for (c, &esperada_c) in esperada.iter().enumerate() {
+                assert!((v.normal[c] - esperada_c).abs() < 1e-5);
             }
         }
         let ys: Vec<f32> = vertices.iter().map(|v| v.position[1]).collect();
@@ -2347,7 +2351,7 @@ mod tests {
     #[test]
     fn esfera_triangulos_hacia_fuera() {
         let (vertices, indices) = generate_sphere();
-        for tri in indices.chunks_exact(3) {
+        for tri in indices.as_chunks::<3>().0 {
             let n = normal_geometrica(&vertices, tri);
             if longitud(n) < 1e-9 {
                 continue; // triángulo degenerado del polo
@@ -2389,7 +2393,7 @@ mod tests {
     fn capsula_triangulos_hacia_fuera() {
         let (vertices, indices) = generate_capsule();
         let ch = glass_core::primitives::CAPSULE_CYLINDER_HALF_HEIGHT;
-        for tri in indices.chunks_exact(3) {
+        for tri in indices.as_chunks::<3>().0 {
             let n = normal_geometrica(&vertices, tri);
             if longitud(n) < 1e-9 {
                 continue; // degenerado del polo
@@ -2432,7 +2436,7 @@ mod tests {
     #[test]
     fn cilindro_triangulos_hacia_fuera() {
         let (vertices, indices) = generate_cylinder();
-        for tri in indices.chunks_exact(3) {
+        for tri in indices.as_chunks::<3>().0 {
             let n = normal_geometrica(&vertices, tri);
             if longitud(n) < 1e-9 {
                 continue;
@@ -2477,7 +2481,7 @@ mod tests {
         for i in indices {
             bin.extend_from_slice(&i.to_le_bytes());
         }
-        while bin.len() % 4 != 0 {
+        while !bin.len().is_multiple_of(4) {
             bin.push(0);
         }
 
@@ -2493,7 +2497,7 @@ mod tests {
         };
         let png_offset = bin.len();
         bin.extend_from_slice(&png);
-        while bin.len() % 4 != 0 {
+        while !bin.len().is_multiple_of(4) {
             bin.push(0);
         }
 
@@ -2527,7 +2531,7 @@ mod tests {
 
         let mut glb: Vec<u8> = Vec::new();
         let json_bytes = json.as_bytes();
-        let json_padded = (json_bytes.len() + 3) / 4 * 4;
+        let json_padded = json_bytes.len().div_ceil(4) * 4;
         let total = 12 + 8 + json_padded + 8 + bin.len();
         glb.extend_from_slice(&0x4654_6C67u32.to_le_bytes()); // 'glTF'
         glb.extend_from_slice(&2u32.to_le_bytes());
@@ -2597,7 +2601,7 @@ mod tests {
 
         let mut glb: Vec<u8> = Vec::new();
         let json_bytes = json.as_bytes();
-        let json_padded = (json_bytes.len() + 3) / 4 * 4;
+        let json_padded = json_bytes.len().div_ceil(4) * 4;
         let total = 12 + 8 + json_padded + 8 + bin.len();
         glb.extend_from_slice(&0x4654_6C67u32.to_le_bytes());
         glb.extend_from_slice(&2u32.to_le_bytes());
@@ -2683,7 +2687,7 @@ mod tests {
         f32s(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0], &mut bin);
         // @108 índices (6 B) + relleno a múltiplo de 4
         u16s(&[0, 1, 2], &mut bin);
-        while bin.len() % 4 != 0 {
+        while !bin.len().is_multiple_of(4) {
             bin.push(0);
         }
         // IBMs: dos matrices identidad (128 B)
@@ -2711,7 +2715,7 @@ mod tests {
 
         let mut glb: Vec<u8> = Vec::new();
         let json_bytes = json.as_bytes();
-        let json_padded = (json_bytes.len() + 3) / 4 * 4;
+        let json_padded = json_bytes.len().div_ceil(4) * 4;
         let total = 12 + 8 + json_padded + 8 + bin.len();
         glb.extend_from_slice(&0x4654_6C67u32.to_le_bytes());
         glb.extend_from_slice(&2u32.to_le_bytes());
@@ -2748,7 +2752,7 @@ mod tests {
         f32s(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0], &mut bin);
         // @108 índices (6 B) + relleno
         u16s(&[0, 1, 2], &mut bin);
-        while bin.len() % 4 != 0 {
+        while !bin.len().is_multiple_of(4) {
             bin.push(0);
         }
         // IBMs (128 B)
@@ -2779,7 +2783,7 @@ mod tests {
 
         let mut glb: Vec<u8> = Vec::new();
         let json_bytes = json.as_bytes();
-        let json_padded = (json_bytes.len() + 3) / 4 * 4;
+        let json_padded = json_bytes.len().div_ceil(4) * 4;
         let total = 12 + 8 + json_padded + 8 + bin.len();
         glb.extend_from_slice(&0x4654_6C67u32.to_le_bytes());
         glb.extend_from_slice(&2u32.to_le_bytes());
@@ -2868,7 +2872,7 @@ mod tests {
         for i in [0u16, 1, 2] {
             bin.extend_from_slice(&i.to_le_bytes());
         }
-        while bin.len() % 4 != 0 {
+        while !bin.len().is_multiple_of(4) {
             bin.push(0);
         }
         let ibm_offset = bin.len();
@@ -2891,7 +2895,7 @@ mod tests {
         );
         let mut glb: Vec<u8> = Vec::new();
         let json_bytes = json.as_bytes();
-        let json_padded = (json_bytes.len() + 3) / 4 * 4;
+        let json_padded = json_bytes.len().div_ceil(4) * 4;
         let total = 12 + 8 + json_padded + 8 + bin.len();
         glb.extend_from_slice(&0x4654_6C67u32.to_le_bytes());
         glb.extend_from_slice(&2u32.to_le_bytes());
@@ -2905,8 +2909,7 @@ mod tests {
         glb.extend_from_slice(&bin);
 
         let err = MeshLoader::load_model_from_glb_bytes(&glb)
-            .err()
-            .expect("una piel gigante no debe importar");
+            .expect_err("una piel gigante no debe importar");
         assert!(
             err.contains("articulaciones"),
             "el error debe explicar el límite, llegó: {err}"

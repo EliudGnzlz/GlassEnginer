@@ -56,7 +56,7 @@ impl<'a> UiFonts<'a> {
 /// Devuelve el lote del último segmento si ya es del mismo atlas;
 /// si no, crea un segmento nuevo y devuelve su lote.
 /// (No se usa un closure para evitar problemas de préstamos.)
-fn segment_mut<'a>(segs: &'a mut Vec<UiSegment>, kind: UiAtlasKind) -> &'a mut UiBatch {
+fn segment_mut(segs: &mut Vec<UiSegment>, kind: UiAtlasKind) -> &mut UiBatch {
     let mismo = matches!(segs.last(), Some(s) if s.atlas == kind);
     if !mismo {
         segs.push(UiSegment {
@@ -673,8 +673,10 @@ mod tests_img3 {
         let mut scene = SceneState::default();
 
         let mut e = entidad("imagen");
-        let mut rt = RectTransformData::default();
-        rt.size_delta = [100.0, 100.0];
+        let rt = RectTransformData {
+            size_delta: [100.0, 100.0],
+            ..Default::default()
+        };
         e.rect_transform = Some(rt);
         e.ui_image = Some(glass_core::UIImageData {
             sprite: "sprite.png".to_string(),

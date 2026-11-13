@@ -1,7 +1,7 @@
 use crate::context::VulkanContext;
 use crate::mesh::GpuMesh;
 use crate::offscreen::OffscreenTarget;
-use crate::pipeline::GraphicsPipeline;
+use crate::pipeline::{GraphicsPipeline, MeshPipelineLayouts};
 use crate::swapchain::SwapchainContext;
 use crate::ui::{FontAtlas, UiAtlasKind, UiRenderer, UiSegment};
 use ash::vk;
@@ -36,6 +36,35 @@ const PBR_SKINNED_VERT_SPV: &[u8] =
 const PBR_LEGACY_FRAG_SPV: &[u8] =
     include_bytes!("../../../assets/shaders/pbr_legacy.frag.spv");
 
+/// Listas de dibujo de un frame para `render_views`: las mallas,
+/// pieles y portales de las vistas de escena y de juego, los
+/// proyectores de sombra y las matrices de partículas. (Agrupadas
+/// por el lint too_many_arguments de Clippy.)
+pub struct FrameDraws<'a> {
+    pub scene_meshes: &'a [MeshDrawItem<'a>],
+    pub game_meshes: Option<&'a [MeshDrawItem<'a>]>,
+    pub scene_skinned: &'a [SkinnedDrawItem<'a>],
+    pub game_skinned: Option<&'a [SkinnedDrawItem<'a>]>,
+    pub shadow_casters: Option<&'a ShadowCasters<'a>>,
+    pub scene_portal_draws: &'a [PortalDrawItem<'a>],
+    pub game_portal_draws: Option<&'a [PortalDrawItem<'a>]>,
+    pub particle_vps: Option<([f32; 16], [f32; 16])>,
+}
+
+/// Proyector estático del pase de sombras: (malla, modelo, rangos).
+pub type StaticCaster<'a> = (&'a GpuMesh, [f32; 16], Option<Vec<(u32, u32)>>);
+
+/// Proyector de grafo del pase de sombras: (malla, modelo, nombre
+/// del grafo, set de texturas, umbral alfa, rangos).
+pub type GraphCaster<'a> = (
+    &'a GpuMesh,
+    [f32; 16],
+    String,
+    vk::DescriptorSet,
+    Option<f32>,
+    Option<Vec<(u32, u32)>>,
+);
+
 /// Proyectores del pase de sombras de un frame: mallas rígidas (malla +
 /// matriz de modelo) y mallas con piel (malla + modelo + set de
 /// articulaciones de la entidad). La MVP de luz la compone el renderer
@@ -44,12 +73,12 @@ pub struct ShadowCasters<'a> {
     /// (malla, modelo, rangos a dibujar): `Some(rangos)` limita el
     /// pase a esos (first_index, index_count) — el nivel LOD activo
     /// (auditoría C3); `None` dibuja la malla entera.
-    pub statics: &'a [(&'a GpuMesh, [f32; 16], Option<Vec<(u32, u32)>>)],
+    pub statics: &'a [StaticCaster<'a>],
     pub skinned: &'a [(&'a GpuMesh, [f32; 16], vk::DescriptorSet)],
     /// Proyectores cuyo material es un grafo con pase Shadow (Fase 2S):
     /// (malla, matriz de modelo, nombre del grafo, set de texturas del
     /// grafo, umbral de recorte alfa si el grafo declara `alpha_clip`).
-    pub graph_statics: &'a [(&'a GpuMesh, [f32; 16], String, vk::DescriptorSet, Option<f32>, Option<Vec<(u32, u32)>>)],
+    pub graph_statics: &'a [GraphCaster<'a>],
 }
 
 /// Qué vista procesa `render_post` (la de escena o la de juego).
@@ -952,12 +981,14 @@ impl GlassRenderer {
         let swapchain = SwapchainContext::new(
             &context.instance,
             device.clone(),
-            &context.surface_loader,
-            context.surface,
-            context.physical_device,
-            width,
-            height,
-            None,
+            crate::swapchain::SwapchainTarget {
+                surface_loader: &context.surface_loader,
+                surface: context.surface,
+                physical_device: context.physical_device,
+                width,
+                height,
+                old_swapchain: None,
+            },
         )?;
 
         // 3. Crear RenderPass y Framebuffers para Swapchain
@@ -989,27 +1020,27 @@ impl GlassRenderer {
         // el 3D se dibuja directamente en ellos).
         let offscreen = OffscreenTarget::with_format(
             device.clone(),
-            &mut *allocator.lock().unwrap(),
+            &mut allocator.lock().unwrap(),
             1280,
             720,
             vk::Format::R16G16B16A16_SFLOAT,
         )?;
         let game_offscreen = OffscreenTarget::with_format(
             device.clone(),
-            &mut *allocator.lock().unwrap(),
+            &mut allocator.lock().unwrap(),
             1280,
             720,
             vk::Format::R16G16B16A16_SFLOAT,
         )?;
         let final_offscreen = OffscreenTarget::new(
             device.clone(),
-            &mut *allocator.lock().unwrap(),
+            &mut allocator.lock().unwrap(),
             1280,
             720,
         )?;
         let final_game_offscreen = OffscreenTarget::new(
             device.clone(),
-            &mut *allocator.lock().unwrap(),
+            &mut allocator.lock().unwrap(),
             1280,
             720,
         )?;
@@ -1028,12 +1059,12 @@ impl GlassRenderer {
         let lm_tex_layout = create_lm_tex_set_layout(&device)?;
         let lm_data_layout = create_lm_data_set_layout(&device)?;
         let ibl_layout = create_ibl_set_layout(&device)?;
-        let mesh_pipeline = GraphicsPipeline::new_mesh_pipeline(device.clone(), offscreen.render_pass, MESH_VERT_SPV, MESH_FRAG_SPV, None, None, None, None)?;
-        let mesh_pipeline_legacy = GraphicsPipeline::new_mesh_pipeline(device.clone(), final_offscreen.render_pass, MESH_VERT_SPV, MESH_FRAG_SPV, None, None, None, None)?;
-        let pbr_pipeline = GraphicsPipeline::new_mesh_pipeline(device.clone(), offscreen.render_pass, PBR_VERT_SPV, PBR_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)), Some(ibl_layout))?;
-        let pbr_pipeline_legacy = GraphicsPipeline::new_mesh_pipeline(device.clone(), final_offscreen.render_pass, PBR_VERT_SPV, PBR_LEGACY_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)), Some(ibl_layout))?;
-        let skinned_pipeline = GraphicsPipeline::new_skinned_pipeline(device.clone(), offscreen.render_pass, PBR_SKINNED_VERT_SPV, PBR_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)), Some(ibl_layout))?;
-        let skinned_pipeline_legacy = GraphicsPipeline::new_skinned_pipeline(device.clone(), final_offscreen.render_pass, PBR_SKINNED_VERT_SPV, PBR_LEGACY_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)), Some(ibl_layout))?;
+        let mesh_pipeline = GraphicsPipeline::new_mesh_pipeline(device.clone(), offscreen.render_pass, MESH_VERT_SPV, MESH_FRAG_SPV, MeshPipelineLayouts::default())?;
+        let mesh_pipeline_legacy = GraphicsPipeline::new_mesh_pipeline(device.clone(), final_offscreen.render_pass, MESH_VERT_SPV, MESH_FRAG_SPV, MeshPipelineLayouts::default())?;
+        let pbr_pipeline = GraphicsPipeline::new_mesh_pipeline(device.clone(), offscreen.render_pass, PBR_VERT_SPV, PBR_FRAG_SPV, MeshPipelineLayouts { shadow: Some(shadow_set_layout), point_lights: Some(point_lights_layout), lm: Some((lm_tex_layout, lm_data_layout)), ibl: Some(ibl_layout) })?;
+        let pbr_pipeline_legacy = GraphicsPipeline::new_mesh_pipeline(device.clone(), final_offscreen.render_pass, PBR_VERT_SPV, PBR_LEGACY_FRAG_SPV, MeshPipelineLayouts { shadow: Some(shadow_set_layout), point_lights: Some(point_lights_layout), lm: Some((lm_tex_layout, lm_data_layout)), ibl: Some(ibl_layout) })?;
+        let skinned_pipeline = GraphicsPipeline::new_skinned_pipeline(device.clone(), offscreen.render_pass, PBR_SKINNED_VERT_SPV, PBR_FRAG_SPV, MeshPipelineLayouts { shadow: Some(shadow_set_layout), point_lights: Some(point_lights_layout), lm: Some((lm_tex_layout, lm_data_layout)), ibl: Some(ibl_layout) })?;
+        let skinned_pipeline_legacy = GraphicsPipeline::new_skinned_pipeline(device.clone(), final_offscreen.render_pass, PBR_SKINNED_VERT_SPV, PBR_LEGACY_FRAG_SPV, MeshPipelineLayouts { shadow: Some(shadow_set_layout), point_lights: Some(point_lights_layout), lm: Some((lm_tex_layout, lm_data_layout)), ibl: Some(ibl_layout) })?;
         // Objetivos y pipelines de las vistas de portal (bloque
         // Portales): dos HDR de 1024² (las vistas desde cada
         // portal de la pareja), sus pipelines de superficie
@@ -1046,14 +1077,14 @@ impl GlassRenderer {
         // compartido, el segundo lock se autobloqueaba.
         let portal_target_a = OffscreenTarget::with_format(
             device.clone(),
-            &mut *allocator.lock().unwrap(),
+            &mut allocator.lock().unwrap(),
             1024,
             1024,
             vk::Format::R16G16B16A16_SFLOAT,
         )?;
         let portal_target_b = OffscreenTarget::with_format(
             device.clone(),
-            &mut *allocator.lock().unwrap(),
+            &mut allocator.lock().unwrap(),
             1024,
             1024,
             vk::Format::R16G16B16A16_SFLOAT,
@@ -1064,20 +1095,14 @@ impl GlassRenderer {
             offscreen.render_pass,
             PORTAL_VERT_SPV,
             PORTAL_FRAG_SPV,
-            None,
-            None,
-            Some((lm_tex_layout, lm_data_layout)),
-            None,
+            MeshPipelineLayouts { lm: Some((lm_tex_layout, lm_data_layout)), ..Default::default() },
         )?;
         let portal_pipeline_legacy = GraphicsPipeline::new_mesh_pipeline(
             device.clone(),
             final_offscreen.render_pass,
             PORTAL_VERT_SPV,
             PORTAL_FRAG_SPV,
-            None,
-            None,
-            Some((lm_tex_layout, lm_data_layout)),
-            None,
+            MeshPipelineLayouts { lm: Some((lm_tex_layout, lm_data_layout)), ..Default::default() },
         )?;
         let portal_sets = unsafe {
             let pool_sizes = [vk::DescriptorPoolSize::default()
@@ -1112,8 +1137,8 @@ impl GlassRenderer {
         // así que NO pueden crearse como pipelines de grafo) con
         // mezcla por alfa. Se registran en los mapas de pipelines
         // con nombre reservado tras construir el renderer.
-        let pbr_transparent = GraphicsPipeline::new_mesh_pipeline_transparent(device.clone(), offscreen.render_pass, PBR_VERT_SPV, PBR_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)), Some(ibl_layout))?;
-        let pbr_transparent_legacy = GraphicsPipeline::new_mesh_pipeline_transparent(device.clone(), final_offscreen.render_pass, PBR_VERT_SPV, PBR_LEGACY_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)), Some(ibl_layout))?;
+        let pbr_transparent = GraphicsPipeline::new_mesh_pipeline_transparent(device.clone(), offscreen.render_pass, PBR_VERT_SPV, PBR_FRAG_SPV, MeshPipelineLayouts { shadow: Some(shadow_set_layout), point_lights: Some(point_lights_layout), lm: Some((lm_tex_layout, lm_data_layout)), ibl: Some(ibl_layout) })?;
+        let pbr_transparent_legacy = GraphicsPipeline::new_mesh_pipeline_transparent(device.clone(), final_offscreen.render_pass, PBR_VERT_SPV, PBR_LEGACY_FRAG_SPV, MeshPipelineLayouts { shadow: Some(shadow_set_layout), point_lights: Some(point_lights_layout), lm: Some((lm_tex_layout, lm_data_layout)), ibl: Some(ibl_layout) })?;
 
         // Recursos del mapa de sombras: imagen D32, UBO de frame, set
         // real (set 2 del PBR/piel) y de relleno (set 2 de grafos) y
@@ -1121,7 +1146,7 @@ impl GlassRenderer {
         // de articulaciones, cuyo layout posee el pipeline con piel.
         let shadow = crate::shadow::ShadowResources::new(
             device.clone(),
-            &mut *allocator.lock().unwrap(),
+            &mut allocator.lock().unwrap(),
             shadow_set_layout,
             shadow_dummy_layout,
             skinned_pipeline
@@ -1141,7 +1166,7 @@ impl GlassRenderer {
         // antes del primer frame.
         let point_shadows = crate::shadow::PointShadowResources::new(
             &device,
-            &mut *allocator.lock().unwrap(),
+            &mut allocator.lock().unwrap(),
             shadow.render_pass,
         )?;
         shadow.write_point_shadow_set(&device, point_shadows.sample_view, point_shadows.sampler);
@@ -1150,7 +1175,7 @@ impl GlassRenderer {
         // pasada final contra el render pass LDR de presentación.
         let post = crate::post::PostChain::new(
             device.clone(),
-            &mut *allocator.lock().unwrap(),
+            &mut allocator.lock().unwrap(),
             1280,
             720,
             final_offscreen.render_pass,
@@ -1351,11 +1376,11 @@ impl GlassRenderer {
             let pool = device.create_descriptor_pool(&pool_info, None)?;
 
             fn alinear_arriba(v: u64, a: u64) -> u64 {
-                if a == 0 { v } else { (v + a - 1) / a * a }
+                if a == 0 { v } else { v.div_ceil(a) * a }
             }
             let point_lights_stride = alinear_arriba(
                 POINT_LIGHTS_UBO_SIZE,
-                context.physical_device_properties.limits.min_uniform_buffer_offset_alignment as u64,
+                context.physical_device_properties.limits.min_uniform_buffer_offset_alignment,
             );
             let size = point_lights_stride * POINT_LIGHT_SLOTS;
             let buffer_info = vk::BufferCreateInfo::default()
@@ -1503,7 +1528,7 @@ impl GlassRenderer {
 
             let default_tex = crate::mesh::MeshLoader::upload_texture_to_gpu(
                 &device,
-                &mut *allocator.lock().unwrap(),
+                &mut allocator.lock().unwrap(),
                 &crate::mesh::GltfImageData {
                     width: 1,
                     height: 1,
@@ -1632,7 +1657,7 @@ impl GlassRenderer {
 
             let ibl_cube = create_ibl_cube(
                 &device,
-                &mut *allocator.lock().unwrap(),
+                &mut allocator.lock().unwrap(),
                 context.graphics_queue,
                 command_pool,
                 1,
@@ -1689,7 +1714,7 @@ impl GlassRenderer {
         // y el pool para la subida única del atlas de fuente.
         let ui = UiRenderer::new(
             device.clone(),
-            &mut *allocator.lock().unwrap(),
+            &mut allocator.lock().unwrap(),
             context.graphics_queue,
             command_pool,
         )?;
@@ -1877,7 +1902,7 @@ impl GlassRenderer {
             .ok_or_else(|| RendererError::Descriptor("pipeline con piel sin layout de set 1".into()))?;
         crate::skin::JointBuffer::new(
             &self.device,
-            &mut *self.allocator.lock().unwrap(),
+            &mut self.allocator.lock().unwrap(),
             self.joints_pool,
             layout,
             joint_count,
@@ -2070,7 +2095,7 @@ impl GlassRenderer {
     ) -> Result<(), String> {
         let tex = crate::mesh::MeshLoader::upload_texture_to_gpu(
             &self.device,
-            &mut *self.allocator.lock().unwrap(),
+            &mut self.allocator.lock().unwrap(),
             &crate::mesh::GltfImageData {
                 width: size,
                 height: size,
@@ -2090,7 +2115,7 @@ impl GlassRenderer {
             .image_info(&image_info)];
         unsafe { self.device.update_descriptor_sets(&write, &[]) };
         if let Some(mut prev) = self.lm_atlas_texture.take() {
-            prev.destroy(&self.device, &mut *self.allocator.lock().unwrap());
+            prev.destroy(&self.device, &mut self.allocator.lock().unwrap());
         }
         self.lm_atlas_texture = Some(tex);
         self.lm_tex_set = self.lm_runtime_tex_set;
@@ -2129,7 +2154,7 @@ impl GlassRenderer {
     pub fn clear_lightmap(&mut self) {
         self.lm_tex_set = self.lm_default_tex_set;
         if let Some(mut prev) = self.lm_atlas_texture.take() {
-            prev.destroy(&self.device, &mut *self.allocator.lock().unwrap());
+            prev.destroy(&self.device, &mut self.allocator.lock().unwrap());
         }
         self.lm_index.clear();
         self.lm_atlas_size = 1.0;
@@ -2157,7 +2182,7 @@ impl GlassRenderer {
             let mut allocator = self.allocator.lock().unwrap();
             create_ibl_cube(
                 &self.device,
-                &mut *allocator,
+                &mut allocator,
                 queue,
                 self.command_pool,
                 size,
@@ -2180,7 +2205,7 @@ impl GlassRenderer {
         }
 
         if let Some(mut old_cube) = self.ibl_cube_texture.take() {
-            old_cube.destroy(&self.device, &mut *self.allocator.lock().unwrap());
+            old_cube.destroy(&self.device, &mut self.allocator.lock().unwrap());
         }
 
         self.ibl_cube_texture = Some(new_cube);
@@ -2273,8 +2298,7 @@ impl GlassRenderer {
             frag_spv,
             self.graph_globals_layout,
             transparent,
-            Some(self.shadow.dummy_layout),
-            Some(self.point_lights_layout),
+            MeshPipelineLayouts { shadow: Some(self.shadow.dummy_layout), point_lights: Some(self.point_lights_layout), ..Default::default() },
         )?;
         let graph_set0 = pipeline.descriptor_set_layout;
         self.custom_pipelines.insert(name.to_string(), pipeline);
@@ -2287,8 +2311,7 @@ impl GlassRenderer {
             frag_spv,
             self.graph_globals_layout,
             transparent,
-            Some(self.shadow.dummy_layout),
-            Some(self.point_lights_layout),
+            MeshPipelineLayouts { shadow: Some(self.shadow.dummy_layout), point_lights: Some(self.point_lights_layout), ..Default::default() },
         )?;
         self.custom_pipelines_legacy.insert(name.to_string(), pipeline_legacy);
         // Pipelines de profundidad del grafo (Fase 2S): si el grafo
@@ -2607,8 +2630,6 @@ impl GlassRenderer {
         }
     }
 
-    /// Enlaza el set 1 con el UBO global cuando el pipeline del lote es
-
     /// El pipeline de un lote: el del grafo si lo pide y existe; si
     /// no, PBR. Con `legacy` (post desactivado) se usan los gemelos
     /// creados contra el render pass LDR.
@@ -2660,12 +2681,14 @@ impl GlassRenderer {
         self.swapchain = SwapchainContext::new(
             &context.instance,
             self.device.clone(),
-            &context.surface_loader,
-            context.surface,
-            context.physical_device,
-            width,
-            height,
-            Some(old_swapchain),
+            crate::swapchain::SwapchainTarget {
+                surface_loader: &context.surface_loader,
+                surface: context.surface,
+                physical_device: context.physical_device,
+                width,
+                height,
+                old_swapchain: Some(old_swapchain),
+            },
         )?;
         let semaphore_info = vk::SemaphoreCreateInfo::default();
         self.render_finished_semaphores = (0..self.swapchain.images.len())
@@ -3361,7 +3384,7 @@ impl GlassRenderer {
                     std::ptr::copy_nonoverlapping(
                         verts.as_ptr() as *const u8,
                         ptr.as_ptr() as *mut u8,
-                        verts.len() * std::mem::size_of::<ParticleVertex>(),
+                        std::mem::size_of_val(verts),
                     );
                 }
             }
@@ -3370,7 +3393,7 @@ impl GlassRenderer {
                     std::ptr::copy_nonoverlapping(
                         indices.as_ptr() as *const u8,
                         ptr.as_ptr() as *mut u8,
-                        indices.len() * std::mem::size_of::<u32>(),
+                        std::mem::size_of_val(indices),
                     );
                 }
             }
@@ -3385,15 +3408,18 @@ impl GlassRenderer {
     pub fn render_views(
         &mut self,
         queue: vk::Queue,
-        scene_meshes: &[MeshDrawItem],
-        game_meshes: Option<&[MeshDrawItem]>,
-        scene_skinned: &[SkinnedDrawItem<'_>],
-        game_skinned: Option<&[SkinnedDrawItem<'_>]>,
-        shadow_casters: Option<&ShadowCasters<'_>>,
-        scene_portal_draws: &[PortalDrawItem],
-        game_portal_draws: Option<&[PortalDrawItem]>,
-        particle_vps: Option<([f32; 16], [f32; 16])>,
+        draws: FrameDraws<'_>,
     ) -> Result<(), RendererError> {
+        let FrameDraws {
+            scene_meshes,
+            game_meshes,
+            scene_skinned,
+            game_skinned,
+            shadow_casters,
+            scene_portal_draws,
+            game_portal_draws,
+            particle_vps,
+        } = draws;
         unsafe {
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
             self.device.reset_fences(&[self.fence])?;
@@ -3568,7 +3594,16 @@ impl GlassRenderer {
             .iter()
             .map(|(m, mvp)| (*m, MeshPushConstants::new(*mvp), self.fallback_set, None, (0, m.index_count), None, 0))
             .collect();
-        self.render_views(queue, &pc_list, None, &[], None, None, &[], None, None)
+        self.render_views(queue, FrameDraws {
+            scene_meshes: &pc_list,
+            game_meshes: None,
+            scene_skinned: &[],
+            game_skinned: None,
+            shadow_casters: None,
+            scene_portal_draws: &[],
+            game_portal_draws: None,
+            particle_vps: None,
+        })
     }
 
     /// Renderiza la escena 3D a la textura offscreen desacoplada (con soporte opcional de malla 3D indexada)
@@ -3596,11 +3631,11 @@ impl GlassRenderer {
 
     /// Ejecuta la cadena de post-procesado sobre una vista (bright-pass
     /// + blur + pasada final con ACES y viñeta) y deja el resultado en
-    /// su objetivo LDR de presentación. Misma disciplina de
-    /// sincronización serializada que el resto del renderer (fence
-    /// compartido, un solo command buffer). Sin post activo
-    /// (GLASS_POST=0) no hace nada: en ese modo `render_views` ya
-    /// dibujó el 3D directamente en el objetivo LDR.
+    ///   su objetivo LDR de presentación. Misma disciplina de
+    ///   sincronización serializada que el resto del renderer (fence
+    ///   compartido, un solo command buffer). Sin post activo
+    ///   (GLASS_POST=0) no hace nada: en ese modo `render_views` ya
+    ///   dibujó el 3D directamente en el objetivo LDR.
     pub fn render_post(
         &mut self,
         queue: vk::Queue,
@@ -3706,11 +3741,11 @@ impl GlassRenderer {
         size: u32,
     ) -> Result<(), RendererError> {
         if let Some(mut old) = self.ui_images.take() {
-            old.destroy(&mut *self.allocator.lock().unwrap());
+            old.destroy(&mut self.allocator.lock().unwrap());
         }
         let renderer = UiRenderer::new_for_texture(
             self.device.clone(),
-            &mut *self.allocator.lock().unwrap(),
+            &mut self.allocator.lock().unwrap(),
             queue,
             self.command_pool,
             rgba,
@@ -3734,7 +3769,7 @@ impl GlassRenderer {
         }
         let renderer = UiRenderer::new_with_font_bytes(
             self.device.clone(),
-            &mut *self.allocator.lock().unwrap(),
+            &mut self.allocator.lock().unwrap(),
             queue,
             self.command_pool,
             font_bytes,
@@ -3752,7 +3787,7 @@ impl GlassRenderer {
     /// usa elementos Imagen).
     pub fn clear_ui_image_atlas(&mut self) {
         if let Some(mut old) = self.ui_images.take() {
-            old.destroy(&mut *self.allocator.lock().unwrap());
+            old.destroy(&mut self.allocator.lock().unwrap());
         }
     }
 
@@ -3980,31 +4015,31 @@ impl Drop for GlassRenderer {
             self.device.destroy_descriptor_pool(self.ibl_pool, None);
             self.device.destroy_buffer(self.ibl_params_buffer, None);
         }
-        self.ui.destroy(&mut *self.allocator.lock().unwrap());
+        self.ui.destroy(&mut self.allocator.lock().unwrap());
         if let Some(ui_img) = &mut self.ui_images {
-            ui_img.destroy(&mut *self.allocator.lock().unwrap());
+            ui_img.destroy(&mut self.allocator.lock().unwrap());
         }
         for pass in self.ui_named_fonts.values_mut() {
-            pass.destroy(&mut *self.allocator.lock().unwrap());
+            pass.destroy(&mut self.allocator.lock().unwrap());
         }
         self.post
-            .destroy(&self.device, &mut *self.allocator.lock().unwrap());
+            .destroy(&self.device, &mut self.allocator.lock().unwrap());
         self.shadow.destroy_with_device(
             &self.device,
-            &mut *self.allocator.lock().unwrap(),
+            &mut self.allocator.lock().unwrap(),
         );
         self.point_shadows.destroy_with_device(
             &self.device,
-            &mut *self.allocator.lock().unwrap(),
+            &mut self.allocator.lock().unwrap(),
         );
         self.offscreen
-            .destroy(&mut *self.allocator.lock().unwrap());
+            .destroy(&mut self.allocator.lock().unwrap());
         self.game_offscreen
-            .destroy(&mut *self.allocator.lock().unwrap());
+            .destroy(&mut self.allocator.lock().unwrap());
         self.final_offscreen
-            .destroy(&mut *self.allocator.lock().unwrap());
+            .destroy(&mut self.allocator.lock().unwrap());
         self.final_game_offscreen
-            .destroy(&mut *self.allocator.lock().unwrap());
+            .destroy(&mut self.allocator.lock().unwrap());
     }
 }
 

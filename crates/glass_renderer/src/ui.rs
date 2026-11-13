@@ -925,11 +925,11 @@ fn create_ui_buffer(
 }
 
 fn create_shader_module(device: &ash::Device, spv_bytes: &[u8]) -> Result<vk::ShaderModule, RendererError> {
-    if spv_bytes.len() % 4 != 0 {
+    if !spv_bytes.len().is_multiple_of(4) {
         return Err(RendererError::Descriptor("SPIR-V de UI con tamaño no múltiplo de 4".into()));
     }
     let words: Vec<u32> = spv_bytes
-        .chunks_exact(4)
+        .as_chunks::<4>().0.iter()
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     let info = vk::ShaderModuleCreateInfo::default().code(&words);
@@ -1024,12 +1024,16 @@ pub struct UiImageAtlas {
     pub uvs: Vec<[f32; 4]>,
 }
 
+/// Resultado de empaquetar un atlas UI: posiciones en píxeles de
+/// cada imagen y sus UVs normalizadas.
+type UiAtlasPacking = (Vec<(u32, u32)>, Vec<[f32; 4]>);
+
 /// Intenta empaquetar las imágenes en un atlas de lado `size`.
 /// Devuelve las posiciones en píxeles y las UVs normalizadas.
 fn try_pack_ui_images(
     images: &[(u32, u32, &[u8])],
     size: u32,
-) -> Option<(Vec<(u32, u32)>, Vec<[f32; 4]>)> {
+) -> Option<UiAtlasPacking> {
     const BORDE: u64 = 2;
     const HUECO: u64 = 2;
 

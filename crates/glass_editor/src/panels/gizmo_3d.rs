@@ -172,7 +172,7 @@ pub fn render_3d_transform_gizmo(
                         hovered_axis = GizmoAxis::Y;
                     } else if (dist - 52.0).abs() < 5.0 {
                         hovered_axis = GizmoAxis::Z;
-                    } else if dist >= 32.0 && dist <= 58.0 {
+                    } else if (32.0..=58.0).contains(&dist) {
                         if dist < 41.5 {
                             hovered_axis = GizmoAxis::X;
                         } else if dist < 48.5 {
@@ -425,7 +425,7 @@ pub fn pick_entity_at_screen(
 
         let center_2d = world_to_screen(pos, vp, rect);
         let icon_clicked = (ent.camera.is_some() || ent.light.is_some())
-            && center_2d.map_or(false, |c| (click_pos - c).length() <= 24.0);
+            && center_2d.is_some_and(|c| (click_pos - c).length() <= 24.0);
 
         let pad = 6.0_f32;
         let is_hit = icon_clicked || if valid_corners >= 2 {

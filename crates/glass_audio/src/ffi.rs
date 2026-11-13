@@ -20,6 +20,10 @@ pub fn get_global_audio_system() -> Option<Arc<AudioSystem>> {
     get_audio_cell().read().ok().and_then(|c| c.clone())
 }
 
+/// # Safety
+/// `clip_utf8` debe ser null o apuntar a una cadena C válida
+/// (terminada en nulo) y legible durante la llamada; la función
+/// comprueba el null y valida el UTF-8.
 #[no_mangle]
 pub unsafe extern "C" fn glass_audio_play_2d(
     clip_utf8: *const c_char,
@@ -41,6 +45,10 @@ pub unsafe extern "C" fn glass_audio_play_2d(
     }
 }
 
+/// # Safety
+/// `clip_utf8` debe ser null o apuntar a una cadena C válida
+/// (terminada en nulo) y legible durante la llamada; la función
+/// comprueba el null y valida el UTF-8.
 #[no_mangle]
 pub unsafe extern "C" fn glass_audio_play_3d(
     clip_utf8: *const c_char,
@@ -80,6 +88,10 @@ fn bus_desde_puente(bus_utf8: *const c_char) -> BusId {
     }
 }
 
+/// # Safety
+/// `clip_utf8` y `bus_utf8` deben ser null o apuntar a cadenas C
+/// válidas (terminadas en nulo) y legibles durante la llamada; la
+/// función comprueba los null y valida el UTF-8.
 #[no_mangle]
 pub unsafe extern "C" fn glass_audio_play_2d_on_bus(
     clip_utf8: *const c_char,
@@ -103,6 +115,10 @@ pub unsafe extern "C" fn glass_audio_play_2d_on_bus(
     }
 }
 
+/// # Safety
+/// `clip_utf8` y `bus_utf8` deben ser null o apuntar a cadenas C
+/// válidas (terminadas en nulo) y legibles durante la llamada; la
+/// función comprueba los null y valida el UTF-8.
 #[no_mangle]
 pub unsafe extern "C" fn glass_audio_play_3d_on_bus(
     clip_utf8: *const c_char,
@@ -129,6 +145,9 @@ pub unsafe extern "C" fn glass_audio_play_3d_on_bus(
     }
 }
 
+/// # Safety
+/// No dereferencia punteros: forma parte de la superficie FFI
+/// (por eso es `unsafe extern`) y admite cualquier `handle`.
 #[no_mangle]
 pub unsafe extern "C" fn glass_audio_set_source_position(
     handle: SoundHandle,
@@ -141,6 +160,9 @@ pub unsafe extern "C" fn glass_audio_set_source_position(
     }
 }
 
+/// # Safety
+/// No dereferencia punteros: forma parte de la superficie FFI
+/// (por eso es `unsafe extern`) y admite cualquier valor.
 #[no_mangle]
 pub unsafe extern "C" fn glass_audio_set_listener_transform(
     pos_x: f32,
@@ -156,6 +178,9 @@ pub unsafe extern "C" fn glass_audio_set_listener_transform(
     }
 }
 
+/// # Safety
+/// No dereferencia punteros: forma parte de la superficie FFI
+/// (por eso es `unsafe extern`) y admite cualquier `handle`.
 #[no_mangle]
 pub unsafe extern "C" fn glass_audio_stop(handle: SoundHandle) {
     if let Some(sys) = get_global_audio_system() {

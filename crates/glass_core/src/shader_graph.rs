@@ -593,7 +593,7 @@ fn coerce(expr: &str, from: GlslType, to: GlslType) -> String {    if from == to
 /// vale 1; un vec2 rellena b=0 y alfa=1; un vec3 rellena alfa=1.
 fn channel_expr(expr: &str, ty: GlslType, ch: usize) -> String {
     match (ty, ch) {
-        (GlslType::Float, 0 | 1 | 2) => expr.to_string(),
+        (GlslType::Float, 0..=2) => expr.to_string(),
         (GlslType::Float, _) => "1.0".to_string(),
         (GlslType::Vec2, 0) => format!("({}).x", expr),
         (GlslType::Vec2, 1) => format!("({}).y", expr),
@@ -1116,12 +1116,15 @@ impl<'a> Compiler<'a> {
     }
 }
 
+/// Mapas validados de un grafo: nodos por id y entradas conectadas
+/// ((nodo destino, pin) → nodo origen). Los consume el compilador
+/// de las dos etapas.
+type MapasValidados<'a> = (HashMap<u32, &'a GraphNode>, HashMap<(u32, &'a str), u32>);
+
 impl ShaderGraph {
     /// Valida el grafo y construye los mapas que consume el compilador:
     /// nodos por id y entradas conectadas. Compartido por las dos etapas.
-    fn validated_maps<'a>(
-        &'a self,
-    ) -> Result<(HashMap<u32, &'a GraphNode>, HashMap<(u32, &'a str), u32>), GraphError> {
+    fn validated_maps(&self) -> Result<MapasValidados<'_>, GraphError> {
         // Auditoría 2S (M-10): el tope de 32 propiedades de valor del
         // UBO por instancia no se hacía cumplir en ninguna parte; un
         // grafo mayor desbordaba el pool del renderer en silencio.
@@ -1962,7 +1965,7 @@ mod tests {
 
     /// Grafo con sub-red de vértices: h = 0,07·sin(37,7·Position.X + 1,3·t)
     /// + 0,05·sin(28,3·Position.Z + 0,9·t); offset = (0, h, 0) vía un color
-    /// verde multiplicado por h. Y su fragmento trivial (un color fijo).
+    ///   verde multiplicado por h. Y su fragmento trivial (un color fijo).
     fn grafo_con_olas() -> ShaderGraph {
         use NodeKind as K;
         use PositionAxis as A;

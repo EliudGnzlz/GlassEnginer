@@ -1029,9 +1029,7 @@ impl EditorDockingLayout {
                 egui::ScrollArea::vertical()
                     .max_height(280.0)
                     .show(ui, |ui| {
-                        let total = ejes.len();
-                        for i in 0..total {
-                            let eje = &mut ejes[i];
+                        for (i, eje) in ejes.iter_mut().enumerate() {
                             egui::CollapsingHeader::new(format!("{} · {}", i, eje.name))
                                 .id_salt(format!("eje_{i}"))
                                 .show(ui, |ui| {

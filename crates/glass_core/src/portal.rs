@@ -128,7 +128,7 @@ pub fn find_pair<'a>(
             && e.active
             && e.portal
                 .as_ref()
-                .map_or(false, |p| p.pair.as_str() == pair)
+                .is_some_and(|p| p.pair.as_str() == pair)
     })
 }
 

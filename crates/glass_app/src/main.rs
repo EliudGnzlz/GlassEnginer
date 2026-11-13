@@ -17,7 +17,8 @@ use glass_mcp::McpServer;
 #[cfg(feature = "editor")]
 use std::io::IsTerminal;
 use glass_renderer::{
-    AssetCache, AssetReloadEvent, AssetWatcher, GlassRenderer, MeshLoader, VulkanConfig,
+    AssetCache, AssetReloadEvent, AssetWatcher, FrameDraws, GlassRenderer, MeshLoader,
+    TextureUpload, VulkanConfig,
     VulkanContext,
 };
 use glass_scripting::{
@@ -178,7 +179,7 @@ impl EngineSceneBridge {
                             if spec.body_type == BodyType::Static =>
                         {
                             let tris: Vec<[u32; 3]> = indices
-                                .chunks_exact(3)
+                                .as_chunks::<3>().0.iter()
                                 .map(|c| [c[0], c[1], c[2]])
                                 .collect();
                             physics.attach_trimesh_collider(
@@ -487,7 +488,6 @@ impl SceneBridge for EngineSceneBridge {
     // así que el cambio se ve en el frame siguiente. Cambiar el
     // sprite además dispara la reconstrucción del atlas de
     // imágenes (la clave de sprites cambia sola).
-
     fn ui_set_text(&self, entity_id: u64, text: &str) -> bool {
         let mut state = match self.scene_state.lock() {
             Ok(s) => s,
@@ -1053,6 +1053,13 @@ impl SceneBridge for EngineSceneBridge {
 /// decisión de pose del frame en `anim_pose`. También consume los
 /// crossfade libres pedidos sin controlador. Sin controlador ni
 /// peticiones, no toca nada: el camino clásico queda intacto.
+/// Salida del avance de animadores de un frame: los eventos de
+/// animación disparados y los cambios de estado, con su entidad.
+type SalidaAvanceAnimadores = (
+    Vec<(u64, glass_core::animator::FiredAnimEvent)>,
+    Vec<(u64, glass_core::animator::StateChangeEvent)>,
+);
+
 fn avanzar_animadores_fsm(
     animator_controllers: &mut std::collections::HashMap<String, glass_core::animator::AnimatorController>,
     anim_pose: &mut std::collections::HashMap<u64, Vec<(String, f32, f32)>>,
@@ -1061,10 +1068,7 @@ fn avanzar_animadores_fsm(
     scene: &mut SceneState,
     cache: &glass_renderer::AssetCache,
     dt: f32,
-) -> (
-    Vec<(u64, glass_core::animator::FiredAnimEvent)>,
-    Vec<(u64, glass_core::animator::StateChangeEvent)>,
-) {
+) -> SalidaAvanceAnimadores {
     anim_pose.clear();
     let mut eventos_out: Vec<(u64, glass_core::animator::FiredAnimEvent)> = Vec::new();
     let mut cambios_out: Vec<(u64, glass_core::animator::StateChangeEvent)> = Vec::new();
@@ -1743,10 +1747,10 @@ impl Drop for GlassEngineApp {
             let joints_pool = renderer.joints_pool;
             let device = renderer.device.clone();
             for (_, mut jb) in std::mem::take(&mut self.skin_joint_buffers) {
-                jb.destroy(&device, &mut *renderer.allocator.lock().unwrap(), joints_pool);
+                jb.destroy(&device, &mut renderer.allocator.lock().unwrap(), joints_pool);
             }
             for mut jb in self.retired_joint_buffers.drain(..) {
-                jb.destroy(&device, &mut *renderer.allocator.lock().unwrap(), joints_pool);
+                jb.destroy(&device, &mut renderer.allocator.lock().unwrap(), joints_pool);
             }
         }
 
@@ -1754,7 +1758,7 @@ impl Drop for GlassEngineApp {
         if let (Some(renderer), Some(pool), Some(layout)) = (&mut self.renderer, self.desc_pool, self.desc_layout) {
             // Liberar AssetCache primero
             if let Ok(mut cache) = self.asset_cache.write() {
-                cache.destroy(&renderer.device, &mut *renderer.allocator.lock().unwrap());
+                cache.destroy(&renderer.device, &mut renderer.allocator.lock().unwrap());
             }
 
             unsafe {
@@ -1785,21 +1789,78 @@ impl Drop for GlassEngineApp {
     }
 }
 
+/// Banderas de arranque de la app: el modo standalone y los modos
+/// de test automático (`--test-*`). (Agrupadas por el lint
+/// too_many_arguments de Clippy.)
+#[derive(Clone, Copy, Default)]
+pub struct LaunchFlags {
+    pub is_standalone: bool,
+    pub is_headless_test: bool,
+    pub is_m5_test: bool,
+    pub is_m6_test: bool,
+    pub is_m7_test: bool,
+    pub is_m8_test: bool,
+    pub is_m9_test: bool,
+    pub is_m10_test: bool,
+    pub is_platformer_test: bool,
+    pub is_sample_game_test: bool,
+    pub is_standalone_test: bool,
+}
+
+/// Descriptor de cuerpo para la reconciliación de física:
+/// (entidad, tipo, posición, rotación, colliders con su offset,
+/// masa, fricción, velocidad inicial, collider de malla opcional).
+type DescriptorCuerpo = (
+    u64,
+    BodyType,
+    [f32; 3],
+    [f32; 4],
+    Vec<(ColliderShape, ColliderConfig, [f32; 3])>,
+    f32,
+    f32,
+    [f32; 3],
+    Option<(glass_core::MeshColliderMode, String, [f32; 3], bool)>,
+);
+
+/// Elemento de dibujo de un lote del Canvas: (rect destino, rect
+/// UV, set de textura, rango de índices, color, tinte).
+type UiDrawItem = ([f32; 4], [f32; 4], vk::DescriptorSet, (u32, u32), [f32; 4], [f32; 4]);
+
+/// Listas de dibujo de los portales de un frame: (mallas de
+/// escena, pieles de escena, mallas de juego, pieles de juego).
+type PortalRenderLists<'a> = (
+    Vec<glass_renderer::MeshDrawItem<'a>>,
+    Vec<glass_renderer::SkinnedDrawItem<'a>>,
+    Vec<glass_renderer::MeshDrawItem<'a>>,
+    Vec<glass_renderer::SkinnedDrawItem<'a>>,
+);
+
+/// Candidata a luz del UBO global: (distancia al ojo, posición y
+/// rango, color e intensidad, proyecta sombra, dirección y cosenos
+/// del cono, cono).
+type CandidataLuz = (f32, [f32; 4], [f32; 4], bool, [f32; 4], [f32; 4]);
+
+/// Entidad emisora de partículas con su matriz de mundo.
+type EntidadEmisora = (u64, glass_core::scene::ParticleEmitterData, [f32; 16]);
+
 impl GlassEngineApp {
     pub fn new(
-        is_standalone: bool,
-        is_headless_test: bool,
-        is_m5_test: bool,
-        is_m6_test: bool,
-        is_m7_test: bool,
-        is_m8_test: bool,
-        is_m9_test: bool,
-        is_m10_test: bool,
-        is_platformer_test: bool,
-        is_sample_game_test: bool,
-        is_standalone_test: bool,
+        flags: LaunchFlags,
         scene_to_load: Option<String>,
     ) -> Self {
+        let LaunchFlags {
+            is_standalone,
+            is_headless_test,
+            is_m5_test,
+            is_m6_test,
+            is_m7_test,
+            is_m8_test,
+            is_m9_test,
+            is_m10_test,
+            is_platformer_test,
+            is_sample_game_test,
+            is_standalone_test,
+        } = flags;
         let scene_state = Arc::new(Mutex::new(SceneState::new()));
         // El gestor de escenas descubre la raíz del proyecto (project.json)
         // subiendo desde el directorio actual. Si no la encuentra, el motor debe
@@ -2716,7 +2777,7 @@ impl GlassEngineApp {
                                     let mut alloc = renderer.allocator.lock().unwrap();
                                     MeshLoader::upload_to_gpu(
                                         &renderer.device,
-                                        &mut *alloc,
+                                        &mut alloc,
                                         &model.vertices,
                                         &model.indices,
                                         vk_ctx.graphics_queue,
@@ -2734,7 +2795,7 @@ impl GlassEngineApp {
                                     let primary = model.primary_material().cloned();
                                     cache.insert_mesh(
                                         &renderer.device,
-                                        &mut *alloc,
+                                        &mut alloc,
                                         stem,
                                         gpu_mesh,
                                     );
@@ -2753,7 +2814,7 @@ impl GlassEngineApp {
                                     // colliders de malla la leen al reconstruir
                                     // la física; sin esto se pierde al subir a GPU.
                                     cache.insert_geometry(stem, &model);
-                                    self.upload_skin_if_any(renderer, vk_ctx, &mut *alloc, &mut *cache, &model, stem);
+                                    self.upload_skin_if_any(renderer, vk_ctx, &mut alloc, &mut cache, &model, stem);
                                     // Y las texturas GPU de todos los
                                     // materiales: se resuben y los sets del
                                     // modelo se reapuntan a las nuevas vistas.
@@ -2766,10 +2827,8 @@ impl GlassEngineApp {
                                                     if let Some(img) = model.images.get(idx) {
                                                         cache.insert_texture(
                                                             &renderer.device,
-                                                            &mut *alloc,
-                                                            vk_ctx.graphics_queue,
-                                                            renderer.command_pool,
-                                                            layout,
+                                                            &mut alloc,
+                                                            TextureUpload { queue: vk_ctx.graphics_queue, command_pool: renderer.command_pool, set_layout: layout },
                                                             stem,
                                                             idx,
                                                             img,
@@ -2913,17 +2972,7 @@ impl GlassEngineApp {
             scene.compute_world_matrices()
         };
 
-let mut descriptors: Vec<(
-            u64,
-            BodyType,
-            [f32; 3],
-            [f32; 4],
-            Vec<(ColliderShape, ColliderConfig, [f32; 3])>,
-            f32,
-            f32,
-            [f32; 3],
-            Option<(glass_core::MeshColliderMode, String, [f32; 3], bool)>,
-        )> = Vec::new();
+let mut descriptors: Vec<DescriptorCuerpo> = Vec::new();
         {
             let Ok(scene) = self.scene_state.lock() else {
                 return;
@@ -3032,7 +3081,7 @@ let resueltos = colliders_resueltos(body, shape);
                     let attached = match modo {
                         glass_core::MeshColliderMode::TriMesh if *es_estatico => {
                             let tris: Vec<[u32; 3]> = indices
-                                .chunks_exact(3)
+                                .as_chunks::<3>().0.iter()
                                 .map(|c| [c[0], c[1], c[2]])
                                 .collect();
                             // OJO, orden deliberado: el cruce (friction, restitution)
@@ -3213,7 +3262,7 @@ let resueltos = colliders_resueltos(body, shape);
                 let joints_pool = renderer.joints_pool;
                 let device = renderer.device.clone();
                 for mut jb in self.retired_joint_buffers.drain(..) {
-                    jb.destroy(&device, &mut *renderer.allocator.lock().unwrap(), joints_pool);
+                    jb.destroy(&device, &mut renderer.allocator.lock().unwrap(), joints_pool);
                 }
             }
         }
@@ -3225,8 +3274,8 @@ let resueltos = colliders_resueltos(body, shape);
         let mut profile_update_us = 0u64;
         // Physics y render se asignan una sola vez y sin condición antes de
         // cualquier registro de muestra: inicialización diferida (sin mut).
-        let profile_physics_us: u64;
-        let profile_render_us: u64;
+        
+        
 
         #[cfg(feature = "editor")]
         if let Some(action) = self.pending_launcher_action.take() {
@@ -3350,7 +3399,7 @@ let resueltos = colliders_resueltos(body, shape);
             0.016667,
             &|n: &str| down_names.contains(n),
             &|_i: usize| 0.0,
-            &|i: usize| pad_src.get(i).map_or(false, |t| t.0),
+            &|i: usize| pad_src.get(i).is_some_and(|t| t.0),
             &|i: usize| pad_src.get(i).map_or(0.0, |t| t.1),
         );
         let move_x = self.axis_bank.value_of("Horizontal");
@@ -3789,7 +3838,7 @@ let resueltos = colliders_resueltos(body, shape);
             }
         }
 
-        profile_physics_us = profile_t_physics.elapsed().as_micros() as u64;
+        let profile_physics_us: u64 = profile_t_physics.elapsed().as_micros() as u64;
 
         // Fase 1: entregar los eventos de contacto del paso a los scripts
         // C# (el lock de física ya se soltó dentro del bloque anterior).
@@ -3960,7 +4009,7 @@ let resueltos = colliders_resueltos(body, shape);
             let mut alloc = renderer.allocator.lock().unwrap();
             let mut cache = self.asset_cache.write().unwrap();
             cache.advance_tick();
-            let evicted = cache.evict_idle(&renderer.device, &mut *alloc, 600, &protected);
+            let evicted = cache.evict_idle(&renderer.device, &mut alloc, 600, &protected);
             if !evicted.is_empty() {
                 log::info!("AssetCache: {} modelos ociosos expulsados: {:?}", evicted.len(), evicted);
             }
@@ -4107,10 +4156,8 @@ let resueltos = colliders_resueltos(body, shape);
                                                     self.asset_cache.write().unwrap();
                                                 cache.insert_texture(
                                                     &renderer.device,
-                                                    &mut *alloc,
-                                                    vk_ctx.graphics_queue,
-                                                    renderer.command_pool,
-                                                    layout,
+                                                    &mut alloc,
+                                                    TextureUpload { queue: vk_ctx.graphics_queue, command_pool: renderer.command_pool, set_layout: layout },
                                                     format!("material:{}", mat.texture),
                                                     0,
                                                     &data,
@@ -4186,15 +4233,8 @@ let resueltos = colliders_resueltos(body, shape);
             // entidad dibujada proyecta con la misma malla y la misma
             // matriz de modelo de su lote; las con piel, además, con su
             // set de articulaciones (la sombra sigue la pose).
-            let mut shadow_statics: Vec<(&glass_renderer::GpuMesh, [f32; 16], Option<Vec<(u32, u32)>>)> = Vec::new();
-            let mut shadow_graph_statics: Vec<(
-                &glass_renderer::GpuMesh,
-                [f32; 16],
-                String,
-                vk::DescriptorSet,
-                Option<f32>,
-                Option<Vec<(u32, u32)>>,
-            )> = Vec::new();
+            let mut shadow_statics: Vec<glass_renderer::StaticCaster<'_>> = Vec::new();
+            let mut shadow_graph_statics: Vec<glass_renderer::GraphCaster<'_>> = Vec::new();
             let mut shadow_skinned: Vec<(&glass_renderer::GpuMesh, [f32; 16], vk::DescriptorSet)> = Vec::new();
             // Fase 2: frustums de las dos vistas y contadores del frame
             // para la tool glass_render_stats.
@@ -4333,7 +4373,7 @@ let resueltos = colliders_resueltos(body, shape);
                         // entidad y los valores históricos (0.15 / 0.45).
                         // El shader PBR siempre muestrea, así que cada lote
                         // lleva un set válido (el de su imagen o el blanco).
-                        let mut draw_items: Vec<([f32; 4], [f32; 4], vk::DescriptorSet, (u32, u32), [f32; 4], [f32; 4])> = Vec::new();
+                        let mut draw_items: Vec<UiDrawItem> = Vec::new();
                         // Materiales v1: el activo asignado a la
                         // entidad manda sobre cualquier otro camino
                         // (un solo lote con sus parámetros y su
@@ -4443,7 +4483,6 @@ let resueltos = colliders_resueltos(body, shape);
                                         continue;
                                     }
                                 }
-                                let range = range;
                                 let mat = range.material.and_then(|i| materials.and_then(|ms| ms.get(i)));
                                 let (c, mp) = if let Some(m) = mat {
                                     (m.base_color_factor, [m.metallic, m.roughness, 1.0, has_light])
@@ -5027,15 +5066,10 @@ let resueltos = colliders_resueltos(body, shape);
             // La llamada a render_portal_views va justo antes de
             // render_views, cuando ya están los proyectores.
             // ------------------------------------------------------------
-            let mut portal_render: Option<(
-                Vec<glass_renderer::MeshDrawItem>,
-                Vec<glass_renderer::SkinnedDrawItem>,
-                Vec<glass_renderer::MeshDrawItem>,
-                Vec<glass_renderer::SkinnedDrawItem>,
-            )> = None;
+            let mut portal_render: Option<PortalRenderLists<'_>> = None;
             let mut scene_portal_draws: Vec<glass_renderer::PortalDrawItem> = Vec::new();
             let mut game_portal_draws: Vec<glass_renderer::PortalDrawItem> = Vec::new();
-            if vp_game_opt.is_some() {
+            if let Some(vp_game) = vp_game_opt {
                 let datos = self.scene_state.lock().ok().and_then(|scene| {
                     let mut portales: Vec<(
                         u64,
@@ -5135,7 +5169,6 @@ let resueltos = colliders_resueltos(body, shape);
                         // los lotes de juego antes de filtrarlos.
                         let sup_a = robar_superficie(&game_batches, world_a);
                         let sup_b = robar_superficie(&game_batches, world_b);
-                        let vp_game = vp_game_opt.unwrap();
                         if let Some((mesh, range)) = sup_a {
                             empujar_draw_portal(&mut game_portal_draws, &mut scene_portal_draws, mesh, range, world_a, vp_game, vp_scene, vp_virt_a, 0, [1.0, 0.45, 0.08, 1.0], mitad_local(&modelo_a));
                         }
@@ -5342,10 +5375,10 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 };
 
                 let mut puntos = [glass_core::lighting_stats::PointLightSnapshot::default(); 8];
-                for i in 0..8 {
+                for (i, punto) in puntos.iter_mut().enumerate() {
                     let pos_range = ubo_luces.pos_range[i];
                     let color_intensity = ubo_luces.color_intensity[i];
-                    puntos[i] = glass_core::lighting_stats::PointLightSnapshot {
+                    *punto = glass_core::lighting_stats::PointLightSnapshot {
                         position: [pos_range[0], pos_range[1], pos_range[2]],
                         range: pos_range[3],
                         color: [color_intensity[0], color_intensity[1], color_intensity[2]],
@@ -5390,21 +5423,23 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 &mut self.particle_prev_origin,
                 &self.scene_state,
                 anim_dt,
-                vp_scene,
-                vp_game_opt,
-                eye_scene,
-                eye_game_opt,
-                #[cfg(feature = "editor")]
-                Some(self.editor_layout.viewport.editor_cam_center),
-                #[cfg(not(feature = "editor"))]
-                None,
+                CamarasParticulas {
+                    vp_scene,
+                    vp_game_opt,
+                    eye_scene,
+                    eye_game_opt,
+                    #[cfg(feature = "editor")]
+                    centro_editor: Some(self.editor_layout.viewport.editor_cam_center),
+                    #[cfg(not(feature = "editor"))]
+                    centro_editor: None,
+                },
             );
             let particle_vps = particle_out.as_ref().map(|o| {
                 renderer.set_particle_frame(false, &o.scene.0, &o.scene.1);
                 renderer.set_particle_frame(true, &o.game.0, &o.game.1);
                 o.vps
             });
-            renderer.render_views(vk_ctx.graphics_queue, &scene_batches, game_meshes_arg, &scene_skinned, game_skinned_arg, Some(&shadow_casters), &scene_portal_draws, Some(&game_portal_draws), particle_vps)?;
+            renderer.render_views(vk_ctx.graphics_queue, FrameDraws { scene_meshes: &scene_batches, game_meshes: game_meshes_arg, scene_skinned: &scene_skinned, game_skinned: game_skinned_arg, shadow_casters: Some(&shadow_casters), scene_portal_draws: &scene_portal_draws, game_portal_draws: Some(&game_portal_draws), particle_vps })?;
 
             // Post-procesado de las vistas renderizadas (sin post
             // activo, estas llamadas no hacen nada). La vista de juego
@@ -5418,7 +5453,7 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
         }
         drop(cache);
 
-        profile_render_us = profile_t_render.elapsed().as_micros() as u64;
+        let profile_render_us: u64 = profile_t_render.elapsed().as_micros() as u64;
 
         // Modo Standalone: Hardware Blit directo de VRAM al Swapchain (Cero egui/MCP overhead)
         #[cfg(feature = "editor")]
@@ -5513,7 +5548,6 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                             .and_then(|bytes| {
                                 glass_renderer::FontAtlas::build(&bytes)
                                     .map(|atlas| (bytes, atlas))
-                                    .map_err(|e| e)
                             })
                             .and_then(|(bytes, atlas)| {
                                 renderer
@@ -5987,7 +6021,7 @@ impl ApplicationHandler for GlassEngineApp {
                 let mut cache = self.asset_cache.write().unwrap();
                 cache.ensure_default_texture(
                     &renderer.device,
-                    &mut *alloc,
+                    &mut alloc,
                     vk_ctx.graphics_queue,
                     renderer.command_pool,
                     set_layout,
@@ -6120,7 +6154,7 @@ impl ApplicationHandler for GlassEngineApp {
                             let mut alloc = renderer.allocator.lock().unwrap();
                             MeshLoader::upload_to_gpu(
                                 &renderer.device,
-                                &mut *alloc,
+                                &mut alloc,
                                 &model.vertices,
                                 &model.indices,
                                 vk_ctx.graphics_queue,
@@ -6135,7 +6169,7 @@ impl ApplicationHandler for GlassEngineApp {
                                 let primary = model.primary_material().cloned();
                                 cache.insert_mesh(
                                     &renderer.device,
-                                    &mut *alloc,
+                                    &mut alloc,
                                     stem.clone(),
                                     gpu_mesh,
                                 );
@@ -6150,7 +6184,7 @@ impl ApplicationHandler for GlassEngineApp {
                                 // Geometría CPU retenida (Fase 1.5), como en la
                                 // ruta de recarga en caliente.
                                 cache.insert_geometry(stem.clone(), &model);
-                                self.upload_skin_if_any(&renderer, &vk_ctx, &mut *alloc, &mut *cache, &model, &stem);
+                                self.upload_skin_if_any(&renderer, &vk_ctx, &mut alloc, &mut cache, &model, &stem);
                                 // Texturas base de TODOS los materiales: una
                                 // subida por cada imagen distinta referenciada,
                                 // para que cada primitiva muestree la suya.
@@ -6163,10 +6197,8 @@ impl ApplicationHandler for GlassEngineApp {
                                                 if let Some(img) = model.images.get(idx) {
                                                     cache.insert_texture(
                                                         &renderer.device,
-                                                        &mut *alloc,
-                                                        vk_ctx.graphics_queue,
-                                                        renderer.command_pool,
-                                                        layout,
+                                                        &mut alloc,
+                                                        TextureUpload { queue: vk_ctx.graphics_queue, command_pool: renderer.command_pool, set_layout: layout },
                                                         stem.clone(),
                                                         idx,
                                                         img,
@@ -6200,7 +6232,7 @@ impl ApplicationHandler for GlassEngineApp {
                     let mut alloc = renderer.allocator.lock().unwrap();
                     glass_renderer::MeshLoader::upload_to_gpu(
                         &renderer.device,
-                        &mut *alloc,
+                        &mut alloc,
                         &vertices,
                         &indices,
                         vk_ctx.graphics_queue,
@@ -6211,7 +6243,7 @@ impl ApplicationHandler for GlassEngineApp {
                     Ok(gpu_mesh) => {
                         let mut alloc = renderer.allocator.lock().unwrap();
                         let mut cache = self.asset_cache.write().unwrap();
-                        cache.insert_mesh(&renderer.device, &mut *alloc, "plane", gpu_mesh);
+                        cache.insert_mesh(&renderer.device, &mut alloc, "plane", gpu_mesh);
                         // Cotas reales desde los vértices (culling):
                         // sin registrarlas, la primitiva cae en el
                         // respaldo ±1e6 y nunca se descarta.
@@ -6264,7 +6296,7 @@ impl ApplicationHandler for GlassEngineApp {
                 let mut alloc = renderer.allocator.lock().unwrap();
                 glass_renderer::MeshLoader::upload_to_gpu(
                     &renderer.device,
-                    &mut *alloc,
+                    &mut alloc,
                     &vertices,
                     &indices,
                     vk_ctx.graphics_queue,
@@ -6275,7 +6307,7 @@ impl ApplicationHandler for GlassEngineApp {
                 Ok(gpu_mesh) => {
                     let mut alloc = renderer.allocator.lock().unwrap();
                     let mut cache = self.asset_cache.write().unwrap();
-                    cache.insert_mesh(&renderer.device, &mut *alloc, name, gpu_mesh);
+                    cache.insert_mesh(&renderer.device, &mut alloc, name, gpu_mesh);
                     cache.insert_bounds(name, pmin, pmax);
                     log::info!(
                         "main: Primitiva '{}' registrada ({} vértices, {} índices).",
@@ -6453,7 +6485,7 @@ impl ApplicationHandler for GlassEngineApp {
                                     // y al muestrear devuelve el valor
                                     // lineal horneado.
                                     let mut srgb = out.rgba.clone();
-                                    for px in srgb.chunks_exact_mut(4) {
+                                    for px in srgb.as_chunks_mut::<4>().0 {
                                         for ch in px.iter_mut().take(3) {
                                             let l = *ch as f32 / 255.0;
                                             let s = if l <= 0.003_130_8 {
@@ -6857,10 +6889,10 @@ impl ApplicationHandler for GlassEngineApp {
                             let cur_y = ent.transform.position[1];
                             if cur_x > max_x { max_x = cur_x; }
                             if cur_y > max_y { max_y = cur_y; }
-                            if cur_x >= 2.0 && cur_x <= 4.2 && cur_y >= 1.35 {
+                            if (2.0..=4.2).contains(&cur_x) && cur_y >= 1.35 {
                                 climbed_step1 = true;
                             }
-                            if cur_x >= 4.8 && cur_x <= 7.5 && cur_y >= 2.30 {
+                            if (4.8..=7.5).contains(&cur_x) && cur_y >= 2.30 {
                                 climbed_step2 = true;
                             }
                         }
@@ -7142,17 +7174,14 @@ impl ApplicationHandler for GlassEngineApp {
                 if let Some(egui_winit) = &mut self.egui_winit {
                     // Capturar WASD/Space ANTES de egui para que nunca sean bloqueadas
                     if let WindowEvent::KeyboardInput { event: ref key_ev, .. } = event {
-                        if let PhysicalKey::Code(code) = key_ev.physical_key {
-                            match code {
-                                KeyCode::KeyW | KeyCode::KeyS | KeyCode::KeyA | KeyCode::KeyD | KeyCode::Space
-                                | KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight
-                                | KeyCode::ShiftLeft | KeyCode::ShiftRight | KeyCode::KeyV => {
-                                    match key_ev.state {
-                                        ElementState::Pressed => { self.keys_pressed.insert(key_ev.physical_key); }
-                                        ElementState::Released => { self.keys_pressed.remove(&key_ev.physical_key); }
-                                    }
-                                }
-                                _ => {}
+                        if let PhysicalKey::Code(
+                            KeyCode::KeyW | KeyCode::KeyS | KeyCode::KeyA | KeyCode::KeyD | KeyCode::Space
+                            | KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight
+                            | KeyCode::ShiftLeft | KeyCode::ShiftRight | KeyCode::KeyV,
+                        ) = key_ev.physical_key {
+                            match key_ev.state {
+                                ElementState::Pressed => { self.keys_pressed.insert(key_ev.physical_key); }
+                                ElementState::Released => { self.keys_pressed.remove(&key_ev.physical_key); }
                             }
                         }
                     }
@@ -7185,21 +7214,18 @@ impl ApplicationHandler for GlassEngineApp {
             // conjunto, `run` y `camera` nunca podían valer 1 en el
             // binario puro (en el editor las cubría la vía de egui).
             WindowEvent::KeyboardInput { event, .. } => {
-                if let PhysicalKey::Code(code) = event.physical_key {
-                    match code {
-                        KeyCode::KeyW | KeyCode::KeyS | KeyCode::KeyA | KeyCode::KeyD | KeyCode::Space
-                        | KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight
-                        | KeyCode::ShiftLeft | KeyCode::ShiftRight | KeyCode::KeyV => {
-                            match event.state {
-                                ElementState::Pressed => {
-                                    self.keys_pressed.insert(event.physical_key);
-                                }
-                                ElementState::Released => {
-                                    self.keys_pressed.remove(&event.physical_key);
-                                }
-                            }
+                if let PhysicalKey::Code(
+                    KeyCode::KeyW | KeyCode::KeyS | KeyCode::KeyA | KeyCode::KeyD | KeyCode::Space
+                    | KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::ArrowLeft | KeyCode::ArrowRight
+                    | KeyCode::ShiftLeft | KeyCode::ShiftRight | KeyCode::KeyV,
+                ) = event.physical_key {
+                    match event.state {
+                        ElementState::Pressed => {
+                            self.keys_pressed.insert(event.physical_key);
                         }
-                        _ => {}
+                        ElementState::Released => {
+                            self.keys_pressed.remove(&event.physical_key);
+                        }
                     }
                 }
             }
@@ -7414,7 +7440,7 @@ fn recolectar_luces_puntuales(
     eye: [f32; 3],
 ) -> (glass_renderer::PointLightsUbo, Vec<glass_renderer::PointShadowLight>) {
     let mundos = scene.compute_world_matrices();
-    let mut candidatas: Vec<(f32, [f32; 4], [f32; 4], bool, [f32; 4], [f32; 4])> = Vec::new();
+    let mut candidatas: Vec<CandidataLuz> = Vec::new();
     for ent in &scene.entities {
         if !ent.active {
             continue;
@@ -7468,17 +7494,17 @@ fn recolectar_luces_puntuales(
     let mut slot: usize = 0;
     let n = candidatas.len().min(glass_renderer::MAX_POINT_LIGHTS);
 
-    for i in 0..n {
-        ubo.pos_range[i] = candidatas[i].1;
-        ubo.color_intensity[i] = candidatas[i].2;
-        ubo.dir_cos[i] = candidatas[i].4;
-        ubo.cone[i] = candidatas[i].5;
+    for (i, cand) in candidatas.iter().enumerate().take(n) {
+        ubo.pos_range[i] = cand.1;
+        ubo.color_intensity[i] = cand.2;
+        ubo.dir_cos[i] = cand.4;
+        ubo.cone[i] = cand.5;
 
-        if candidatas[i].3 && slot < 4 {
-            ubo.shadow[i] = [slot as f32, candidatas[i].1[3].max(0.1), 0.0025, 0.1];
+        if cand.3 && slot < 4 {
+            ubo.shadow[i] = [slot as f32, cand.1[3].max(0.1), 0.0025, 0.1];
             luces_sombra.push(glass_renderer::PointShadowLight {
-                pos: [candidatas[i].1[0], candidatas[i].1[1], candidatas[i].1[2]],
-                far: candidatas[i].1[3].max(0.1),
+                pos: [cand.1[0], cand.1[1], cand.1[2]],
+                far: cand.1[3].max(0.1),
             });
             slot += 1;
         }
@@ -7673,7 +7699,7 @@ fn registrar_muestra_frame(
     present_us: u64,
 ) {
     *contador += 1;
-    if *contador % 120 == 0 {
+    if (*contador).is_multiple_of(120) {
         if let Some(r) = renderer {
             if let Ok(alloc) = r.allocator.lock() {
                 let report = alloc.generate_report();
@@ -7738,17 +7764,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = builder.build()?;
     install_signal_handlers();
     let mut app = GlassEngineApp::new(
-        is_standalone,
-        is_headless_test,
-        is_m5_test,
-        is_m6_test,
-        is_m7_test,
-        is_m8_test,
-        is_m9_test,
-        is_m10_test,
-        is_platformer_test,
-        is_sample_game_test,
-        is_standalone_test,
+        LaunchFlags {
+            is_standalone,
+            is_headless_test,
+            is_m5_test,
+            is_m6_test,
+            is_m7_test,
+            is_m8_test,
+            is_m9_test,
+            is_m10_test,
+            is_platformer_test,
+            is_sample_game_test,
+            is_standalone_test,
+        },
         scene_to_load,
     );
     // MCP sobre la escena viva: con la feature de editor, el servidor MCP
@@ -8106,8 +8134,8 @@ fn expandir_particulas(
             let size = emisor.size_at(i);
             let color = emisor.color_at(i);
             let base_idx = verts.len() as u32;
-            let esquinas: [([f32; 3], [f32; 2]); 4];
-            if emisor.config.stretched {
+            
+            let esquinas: [([f32; 3], [f32; 2]); 4] = if emisor.config.stretched {
                 let vel = pool.vel[i];
                 // Eje: velocidad proyectada en el plano de cámara.
                 let d = vel[0] * fwd[0] + vel[1] * fwd[1] + vel[2] * fwd[2];
@@ -8137,12 +8165,12 @@ fn expandir_particulas(
                         centro[2] + eje[2] * sa * hl + perp[2] * sp * hw,
                     ]
                 };
-                esquinas = [
+                [
                     (esquina(-1.0, -1.0), [0.0, 0.0]),
                     (esquina(-1.0, 1.0), [1.0, 0.0]),
                     (esquina(1.0, 1.0), [1.0, 1.0]),
                     (esquina(1.0, -1.0), [0.0, 1.0]),
-                ];
+                ]
             } else {
                 let rot = emisor.rotation_at(i);
                 let (s, c) = rot.sin_cos();
@@ -8155,13 +8183,13 @@ fn expandir_particulas(
                         centro[2] + right[2] * lx + up[2] * ly,
                     ]
                 };
-                esquinas = [
+                [
                     (esquina(-0.5, -0.5), [0.0, 0.0]),
                     (esquina(0.5, -0.5), [1.0, 0.0]),
                     (esquina(0.5, 0.5), [1.0, 1.0]),
                     (esquina(-0.5, 0.5), [0.0, 1.0]),
-                ];
-            }
+                ]
+            };
             for (pos, uv) in esquinas {
                 verts.push(glass_renderer::ParticleVertex {
                     position: pos,
@@ -8267,25 +8295,30 @@ fn rangos_sombra_lod(
     Some(out)
 }
 
+/// Cámaras del frame al avanzar partículas: VP y ojo de la vista de
+/// escena, los de la vista de juego si la hay y el centro del
+/// editor. (Agrupadas por el lint too_many_arguments de Clippy.)
+struct CamarasParticulas {
+    vp_scene: [f32; 16],
+    vp_game_opt: Option<[f32; 16]>,
+    eye_scene: [f32; 4],
+    eye_game_opt: Option<[f32; 4]>,
+    centro_editor: Option<[f32; 3]>,
+}
+
 fn avanzar_particulas(
 emisores_rt: &mut std::collections::HashMap<u64, glass_particles::Emitter>,
 aplicados: &mut std::collections::HashMap<u64, glass_core::scene::ParticleEmitterData>,
 prev_origen: &mut std::collections::HashMap<u64, [f32; 3]>,
 scene_state: &std::sync::Arc<std::sync::Mutex<glass_core::scene::SceneState>>,
 dt: f32,
-vp_scene: [f32; 16],
-vp_game_opt: Option<[f32; 16]>,
-eye_scene: [f32; 4],
-eye_game_opt: Option<[f32; 4]>,
-centro_editor: Option<[f32; 3]>,
+camaras: CamarasParticulas,
 ) -> Option<ParticleFrameOut> {
+    let CamarasParticulas { vp_scene, vp_game_opt, eye_scene, eye_game_opt, centro_editor } = camaras;
     use glass_particles::ParticleCommand;
     let inicio = std::time::Instant::now();
     // Recoger emisores de la escena con su matriz de mundo.
-    let (entidades, cam_world): (
-        Vec<(u64, glass_core::scene::ParticleEmitterData, [f32; 16])>,
-        Option<[f32; 16]>,
-    ) = match scene_state.lock() {
+    let (entidades, cam_world): (Vec<EntidadEmisora>, Option<[f32; 16]>) = match scene_state.lock() {
         Ok(scene) => {
             let world_matrices = scene.compute_world_matrices();
             let lista = scene
@@ -8477,7 +8510,7 @@ mod particle_fade_tests {
             std::collections::HashMap::new();
         let eye = [0.0, 1.0, 5.0, 1.0];
         for _ in 0..20 {
-            avanzar_particulas(&mut rt, &mut ap, &mut po, &scene, 0.05, IDENT, None, eye, None, None);
+            avanzar_particulas(&mut rt, &mut ap, &mut po, &scene, 0.05, CamarasParticulas { vp_scene: IDENT, vp_game_opt: None, eye_scene: eye, eye_game_opt: None, centro_editor: None });
         }
         let vivas = rt.get(&11).map(|e| e.pool.alive).unwrap_or(0);
         assert!(vivas > 0, "el emisor activo debió emitir (vivas={vivas})");
@@ -8494,7 +8527,7 @@ mod particle_fade_tests {
             e.active = false;
         }
         for _ in 0..40 {
-            avanzar_particulas(&mut rt, &mut ap, &mut po, &scene, 0.1, IDENT, None, eye, None, None);
+            avanzar_particulas(&mut rt, &mut ap, &mut po, &scene, 0.1, CamarasParticulas { vp_scene: IDENT, vp_game_opt: None, eye_scene: eye, eye_game_opt: None, centro_editor: None });
         }
         assert!(
             rt.is_empty() && ap.is_empty(),

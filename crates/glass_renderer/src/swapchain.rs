@@ -20,17 +20,26 @@ pub struct SwapchainContext {
     pub image_views: Vec<vk::ImageView>,
 }
 
+/// Destino de un swapchain: la superficie sobre la que se presenta,
+/// el dispositivo físico que la evalúa, el tamaño deseado y el
+/// swapchain anterior a reciclar si lo hay. (Agrupado por el lint
+/// too_many_arguments de Clippy.)
+pub struct SwapchainTarget<'a> {
+    pub surface_loader: &'a ash::khr::surface::Instance,
+    pub surface: vk::SurfaceKHR,
+    pub physical_device: vk::PhysicalDevice,
+    pub width: u32,
+    pub height: u32,
+    pub old_swapchain: Option<vk::SwapchainKHR>,
+}
+
 impl SwapchainContext {
     pub fn new(
         instance: &ash::Instance,
         device: Arc<ash::Device>,
-        surface_loader: &ash::khr::surface::Instance,
-        surface: vk::SurfaceKHR,
-        physical_device: vk::PhysicalDevice,
-        width: u32,
-        height: u32,
-        old_swapchain: Option<vk::SwapchainKHR>,
+        target: SwapchainTarget<'_>,
     ) -> Result<Self, SwapchainError> {
+        let SwapchainTarget { surface_loader, surface, physical_device, width, height, old_swapchain } = target;
         let capabilities = unsafe {
             surface_loader.get_physical_device_surface_capabilities(physical_device, surface)?
         };

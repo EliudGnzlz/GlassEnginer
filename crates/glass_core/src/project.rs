@@ -50,7 +50,7 @@ impl ProjectSettings {
             std::fs::create_dir_all(parent)?;
         }
         let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         std::fs::write(p, json)
     }
 }
@@ -61,12 +61,14 @@ mod tests {
 
     #[test]
     fn test_project_settings_serialization() {
-        let mut settings = ProjectSettings::default();
-        settings.name = "MyAwesomeGame".into();
-        settings.scenes_in_build = vec![
-            "assets/scenes/Level1.scene.json".into(),
-            "assets/scenes/Level2.scene.json".into(),
-        ];
+        let settings = ProjectSettings {
+            name: "MyAwesomeGame".into(),
+            scenes_in_build: vec![
+                "assets/scenes/Level1.scene.json".into(),
+                "assets/scenes/Level2.scene.json".into(),
+            ],
+            ..Default::default()
+        };
 
         let json = serde_json::to_string(&settings).unwrap();
         let loaded: ProjectSettings = serde_json::from_str(&json).unwrap();

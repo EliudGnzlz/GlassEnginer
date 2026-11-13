@@ -124,5 +124,5 @@ fn contact_pairs_fusiona_solido_y_sensor() {
     let pares = w.contact_pairs();
     let del_par: Vec<_> = pares.iter().filter(|p| p.0 == 1 && p.1 == 8).collect();
     assert_eq!(del_par.len(), 1, "un solo par fusionado: {pares:?}");
-    assert_eq!(del_par[0].2, false, "manda el contacto sólido");
+    assert!(!del_par[0].2, "manda el contacto sólido");
 }

@@ -357,11 +357,10 @@ impl ViewportPanel {
             }
 
             // Arrastre e interactividad
-            if response.drag_started() {
-                if self.gizmo_mode != GizmoMode::View && hovered_gizmo_axis != GizmoAxis::None {
+            if response.drag_started()
+                && self.gizmo_mode != GizmoMode::View && hovered_gizmo_axis != GizmoAxis::None {
                     self.active_drag_axis = hovered_gizmo_axis;
                 }
-            }
 
             if response.drag_stopped() {
                 self.active_drag_axis = GizmoAxis::None;
@@ -618,7 +617,7 @@ impl ViewportPanel {
                     Color32::from_rgb(200, 130, 255),
                 ),
                 GizmoMode::View => (
-                    format!("✋ [Q] Mano: Clic Izquierdo arrastra la vista libremente (Pan) | Clic Derecho para orbitar"),
+                    "✋ [Q] Mano: Clic Izquierdo arrastra la vista libremente (Pan) | Clic Derecho para orbitar".to_string(),
                     Color32::from_rgb(240, 220, 110),
                 ),
             };

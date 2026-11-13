@@ -29,6 +29,12 @@ pub struct AudioSystem {
     clock_start: Instant,
 }
 
+impl Default for AudioSystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AudioSystem {
     pub fn new() -> Self {
         let command_queue = Arc::new(CommandQueue::new(512));
@@ -75,7 +81,7 @@ impl AudioSystem {
                                 backend.play_2d(&name, volume, pitch, looping, bus, handle);
                             }
                             AudioCommand::Play3D { name, position, volume, pitch, looping, bus, handle } => {
-                                backend.play_3d(&name, position, volume, pitch, looping, bus, handle);
+                                backend.play_3d(&name, crate::backend::Play3dParams { position, volume, pitch, looping, bus }, handle);
                             }
                             AudioCommand::SetSourcePosition { handle, position } => {
                                 backend.set_source_position(handle, position);

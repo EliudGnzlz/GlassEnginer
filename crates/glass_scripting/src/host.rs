@@ -246,6 +246,12 @@ pub struct ScriptHost {
     active_instances: HashMap<i32, (u64, String)>, // handle -> (entity_id, script_name)
 }
 
+impl Default for ScriptHost {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ScriptHost {
     pub fn new() -> Self {
         Self {

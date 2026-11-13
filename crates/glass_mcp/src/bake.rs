@@ -365,7 +365,7 @@ pub fn write_lightmap_files(
     let png = format!("{dir}/{nombre}.lm.png");
     let json_path = format!("{dir}/{nombre}.lm.json");
     let mut srgb = out.rgba.clone();
-    for px in srgb.chunks_exact_mut(4) {
+    for px in srgb.as_chunks_mut::<4>().0 {
         for ch in px.iter_mut().take(3) {
             let l = *ch as f32 / 255.0;
             let s = if l <= 0.003_130_8 {

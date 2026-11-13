@@ -5,6 +5,15 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
+/// Contexto de subida de una textura: la cola y el pool de comandos
+/// que ejecutan la copia y el layout del set donde se enlaza.
+/// (Agrupado por el lint too_many_arguments de Clippy.)
+pub struct TextureUpload {
+    pub queue: vk::Queue,
+    pub command_pool: vk::CommandPool,
+    pub set_layout: vk::DescriptorSetLayout,
+}
+
 pub struct AssetCache {
 /// Geometría CPU retenida de cada modelo importado (posiciones e
     /// índices, misma clave que `meshes`): la física la necesita para los
@@ -322,13 +331,12 @@ impl AssetCache {
         &mut self,
         device: &ash::Device,
         allocator: &mut Allocator,
-        queue: vk::Queue,
-        command_pool: vk::CommandPool,
-        set_layout: vk::DescriptorSetLayout,
+        upload: TextureUpload,
         name: impl Into<String>,
         image_index: usize,
         img: &GltfImageData,
     ) {
+        let TextureUpload { queue, command_pool, set_layout } = upload;
         let key = name.into();
         let tex_key = (key.clone(), image_index);
         self.ensure_descriptor_infra(device);
@@ -569,6 +577,23 @@ impl AssetCache {
     }
 }
 
+static GLOBAL_ASSET_CACHE: std::sync::OnceLock<
+    std::sync::Arc<std::sync::RwLock<AssetCache>>,
+> = std::sync::OnceLock::new();
+
+/// Registra la caché de assets global (la llama la app al arrancar,
+/// junto al mundo físico global): la leen las tools MCP de inspección.
+pub fn register_global_asset_cache(
+    cache: std::sync::Arc<std::sync::RwLock<AssetCache>>,
+) {
+    let _ = GLOBAL_ASSET_CACHE.set(cache);
+}
+
+/// La caché global registrada, si la app ya arrancó.
+pub fn global_asset_cache() -> Option<std::sync::Arc<std::sync::RwLock<AssetCache>>> {
+    GLOBAL_ASSET_CACHE.get().cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -625,21 +650,4 @@ mod tests {
         let evictions = cache.select_evictions(600, &HashSet::new());
         assert!(evictions.is_empty());
     }
-}
-
-static GLOBAL_ASSET_CACHE: std::sync::OnceLock<
-    std::sync::Arc<std::sync::RwLock<AssetCache>>,
-> = std::sync::OnceLock::new();
-
-/// Registra la caché de assets global (la llama la app al arrancar,
-/// junto al mundo físico global): la leen las tools MCP de inspección.
-pub fn register_global_asset_cache(
-    cache: std::sync::Arc<std::sync::RwLock<AssetCache>>,
-) {
-    let _ = GLOBAL_ASSET_CACHE.set(cache);
-}
-
-/// La caché global registrada, si la app ya arrancó.
-pub fn global_asset_cache() -> Option<std::sync::Arc<std::sync::RwLock<AssetCache>>> {
-    GLOBAL_ASSET_CACHE.get().cloned()
 }

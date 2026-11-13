@@ -130,8 +130,8 @@ impl TransformStore {
             for &i in &orden {
                 en_orden[i] = true;
             }
-            for i in 0..n {
-                if !en_orden[i] {
+            for (i, &en_orden_i) in en_orden.iter().enumerate() {
+                if !en_orden_i {
                     // Se marca su padre como raíz para resolverlo
                     // sin depender de otro miembro del ciclo.
                     self.parent_idx[i] = -1;

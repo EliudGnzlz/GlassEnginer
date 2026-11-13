@@ -447,12 +447,11 @@ impl HierarchyPanel {
                             ui.close();
                         }
 
-                        if entity.parent.is_some() {
-                            if ui.button("⛓ Desemparentar (Mover a Raíz)").clicked() {
+                        if entity.parent.is_some()
+                            && ui.button("⛓ Desemparentar (Mover a Raíz)").clicked() {
                                 pending_action = Some(HierarchyAction::Reparent(entity.id, None));
                                 ui.close();
                             }
-                        }
 
                         // Submenú para emparentar con otro objeto
                         let candidate_parents: Vec<(u64, String)> = scene.entities
@@ -464,7 +463,7 @@ impl HierarchyPanel {
                         if !candidate_parents.is_empty() {
                             ui.menu_button("🔗 Emparentar con... ▾", |ui| {
                                 for (pid, pname) in candidate_parents {
-                                    if ui.button(format!("{pname}")).clicked() {
+                                    if ui.button(pname.to_string()).clicked() {
                                         pending_action = Some(HierarchyAction::Reparent(entity.id, Some(pid)));
                                         ui.close();
                                     }

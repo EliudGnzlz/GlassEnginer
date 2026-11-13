@@ -11,6 +11,8 @@
 
 pub mod ffi;
 
+pub use ffi::{glass_particles_burst, glass_particles_play, glass_particles_stop};
+
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
@@ -156,6 +158,18 @@ fn v_basis(basis: &[[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
     ]
 }
 
+/// Valores iniciales de una partícula al nacer en el pool.
+/// (Agrupados para no pasarlos sueltos: lint too_many_arguments
+/// de Clippy.)
+struct NacimientoParticula {
+    pos: [f32; 3],
+    vel: [f32; 3],
+    life: f32,
+    size: f32,
+    rot0: f32,
+    rot_speed: f32,
+}
+
 /// Pool de partículas en arrays paralelos (SoA). Las vivas son
 /// `0..alive`; al morir una, la última ocupa su hueco.
 #[derive(Debug, Default)]
@@ -184,16 +198,8 @@ impl ParticlePool {
         }
     }
 
-    fn spawn(
-        &mut self,
-        cap: usize,
-        pos: [f32; 3],
-        vel: [f32; 3],
-        life: f32,
-        size: f32,
-        rot0: f32,
-        rot_speed: f32,
-    ) -> bool {
+    fn spawn(&mut self, cap: usize, nace: NacimientoParticula) -> bool {
+        let NacimientoParticula { pos, vel, life, size, rot0, rot_speed } = nace;
         if self.alive >= cap {
             return false;
         }
@@ -331,12 +337,14 @@ impl Emitter {
             .range(self.config.rotation_speed[0], self.config.rotation_speed[1]);
         self.pool.spawn(
             self.config.max_particles.max(1),
-            pos,
-            vel,
-            life.max(0.01),
-            size,
-            rot0,
-            rot_speed,
+            NacimientoParticula {
+                pos,
+                vel,
+                life: life.max(0.01),
+                size,
+                rot0,
+                rot_speed,
+            },
         );
     }
 
@@ -457,8 +465,8 @@ impl Emitter {
     pub fn color_at(&self, i: usize) -> [f32; 4] {
         let t = self.pool.life_t(i);
         let mut c = [0.0; 4];
-        for k in 0..4 {
-            c[k] = self.config.color_start[k]
+        for (k, ck) in c.iter_mut().enumerate() {
+            *ck = self.config.color_start[k]
                 + (self.config.color_end[k] - self.config.color_start[k]) * t;
         }
         let fade_in = (t / 0.12).min(1.0);
@@ -646,5 +654,3 @@ mod tests {
         assert!(drain_commands().is_empty());
     }
 }
-
-pub use ffi::{glass_particles_burst, glass_particles_play, glass_particles_stop};

@@ -13,10 +13,21 @@ use kira::{
 use crate::buses::{BusId, BusMixer};
 use crate::command::SoundHandle;
 
+/// Parameters of a 3D playback request to a backend, grouped so
+/// `play_3d` does not take them loose (Clippy too_many_arguments).
+#[derive(Debug, Clone, Copy)]
+pub struct Play3dParams {
+    pub position: [f32; 3],
+    pub volume: f32,
+    pub pitch: f32,
+    pub looping: bool,
+    pub bus: BusId,
+}
+
 pub trait AudioBackend: Send {
     fn load_clip(&mut self, name: &str, wav_bytes: Vec<u8>) -> bool;
     fn play_2d(&mut self, name: &str, volume: f32, pitch: f32, looping: bool, bus: BusId, handle: SoundHandle) -> bool;
-    fn play_3d(&mut self, name: &str, position: [f32; 3], volume: f32, pitch: f32, looping: bool, bus: BusId, handle: SoundHandle) -> bool;
+    fn play_3d(&mut self, name: &str, params: Play3dParams, handle: SoundHandle) -> bool;
     fn set_source_position(&mut self, handle: SoundHandle, position: [f32; 3]);
     fn set_listener_transform(&mut self, position: [f32; 3], orientation: [f32; 4]);
     fn stop(&mut self, handle: SoundHandle);
@@ -155,7 +166,8 @@ impl AudioBackend for KiraBackend {
         }
     }
 
-    fn play_3d(&mut self, name: &str, position: [f32; 3], volume: f32, pitch: f32, looping: bool, bus: BusId, handle: SoundHandle) -> bool {
+    fn play_3d(&mut self, name: &str, params: Play3dParams, handle: SoundHandle) -> bool {
+        let Play3dParams { position, volume, pitch, looping, bus } = params;
         self.active_3d.retain(|_, src| src.sound.state() != PlaybackState::Stopped);
         let sound_data = match self.clips.get(name) {
             Some(d) => d.clone(),
@@ -297,6 +309,12 @@ pub struct NullBackend {
     occluded: HashMap<SoundHandle, bool>,
 }
 
+impl Default for NullBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NullBackend {
     pub fn new() -> Self {
         Self {
@@ -321,7 +339,8 @@ impl AudioBackend for NullBackend {
         true
     }
 
-    fn play_3d(&mut self, _name: &str, position: [f32; 3], _volume: f32, _pitch: f32, _looping: bool, _bus: BusId, handle: SoundHandle) -> bool {
+    fn play_3d(&mut self, _name: &str, params: Play3dParams, handle: SoundHandle) -> bool {
+        let Play3dParams { position, .. } = params;
         self.active_sources.insert(handle, position);
         self.occluded.insert(handle, false);
         true

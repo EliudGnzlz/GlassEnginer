@@ -42,6 +42,9 @@ unsafe fn copy_str_to_buf(text: &str, out: *mut c_char, cap: usize) -> i32 {
 }
 
 /// Native callback invoked by C# to query an entity's transform.
+/// # Safety
+/// `out` debe ser null o apuntar a memoria válida y escribible
+/// para un `TransformFfi` durante la llamada (la función comprueba el null).
 pub unsafe extern "C" fn get_transform(entity_id: u64, out: *mut TransformFfi) -> i32 {
     if out.is_null() {
         return BRIDGE_ERR_NULL_PTR;
@@ -56,6 +59,9 @@ pub unsafe extern "C" fn get_transform(entity_id: u64, out: *mut TransformFfi) -
 }
 
 /// Native callback invoked by C# to mutate an entity's transform.
+/// # Safety
+/// `input` debe ser null o apuntar a un `TransformFfi` válido y
+/// legible durante la llamada (la función comprueba el null).
 pub unsafe extern "C" fn set_transform(entity_id: u64, input: *const TransformFfi) -> i32 {
     if input.is_null() {
         return BRIDGE_ERR_NULL_PTR;
@@ -80,6 +86,10 @@ pub unsafe extern "C" fn set_transform(entity_id: u64, input: *const TransformFf
 ///   * Si no → se copian `min(cap, N)` pares y se devuelve N, para
 ///     que C# pueda comparar N con su capacidad y reintentar con un
 ///     buffer mayor.
+/// # Safety
+/// `ids` y `data` deben ser null (modo consulta de tamaño) o
+/// apuntar a memoria válida y escribible para al menos `cap`
+/// elementos cada uno durante la llamada.
 pub unsafe extern "C" fn get_transforms_batch(
     ids: *mut u64,
     data: *mut TransformFfi,
@@ -112,6 +122,10 @@ pub unsafe extern "C" fn get_transforms_batch(
 /// puntero nulo con `count > 0` es fallo de contrato y devuelve
 /// `BRIDGE_ERR_NULL_PTR`. Devuelve cuántos pares se aplicaron: un
 /// id desconocido o muerto no aborta el resto del lote.
+/// # Safety
+/// `ids` y `data` son arrays paralelos: con `count > 0` deben
+/// apuntar a memoria válida y legible para `count` elementos cada
+/// uno durante la llamada; con `count == 0` pueden ser null.
 pub unsafe extern "C" fn set_transforms_batch(
     ids: *const u64,
     data: *const TransformFfi,
@@ -136,6 +150,10 @@ pub unsafe extern "C" fn set_transforms_batch(
 }
 
 /// Native callback invoked by C# to pipe logs directly into Rust log subsystem.
+/// # Safety
+/// `msg` debe ser null o apuntar a una cadena C válida
+/// (terminada en nulo, en UTF-8) y legible durante la llamada;
+/// la función comprueba el null.
 pub unsafe extern "C" fn log_message(level: i32, msg: *const c_char) {
     if msg.is_null() {
         return;
@@ -262,6 +280,9 @@ fn input_write_len() -> usize {
     }
 }
 
+/// # Safety
+/// `out` debe ser null o apuntar a memoria válida y escribible
+/// para un `InputDataFfi` durante la llamada (la función comprueba el null).
 pub unsafe extern "C" fn get_input(out: *mut InputDataFfi) -> i32 {
     if out.is_null() {
         return BRIDGE_ERR_NULL_PTR;
@@ -282,6 +303,9 @@ pub unsafe extern "C" fn get_input(out: *mut InputDataFfi) -> i32 {
 /// Nº de ejes de entrada configurados (Input v2). Lo consulta el
 /// managed para construir su caché nombre → índice.
 #[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn input_axis_count() -> u32 {
     crate::input_axes::axis_defs().len() as u32
 }
@@ -290,6 +314,9 @@ pub unsafe extern "C" fn input_axis_count() -> u32 {
 /// terminador) y devuelve los bytes escritos; -1 si el índice
 /// no existe o el buffer es nulo o no cabe.
 #[no_mangle]
+/// # Safety
+/// `buf` debe ser null (consulta de tamaño) o apuntar a memoria
+/// válida y escribible para `buf_len` bytes durante la llamada.
 pub unsafe extern "C" fn input_axis_name(index: u32, buf: *mut u8, buf_len: i32) -> i32 {
     if buf.is_null() || buf_len <= 0 {
         return -1;
@@ -336,6 +363,9 @@ pub fn get_script_params() -> ScriptParamsFfi {
     })
 }
 
+/// # Safety
+/// `out` debe ser null o apuntar a memoria válida y escribible
+/// para un `ScriptParamsFfi` durante la llamada (la función comprueba el null).
 pub unsafe extern "C" fn get_script_params_ffi(out: *mut ScriptParamsFfi) -> i32 {
     if out.is_null() {
         return BRIDGE_ERR_NULL_PTR;
@@ -357,6 +387,10 @@ pub unsafe extern "C" fn get_script_params_ffi(out: *mut ScriptParamsFfi) -> i32
 /// Igual que en Unity, el éxito **no** significa que la escena ya esté cargada:
 /// sólo que se cargará cuando el frame termine. Para observar el resultado real,
 /// consultar [`scene_active_name`] en frames posteriores.
+/// # Safety
+/// `name` debe ser null o apuntar a una cadena C válida
+/// (terminada en nulo, en UTF-8) y legible durante la llamada;
+/// la función comprueba el null.
 pub unsafe extern "C" fn scene_load(name: *const c_char) -> i32 {
     if name.is_null() {
         return BRIDGE_ERR_NULL_PTR;
@@ -382,6 +416,9 @@ pub unsafe extern "C" fn scene_load(name: *const c_char) -> i32 {
 
 /// Escribe en `out` el nombre de la escena activa. Con `cap == 0` sólo informa
 /// del tamaño necesario. Devuelve la longitud escrita, o un código negativo.
+/// # Safety
+/// `out` debe ser null (consulta de tamaño) o apuntar a memoria
+/// válida y escribible para `cap` bytes durante la llamada.
 pub unsafe extern "C" fn scene_active_name(out: *mut c_char, cap: usize) -> i32 {
     match crate::bridge::read_active_scene_name() {
         Some(name) => unsafe { copy_str_to_buf(&name, out, cap) },
@@ -390,6 +427,9 @@ pub unsafe extern "C" fn scene_active_name(out: *mut c_char, cap: usize) -> i32 
 }
 
 /// Número de escenas descubiertas en el proyecto. `-1` si no hay puente.
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn scene_count() -> i32 {
     let scenes = crate::bridge::read_available_scenes();
     if scenes.is_empty() {
@@ -411,6 +451,10 @@ pub unsafe extern "C" fn scene_count() -> i32 {
 /// Devuelve `BRIDGE_OK` (0) si la entidad existe, `BRIDGE_ERR_NOT_FOUND`
 /// (-1) si no existe (o si el puente del motor no atiende animaciones) y
 /// `BRIDGE_ERR_NULL_PTR` (-2) si el nombre del clip es nulo.
+/// # Safety
+/// `clip` debe ser null o apuntar a una cadena C válida
+/// (terminada en nulo, en UTF-8) y legible durante la llamada;
+/// la función comprueba el null.
 pub unsafe extern "C" fn animator_play(entity_id: u64, clip: *const c_char) -> i32 {
     if clip.is_null() {
         return BRIDGE_ERR_NULL_PTR;
@@ -436,6 +480,10 @@ pub unsafe extern "C" fn animator_play(entity_id: u64, clip: *const c_char) -> i
 /// tiene componente Animator, `BRIDGE_ERR_NOT_FOUND` si no, y
 /// `BRIDGE_ERR_NULL_PTR` si el nombre es nulo.
 #[no_mangle]
+/// # Safety
+/// `name` debe ser null o apuntar a una cadena C válida
+/// (terminada en nulo, en UTF-8) y legible durante la llamada;
+/// la función comprueba el null.
 pub unsafe extern "C" fn animator_set_param(
     entity_id: u64,
     name: *const c_char,
@@ -460,6 +508,9 @@ pub unsafe extern "C" fn animator_set_param(
 /// dos llamadas de `copy_str_to_buf` (con `cap = 0` devuelve los bytes
 /// que hacen falta). Sin controlador, el estado es el clip en curso.
 #[no_mangle]
+/// # Safety
+/// `out` debe ser null (consulta de tamaño) o apuntar a memoria
+/// válida y escribible para `cap` bytes durante la llamada.
 pub unsafe extern "C" fn animator_current_state(
     entity_id: u64,
     out: *mut c_char,
@@ -473,6 +524,10 @@ pub unsafe extern "C" fn animator_current_state(
 /// crossfade libre entre clips si no lo tiene. Devuelve `BRIDGE_OK` si
 /// la entidad existe y `BRIDGE_ERR_NOT_FOUND` si no.
 #[no_mangle]
+/// # Safety
+/// `name` debe ser null o apuntar a una cadena C válida
+/// (terminada en nulo, en UTF-8) y legible durante la llamada;
+/// la función comprueba el null.
 pub unsafe extern "C" fn animator_crossfade(
     entity_id: u64,
     name: *const c_char,
@@ -500,6 +555,9 @@ pub unsafe extern "C" fn animator_crossfade(
 /// entidad existe y tiene componente Light, y `BRIDGE_ERR_NOT_FOUND` si
 /// no.
 #[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn light_set_color(entity_id: u64, r: f32, g: f32, b: f32) -> i32 {
     if crate::bridge::light_set_color(entity_id, r, g, b) {
         BRIDGE_OK
@@ -511,6 +569,9 @@ pub unsafe extern "C" fn light_set_color(entity_id: u64, r: f32, g: f32, b: f32)
 /// Fija la intensidad de la luz de la entidad (acotada a >= 0.0 en el
 /// motor). Mismos códigos que `light_set_color`.
 #[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn light_set_intensity(entity_id: u64, intensity: f32) -> i32 {
     if crate::bridge::light_set_intensity(entity_id, intensity) {
         BRIDGE_OK
@@ -522,6 +583,9 @@ pub unsafe extern "C" fn light_set_intensity(entity_id: u64, intensity: f32) -> 
 /// Fija el tipo de la luz de la entidad. Mismos códigos que
 /// `light_set_color`.
 #[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn light_set_type(entity_id: u64, tipo: i32) -> i32 {
     if crate::bridge::light_set_type(entity_id, tipo) {
         BRIDGE_OK
@@ -533,6 +597,9 @@ pub unsafe extern "C" fn light_set_type(entity_id: u64, tipo: i32) -> i32 {
 /// Fija el rango de la luz de la entidad (acotado a >= 0.0 en el
 /// motor). Mismos códigos que `light_set_color`.
 #[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn light_set_range(entity_id: u64, range: f32) -> i32 {
     if crate::bridge::light_set_range(entity_id, range) {
         BRIDGE_OK
@@ -544,6 +611,9 @@ pub unsafe extern "C" fn light_set_range(entity_id: u64, range: f32) -> i32 {
 /// Fija los ángulos del cono Spot de la luz de la entidad. Mismos
 /// códigos que `light_set_color`.
 #[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn light_set_spot_angles(
     entity_id: u64,
     outer_deg: f32,
@@ -557,6 +627,10 @@ pub unsafe extern "C" fn light_set_spot_angles(
 }
 
 #[no_mangle]
+/// # Safety
+/// `text` debe ser null o apuntar a una cadena C válida
+/// (terminada en nulo, en UTF-8) y legible durante la llamada;
+/// la función comprueba el null.
 pub unsafe extern "C" fn ui_set_text(entity_id: u64, text: *const c_char) -> i32 {
     if text.is_null() {
         return BRIDGE_ERR_NULL_PTR;
@@ -573,6 +647,9 @@ pub unsafe extern "C" fn ui_set_text(entity_id: u64, text: *const c_char) -> i32
 }
 
 #[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn ui_set_font_size(entity_id: u64, size: f32) -> i32 {
     if crate::bridge::ui_set_font_size(entity_id, size) {
         BRIDGE_OK
@@ -582,6 +659,9 @@ pub unsafe extern "C" fn ui_set_font_size(entity_id: u64, size: f32) -> i32 {
 }
 
 #[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn ui_set_text_color(entity_id: u64, r: f32, g: f32, b: f32, a: f32) -> i32 {
     if crate::bridge::ui_set_text_color(entity_id, r, g, b, a) {
         BRIDGE_OK
@@ -591,6 +671,10 @@ pub unsafe extern "C" fn ui_set_text_color(entity_id: u64, r: f32, g: f32, b: f3
 }
 
 #[no_mangle]
+/// # Safety
+/// `sprite` debe ser null o apuntar a una cadena C válida
+/// (terminada en nulo, en UTF-8) y legible durante la llamada;
+/// la función comprueba el null.
 pub unsafe extern "C" fn ui_set_image_sprite(entity_id: u64, sprite: *const c_char) -> i32 {
     if sprite.is_null() {
         return BRIDGE_ERR_NULL_PTR;
@@ -607,6 +691,9 @@ pub unsafe extern "C" fn ui_set_image_sprite(entity_id: u64, sprite: *const c_ch
 }
 
 #[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn ui_set_image_color(entity_id: u64, r: f32, g: f32, b: f32, a: f32) -> i32 {
     if crate::bridge::ui_set_image_color(entity_id, r, g, b, a) {
         BRIDGE_OK
@@ -616,6 +703,9 @@ pub unsafe extern "C" fn ui_set_image_color(entity_id: u64, r: f32, g: f32, b: f
 }
 
 #[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn ui_set_button_color(entity_id: u64, r: f32, g: f32, b: f32, a: f32) -> i32 {
     if crate::bridge::ui_set_button_color(entity_id, r, g, b, a) {
         BRIDGE_OK
@@ -625,6 +715,9 @@ pub unsafe extern "C" fn ui_set_button_color(entity_id: u64, r: f32, g: f32, b: 
 }
 
 #[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn ui_set_anchored_pos(entity_id: u64, x: f32, y: f32) -> i32 {
     if crate::bridge::ui_set_anchored_pos(entity_id, x, y) {
         BRIDGE_OK
@@ -634,6 +727,9 @@ pub unsafe extern "C" fn ui_set_anchored_pos(entity_id: u64, x: f32, y: f32) -> 
 }
 
 #[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn ui_set_size_delta(entity_id: u64, w: f32, h: f32) -> i32 {
     if crate::bridge::ui_set_size_delta(entity_id, w, h) {
         BRIDGE_OK
@@ -644,12 +740,18 @@ pub unsafe extern "C" fn ui_set_size_delta(entity_id: u64, w: f32, h: f32) -> i3
 
 /// Entidad del último arrastre del Canvas (drag & drop, UI v2).
 #[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn ui_get_dragged_id() -> u64 {
     crate::bridge::ui_dragged_id()
 }
 
 /// Casilla que recibió la última suelta (0 = en vacío).
 #[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn ui_get_drop_target_id() -> u64 {
     crate::bridge::ui_drop_target_id()
 }
@@ -727,7 +829,7 @@ fn sanitize_spawn_spec(ffi: &SpawnSpecFfi) -> Option<crate::bridge::SpawnSpec> {
     if !finite {
         return None;
     }
-    if ffi.scale.iter().any(|&s| s == 0.0) {
+    if ffi.scale.contains(&0.0) {
         return None;
     }
     if !(crate::bridge::SPAWN_PHYSICS_NONE..=crate::bridge::SPAWN_PHYSICS_KINEMATIC).contains(&ffi.physics) {
@@ -761,6 +863,10 @@ fn sanitize_spawn_spec(ffi: &SpawnSpecFfi) -> Option<crate::bridge::SpawnSpec> {
 /// el spec es nulo/inválido o el motor no pudo crearla (el motivo va al
 /// log). El id 0 nunca es una entidad válida en este motor (la escena
 /// por defecto empieza en 1), así que sirve de centinela sin ambigüedad.
+/// # Safety
+/// `spec` debe ser null o apuntar a un `SpawnSpecFfi` válido y
+/// legible durante la llamada, y los punteros de cadena que
+/// contiene siguen el mismo contrato (null o cadena C válida).
 pub unsafe extern "C" fn entity_spawn(spec: *const SpawnSpecFfi) -> u64 {
     if spec.is_null() {
         return 0;
@@ -782,6 +888,9 @@ pub unsafe extern "C" fn entity_spawn(spec: *const SpawnSpecFfi) -> u64 {
 /// para destruir una entidad: sale de la escena y su cuerpo y colliders
 /// salen del mundo físico. Devuelve `BRIDGE_OK` si existía y
 /// `BRIDGE_ERR_NOT_FOUND` si no (o si no hay puente).
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn entity_destroy(entity_id: u64) -> i32 {
     if crate::bridge::destroy_entity(entity_id) {
         BRIDGE_OK
@@ -803,6 +912,10 @@ pub unsafe extern "C" fn entity_destroy(entity_id: u64) -> i32 {
 /// delega en `crate::bridge::spawn_entity`. Devuelve el id de la
 /// entidad raíz creada, o 0 si el puente no está, la ruta no se pudo
 /// leer o el motor rechazó la instanciación (el motivo va al log).
+/// # Safety
+/// `path` debe ser null o apuntar a una cadena C válida
+/// (terminada en nulo, en UTF-8) y legible durante la llamada;
+/// la función comprueba el null.
 pub unsafe extern "C" fn entity_instantiate_prefab(path: *const c_char, x: f32, y: f32, z: f32) -> u64 {
     let path = match unsafe { read_spawn_str(path) } {
         Ok(Some(p)) if !p.is_empty() => p,
@@ -844,6 +957,9 @@ pub unsafe extern "C" fn entity_instantiate_prefab(path: *const c_char, x: f32, 
 /// desactivar una entidad: la inactiva no se dibuja y no tiene cuerpo;
 /// al reactivarla el cuerpo se recrea desde su `PhysicsData`. Devuelve
 /// `BRIDGE_OK` / `BRIDGE_ERR_NOT_FOUND` como `entity_destroy`.
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn entity_set_active(entity_id: u64, active: u8) -> i32 {
     if crate::bridge::set_entity_active(entity_id, active != 0) {
         BRIDGE_OK
@@ -855,6 +971,9 @@ pub unsafe extern "C" fn entity_set_active(entity_id: u64, active: u8) -> i32 {
 /// Callback invocado por C# (`RuntimeBridge.SetFog`) para fijar la
 /// niebla de la escena en vivo desde un script (sistemas de clima).
 /// Devuelve `BRIDGE_OK` / `BRIDGE_ERR_NOT_FOUND`.
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn scene_set_fog(r: f32, g: f32, b: f32, near: f32, far: f32) -> i32 {
     if !r.is_finite() || !g.is_finite() || !b.is_finite() || !near.is_finite() || !far.is_finite()
     {
@@ -870,6 +989,9 @@ pub unsafe extern "C" fn scene_set_fog(r: f32, g: f32, b: f32, near: f32, far: f
 /// Callback invocado por C# (`RuntimeBridge.SetCameraFov`) para fijar
 /// el FOV de la cámara principal desde un script (miras con zoom).
 /// Devuelve `BRIDGE_OK` / `BRIDGE_ERR_NOT_FOUND`.
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn scene_set_camera_fov(fov: f32) -> i32 {
     if !fov.is_finite() {
         return BRIDGE_ERR_NOT_FOUND;
@@ -883,6 +1005,9 @@ pub unsafe extern "C" fn scene_set_camera_fov(fov: f32) -> i32 {
 
 /// Número de entidades de la escena viva; `BRIDGE_ERR_NOT_FOUND` si el
 /// puente no está disponible (p. ej. antes de cargar el proyecto).
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn entity_count() -> i32 {
     match crate::bridge::entity_count() {
         Some(n) => n as i32,
@@ -893,6 +1018,10 @@ pub unsafe extern "C" fn entity_count() -> i32 {
 /// Escribe los conteos (cuerpos, colliders) del mundo físico vivo en
 /// las salidas (cualquiera puede ser NULL si no interesa). Devuelve
 /// `BRIDGE_OK` o `BRIDGE_ERR_NOT_FOUND` si no hay puente.
+/// # Safety
+/// `out_bodies` y `out_colliders` deben ser null o apuntar a
+/// memoria válida y escribible para un `i32` cada uno durante la
+/// llamada.
 pub unsafe extern "C" fn entity_physics_counts(out_bodies: *mut i32, out_colliders: *mut i32) -> i32 {
     match crate::bridge::physics_counts() {
         Some((bodies, colliders)) => {
@@ -957,6 +1086,9 @@ pub fn clear_interaction_point_state() {
 /// máscaras de distancia sin error visible) y el radio negativo se
 /// clampa a cero; con radio cero el punto sigue siendo válido pero su
 /// disco de influencia es un punto.
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn graph_set_interaction_point(x: f32, y: f32, z: f32, radius: f32) {
     if !(x.is_finite() && y.is_finite() && z.is_finite() && radius.is_finite()) {
         return;
@@ -971,6 +1103,9 @@ pub unsafe extern "C" fn graph_set_interaction_point(x: f32, y: f32, z: f32, rad
 /// planta) y su rotación Y en radianes. El `w` del punto (el radio) no
 /// se usa con esta forma y queda a cero. Misma higiene que la esférica:
 /// no finitos descartados enteros y semiejes negativos clampados a cero.
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn graph_set_interaction_box(
     x: f32,
     y: f32,
@@ -1002,11 +1137,17 @@ pub unsafe extern "C" fn graph_set_interaction_box(
 
 /// Callback invocado por C# (`Shader.ClearInteractionPoint`): el canal
 /// vuelve a su valor inactivo y los grafos dejan de reaccionar.
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
 pub unsafe extern "C" fn graph_clear_interaction_point() {
     clear_interaction_point_state();
 }
 
 /// Escribe en `out` el nombre de la escena en la posición `index`.
+/// # Safety
+/// `out` debe ser null (consulta de tamaño) o apuntar a memoria
+/// válida y escribible para `cap` bytes durante la llamada.
 pub unsafe extern "C" fn scene_name_at(index: i32, out: *mut c_char, cap: usize) -> i32 {
     if index < 0 {
         return BRIDGE_ERR_NOT_FOUND;

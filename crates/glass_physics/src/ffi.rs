@@ -112,8 +112,12 @@ pub extern "C" fn glass_physics_attach_sphere_collider(
 /// Adjunta un collider de CÁPSULA (eje Y) al cuerpo. `half_height` es
 /// la mitad del tramo recto, sin casquetes (la semántica de Rapier).
 /// 0 si el mundo o el cuerpo no existen o algún valor no es finito.
+///
+/// # Safety
+/// `world` debe ser null o un puntero válido a un `PhysicsWorld`
+/// vivo entregado por el motor (la función comprueba el null).
 #[no_mangle]
-pub extern "C" fn glass_physics_attach_capsule_collider(
+pub unsafe extern "C" fn glass_physics_attach_capsule_collider(
     world: *mut PhysicsWorld,
     body_handle: BodyHandle,
     half_height: f32,
@@ -125,16 +129,19 @@ pub extern "C" fn glass_physics_attach_capsule_collider(
         return 0;
     }
     let world = unsafe { &mut *world };
-    match world.attach_capsule_collider(body_handle, half_height, radius, restitution, friction) {
-        Some(h) => h,
-        None => 0,
-    }
+    world
+        .attach_capsule_collider(body_handle, half_height, radius, restitution, friction)
+        .unwrap_or_default()
 }
 
 /// Adjunta un collider de CILINDRO (eje Y) al cuerpo. `half_height`
 /// es la mitad de la altura total. Misma guarda que la cápsula.
+///
+/// # Safety
+/// `world` debe ser null o un puntero válido a un `PhysicsWorld`
+/// vivo entregado por el motor (la función comprueba el null).
 #[no_mangle]
-pub extern "C" fn glass_physics_attach_cylinder_collider(
+pub unsafe extern "C" fn glass_physics_attach_cylinder_collider(
     world: *mut PhysicsWorld,
     body_handle: BodyHandle,
     half_height: f32,
@@ -146,10 +153,9 @@ pub extern "C" fn glass_physics_attach_cylinder_collider(
         return 0;
     }
     let world = unsafe { &mut *world };
-    match world.attach_cylinder_collider(body_handle, half_height, radius, restitution, friction) {
-        Some(h) => h,
-        None => 0,
-    }
+    world
+        .attach_cylinder_collider(body_handle, half_height, radius, restitution, friction)
+        .unwrap_or_default()
 }
 
 #[no_mangle]
@@ -190,6 +196,9 @@ pub extern "C" fn glass_physics_apply_force(
     false
 }
 
+/// # Safety
+/// `out_vel` debe ser null o apuntar a memoria válida y escribible
+/// para un `[f32; 3]` durante la llamada (la función comprueba el null).
 #[no_mangle]
 pub unsafe extern "C" fn glass_physics_get_linear_velocity(
     body_handle: BodyHandle,
@@ -228,6 +237,10 @@ pub extern "C" fn glass_physics_set_linear_velocity(
     false
 }
 
+/// # Safety
+/// `out_pos` y `out_rot` deben ser null o apuntar a memoria válida
+/// y escribible para un `[f32; 3]` y un `[f32; 4]` respectivamente
+/// durante la llamada (la función comprueba los null).
 #[no_mangle]
 pub unsafe extern "C" fn glass_physics_get_transform(
     body_handle: BodyHandle,
@@ -290,8 +303,13 @@ pub extern "C" fn glass_physics_remove_body(body_handle: BodyHandle) -> bool {
 /// Plat3D: chequeo de suelo del jugador y golpe de espada). Devuelve
 /// `true` si hubo impacto y rellena las salidas (cualquiera puede ser
 /// null si al llamante no le interesa). `exclude_entity` = 0 no excluye.
+///
+/// # Safety
+/// Cada puntero de salida debe ser null o apuntar a memoria válida
+/// y escribible para un valor de su tipo durante la llamada (la
+/// función comprueba cada null antes de escribir).
 #[no_mangle]
-pub extern "C" fn glass_physics_cast_ray(
+pub unsafe extern "C" fn glass_physics_cast_ray(
     origin_x: f32,
     origin_y: f32,
     origin_z: f32,
@@ -373,8 +391,13 @@ pub extern "C" fn glass_physics_body_handle(entity_id: u64) -> u64 {
 /// Barrido de esfera contra los colliders del mundo (auditoría C5:
 /// las consultas extendidas de la Fase 1 solo existían por MCP; esto
 /// las abre a los scripts C#). Misma forma y salidas que el raycast.
+///
+/// # Safety
+/// Cada puntero de salida debe ser null o apuntar a memoria válida
+/// y escribible para un valor de su tipo durante la llamada (la
+/// función comprueba cada null antes de escribir).
 #[no_mangle]
-pub extern "C" fn glass_physics_cast_sphere(
+pub unsafe extern "C" fn glass_physics_cast_sphere(
     origin_x: f32,
     origin_y: f32,
     origin_z: f32,
@@ -445,8 +468,13 @@ pub extern "C" fn glass_physics_cast_sphere(
 /// Entidades cuyos colliders intersectan una esfera (auditoría C5).
 /// Escribe hasta `capacity` ids en `out_entities` y devuelve cuántos
 /// escribió; -1 si los argumentos no son válidos.
+///
+/// # Safety
+/// `out_entities` debe ser null o apuntar a memoria válida y
+/// escribible para al menos `capacity` valores `u64` durante la
+/// llamada (la función comprueba el null).
 #[no_mangle]
-pub extern "C" fn glass_physics_overlap_sphere(
+pub unsafe extern "C" fn glass_physics_overlap_sphere(
     center_x: f32,
     center_y: f32,
     center_z: f32,

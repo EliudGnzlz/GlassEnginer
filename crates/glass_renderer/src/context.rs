@@ -301,7 +301,7 @@ impl VulkanContext {
         }
 
         // Ordenar candidatos de mayor a menor puntuación
-        candidates.sort_by(|a, b| b.score.cmp(&a.score));
+        candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
         let best_gpu = candidates.remove(0);
 
         let chosen_name =

@@ -99,6 +99,12 @@ fn physics_thread_count() -> usize {
         })
 }
 
+impl Default for PhysicsWorld {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PhysicsWorld {
     pub fn new() -> Self {
         let (event_sender, event_receiver) = crossbeam::channel::unbounded();
@@ -825,7 +831,10 @@ impl PhysicsWorld {
                 max_cruz2 = cruz2;
             }
         }
-        if !(max_cruz2 > 0.0) {
+        if !matches!(
+            max_cruz2.partial_cmp(&0.0),
+            Some(std::cmp::Ordering::Greater)
+        ) {
             return None;
         }
 
@@ -1161,14 +1170,11 @@ impl PhysicsWorld {
     /// pertenezca a esa entidad.
     pub fn cast_capsule(
         &mut self,
-        origin: [f32; 3],
-        half_height: f32,
-        radius: f32,
-        dir: [f32; 3],
-        max_dist: f32,
+        barrido: BarridoCapsula,
         mask: u32,
         exclude_entity: u64,
     ) -> Option<ShapeHit> {
+        let BarridoCapsula { origin, half_height, radius, dir, max_dist } = barrido;
         if !origin.iter().all(|v| v.is_finite())
             || !dir.iter().all(|v| v.is_finite())
             || !radius.is_finite()
@@ -1357,6 +1363,19 @@ impl PhysicsWorld {
 
 }
 
+/// Parámetros de un barrido de cápsula (eje Y) en `cast_capsule`:
+/// origen, media altura del tramo cilíndrico, radio, dirección y
+/// distancia máxima. (Agrupados para no pasarlos sueltos: lint
+/// too_many_arguments de Clippy.)
+#[derive(Debug, Clone, Copy)]
+pub struct BarridoCapsula {
+    pub origin: [f32; 3],
+    pub half_height: f32,
+    pub radius: f32,
+    pub dir: [f32; 3],
+    pub max_dist: f32,
+}
+
 /// Resultado de una consulta de forma (shape cast): como `RayHit` pero el
 /// punto y la normal son los del contacto de la forma barrida (witness del
 /// collider golpeado).
@@ -1530,12 +1549,10 @@ let eventos = world.drain_contact_events();
     let mut hubo_enter = false;
     let mut hubo_exit = false;
     for ev in &eventos {
-        if (ev.a == 4 && ev.b == 5) || (ev.a == 5 && ev.b == 4) {
-            if ev.is_trigger {
-                match ev.kind {
-                    ContactKind::Enter => hubo_enter = true,
-                    ContactKind::Exit => hubo_exit = true,
-                }
+        if ((ev.a == 4 && ev.b == 5) || (ev.a == 5 && ev.b == 4)) && ev.is_trigger {
+            match ev.kind {
+                ContactKind::Enter => hubo_enter = true,
+                ContactKind::Exit => hubo_exit = true,
             }
         }
     }

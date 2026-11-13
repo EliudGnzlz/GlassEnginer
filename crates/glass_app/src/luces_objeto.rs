@@ -278,7 +278,7 @@ impl SistemaAsignacion {
                 if dist2 > 0.25 * 0.25 {
                     return true;
                 }
-                (frame + entidad) % 30 == 0
+                (frame + entidad).is_multiple_of(30)
             }
         }
     }
@@ -289,11 +289,11 @@ impl SistemaAsignacion {
     /// las que alcanzan la caja (d <= range); score =
     /// intensidad × prioridad / (1 + d²/range²) con range acotado a
     /// >= 0.01. (Antes se medía al centro menos el radio de la
-    /// esfera envolvente: en un receptor grande la d salía 0 para
-    /// todas las luces y el ranking era un empate sin sentido.)
-    /// Reutiliza la ranura si ya tenía; si no hay ranuras (1023
-    /// ocupadas), devuelve None y el objeto cae al global. Guarda y
-    /// devuelve la asignación.
+    /// > esfera envolvente: en un receptor grande la d salía 0 para
+    /// > todas las luces y el ranking era un empate sin sentido.)
+    /// > Reutiliza la ranura si ya tenía; si no hay ranuras (1023
+    /// > ocupadas), devuelve None y el objeto cae al global. Guarda y
+    /// > devuelve la asignación.
     pub fn resolver(
         &mut self,
         entidad: u64,

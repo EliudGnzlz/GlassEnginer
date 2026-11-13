@@ -10,6 +10,18 @@ pub enum PipelineError {
     ShaderLoadError,
 }
 
+/// Layouts de descriptores opcionales que enlaza una pipeline de
+/// mallas: sombras, luces puntuales, lightmaps e IBL. Viajan juntos
+/// porque todas las variantes de pipeline los comparten (agrupados
+/// por el lint too_many_arguments de Clippy).
+#[derive(Clone, Copy, Default)]
+pub struct MeshPipelineLayouts {
+    pub shadow: Option<vk::DescriptorSetLayout>,
+    pub point_lights: Option<vk::DescriptorSetLayout>,
+    pub lm: Option<(vk::DescriptorSetLayout, vk::DescriptorSetLayout)>,
+    pub ibl: Option<vk::DescriptorSetLayout>,
+}
+
 pub struct GraphicsPipeline {
     pub device: Arc<ash::Device>,
     pub layout: vk::PipelineLayout,
@@ -175,12 +187,9 @@ impl GraphicsPipeline {
         render_pass: vk::RenderPass,
         vert_spv: &[u8],
         frag_spv: &[u8],
-        shadow_set_layout: Option<vk::DescriptorSetLayout>,
-        point_lights_set_layout: Option<vk::DescriptorSetLayout>,
-        lm_set_layouts: Option<(vk::DescriptorSetLayout, vk::DescriptorSetLayout)>,
-        ibl_set_layout: Option<vk::DescriptorSetLayout>,
+        layouts: MeshPipelineLayouts,
     ) -> Result<Self, PipelineError> {
-        Self::new_mesh_pipeline_impl(device, render_pass, vert_spv, frag_spv, None, false, shadow_set_layout, point_lights_set_layout, lm_set_layouts, ibl_set_layout)
+        Self::new_mesh_pipeline_impl(device, render_pass, vert_spv, frag_spv, None, false, layouts)
     }
 
     /// Igual que `new_mesh_pipeline` pero transparente (mezcla por
@@ -191,12 +200,9 @@ impl GraphicsPipeline {
         render_pass: vk::RenderPass,
         vert_spv: &[u8],
         frag_spv: &[u8],
-        shadow_set_layout: Option<vk::DescriptorSetLayout>,
-        point_lights_set_layout: Option<vk::DescriptorSetLayout>,
-        lm_set_layouts: Option<(vk::DescriptorSetLayout, vk::DescriptorSetLayout)>,
-        ibl_set_layout: Option<vk::DescriptorSetLayout>,
+        layouts: MeshPipelineLayouts,
     ) -> Result<Self, PipelineError> {
-        Self::new_mesh_pipeline_impl(device, render_pass, vert_spv, frag_spv, None, true, shadow_set_layout, point_lights_set_layout, lm_set_layouts, ibl_set_layout)
+        Self::new_mesh_pipeline_impl(device, render_pass, vert_spv, frag_spv, None, true, layouts)
     }
 
     /// Pipeline de un material de GRAFO: idéntico al de mallas (mismo
@@ -218,8 +224,7 @@ impl GraphicsPipeline {
         frag_spv: &[u8],
         globals_set_layout: vk::DescriptorSetLayout,
         transparent: bool,
-        shadow_set_layout: Option<vk::DescriptorSetLayout>,
-        point_lights_set_layout: Option<vk::DescriptorSetLayout>,
+        layouts: MeshPipelineLayouts,
     ) -> Result<Self, PipelineError> {
         Self::new_mesh_pipeline_impl(
             device,
@@ -228,10 +233,7 @@ impl GraphicsPipeline {
             frag_spv,
             Some(globals_set_layout),
             transparent,
-            shadow_set_layout,
-            point_lights_set_layout,
-            None,
-            None,
+            layouts,
         )
     }
 
@@ -242,11 +244,14 @@ impl GraphicsPipeline {
         frag_spv: &[u8],
         globals_set_layout: Option<vk::DescriptorSetLayout>,
         transparent: bool,
-        shadow_set_layout: Option<vk::DescriptorSetLayout>,
-        point_lights_set_layout: Option<vk::DescriptorSetLayout>,
-        lm_set_layouts: Option<(vk::DescriptorSetLayout, vk::DescriptorSetLayout)>,
-        ibl_set_layout: Option<vk::DescriptorSetLayout>,
+        layouts: MeshPipelineLayouts,
     ) -> Result<Self, PipelineError> {
+        let MeshPipelineLayouts {
+            shadow: shadow_set_layout,
+            point_lights: point_lights_set_layout,
+            lm: lm_set_layouts,
+            ibl: ibl_set_layout,
+        } = layouts;
         let vert_module = Self::create_shader_module(&device, vert_spv)?;
         let frag_module = Self::create_shader_module(&device, frag_spv)?;
 
@@ -493,11 +498,14 @@ impl GraphicsPipeline {
         render_pass: vk::RenderPass,
         vert_spv: &[u8],
         frag_spv: &[u8],
-        shadow_set_layout: Option<vk::DescriptorSetLayout>,
-        point_lights_set_layout: Option<vk::DescriptorSetLayout>,
-        lm_set_layouts: Option<(vk::DescriptorSetLayout, vk::DescriptorSetLayout)>,
-        ibl_set_layout: Option<vk::DescriptorSetLayout>,
+        layouts: MeshPipelineLayouts,
     ) -> Result<Self, PipelineError> {
+        let MeshPipelineLayouts {
+            shadow: shadow_set_layout,
+            point_lights: point_lights_set_layout,
+            lm: lm_set_layouts,
+            ibl: ibl_set_layout,
+        } = layouts;
         let vert_module = Self::create_shader_module(&device, vert_spv)?;
         let frag_module = Self::create_shader_module(&device, frag_spv)?;
 
@@ -1319,12 +1327,12 @@ impl GraphicsPipeline {
         device: &ash::Device,
         spv_bytes: &[u8],
     ) -> Result<vk::ShaderModule, PipelineError> {
-        if spv_bytes.len() % 4 != 0 {
+        if !spv_bytes.len().is_multiple_of(4) {
             return Err(PipelineError::ShaderLoadError);
         }
 
         let words: Vec<u32> = spv_bytes
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
             .collect();
 

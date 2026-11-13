@@ -743,7 +743,7 @@ impl Default for UIImageData {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UIDragData {
     /// true = el elemento se puede arrastrar con el ratón.
     pub draggable: bool,
@@ -757,18 +757,6 @@ pub struct UIDragData {
     /// Método del script de ESTA entidad cuando algo se suelta
     /// sobre ella (solo si accepts_drop).
     pub on_drop: String,
-}
-
-impl Default for UIDragData {
-    fn default() -> Self {
-        Self {
-            draggable: false,
-            accepts_drop: false,
-            on_begin_drag: String::new(),
-            on_drag_end: String::new(),
-            on_drop: String::new(),
-        }
-    }
 }
 
 /// Activo de material estilo Unity (Canvas no: materiales 3D,
@@ -1962,7 +1950,7 @@ impl SceneState {
     /// 10 instantáneas más recientes por escena.
     pub fn save_to_json(&self, path: &str) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(&self.entities)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         if let Some(parent) = std::path::Path::new(path).parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -1992,7 +1980,7 @@ impl SceneState {
     pub fn load_from_json(&mut self, path: &str) -> std::io::Result<()> {
         let json = std::fs::read_to_string(path)?;
         let entities: Vec<EntityData> = serde_json::from_str(&json)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         self.replace_entities(entities);
         Ok(())
     }
@@ -2911,7 +2899,7 @@ mod tests_material {
     }
 
     /// 3) Escena antigua: `MeshData` sin el campo `material`
-    /// debe deserializar con `material == ""`.
+    ///    debe deserializar con `material == ""`.
     #[test]
     fn meshdata_antiguo_sin_material() {
         // `color`, `wireframe` y `shader` no tienen default, así
@@ -3035,9 +3023,11 @@ mod scene_index_tests {
 
     #[test]
     fn spot_cone_cos_sanea() {
-        let mut light = LightData::default();
-        light.spot_outer_deg = 30.0;
-        light.spot_inner_deg = 50.0;
+        let mut light = LightData {
+            spot_outer_deg: 30.0,
+            spot_inner_deg: 50.0,
+            ..Default::default()
+        };
         let (cos_outer, cos_inner) = light.spot_cone_cos();
         assert!((cos_inner - cos_outer).abs() < 1e-6);
 

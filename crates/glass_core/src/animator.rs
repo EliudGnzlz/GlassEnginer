@@ -156,18 +156,27 @@ fn state_reference_clip(
     }
 }
 
-/// Recolecta los eventos de animación disparados al avanzar el tiempo del
-/// clip de `prev` a `next` (segundos), sobre un clip de duración `dur`.
-fn recolectar_eventos(
-    defs: &[AnimEvent],
-    state: &str,
-    clip: &str,
+/// Tramo de avance de un clip al recolectar eventos: del instante
+/// `prev` al `next` (segundos), sobre un clip de duración `dur`, en
+/// el estado `state`. (Agrupa los parámetros de la ventana para no
+/// pasarlos sueltos: lint too_many_arguments de Clippy.)
+struct TramoClip<'a> {
+    state: &'a str,
+    clip: &'a str,
     prev: f32,
     next: f32,
     dur: f32,
     bucle: bool,
+}
+
+/// Recolecta los eventos de animación disparados al avanzar el
+/// tramo de clip dado.
+fn recolectar_eventos(
+    defs: &[AnimEvent],
+    tramo: TramoClip<'_>,
     out: &mut Vec<FiredAnimEvent>,
 ) {
+    let TramoClip { state, clip, prev, next, dur, bucle } = tramo;
     if dur <= 0.0 || defs.is_empty() || next <= prev {
         return;
     }
@@ -511,12 +520,14 @@ impl AnimatorData {
                         };
                         recolectar_eventos(
                             &st.events,
-                            &st.name,
-                            &st.clip,
-                            prev_state_time,
-                            next_eval,
-                            d,
-                            cur_loop,
+                            TramoClip {
+                                state: &st.name,
+                                clip: &st.clip,
+                                prev: prev_state_time,
+                                next: next_eval,
+                                dur: d,
+                                bucle: cur_loop,
+                            },
                             &mut eventos,
                         );
                     }
@@ -532,12 +543,14 @@ impl AnimatorData {
                             let next = self.blend_times.get(&child.clip).copied().unwrap_or(prev);
                             recolectar_eventos(
                                 &child.events,
-                                &st.name,
-                                &child.clip,
-                                prev,
-                                next,
-                                d,
-                                true,
+                                TramoClip {
+                                    state: &st.name,
+                                    clip: &child.clip,
+                                    prev,
+                                    next,
+                                    dur: d,
+                                    bucle: true,
+                                },
                                 &mut eventos,
                             );
                         }
@@ -581,12 +594,14 @@ impl AnimatorData {
                                 };
                                 recolectar_eventos(
                                     &st.events,
-                                    &st.name,
-                                    &st.clip,
-                                    prev_fade_from_time,
-                                    next_eval,
-                                    d,
-                                    fs_loop,
+                                    TramoClip {
+                                        state: &st.name,
+                                        clip: &st.clip,
+                                        prev: prev_fade_from_time,
+                                        next: next_eval,
+                                        dur: d,
+                                        bucle: fs_loop,
+                                    },
                                     &mut eventos,
                                 );
                             }
@@ -609,12 +624,14 @@ impl AnimatorData {
                                         .unwrap_or(prev);
                                     recolectar_eventos(
                                         &child.events,
-                                        &st.name,
-                                        &child.clip,
-                                        prev,
-                                        next,
-                                        d,
-                                        true,
+                                        TramoClip {
+                                            state: &st.name,
+                                            clip: &child.clip,
+                                            prev,
+                                            next,
+                                            dur: d,
+                                            bucle: true,
+                                        },
                                         &mut eventos,
                                     );
                                 }
