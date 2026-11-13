@@ -22,6 +22,7 @@ pub struct PhysicsWorld {
     pub collider_set: ColliderSet,
     pub query_pipeline: QueryPipeline,
     pub characters: HashMap<u64, crate::character::CharacterState>,
+    pub ragdolls: std::collections::HashMap<u64, crate::ragdoll::RagdollState>,
 
     /// Handler de eventos de colisión de Rapier: vuelca los CollisionEvent
     /// de cada substep en el canal que drena `step()`.
@@ -136,6 +137,7 @@ impl PhysicsWorld {
             collider_set: ColliderSet::new(),
             query_pipeline: QueryPipeline::new(),
             characters: HashMap::new(),
+            ragdolls: HashMap::new(),
             event_handler: ChannelEventCollector::new(event_sender, force_sender),
             event_receiver,
             force_event_receiver,

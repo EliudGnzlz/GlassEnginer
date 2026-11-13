@@ -5,6 +5,8 @@ pub mod types;
 pub mod world;
 
 pub mod character;
+pub mod ragdoll;
+pub use ragdoll::{RagdollBoneSpec, RagdollState};
 pub use types::*;
 pub use world::*;
 pub use ffi::*;
