@@ -350,6 +350,258 @@ fn create_lm_data_set_layout(
     unsafe { device.create_descriptor_set_layout(&info, None) }
 }
 
+/// UBO del set 6 (IBL): parámetros del entorno en un vec4 —
+/// x: intensidad, y: mip máximo del cubemap, z: 1.0 si hay entorno
+/// válido (si es 0, el shader conserva el ambiente hemisférico).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct IblParamsUbo {
+    pub params: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<IblParamsUbo>() == 16);
+
+impl Default for IblParamsUbo {
+    fn default() -> Self {
+        Self { params: [0.0; 4] }
+    }
+}
+
+/// Layout del set 6 (IBL): cubemap de entorno + UBO de parámetros.
+fn create_ibl_set_layout(device: &ash::Device) -> Result<vk::DescriptorSetLayout, vk::Result> {
+    let bindings = [
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(1)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+    ];
+    let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+    unsafe { device.create_descriptor_set_layout(&info, None) }
+}
+
+/// Crea y sube un cubemap RGBA16F con mips precocinados en CPU.
+/// `data` viene empaquetado nivel a nivel: por cada nivel, las 6 caras
+/// (+X, -X, +Y, -Y, +Z, -Z) de (size>>nivel)² téxeles de 8 bytes.
+pub fn create_ibl_cube(
+    device: &ash::Device,
+    allocator: &mut Allocator,
+    queue: vk::Queue,
+    command_pool: vk::CommandPool,
+    size: u32,
+    mip_levels: u32,
+    data: &[u8],
+) -> Result<IblCubeTexture, String> {
+    unsafe {
+        let (staging_buffer, staging_alloc) = crate::mesh::MeshLoader::create_buffer(
+            device,
+            allocator,
+            data.len() as u64,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            MemoryLocation::CpuToGpu,
+            "ibl_staging",
+        )?;
+        let mapped = staging_alloc
+            .mapped_ptr()
+            .ok_or_else(|| "Fallo al mapear staging IBL".to_string())?;
+        std::ptr::copy_nonoverlapping(data.as_ptr(), mapped.as_ptr() as *mut u8, data.len());
+
+        let image_info = vk::ImageCreateInfo::default()
+            .flags(vk::ImageCreateFlags::CUBE_COMPATIBLE)
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(vk::Format::R16G16B16A16_SFLOAT)
+            .extent(vk::Extent3D {
+                width: size,
+                height: size,
+                depth: 1,
+            })
+            .mip_levels(mip_levels)
+            .array_layers(6)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let image = device
+            .create_image(&image_info, None)
+            .map_err(|e| format!("Fallo al crear imagen IBL: {}", e))?;
+
+        let requirements = device.get_image_memory_requirements(image);
+        let image_alloc = allocator
+            .allocate(&AllocationCreateDesc {
+                name: "ibl_cube",
+                requirements,
+                location: MemoryLocation::GpuOnly,
+                linear: false,
+                allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+            })
+            .map_err(|e| format!("Fallo al asignar memoria IBL: {}", e))?;
+        device
+            .bind_image_memory(image, image_alloc.memory(), image_alloc.offset())
+            .map_err(|e| format!("Fallo al vincular memoria IBL: {}", e))?;
+
+        let cmd = device
+            .allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::default()
+                    .command_pool(command_pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1),
+            )
+            .map_err(|e| format!("Fallo al asignar command buffer IBL: {}", e))?[0];
+
+        device
+            .begin_command_buffer(
+                cmd,
+                &vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )
+            .map_err(|e| format!("Error al iniciar command buffer IBL: {}", e))?;
+
+        let full_range = vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .base_mip_level(0)
+            .level_count(mip_levels)
+            .base_array_layer(0)
+            .layer_count(6);
+
+        let to_transfer = vk::ImageMemoryBarrier::default()
+            .old_layout(vk::ImageLayout::UNDEFINED)
+            .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(image)
+            .subresource_range(full_range)
+            .src_access_mask(vk::AccessFlags::empty())
+            .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
+        device.cmd_pipeline_barrier(
+            cmd,
+            vk::PipelineStageFlags::TOP_OF_PIPE,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[to_transfer],
+        );
+
+        let mut regions = Vec::with_capacity((mip_levels * 6) as usize);
+        let mut offset = 0u64;
+        for mip in 0..mip_levels {
+            let lado = (size >> mip).max(1);
+            for cara in 0..6 {
+                regions.push(
+                    vk::BufferImageCopy::default()
+                        .buffer_offset(offset)
+                        .buffer_row_length(0)
+                        .buffer_image_height(0)
+                        .image_subresource(
+                            vk::ImageSubresourceLayers::default()
+                                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                                .mip_level(mip)
+                                .base_array_layer(cara)
+                                .layer_count(1),
+                        )
+                        .image_offset(vk::Offset3D::default().x(0).y(0).z(0))
+                        .image_extent(vk::Extent3D {
+                            width: lado,
+                            height: lado,
+                            depth: 1,
+                        }),
+                );
+                offset += (lado as u64) * (lado as u64) * 8;
+            }
+        }
+        device.cmd_copy_buffer_to_image(
+            cmd,
+            staging_buffer,
+            image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &regions,
+        );
+
+        let to_shader = vk::ImageMemoryBarrier::default()
+            .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(image)
+            .subresource_range(full_range)
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ);
+        device.cmd_pipeline_barrier(
+            cmd,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[to_shader],
+        );
+
+        device
+            .end_command_buffer(cmd)
+            .map_err(|e| format!("Error al finalizar command buffer IBL: {}", e))?;
+        let fence = device
+            .create_fence(&vk::FenceCreateInfo::default(), None)
+            .map_err(|e| format!("Fallo al crear fence IBL: {}", e))?;
+        let cmds = [cmd];
+        device
+            .queue_submit(
+                queue,
+                &[vk::SubmitInfo::default().command_buffers(&cmds)],
+                fence,
+            )
+            .map_err(|e| format!("Error en queue_submit IBL: {}", e))?;
+        device
+            .wait_for_fences(&[fence], true, u64::MAX)
+            .map_err(|e| format!("Error esperando fence IBL: {}", e))?;
+        device.destroy_fence(fence, None);
+        device.free_command_buffers(command_pool, &cmds);
+        allocator
+            .free(staging_alloc)
+            .map_err(|e| format!("Fallo al liberar staging IBL: {}", e))?;
+        device.destroy_buffer(staging_buffer, None);
+
+        let view_info = vk::ImageViewCreateInfo::default()
+            .image(image)
+            .view_type(vk::ImageViewType::CUBE)
+            .format(vk::Format::R16G16B16A16_SFLOAT)
+            .subresource_range(full_range);
+        let image_view = device
+            .create_image_view(&view_info, None)
+            .map_err(|e| format!("Fallo al crear vista IBL: {}", e))?;
+
+        Ok(IblCubeTexture {
+            image,
+            allocation: Some(image_alloc),
+            image_view,
+        })
+    }
+}
+
+/// Un cubemap de entorno vivo (IBL): imagen cúbica R16F con su cadena
+/// de mips precocinada en CPU y su vista TYPE_CUBE.
+pub struct IblCubeTexture {
+    pub image: vk::Image,
+    pub allocation: Option<Allocation>,
+    pub image_view: vk::ImageView,
+}
+
+impl IblCubeTexture {
+    pub fn destroy(&mut self, device: &ash::Device, allocator: &mut Allocator) {
+        unsafe {
+            device.destroy_image_view(self.image_view, None);
+            if let Some(alloc) = self.allocation.take() {
+                let _ = allocator.free(alloc);
+            }
+            device.destroy_image(self.image, None);
+        }
+    }
+}
+
 /// Una entrada viva del `graph_props_pool`: el set asignado, el buffer
 /// CpuToGpu que respalda su binding 1 y el puntero mapeado para que
 /// `update_graph_props_set` pueda volcar datos sin reabrir el mapeo.
@@ -574,6 +826,19 @@ pub struct GlassRenderer {
     lm_index: std::collections::HashMap<u64, u32>,
     /// Tamaño del atlas vigente (1 si no hay bake).
     lm_atlas_size: f32,
+    /// Set 6 (IBL de skybox): layout, pool y set único del renderer,
+    /// UBO de parámetros mapeado y cubemap vigente. Sin entorno
+    /// publicado, el cubemap es el 1×1 negro y `ibl_params.z = 0`:
+    /// el shader conserva el ambiente hemisférico de siempre.
+    pub ibl_set_layout: vk::DescriptorSetLayout,
+    ibl_pool: vk::DescriptorPool,
+    ibl_set: vk::DescriptorSet,
+    ibl_params_buffer: vk::Buffer,
+    #[allow(dead_code)]
+    ibl_params_allocation: Option<Allocation>,
+    ibl_params_mapped: *mut u8,
+    ibl_sampler: vk::Sampler,
+    ibl_cube_texture: Option<IblCubeTexture>,
     /// Pase 2D del Canvas de juego (sin egui) para el standalone: ver
     /// `render_ui_overlay` y el módulo `ui`.
     pub ui: UiRenderer,
@@ -762,12 +1027,13 @@ impl GlassRenderer {
         let point_lights_layout = create_point_lights_set_layout(&device)?;
         let lm_tex_layout = create_lm_tex_set_layout(&device)?;
         let lm_data_layout = create_lm_data_set_layout(&device)?;
-        let mesh_pipeline = GraphicsPipeline::new_mesh_pipeline(device.clone(), offscreen.render_pass, MESH_VERT_SPV, MESH_FRAG_SPV, None, None, None)?;
-        let mesh_pipeline_legacy = GraphicsPipeline::new_mesh_pipeline(device.clone(), final_offscreen.render_pass, MESH_VERT_SPV, MESH_FRAG_SPV, None, None, None)?;
-        let pbr_pipeline = GraphicsPipeline::new_mesh_pipeline(device.clone(), offscreen.render_pass, PBR_VERT_SPV, PBR_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)))?;
-        let pbr_pipeline_legacy = GraphicsPipeline::new_mesh_pipeline(device.clone(), final_offscreen.render_pass, PBR_VERT_SPV, PBR_LEGACY_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)))?;
-        let skinned_pipeline = GraphicsPipeline::new_skinned_pipeline(device.clone(), offscreen.render_pass, PBR_SKINNED_VERT_SPV, PBR_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)))?;
-        let skinned_pipeline_legacy = GraphicsPipeline::new_skinned_pipeline(device.clone(), final_offscreen.render_pass, PBR_SKINNED_VERT_SPV, PBR_LEGACY_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)))?;
+        let ibl_layout = create_ibl_set_layout(&device)?;
+        let mesh_pipeline = GraphicsPipeline::new_mesh_pipeline(device.clone(), offscreen.render_pass, MESH_VERT_SPV, MESH_FRAG_SPV, None, None, None, None)?;
+        let mesh_pipeline_legacy = GraphicsPipeline::new_mesh_pipeline(device.clone(), final_offscreen.render_pass, MESH_VERT_SPV, MESH_FRAG_SPV, None, None, None, None)?;
+        let pbr_pipeline = GraphicsPipeline::new_mesh_pipeline(device.clone(), offscreen.render_pass, PBR_VERT_SPV, PBR_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)), Some(ibl_layout))?;
+        let pbr_pipeline_legacy = GraphicsPipeline::new_mesh_pipeline(device.clone(), final_offscreen.render_pass, PBR_VERT_SPV, PBR_LEGACY_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)), Some(ibl_layout))?;
+        let skinned_pipeline = GraphicsPipeline::new_skinned_pipeline(device.clone(), offscreen.render_pass, PBR_SKINNED_VERT_SPV, PBR_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)), Some(ibl_layout))?;
+        let skinned_pipeline_legacy = GraphicsPipeline::new_skinned_pipeline(device.clone(), final_offscreen.render_pass, PBR_SKINNED_VERT_SPV, PBR_LEGACY_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)), Some(ibl_layout))?;
         // Objetivos y pipelines de las vistas de portal (bloque
         // Portales): dos HDR de 1024² (las vistas desde cada
         // portal de la pareja), sus pipelines de superficie
@@ -801,6 +1067,7 @@ impl GlassRenderer {
             None,
             None,
             Some((lm_tex_layout, lm_data_layout)),
+            None,
         )?;
         let portal_pipeline_legacy = GraphicsPipeline::new_mesh_pipeline(
             device.clone(),
@@ -810,6 +1077,7 @@ impl GlassRenderer {
             None,
             None,
             Some((lm_tex_layout, lm_data_layout)),
+            None,
         )?;
         let portal_sets = unsafe {
             let pool_sizes = [vk::DescriptorPoolSize::default()
@@ -844,8 +1112,8 @@ impl GlassRenderer {
         // así que NO pueden crearse como pipelines de grafo) con
         // mezcla por alfa. Se registran en los mapas de pipelines
         // con nombre reservado tras construir el renderer.
-        let pbr_transparent = GraphicsPipeline::new_mesh_pipeline_transparent(device.clone(), offscreen.render_pass, PBR_VERT_SPV, PBR_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)))?;
-        let pbr_transparent_legacy = GraphicsPipeline::new_mesh_pipeline_transparent(device.clone(), final_offscreen.render_pass, PBR_VERT_SPV, PBR_LEGACY_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)))?;
+        let pbr_transparent = GraphicsPipeline::new_mesh_pipeline_transparent(device.clone(), offscreen.render_pass, PBR_VERT_SPV, PBR_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)), Some(ibl_layout))?;
+        let pbr_transparent_legacy = GraphicsPipeline::new_mesh_pipeline_transparent(device.clone(), final_offscreen.render_pass, PBR_VERT_SPV, PBR_LEGACY_FRAG_SPV, Some(shadow_set_layout), Some(point_lights_layout), Some((lm_tex_layout, lm_data_layout)), Some(ibl_layout))?;
 
         // Recursos del mapa de sombras: imagen D32, UBO de frame, set
         // real (set 2 del PBR/piel) y de relleno (set 2 de grafos) y
@@ -1290,6 +1558,133 @@ impl GlassRenderer {
             )
         };
 
+        // 6e. IBL (set 6): pool propio, UBO de parámetros a ceros,
+        // muestreador lineal con mips y cubemap 1×1 negro por defecto.
+        let (ibl_pool, ibl_set, ibl_params_buffer, ibl_params_allocation,
+             ibl_params_mapped, ibl_sampler, ibl_cube_texture) = unsafe {
+            let pool_sizes = [
+                vk::DescriptorPoolSize::default()
+                    .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .descriptor_count(1),
+                vk::DescriptorPoolSize::default()
+                    .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                    .descriptor_count(1),
+            ];
+            let ibl_pool = device
+                .create_descriptor_pool(
+                    &vk::DescriptorPoolCreateInfo::default()
+                        .max_sets(1)
+                        .pool_sizes(&pool_sizes),
+                    None,
+                )
+                .map_err(|e| RendererError::Descriptor(format!("{e:?}")))?;
+
+            let ibl_params_buffer = device
+                .create_buffer(
+                    &vk::BufferCreateInfo::default()
+                        .size(16)
+                        .usage(vk::BufferUsageFlags::UNIFORM_BUFFER)
+                        .sharing_mode(vk::SharingMode::EXCLUSIVE),
+                    None,
+                )
+                .map_err(|e| RendererError::Descriptor(format!("{e:?}")))?;
+
+            let ibl_params_requirements =
+                device.get_buffer_memory_requirements(ibl_params_buffer);
+            let ibl_params_allocation = allocator
+                .lock()
+                .unwrap()
+                .allocate(&AllocationCreateDesc {
+                    name: "ibl_params",
+                    requirements: ibl_params_requirements,
+                    location: MemoryLocation::CpuToGpu,
+                    linear: true,
+                    allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+                })
+                .map_err(RendererError::Allocator)?;
+            device.bind_buffer_memory(
+                ibl_params_buffer,
+                ibl_params_allocation.memory(),
+                ibl_params_allocation.offset(),
+            )?;
+            let ibl_params_mapped = ibl_params_allocation
+                .mapped_ptr()
+                .map(|p| p.as_ptr() as *mut u8)
+                .ok_or(RendererError::Descriptor(
+                    "el buffer de parámetros IBL no quedó mapeado".into(),
+                ))?;
+            std::ptr::write_bytes(ibl_params_mapped, 0, 16);
+
+            let ibl_sampler = device
+                .create_sampler(
+                    &vk::SamplerCreateInfo::default()
+                        .mag_filter(vk::Filter::LINEAR)
+                        .min_filter(vk::Filter::LINEAR)
+                        .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .anisotropy_enable(false)
+                        .max_lod(8.0),
+                    None,
+                )
+                .map_err(|e| RendererError::Descriptor(format!("{e:?}")))?;
+
+            let ibl_cube = create_ibl_cube(
+                &device,
+                &mut *allocator.lock().unwrap(),
+                context.graphics_queue,
+                command_pool,
+                1,
+                1,
+                &[0u8; 48],
+            )
+            .map_err(RendererError::Descriptor)?;
+
+            let ibl_set = device
+                .allocate_descriptor_sets(
+                    &vk::DescriptorSetAllocateInfo::default()
+                        .descriptor_pool(ibl_pool)
+                        .set_layouts(&[ibl_layout]),
+                )
+                .map_err(|e| RendererError::Descriptor(format!("{e:?}")))?
+                .into_iter()
+                .next()
+                .ok_or(RendererError::Descriptor("pool IBL sin sets".into()))?;
+
+            let image_info = [vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(ibl_cube.image_view)
+                .sampler(ibl_sampler)];
+            let buffer_info = [vk::DescriptorBufferInfo::default()
+                .buffer(ibl_params_buffer)
+                .offset(0)
+                .range(16)];
+            let writes = [
+                vk::WriteDescriptorSet::default()
+                    .dst_set(ibl_set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&image_info),
+                vk::WriteDescriptorSet::default()
+                    .dst_set(ibl_set)
+                    .dst_binding(1)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                    .buffer_info(&buffer_info),
+            ];
+            device.update_descriptor_sets(&writes, &[]);
+
+            (
+                ibl_pool,
+                ibl_set,
+                ibl_params_buffer,
+                Some(ibl_params_allocation),
+                ibl_params_mapped,
+                ibl_sampler,
+                Some(ibl_cube),
+            )
+        };
+
         // 6b. Pase 2D del Canvas (UI de juego sin egui): necesita la cola
         // y el pool para la subida única del atlas de fuente.
         let ui = UiRenderer::new(
@@ -1433,6 +1828,14 @@ impl GlassRenderer {
             lm_atlas_texture: None,
             lm_index: std::collections::HashMap::new(),
             lm_atlas_size: 1.0,
+            ibl_set_layout: ibl_layout,
+            ibl_pool,
+            ibl_set,
+            ibl_params_buffer,
+            ibl_params_allocation,
+            ibl_params_mapped,
+            ibl_sampler,
+            ibl_cube_texture,
             ui,
             ui_images: None,
             ui_named_fonts: std::collections::HashMap::new(),
@@ -1518,6 +1921,7 @@ impl GlassRenderer {
             self.bind_point_lights_set(cmd, pipe, *light_slot);
             // Sets 4 y 5: el lightmap (mismo fragmento PBR).
             self.bind_lightmap_sets(cmd, pipe);
+            self.bind_ibl_set(cmd, pipe);
             let push_bytes = bytemuck::bytes_of(push_consts);
             self.device.cmd_push_constants(
                 cmd,
@@ -1734,6 +2138,79 @@ impl GlassRenderer {
                 self.lm_data_mapped,
                 0,
                 std::mem::size_of::<LmDataUbo>(),
+            );
+        }
+    }
+
+    /// Publica un cubemap de entorno nuevo (IBL): crea la imagen,
+    /// reescribe el binding 0 del set 6 y destruye el cubo anterior.
+    /// `rgba16f` va empaquetado nivel a nivel, 6 caras por nivel
+    /// (ver `create_ibl_cube`).
+    pub fn set_ibl_cubemap(
+        &mut self,
+        queue: vk::Queue,
+        size: u32,
+        mip_levels: u32,
+        rgba16f: &[u8],
+    ) -> Result<(), String> {
+        let new_cube = {
+            let mut allocator = self.allocator.lock().unwrap();
+            create_ibl_cube(
+                &self.device,
+                &mut *allocator,
+                queue,
+                self.command_pool,
+                size,
+                mip_levels,
+                rgba16f,
+            )?
+        };
+
+        let image_info = [vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(new_cube.image_view)
+            .sampler(self.ibl_sampler)];
+        let write = [vk::WriteDescriptorSet::default()
+            .dst_set(self.ibl_set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&image_info)];
+        unsafe {
+            self.device.update_descriptor_sets(&write, &[]);
+        }
+
+        if let Some(mut old_cube) = self.ibl_cube_texture.take() {
+            old_cube.destroy(&self.device, &mut *self.allocator.lock().unwrap());
+        }
+
+        self.ibl_cube_texture = Some(new_cube);
+
+        Ok(())
+    }
+
+    /// Fija los parámetros del entorno (set 6, binding 1): intensidad,
+    /// mip máximo del cubemap y si hay entorno válido. Sin entorno, el
+    /// shader conserva el ambiente hemisférico de siempre.
+    pub fn set_ibl_params(&mut self, intensity: f32, max_mip: f32, available: bool) {
+        let ubo = IblParamsUbo {
+            params: [intensity, max_mip, if available { 1.0 } else { 0.0 }, 0.0],
+        };
+        let bytes = bytemuck::bytes_of(&ubo);
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.ibl_params_mapped, bytes.len());
+        }
+    }
+
+    /// Enlaza el set 6 (IBL) si el pipeline lo declara.
+    unsafe fn bind_ibl_set(&self, cmd: vk::CommandBuffer, pipe: &GraphicsPipeline) {
+        if pipe.ibl_set_layout.is_some() {
+            self.device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipe.layout,
+                6,
+                &[self.ibl_set],
+                &[],
             );
         }
     }
@@ -2661,6 +3138,7 @@ impl GlassRenderer {
                     self.bind_shadow_set(cmd, pipe);
                     self.bind_point_lights_set(cmd, pipe, *light_slot);
                     self.bind_lightmap_sets(cmd, pipe);
+            self.bind_ibl_set(cmd, pipe);
                     {
                         let mut desc = 0u32;
                         if *tex_set != vk::DescriptorSet::null() {

@@ -44,6 +44,9 @@ pub struct GraphicsPipeline {
     /// horneado: solo los pipelines cuyo fragmento es el PBR los
     /// declaran; el resto conserva su layout de siempre.
     pub lm_set_layouts: Option<(vk::DescriptorSetLayout, vk::DescriptorSetLayout)>,
+    /// Set 6 (IBL de skybox): cubemap de entorno + UBO de parámetros.
+    /// Solo los pipelines cuyo fragmento es el PBR lo declaran.
+    pub ibl_set_layout: Option<vk::DescriptorSetLayout>,
 }
 
 impl GraphicsPipeline {
@@ -162,6 +165,7 @@ impl GraphicsPipeline {
             shadow_set_layout: None,
             point_lights_set_layout: None,
             lm_set_layouts: None,
+            ibl_set_layout: None,
         })
     }
 
@@ -174,8 +178,9 @@ impl GraphicsPipeline {
         shadow_set_layout: Option<vk::DescriptorSetLayout>,
         point_lights_set_layout: Option<vk::DescriptorSetLayout>,
         lm_set_layouts: Option<(vk::DescriptorSetLayout, vk::DescriptorSetLayout)>,
+        ibl_set_layout: Option<vk::DescriptorSetLayout>,
     ) -> Result<Self, PipelineError> {
-        Self::new_mesh_pipeline_impl(device, render_pass, vert_spv, frag_spv, None, false, shadow_set_layout, point_lights_set_layout, lm_set_layouts)
+        Self::new_mesh_pipeline_impl(device, render_pass, vert_spv, frag_spv, None, false, shadow_set_layout, point_lights_set_layout, lm_set_layouts, ibl_set_layout)
     }
 
     /// Igual que `new_mesh_pipeline` pero transparente (mezcla por
@@ -189,8 +194,9 @@ impl GraphicsPipeline {
         shadow_set_layout: Option<vk::DescriptorSetLayout>,
         point_lights_set_layout: Option<vk::DescriptorSetLayout>,
         lm_set_layouts: Option<(vk::DescriptorSetLayout, vk::DescriptorSetLayout)>,
+        ibl_set_layout: Option<vk::DescriptorSetLayout>,
     ) -> Result<Self, PipelineError> {
-        Self::new_mesh_pipeline_impl(device, render_pass, vert_spv, frag_spv, None, true, shadow_set_layout, point_lights_set_layout, lm_set_layouts)
+        Self::new_mesh_pipeline_impl(device, render_pass, vert_spv, frag_spv, None, true, shadow_set_layout, point_lights_set_layout, lm_set_layouts, ibl_set_layout)
     }
 
     /// Pipeline de un material de GRAFO: idéntico al de mallas (mismo
@@ -225,6 +231,7 @@ impl GraphicsPipeline {
             shadow_set_layout,
             point_lights_set_layout,
             None,
+            None,
         )
     }
 
@@ -238,6 +245,7 @@ impl GraphicsPipeline {
         shadow_set_layout: Option<vk::DescriptorSetLayout>,
         point_lights_set_layout: Option<vk::DescriptorSetLayout>,
         lm_set_layouts: Option<(vk::DescriptorSetLayout, vk::DescriptorSetLayout)>,
+        ibl_set_layout: Option<vk::DescriptorSetLayout>,
     ) -> Result<Self, PipelineError> {
         let vert_module = Self::create_shader_module(&device, vert_spv)?;
         let frag_module = Self::create_shader_module(&device, frag_spv)?;
@@ -421,6 +429,14 @@ impl GraphicsPipeline {
             set_layouts.push(lm_data);
         }
 
+        // Set 6 (IBL): solo el PBR lo pide; huecos rellenados igual.
+        if let Some(ibl) = ibl_set_layout {
+            while set_layouts.len() < 6 {
+                set_layouts.push(descriptor_set_layout);
+            }
+            set_layouts.push(ibl);
+        }
+
         let layout_info = vk::PipelineLayoutCreateInfo::default()
             .set_layouts(&set_layouts)
             .push_constant_ranges(&push_constant_ranges);
@@ -461,6 +477,7 @@ impl GraphicsPipeline {
             shadow_set_layout,
             point_lights_set_layout,
             lm_set_layouts,
+            ibl_set_layout,
         })
     }
 
@@ -479,6 +496,7 @@ impl GraphicsPipeline {
         shadow_set_layout: Option<vk::DescriptorSetLayout>,
         point_lights_set_layout: Option<vk::DescriptorSetLayout>,
         lm_set_layouts: Option<(vk::DescriptorSetLayout, vk::DescriptorSetLayout)>,
+        ibl_set_layout: Option<vk::DescriptorSetLayout>,
     ) -> Result<Self, PipelineError> {
         let vert_module = Self::create_shader_module(&device, vert_spv)?;
         let frag_module = Self::create_shader_module(&device, frag_spv)?;
@@ -620,6 +638,14 @@ impl GraphicsPipeline {
             set_layouts.push(lm_data);
         }
 
+        // Set 6 (IBL): solo el PBR lo pide; huecos rellenados igual.
+        if let Some(ibl) = ibl_set_layout {
+            while set_layouts.len() < 6 {
+                set_layouts.push(descriptor_set_layout);
+            }
+            set_layouts.push(ibl);
+        }
+
         let layout_info = vk::PipelineLayoutCreateInfo::default()
             .set_layouts(&set_layouts)
             .push_constant_ranges(&push_constant_ranges);
@@ -662,6 +688,7 @@ impl GraphicsPipeline {
             shadow_set_layout,
             point_lights_set_layout,
             lm_set_layouts,
+            ibl_set_layout,
         })
     }
 
@@ -927,6 +954,7 @@ impl GraphicsPipeline {
             shadow_set_layout: None,
             point_lights_set_layout: None,
             lm_set_layouts: None,
+            ibl_set_layout: None,
         })
     }
 
@@ -1063,6 +1091,7 @@ impl GraphicsPipeline {
             shadow_set_layout: None,
             point_lights_set_layout: None,
             lm_set_layouts: None,
+            ibl_set_layout: None,
         })
     }
 
@@ -1282,6 +1311,7 @@ impl GraphicsPipeline {
             shadow_set_layout: None,
             point_lights_set_layout: None,
             lm_set_layouts: None,
+            ibl_set_layout: None,
         })
     }
 

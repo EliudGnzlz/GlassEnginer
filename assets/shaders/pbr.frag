@@ -113,6 +113,14 @@ float shadow_factor(vec3 world_pos, vec3 n) {
 const float PI = 3.14159265359;
 
 // Normal Distribution Function (GGX / Trowbridge-Reitz)
+// Set 6 (IBL de skybox): cubemap de entorno precocinado en CPU
+// (gradiente hemisférico + disco solar) con mips por rugosidad.
+// u_ibl.params: x = intensidad, y = mip máximo, z = 1 si hay entorno.
+layout(set = 6, binding = 0) uniform samplerCube ibl_cube;
+layout(set = 6, binding = 1, std140) uniform IblParams {
+    vec4 params;
+} u_ibl;
+
 float DistributionGGX(vec3 N, vec3 H, float roughness) {
     float a = roughness * roughness;
     float a2 = a * a;
@@ -236,6 +244,15 @@ void main() {
     vec3 ambient_color = mix(vec3(0.62, 0.58, 0.55), vec3(0.82, 0.88, 1.0), hemi_t);
     vec3 ambient = ambient_color * (ambient_intensity * hemi_factor) * albedo * ao;
 
+    // IBL (set 6): con entorno válido, el difuso ambiental sale del
+    // cubemap del cielo (su mip más borroso) en vez del hemisférico.
+    if (u_ibl.params.z > 0.5) {
+        vec3 env_diff = textureLod(ibl_cube, N, u_ibl.params.y).rgb;
+        vec3 F_env_d = fresnelSchlick(max(dot(N, V), 0.0), F0);
+        ambient = (vec3(1.0) - F_env_d) * (1.0 - metallic) * albedo
+            * env_diff * u_ibl.params.x * ao;
+    }
+
         // --- Puntuales: mismo BRDF Cook-Torrance que la direccional ---------
     // Atenuación: corte suave a 0 en el rango y caída 1/d², coherente
     // con el tono físico del PBR y sin borde duro.
@@ -293,7 +310,20 @@ void main() {
         ambient = kD * albedo * baked;
     }
 
-    vec3 final_color = ambient + Lo + Lo_points * has_light
+    // IBL especular: la reflexión se muestrea al mip según la
+    // rugosidad (aproximación de Karis sin LUT de BRDF) con el
+    // Fresnel atenuado por la rugosidad. Sobrevive al bake: una
+    // escena horneada sigue reflejando el cielo vivo.
+    vec3 Lo_env = vec3(0.0);
+    if (u_ibl.params.z > 0.5) {
+        vec3 R = reflect(-V, N);
+        vec3 env_spec = textureLod(ibl_cube, R, roughness * u_ibl.params.y).rgb;
+        float ndv = max(dot(N, V), 0.0);
+        vec3 F_env = F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - ndv, 5.0);
+        Lo_env = env_spec * F_env * u_ibl.params.x;
+    }
+
+    vec3 final_color = ambient + Lo + Lo_env + Lo_points * has_light
         + u_push.emissive.rgb * u_push.emissive.w;
 
     // Niebla analítica lineal (Fase 2): mezcla hacia el color de niebla

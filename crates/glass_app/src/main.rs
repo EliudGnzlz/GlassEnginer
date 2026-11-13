@@ -27,6 +27,7 @@ use glass_scripting::{
 mod bake;
 mod canvas_ui;
 mod luces_objeto;
+mod ibl;
 mod mouse_input;
 
 use std::ffi::CStr;
@@ -1644,6 +1645,7 @@ struct GlassEngineApp {
     /// Sistema de asignación de luces por objeto (integración de
     /// iluminación): ranuras del UBO dinámico por entidad con malla.
     sistema_luces: luces_objeto::SistemaAsignacion,
+    estado_ibl: ibl::EstadoIbl,
     /// true si GLASS_LUCES_GLOBAL=1: se usa solo el UBO global
     /// (comparación A/B del sistema por objeto).
     luces_global: bool,
@@ -1965,6 +1967,7 @@ impl GlassEngineApp {
             ui_drag_session: None,
             skin_joint_buffers: std::collections::HashMap::new(),
             sistema_luces: luces_objeto::SistemaAsignacion::nueva(),
+            estado_ibl: ibl::EstadoIbl::default(),
             luces_global: std::env::var("GLASS_LUCES_GLOBAL").map(|v| v == "1").unwrap_or(false),
             luces_frame: 0,
             anim_runtime: std::collections::HashMap::new(),
@@ -5141,6 +5144,39 @@ let resueltos = colliders_resueltos(body, shape);
             // del Renderer; sin publicador vale el valor inactivo y los
             // grafos ni se enteran.
             renderer.set_graph_globals(glass_scripting::bindings::get_interaction_point_state());
+
+            // IBL (set 6): el cubemap del cielo se regenera solo si el
+            // sol se movió o cambió de color (con freno de 2 s). Sin luz
+            // direccional, el entorno se desactiva y el shader vuelve
+            // al ambiente hemisférico.
+            {
+                let hay_sol = light_color[0] + light_color[1] + light_color[2] > 0.0;
+                if hay_sol {
+                    let sol = [light_dir[0], light_dir[1], light_dir[2]];
+                    let color = [light_color[0], light_color[1], light_color[2]];
+                    if self.estado_ibl.toca_regenerar(sol, color) {
+                        let datos = ibl::generar_cubemapa(sol, color);
+                        if renderer
+                            .set_ibl_cubemap(
+                                vk_ctx.graphics_queue,
+                                ibl::IBL_SIZE,
+                                ibl::IBL_MIPS,
+                                &datos,
+                            )
+                            .is_ok()
+                        {
+                            renderer.set_ibl_params(
+                                light_dir[3],
+                                (ibl::IBL_MIPS - 1) as f32,
+                                true,
+                            );
+                        }
+                    }
+                } else if self.estado_ibl.hay_entorno {
+                    self.estado_ibl.hay_entorno = false;
+                    renderer.set_ibl_params(0.0, 0.0, false);
+                }
+            }
 
             // Sombras del sol (bloque de gráficos): la caja
             // ortográfica sigue a la cámara de juego (a la de escena

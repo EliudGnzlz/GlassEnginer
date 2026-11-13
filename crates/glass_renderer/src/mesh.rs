@@ -2031,7 +2031,7 @@ impl MeshLoader {
     }
 
 
-    unsafe fn create_buffer(
+    pub unsafe fn create_buffer(
         device: &ash::Device,
         allocator: &mut Allocator,
         size: u64,
