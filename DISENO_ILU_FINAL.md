@@ -42,10 +42,21 @@ código real marcadas con ◆.
   (1/30 de los objetos por frame). ◆ (El diseño de Sonnet proponía
   reconstrucción solo por eventos; la versión global cubre luces que
   se mueven sin que el objeto se mueva.)
-- Algoritmo: candidatas = luces (Point+Spot) cuyo rango alcanza al
-  objeto (dist(luz, centro del objeto) ≤ range + radio del objeto;
-  radio desde las cotas de la malla si existen, si no 0,5).
+- Algoritmo: candidatas = luces (Point+Spot) cuyo rango alcanza a
+  la **caja** del objeto: la distancia se mide al **punto más
+  cercano de la caja** (centro ± semiejes desde la escala),
+  `d = dist(luz, punto_más_cercano) ≤ range`.
   `score = intensidad × prioridad_perfil / (1 + d²/range²)`.
+  ◆ (Corrección del 2026-11-13 tras el veredicto visual: la primera
+  versión medía al centro menos el radio de la esfera envolvente;
+  en un receptor grande — el suelo de 30×18, radio 15 — la d salía
+  0 para las 40 velas, el ranking era un empate y el suelo recibía
+  4 velas arbitrarias: velas sin charco. **Regla de autoría que
+  queda: un objeto recibe como máximo 8 luces; un receptor grande
+  se subdivide en piezas** — la escena de validación subdividió
+  suelo/techo/paredes en piezas de 6 m y la unión de piezas cubre
+  las 40 velas. La salida general, listas por fragmento
+  (clustered), queda como bloque futuro Post-1.0.)
   **Histéresis**: las asignadas que siguen en rango se quedan; las
   nuevas solo desplazan a la peor asignada si
   `score_nueva > score_peor × 1,15`; huecos libres se rellenan por

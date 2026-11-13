@@ -284,28 +284,38 @@ impl SistemaAsignacion {
     }
 
     /// Resuelve la asignación del objeto contra las luces dadas:
-    /// candidatas = las que lo alcanzan (dist(centro) <= range +
-    /// radio); score = intensidad × prioridad / (1 + d²/range²) con
-    /// d = max(0, dist - radio) y range acotado a >= 0.01. Reutiliza
-    /// la ranura si ya tenía; si no hay ranuras (1023 ocupadas),
-    /// devuelve None y el objeto cae al global. Guarda y devuelve la
-    /// asignación.
+    /// la distancia de ranking es al **punto más cercano de la caja**
+    /// del receptor (centro ± semiejes), no a su centro: candidatas =
+    /// las que alcanzan la caja (d <= range); score =
+    /// intensidad × prioridad / (1 + d²/range²) con range acotado a
+    /// >= 0.01. (Antes se medía al centro menos el radio de la
+    /// esfera envolvente: en un receptor grande la d salía 0 para
+    /// todas las luces y el ranking era un empate sin sentido.)
+    /// Reutiliza la ranura si ya tenía; si no hay ranuras (1023
+    /// ocupadas), devuelve None y el objeto cae al global. Guarda y
+    /// devuelve la asignación.
     pub fn resolver(
         &mut self,
         entidad: u64,
         centro: [f32; 3],
-        radio: f32,
+        semiejes: [f32; 3],
         luces: &[LuzEscena],
     ) -> Option<&AsignacionObjeto> {
         let mut candidatas: Vec<LuzCandidata> = Vec::new();
         for l in luces {
-            let dx = centro[0] - l.pos[0];
-            let dy = centro[1] - l.pos[1];
-            let dz = centro[2] - l.pos[2];
-            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-            if dist <= l.range + radio {
+            // Punto más cercano de la caja a la luz (clamp por eje) y
+            // distancia a ese punto: 0 si la luz está dentro de la
+            // caja o sobre ella.
+            let mut d2 = 0.0f32;
+            for eje in 0..3 {
+                let cerca =
+                    l.pos[eje].clamp(centro[eje] - semiejes[eje], centro[eje] + semiejes[eje]);
+                let delta = l.pos[eje] - cerca;
+                d2 += delta * delta;
+            }
+            let d = d2.sqrt();
+            if d <= l.range {
                 let range_seguro = l.range.max(0.01);
-                let d = (dist - radio).max(0.0);
                 let score =
                     l.color_int[3] * l.prioridad / (1.0 + (d * d) / (range_seguro * range_seguro));
                 candidatas.push(LuzCandidata {
@@ -546,6 +556,60 @@ mod tests {
         assert_eq!(sistema.version, version_tras_primera + 1);
     }
 
+    fn luz_en(id: u64, pos: [f32; 3], range: f32) -> LuzEscena {
+        LuzEscena {
+            id,
+            pos,
+            dir: [0.0, -1.0, 0.0],
+            color_int: [1.0, 1.0, 1.0, 7.0],
+            range,
+            cos_outer: 0.5,
+            cos_inner: 0.8,
+            es_spot: false,
+            cast_shadow: false,
+            prioridad: 1.0,
+            grupo: 0,
+            tope_grupo: 8,
+        }
+    }
+
+    #[test]
+    fn distancia_a_cotas_no_al_centro() {
+        // Caja alargada (semiejes 10×1×1): la luz A está más lejos
+        // del CENTRO que la B, pero más cerca de la CAJA. Con la
+        // métrica vieja (centro) ganaba B; con cotas debe ganar A.
+        let mut sistema = SistemaAsignacion::nueva();
+        let luces = vec![luz_en(1, [9.0, 3.0, 0.0], 30.0), luz_en(2, [0.0, 8.0, 0.0], 30.0)];
+        let a = sistema.resolver(10, [0.0, 0.0, 0.0], [10.0, 1.0, 1.0], &luces).unwrap();
+        assert_eq!(a.luces[0], 1);
+    }
+
+    #[test]
+    fn luz_fuera_de_rango_de_la_caja_no_es_candidata() {
+        // El suelo real (30×18 a y=-0,5): una vela encima entra; una
+        // luz a 25 m del borde, no, aunque el shader la atenuaría.
+        let mut sistema = SistemaAsignacion::nueva();
+        let luces = vec![luz_en(1, [0.0, 1.0, 0.0], 7.5), luz_en(2, [40.0, 1.0, 0.0], 7.5)];
+        let a = sistema
+            .resolver(3, [0.0, -0.5, 0.0], [15.0, 0.5, 9.0], &luces)
+            .unwrap();
+        assert_eq!(a.luces, vec![1]);
+    }
+
+    #[test]
+    fn sobre_la_caja_se_rankean_por_distancia_real() {
+        // Regresión del empate del suelo: dos velas SOBRE la misma
+        // caja grande, a distinta altura. La métrica vieja daba
+        // d = 0 a ambas (empate; ganaba el orden de llegada); la de
+        // cotas rankea por la distancia real a la caja.
+        let mut sistema = SistemaAsignacion::nueva();
+        let luces = vec![luz_en(1, [-11.0, 6.0, 0.0], 7.5), luz_en(2, [11.0, 1.0, 0.0], 7.5)];
+        let a = sistema
+            .resolver(3, [0.0, -0.5, 0.0], [15.0, 0.5, 9.0], &luces)
+            .unwrap();
+        assert_eq!(a.luces[0], 2);
+    }
+
     #[test]
     fn resolver_asigna_ranura_y_respeta_rango() {
         let mut sistema = SistemaAsignacion::nueva();
@@ -581,12 +645,12 @@ mod tests {
         ];
 
         sistema.observar_luces(&luces);
-        let asignacion = sistema.resolver(10, [0.0, 0.0, 0.0], 0.0, &luces).unwrap();
+        let asignacion = sistema.resolver(10, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], &luces).unwrap();
         assert_eq!(asignacion.luces, vec![1]);
         assert!(asignacion.ranura >= 1);
         let ranura_previa = asignacion.ranura;
 
-        let asignacion2 = sistema.resolver(10, [0.0, 0.0, 0.0], 0.0, &luces).unwrap();
+        let asignacion2 = sistema.resolver(10, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], &luces).unwrap();
         assert_eq!(asignacion2.ranura, ranura_previa);
     }
 
@@ -609,14 +673,14 @@ mod tests {
         }];
 
         sistema.observar_luces(&luces);
-        sistema.resolver(1, [0.0, 0.0, 0.0], 0.0, &luces);
+        sistema.resolver(1, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], &luces);
         assert_ne!(sistema.ranura_de(1), 0);
 
         let vivas = std::collections::HashSet::new();
         sistema.podar(&vivas);
         assert_eq!(sistema.ranura_de(1), 0);
 
-        sistema.resolver(2, [0.0, 0.0, 0.0], 0.0, &luces);
+        sistema.resolver(2, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], &luces);
         assert!(sistema.ranura_de(2) >= 1);
     }
 

@@ -121,3 +121,68 @@ Resultados (modo por objeto, `glass_light_assignment`):
   vacías · **Kimi: 0** (un 429 «engine overloaded» sin medición) ·
   **Opus 5-5: 0** útiles (dos timeouts del cliente en el diseño, sin
   medición). P6 (diagnóstico, escena y drivers) fue trabajo propio.
+
+## Addenda 2026-11-13 — veredicto visual RECHAZADO y arreglo
+
+**Veredicto de D3m3tr10 sobre las capturas de P6: no aprobado.** En
+la captura noreste, las velas cercanas a la cámara eran cilindros
+blancos sobre suelo plano, sin charco; la prueba prometía 40 velas
+alumbrando la sala. Tenía razón, y el diagnóstico con datos lo
+demuestra:
+
+- **La métrica de ranking era el defecto principal.** `resolver`
+  medía la distancia al CENTRO del receptor menos el radio de su
+  esfera envolvente (radio = 0,5 × escala máxima). El suelo (30×18,
+  centro en el medio de la sala, radio 15) tenía a las 40 velas a
+  entre 3,0 y 12,7 m del centro → **d = 0 para las 40** → score
+  idéntico (intensidad × prioridad, iguales en todas las velas) →
+  **empate total**: el conjunto del suelo salió por orden de
+  llegada. Consulta en vivo (`glass_light_assignment`): el suelo
+  tenía asignadas las velas **[100, 101, 102, 103]** — las cuatro
+  del extremo oeste — más 2 linternas; las otras 36 velas no
+  aportaban NADA al suelo. Techo y paredes, igual de arbitrarios.
+  Los charcos del fondo de la captura eran justo esas 4 velas.
+- **Y el límite estructural**: aunque la métrica fuera perfecta,
+  un objeto = un conjunto de 8 luces; un suelo de 30×18 jamás
+  puede recibir 40 velas en un solo conjunto.
+
+**Arreglo aplicado:**
+
+1. **Motor — distancia a las cotas**: `resolver` recibe los
+   semiejes de la caja del receptor y mide la distancia al **punto
+   más cercano de la caja** (clamp por eje); candidata si esa
+   distancia ≤ rango. 3 tests nuevos que fijan la métrica
+   (cotas≠centro, fuera de rango de la caja, y la regresión del
+   empate: dos velas sobre la misma caja grande se rankean por su
+   distancia real). Diseño actualizado en `DISENO_ILU_FINAL.md`.
+2. **Escena — subdivisión de receptores grandes** (la salida real
+   dentro de esta arquitectura, y la regla de autoría que queda
+   escrita): suelo y techo en piezas de 6×6 m (15+15), paredes en
+   segmentos de 6 m (16) — ids 400-445; la escena pasa a 151
+   entidades. **Unión de las piezas del suelo: 40/40 velas
+   cubiertas**, cada pieza con sus velas locales (la del oeste:
+   100-106; la del este: 129-135). Los bancos siguen disjuntos y
+   la esfera de paseo sigue cambiando de conjunto.
+3. **La salida general** — listas de luces por fragmento
+   (clustered/forward+) — queda registrada como bloque futuro
+   Post-1.0: es la solución de motor de verdad para receptores
+   arbitrarios, con coste de subsistema (clustering + rework de
+   shaders), no de parche.
+
+**Re-validación visual** (misma cámara noreste, capturas
+`cap_panteon_ne2.png` / `cap_panteon_global2.png` y GIF nuevo en
+`fase1/test-ilu/`; el GIF rechazado se conserva como
+`panteon_v1_rechazado.gif`): por objeto, la fila cercana a la
+cámara alumbra vela a vela en toda su longitud y la sala entera
+tiene charcos; en global, la sala queda plana salvo las 8 luces
+globales. **A/B de GPU medido de nuevo, espalda contra espalda en
+lavapipe: por objeto 1.227 ms frente a global 1.027 ms (+19,5 %
+con 103 objetos asignados y la escena subdividida)** — más caro
+que el +3,6 % de P6 (63 objetos, escena sin subdividir): el render
+por software infla el coste CPU de los enlaces por objeto; se
+reporta tal cual se midió.
+
+**Suite tras el arreglo: 429/429.** Consumo del arreglo:
+**DeepSeek Flash: 3.796 tokens** (métrica de cotas en
+luces_objeto + llamador); diagnóstico, subdivisión, tests y
+capturas, trabajo propio. A la espera del nuevo veredicto visual.

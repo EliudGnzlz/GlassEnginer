@@ -132,8 +132,8 @@
   "ui_button": null,
   "ui_text": null,
   "tag": "Untagged",
-  "id": 3,
-  "name": "Suelo",
+  "id": 400,
+  "name": "Suelo00",
   "components": [
    "Transform",
    "MeshRenderer",
@@ -141,9 +141,9 @@
   ],
   "transform": {
    "position": [
-    0.0,
+    -12.0,
     -0.5,
-    0.0
+    -6.0
    ],
    "rotation": [
     0.0,
@@ -151,9 +151,9 @@
     0.0
    ],
    "scale": [
-    30.0,
+    6.0,
     1.0,
-    18.0
+    6.0
    ]
   }
  },
@@ -185,8 +185,750 @@
   "ui_button": null,
   "ui_text": null,
   "tag": "Untagged",
-  "id": 4,
-  "name": "Techo",
+  "id": 415,
+  "name": "Techo00",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -12.0,
+    7.0,
+    -6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.36,
+    0.33,
+    0.3
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 401,
+  "name": "Suelo01",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -12.0,
+    -0.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.16,
+    0.15,
+    0.14
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 416,
+  "name": "Techo01",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -12.0,
+    7.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.36,
+    0.33,
+    0.3
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 402,
+  "name": "Suelo02",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -12.0,
+    -0.5,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.16,
+    0.15,
+    0.14
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 417,
+  "name": "Techo02",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -12.0,
+    7.0,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.36,
+    0.33,
+    0.3
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 403,
+  "name": "Suelo10",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -6.0,
+    -0.5,
+    -6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.16,
+    0.15,
+    0.14
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 418,
+  "name": "Techo10",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -6.0,
+    7.0,
+    -6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.36,
+    0.33,
+    0.3
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 404,
+  "name": "Suelo11",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -6.0,
+    -0.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.16,
+    0.15,
+    0.14
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 419,
+  "name": "Techo11",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -6.0,
+    7.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.36,
+    0.33,
+    0.3
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 405,
+  "name": "Suelo12",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -6.0,
+    -0.5,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.16,
+    0.15,
+    0.14
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 420,
+  "name": "Techo12",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -6.0,
+    7.0,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.36,
+    0.33,
+    0.3
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 406,
+  "name": "Suelo20",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -0.5,
+    -6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.16,
+    0.15,
+    0.14
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 421,
+  "name": "Techo20",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    7.0,
+    -6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.36,
+    0.33,
+    0.3
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 407,
+  "name": "Suelo21",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -0.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.16,
+    0.15,
+    0.14
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 422,
+  "name": "Techo21",
   "components": [
    "Transform",
    "MeshRenderer",
@@ -204,9 +946,751 @@
     0.0
    ],
    "scale": [
-    30.0,
+    6.0,
     1.0,
-    18.0
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.36,
+    0.33,
+    0.3
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 408,
+  "name": "Suelo22",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -0.5,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.16,
+    0.15,
+    0.14
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 423,
+  "name": "Techo22",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    7.0,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.36,
+    0.33,
+    0.3
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 409,
+  "name": "Suelo30",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    6.0,
+    -0.5,
+    -6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.16,
+    0.15,
+    0.14
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 424,
+  "name": "Techo30",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    6.0,
+    7.0,
+    -6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.36,
+    0.33,
+    0.3
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 410,
+  "name": "Suelo31",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    6.0,
+    -0.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.16,
+    0.15,
+    0.14
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 425,
+  "name": "Techo31",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    6.0,
+    7.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.36,
+    0.33,
+    0.3
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 411,
+  "name": "Suelo32",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    6.0,
+    -0.5,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.16,
+    0.15,
+    0.14
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 426,
+  "name": "Techo32",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    6.0,
+    7.0,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.36,
+    0.33,
+    0.3
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 412,
+  "name": "Suelo40",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    12.0,
+    -0.5,
+    -6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.16,
+    0.15,
+    0.14
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 427,
+  "name": "Techo40",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    12.0,
+    7.0,
+    -6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.36,
+    0.33,
+    0.3
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 413,
+  "name": "Suelo41",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    12.0,
+    -0.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.16,
+    0.15,
+    0.14
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 428,
+  "name": "Techo41",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    12.0,
+    7.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.36,
+    0.33,
+    0.3
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 414,
+  "name": "Suelo42",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    12.0,
+    -0.5,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.16,
+    0.15,
+    0.14
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 429,
+  "name": "Techo42",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    12.0,
+    7.0,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    1.0,
+    6.0
    ]
   }
  },
@@ -238,8 +1722,8 @@
   "ui_button": null,
   "ui_text": null,
   "tag": "Untagged",
-  "id": 5,
-  "name": "ParedNorte",
+  "id": 430,
+  "name": "ParedNorte0",
   "components": [
    "Transform",
    "MeshRenderer",
@@ -247,7 +1731,7 @@
   ],
   "transform": {
    "position": [
-    0.0,
+    -12.0,
     3.5,
     -9.0
    ],
@@ -257,7 +1741,7 @@
     0.0
    ],
    "scale": [
-    30.0,
+    6.0,
     7.0,
     0.5
    ]
@@ -291,8 +1775,220 @@
   "ui_button": null,
   "ui_text": null,
   "tag": "Untagged",
-  "id": 6,
-  "name": "ParedSur",
+  "id": 435,
+  "name": "ParedSur0",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -12.0,
+    3.5,
+    9.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    7.0,
+    0.5
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.28,
+    0.26,
+    0.24
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 431,
+  "name": "ParedNorte1",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -6.0,
+    3.5,
+    -9.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    7.0,
+    0.5
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.28,
+    0.26,
+    0.24
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 436,
+  "name": "ParedSur1",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -6.0,
+    3.5,
+    9.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    7.0,
+    0.5
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.28,
+    0.26,
+    0.24
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 432,
+  "name": "ParedNorte2",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    3.5,
+    -9.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    7.0,
+    0.5
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.28,
+    0.26,
+    0.24
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 437,
+  "name": "ParedSur2",
   "components": [
    "Transform",
    "MeshRenderer",
@@ -310,7 +2006,219 @@
     0.0
    ],
    "scale": [
-    30.0,
+    6.0,
+    7.0,
+    0.5
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.28,
+    0.26,
+    0.24
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 433,
+  "name": "ParedNorte3",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    6.0,
+    3.5,
+    -9.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    7.0,
+    0.5
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.28,
+    0.26,
+    0.24
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 438,
+  "name": "ParedSur3",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    6.0,
+    3.5,
+    9.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    7.0,
+    0.5
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.28,
+    0.26,
+    0.24
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 434,
+  "name": "ParedNorte4",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    12.0,
+    3.5,
+    -9.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
+    7.0,
+    0.5
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.28,
+    0.26,
+    0.24
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 439,
+  "name": "ParedSur4",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    12.0,
+    3.5,
+    9.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    6.0,
     7.0,
     0.5
    ]
@@ -344,8 +2252,114 @@
   "ui_button": null,
   "ui_text": null,
   "tag": "Untagged",
-  "id": 7,
-  "name": "ParedOeste",
+  "id": 440,
+  "name": "ParedOeste0",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -15.0,
+    3.5,
+    -6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.5,
+    7.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.25,
+    0.23,
+    0.22
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 443,
+  "name": "ParedEste0",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    15.0,
+    3.5,
+    -6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.5,
+    7.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.25,
+    0.23,
+    0.22
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 441,
+  "name": "ParedOeste1",
   "components": [
    "Transform",
    "MeshRenderer",
@@ -365,7 +2379,7 @@
    "scale": [
     0.5,
     7.0,
-    18.0
+    6.0
    ]
   }
  },
@@ -397,8 +2411,8 @@
   "ui_button": null,
   "ui_text": null,
   "tag": "Untagged",
-  "id": 8,
-  "name": "ParedEste",
+  "id": 444,
+  "name": "ParedEste1",
   "components": [
    "Transform",
    "MeshRenderer",
@@ -418,7 +2432,113 @@
    "scale": [
     0.5,
     7.0,
-    18.0
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.25,
+    0.23,
+    0.22
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 442,
+  "name": "ParedOeste2",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -15.0,
+    3.5,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.5,
+    7.0,
+    6.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.25,
+    0.23,
+    0.22
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 445,
+  "name": "ParedEste2",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    15.0,
+    3.5,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.5,
+    7.0,
+    6.0
    ]
   }
  },

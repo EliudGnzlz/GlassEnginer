@@ -5275,16 +5275,20 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                             if !self.sistema_luces.necesita(ent.id, centro, frame) {
                                 continue;
                             }
-                            // Radio aproximado desde la escala (las
-                            // primitivas son unitarias); la prueba de
-                            // rango lleva el margen del propio rango.
+                            // Semiejes de la caja del objeto desde la
+                            // escala (las primitivas son unitarias): la
+                            // distancia de ranking va al punto más
+                            // cercano de la caja, no al centro.
                             let s = ent.transform.scale;
-                            let radio = 0.5
-                                * s[0].abs().max(s[1].abs()).max(s[2].abs());
+                            let semiejes = [
+                                0.5 * s[0].abs(),
+                                0.5 * s[1].abs(),
+                                0.5 * s[2].abs(),
+                            ];
                             let resuelto = self.sistema_luces.resolver(
                                 ent.id,
                                 centro,
-                                radio,
+                                semiejes,
                                 &luces,
                             );
                             if let Some((ranura, lista)) =
