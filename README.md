@@ -1,8 +1,10 @@
 # GlassEnginer
 
-Motor de videojuegos open source tipo Unity, en desarrollo activo (beta). Núcleo en Rust con render Vulkan 1.3, scripting en C# con API estilo Unity y un servidor MCP nativo pensado como vía principal para trabajar el motor con IA.
+GlassEnginer está inspirado en la forma de trabajar de Unity — su API en C#, su editor por paneles y su flujo de escenas y componentes — pero no persigue el fotorrealismo: su dirección de arte es la composición estilizada, con PBR de criterio y acabado toon/cartoon, donde la legibilidad y el estilo van por encima del realismo.
 
 Está pensado para flujos procedurales: generar y borrar grandes cantidades de objetos en tiempo real, creando y regenerando mundos repetidamente sin grandes cargas de memoria ni de procesos. Medido con la escalera de spawn/despawn de esferas (informe completo en `INFORME_ESFERAS.md`): **1.000.000 de entidades generadas en ~134 s y borradas en ~141 s, con un pico de ~2,5 GB de RAM y sin fugas entre ciclos**; 100.000 entidades con física dinámica sostenidas en la misma prueba.
+
+Es open source: núcleo en Rust con render Vulkan 1.3, scripting en C# y un MCP nativo como vía principal de trabajo con IA.
 
 Versión actual: **0.1.0**.
 
