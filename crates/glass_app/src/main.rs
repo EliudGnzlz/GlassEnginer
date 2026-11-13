@@ -6332,7 +6332,17 @@ impl ApplicationHandler for GlassEngineApp {
             if let Some(ref scene_file) = self.scene_to_load {
                 log::info!("Cargando escena solicitada desde archivo: {}", scene_file);
                 let cargada = match self.scene_state.lock() {
-                    Ok(mut sc) => sc.load_from_json(scene_file).is_ok(),
+                    Ok(mut sc) => match sc.load_from_json(scene_file) {
+                        Ok(()) => true,
+                        Err(e) => {
+                            log::error!(
+                                "La escena solicitada no cargó ({}): {}",
+                                scene_file,
+                                e
+                            );
+                            false
+                        }
+                    },
                     Err(_) => false,
                 };
                 if cargada {

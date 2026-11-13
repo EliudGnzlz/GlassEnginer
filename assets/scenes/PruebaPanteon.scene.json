@@ -1,0 +1,6328 @@
+[
+ {
+  "id": 1,
+  "name": "Camara",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "transform": {
+   "position": [
+    7.8,
+    3.1,
+    -5.4
+   ],
+   "rotation": [
+    -5.0,
+    125.0,
+    0.0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ]
+  },
+  "components": [
+   "Transform",
+   "Camera"
+  ],
+  "mesh": null,
+  "camera": {
+   "fov": 55.0,
+   "near_clip": 0.1,
+   "far_clip": 200.0,
+   "is_main": true
+  },
+  "light": null,
+  "physics": null,
+  "script": null,
+  "script_data": null,
+  "audio": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "portal": null,
+  "animator": null,
+  "fog": null
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.95,
+    0.85
+   ],
+   "intensity": 0.5,
+   "light_type": "Directional",
+   "range": 10.0,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 2,
+  "name": "Sol",
+  "components": [
+   "Transform",
+   "Light"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    3.0,
+    0.0
+   ],
+   "rotation": [
+    -55.0,
+    25.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.36,
+    0.33,
+    0.3
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 3,
+  "name": "Suelo",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -0.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    30.0,
+    1.0,
+    18.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.16,
+    0.15,
+    0.14
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 4,
+  "name": "Techo",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    7.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    30.0,
+    1.0,
+    18.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.28,
+    0.26,
+    0.24
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 5,
+  "name": "ParedNorte",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    3.5,
+    -9.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    30.0,
+    7.0,
+    0.5
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.28,
+    0.26,
+    0.24
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 6,
+  "name": "ParedSur",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    3.5,
+    9.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    30.0,
+    7.0,
+    0.5
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.25,
+    0.23,
+    0.22
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 7,
+  "name": "ParedOeste",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -15.0,
+    3.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.5,
+    7.0,
+    18.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.25,
+    0.23,
+    0.22
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 8,
+  "name": "ParedEste",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    15.0,
+    3.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.5,
+    7.0,
+    18.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.42,
+    0.39,
+    0.36
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 9,
+  "name": "Columna00",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -10.0,
+    3.0,
+    -6.5
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.1,
+    6.0,
+    1.1
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.42,
+    0.39,
+    0.36
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 10,
+  "name": "Columna01",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -10.0,
+    3.0,
+    6.5
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.1,
+    6.0,
+    1.1
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.42,
+    0.39,
+    0.36
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 11,
+  "name": "Columna10",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -5.0,
+    3.0,
+    -6.5
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.1,
+    6.0,
+    1.1
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.42,
+    0.39,
+    0.36
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 12,
+  "name": "Columna11",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -5.0,
+    3.0,
+    6.5
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.1,
+    6.0,
+    1.1
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.42,
+    0.39,
+    0.36
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 13,
+  "name": "Columna20",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.01,
+    3.0,
+    -6.5
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.1,
+    6.0,
+    1.1
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.42,
+    0.39,
+    0.36
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 14,
+  "name": "Columna21",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.01,
+    3.0,
+    6.5
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.1,
+    6.0,
+    1.1
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.42,
+    0.39,
+    0.36
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 15,
+  "name": "Columna30",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    5.0,
+    3.0,
+    -6.5
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.1,
+    6.0,
+    1.1
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.42,
+    0.39,
+    0.36
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 16,
+  "name": "Columna31",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    5.0,
+    3.0,
+    6.5
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.1,
+    6.0,
+    1.1
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.42,
+    0.39,
+    0.36
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 17,
+  "name": "Columna40",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    10.0,
+    3.0,
+    -6.5
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.1,
+    6.0,
+    1.1
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.42,
+    0.39,
+    0.36
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 18,
+  "name": "Columna41",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    10.0,
+    3.0,
+    6.5
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.1,
+    6.0,
+    1.1
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 300,
+  "name": "VelaMesh0",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -11.9,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 100,
+  "name": "Vela0",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -11.9,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 301,
+  "name": "VelaMesh1",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -11.9,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 101,
+  "name": "Vela1",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -11.9,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 302,
+  "name": "VelaMesh2",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -10.5,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 102,
+  "name": "Vela2",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -10.5,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 303,
+  "name": "VelaMesh3",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -10.5,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 103,
+  "name": "Vela3",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -10.5,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 304,
+  "name": "VelaMesh4",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -9.100000000000001,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 104,
+  "name": "Vela4",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -9.100000000000001,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 305,
+  "name": "VelaMesh5",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -9.100000000000001,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 105,
+  "name": "Vela5",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -9.100000000000001,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 306,
+  "name": "VelaMesh6",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -7.700000000000001,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 106,
+  "name": "Vela6",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -7.700000000000001,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 307,
+  "name": "VelaMesh7",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -7.700000000000001,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 107,
+  "name": "Vela7",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -7.700000000000001,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 308,
+  "name": "VelaMesh8",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -6.300000000000001,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 108,
+  "name": "Vela8",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -6.300000000000001,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 309,
+  "name": "VelaMesh9",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -6.300000000000001,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 109,
+  "name": "Vela9",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -6.300000000000001,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 310,
+  "name": "VelaMesh10",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -4.9,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 110,
+  "name": "Vela10",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -4.9,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 311,
+  "name": "VelaMesh11",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -4.9,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 111,
+  "name": "Vela11",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -4.9,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 312,
+  "name": "VelaMesh12",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -3.5000000000000018,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 112,
+  "name": "Vela12",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -3.5000000000000018,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 313,
+  "name": "VelaMesh13",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -3.5000000000000018,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 113,
+  "name": "Vela13",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -3.5000000000000018,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 314,
+  "name": "VelaMesh14",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -2.1000000000000014,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 114,
+  "name": "Vela14",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -2.1000000000000014,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 315,
+  "name": "VelaMesh15",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -2.1000000000000014,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 115,
+  "name": "Vela15",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -2.1000000000000014,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 316,
+  "name": "VelaMesh16",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -0.7000000000000011,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 116,
+  "name": "Vela16",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -0.7000000000000011,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 317,
+  "name": "VelaMesh17",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -0.7000000000000011,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 117,
+  "name": "Vela17",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -0.7000000000000011,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 318,
+  "name": "VelaMesh18",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.6999999999999993,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 118,
+  "name": "Vela18",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    0.6999999999999993,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 319,
+  "name": "VelaMesh19",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.6999999999999993,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 119,
+  "name": "Vela19",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    0.6999999999999993,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 320,
+  "name": "VelaMesh20",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    2.0999999999999996,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 120,
+  "name": "Vela20",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    2.0999999999999996,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 321,
+  "name": "VelaMesh21",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    2.0999999999999996,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 121,
+  "name": "Vela21",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    2.0999999999999996,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 322,
+  "name": "VelaMesh22",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    3.4999999999999982,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 122,
+  "name": "Vela22",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    3.4999999999999982,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 323,
+  "name": "VelaMesh23",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    3.4999999999999982,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 123,
+  "name": "Vela23",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    3.4999999999999982,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 324,
+  "name": "VelaMesh24",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    4.899999999999997,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 124,
+  "name": "Vela24",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    4.899999999999997,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 325,
+  "name": "VelaMesh25",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    4.899999999999997,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 125,
+  "name": "Vela25",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    4.899999999999997,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 326,
+  "name": "VelaMesh26",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    6.299999999999999,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 126,
+  "name": "Vela26",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    6.299999999999999,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 327,
+  "name": "VelaMesh27",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    6.299999999999999,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 127,
+  "name": "Vela27",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    6.299999999999999,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 328,
+  "name": "VelaMesh28",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    7.6999999999999975,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 128,
+  "name": "Vela28",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    7.6999999999999975,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 329,
+  "name": "VelaMesh29",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    7.6999999999999975,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 129,
+  "name": "Vela29",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    7.6999999999999975,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 330,
+  "name": "VelaMesh30",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    9.1,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 130,
+  "name": "Vela30",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    9.1,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 331,
+  "name": "VelaMesh31",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    9.1,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 131,
+  "name": "Vela31",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    9.1,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 332,
+  "name": "VelaMesh32",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    10.499999999999998,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 132,
+  "name": "Vela32",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    10.499999999999998,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 333,
+  "name": "VelaMesh33",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    10.499999999999998,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 133,
+  "name": "Vela33",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    10.499999999999998,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 334,
+  "name": "VelaMesh34",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    11.899999999999997,
+    0.35,
+    -4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 134,
+  "name": "Vela34",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    11.899999999999997,
+    1.0,
+    -4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 335,
+  "name": "VelaMesh35",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    11.899999999999997,
+    0.35,
+    4.2
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 135,
+  "name": "Vela35",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    11.899999999999997,
+    1.0,
+    4.2
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 336,
+  "name": "VelaMesh36",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    1.8384776310850237,
+    0.35,
+    1.8384776310850235
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 136,
+  "name": "Vela36",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    1.8384776310850237,
+    1.0,
+    1.8384776310850235
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 337,
+  "name": "VelaMesh37",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -1.8384776310850235,
+    0.35,
+    1.8384776310850237
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 137,
+  "name": "Vela37",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -1.8384776310850235,
+    1.0,
+    1.8384776310850237
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 338,
+  "name": "VelaMesh38",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -1.838477631085024,
+    0.35,
+    -1.8384776310850235
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 138,
+  "name": "Vela38",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -1.838477631085024,
+    1.0,
+    -1.8384776310850235
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.92,
+    0.88,
+    0.78
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 339,
+  "name": "VelaMesh39",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    1.8384776310850233,
+    0.35,
+    -1.838477631085024
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.16,
+    0.7,
+    0.16
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 7.0,
+   "light_type": "Point",
+   "range": 7.5,
+   "cast_shadow": false
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 139,
+  "name": "Vela39",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    1.8384776310850233,
+    1.0,
+    -1.838477631085024
+   ],
+   "rotation": [
+    -90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "Panteon",
+   "tope_por_objeto": 4,
+   "grupo": 0,
+   "prioridad": 1.0,
+   "sombra_por_prioridad": true,
+   "umbral_sombra": 1.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    1,
+    1,
+    1
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false,
+   "material": "mate"
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 150,
+  "name": "BancoIzq",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    -9.0,
+    0.75,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    3.2,
+    1.5,
+    1.2
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    1,
+    1,
+    1
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false,
+   "material": "mate"
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 151,
+  "name": "BancoDer",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    9.0,
+    0.75,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    3.2,
+    1.5,
+    1.2
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    1,
+    1,
+    1
+   ],
+   "model": "sphere",
+   "shader": "pbr.vert.spv",
+   "wireframe": false,
+   "material": "espejo"
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 152,
+  "name": "EsferaEspejo",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    1.6,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.6,
+    1.6,
+    1.6
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    1,
+    1,
+    1
+   ],
+   "model": "sphere",
+   "shader": "pbr.vert.spv",
+   "wireframe": false,
+   "material": "oro"
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 153,
+  "name": "EsferaOro",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    3.4,
+    1.0,
+    -2.4
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.1,
+    1.1,
+    1.1
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.5,
+    0.47,
+    0.44
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 154,
+  "name": "Altar",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.35,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    3.4,
+    0.7,
+    3.4
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [
+   201,
+   202,
+   203,
+   204,
+   205,
+   206
+  ],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.12,
+    0.12,
+    0.14
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": "GlassEngine.Core.Scripts.LinternaArma",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.LinternaArma"
+  },
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 200,
+  "name": "Arma",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    1.7,
+    5.6
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.5,
+    0.35,
+    1.4
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    0.92,
+    0.96,
+    1.0
+   ],
+   "intensity": 60.0,
+   "light_type": "Spot",
+   "range": 22.0,
+   "cast_shadow": false,
+   "spot_outer_deg": 24.0,
+   "spot_inner_deg": 15.0
+  },
+  "mesh": null,
+  "parent": 200,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 201,
+  "name": "Linterna0",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -0.75,
+    0.0,
+    -0.6
+   ],
+   "rotation": [
+    -6.0,
+    -14.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "LinternaArma",
+   "tope_por_objeto": 2,
+   "grupo": 1,
+   "prioridad": 1.5,
+   "sombra_por_prioridad": false,
+   "umbral_sombra": 0.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    0.92,
+    0.96,
+    1.0
+   ],
+   "intensity": 60.0,
+   "light_type": "Spot",
+   "range": 22.0,
+   "cast_shadow": false,
+   "spot_outer_deg": 24.0,
+   "spot_inner_deg": 15.0
+  },
+  "mesh": null,
+  "parent": 200,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 202,
+  "name": "Linterna1",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -0.45,
+    0.0,
+    -0.6
+   ],
+   "rotation": [
+    -6.0,
+    -8.4,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "LinternaArma",
+   "tope_por_objeto": 2,
+   "grupo": 1,
+   "prioridad": 1.5,
+   "sombra_por_prioridad": false,
+   "umbral_sombra": 0.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    0.92,
+    0.96,
+    1.0
+   ],
+   "intensity": 60.0,
+   "light_type": "Spot",
+   "range": 22.0,
+   "cast_shadow": false,
+   "spot_outer_deg": 24.0,
+   "spot_inner_deg": 15.0
+  },
+  "mesh": null,
+  "parent": 200,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 203,
+  "name": "Linterna2",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    -0.15000000000000002,
+    0.0,
+    -0.6
+   ],
+   "rotation": [
+    -6.0,
+    -2.8000000000000007,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "LinternaArma",
+   "tope_por_objeto": 2,
+   "grupo": 1,
+   "prioridad": 1.5,
+   "sombra_por_prioridad": false,
+   "umbral_sombra": 0.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    0.92,
+    0.96,
+    1.0
+   ],
+   "intensity": 60.0,
+   "light_type": "Spot",
+   "range": 22.0,
+   "cast_shadow": false,
+   "spot_outer_deg": 24.0,
+   "spot_inner_deg": 15.0
+  },
+  "mesh": null,
+  "parent": 200,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 204,
+  "name": "Linterna3",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    0.1499999999999999,
+    0.0,
+    -0.6
+   ],
+   "rotation": [
+    -6.0,
+    2.799999999999997,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "LinternaArma",
+   "tope_por_objeto": 2,
+   "grupo": 1,
+   "prioridad": 1.5,
+   "sombra_por_prioridad": false,
+   "umbral_sombra": 0.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    0.92,
+    0.96,
+    1.0
+   ],
+   "intensity": 60.0,
+   "light_type": "Spot",
+   "range": 22.0,
+   "cast_shadow": false,
+   "spot_outer_deg": 24.0,
+   "spot_inner_deg": 15.0
+  },
+  "mesh": null,
+  "parent": 200,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 205,
+  "name": "Linterna4",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    0.44999999999999996,
+    0.0,
+    -0.6
+   ],
+   "rotation": [
+    -6.0,
+    8.399999999999999,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "LinternaArma",
+   "tope_por_objeto": 2,
+   "grupo": 1,
+   "prioridad": 1.5,
+   "sombra_por_prioridad": false,
+   "umbral_sombra": 0.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    0.92,
+    0.96,
+    1.0
+   ],
+   "intensity": 60.0,
+   "light_type": "Spot",
+   "range": 22.0,
+   "cast_shadow": false,
+   "spot_outer_deg": 24.0,
+   "spot_inner_deg": 15.0
+  },
+  "mesh": null,
+  "parent": 200,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 206,
+  "name": "Linterna5",
+  "components": [
+   "Transform",
+   "Light",
+   "LightProfile"
+  ],
+  "transform": {
+   "position": [
+    0.75,
+    0.0,
+    -0.6
+   ],
+   "rotation": [
+    -6.0,
+    14.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "light_profile": {
+   "preset": "LinternaArma",
+   "tope_por_objeto": 2,
+   "grupo": 1,
+   "prioridad": 1.5,
+   "sombra_por_prioridad": false,
+   "umbral_sombra": 0.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.85,
+    0.3,
+    0.25
+   ],
+   "model": "sphere",
+   "shader": "pbr.vert.spv",
+   "wireframe": false,
+   "material": "mate"
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": "GlassEngine.Core.Scripts.PaseoPanteon",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.PaseoPanteon"
+  },
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 210,
+  "name": "EsferaPaseo",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.7,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  }
+ }
+]
