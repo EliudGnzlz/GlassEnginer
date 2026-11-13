@@ -398,6 +398,9 @@ pub struct FogData {
     pub far: f32,
 }
 
+fn default_spot_outer_deg() -> f32 { 45.0 }
+fn default_spot_inner_deg() -> f32 { 35.0 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LightData {
     pub light_type: String, // "Directional", "Point", "Spot"
@@ -408,6 +411,10 @@ pub struct LightData {
     /// uno de los 4 cubos del atlas compartido por orden de cercanía.
     #[serde(default)]
     pub cast_shadow: bool,
+    #[serde(default = "default_spot_outer_deg")]
+    pub spot_outer_deg: f32,
+    #[serde(default = "default_spot_inner_deg")]
+    pub spot_inner_deg: f32,
 }
 
 impl Default for LightData {
@@ -418,6 +425,113 @@ impl Default for LightData {
             intensity: 1.0,
             range: 10.0,
             cast_shadow: false,
+            spot_outer_deg: 45.0,
+            spot_inner_deg: 35.0,
+        }
+    }
+}
+
+impl LightData {
+    /// (cos_outer, cos_inner) del cono Spot con los ángulos saneados:
+    /// outer se acota a [1°, 179°] e inner nunca supera a outer.
+    pub fn spot_cone_cos(&self) -> (f32, f32) {
+        let outer = self.spot_outer_deg.clamp(1.0, 179.0);
+        let inner = self.spot_inner_deg.min(outer).max(0.0);
+        (outer.to_radians().cos(), inner.to_radians().cos())
+    }
+}
+
+fn default_tope_perfil() -> u8 { 4 }
+fn default_prioridad_perfil() -> f32 { 1.0 }
+
+/// Perfil de iluminación de una luz (integración de iluminación):
+/// política que la asignación de luces por objeto usa para puntuar,
+/// agrupar y limitar cuántas luces de este perfil alumbran a un
+/// mismo objeto, y si la luz proyecta sombra según su prioridad.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LightProfileData {
+    /// Nombre del preset aplicado ("Vela", "Antorcha", "LinternaArma",
+    /// "Panteon" o "Custom" si los valores se editaron a mano).
+    pub preset: String,
+    /// Máximo de luces de ESTE grupo que alumbran a un mismo objeto.
+    #[serde(default = "default_tope_perfil")]
+    pub tope_por_objeto: u8,
+    /// Grupo de asignación: los topes se aplican por grupo.
+    #[serde(default)]
+    pub grupo: u8,
+    /// Peso en el score de asignación (más = se asigna antes).
+    #[serde(default = "default_prioridad_perfil")]
+    pub prioridad: f32,
+    /// Si es true, la luz solo proyecta sombra cuando su score medio
+    /// supera `umbral_sombra` (con 4 cubos globales no caben todas).
+    #[serde(default)]
+    pub sombra_por_prioridad: bool,
+    #[serde(default)]
+    pub umbral_sombra: f32,
+}
+
+impl Default for LightProfileData {
+    fn default() -> Self {
+        Self {
+            preset: "Custom".into(),
+            tope_por_objeto: 4,
+            grupo: 0,
+            prioridad: 1.0,
+            sombra_por_prioridad: false,
+            umbral_sombra: 0.0,
+        }
+    }
+}
+
+impl LightProfileData {
+    /// Perfil de un preset conocido; `None` si el nombre no existe.
+    pub fn preset(nombre: &str) -> Option<Self> {
+        match nombre {
+            "Vela" => Some(Self {
+                preset: "Vela".into(),
+                tope_por_objeto: 4,
+                grupo: 0,
+                prioridad: 0.3,
+                sombra_por_prioridad: false,
+                umbral_sombra: 0.0,
+            }),
+            "Antorcha" => Some(Self {
+                preset: "Antorcha".into(),
+                tope_por_objeto: 4,
+                grupo: 0,
+                prioridad: 0.6,
+                sombra_por_prioridad: false,
+                umbral_sombra: 0.0,
+            }),
+            "LinternaArma" => Some(Self {
+                preset: "LinternaArma".into(),
+                tope_por_objeto: 2,
+                grupo: 1,
+                prioridad: 1.5,
+                sombra_por_prioridad: false,
+                umbral_sombra: 0.0,
+            }),
+            "Panteon" => Some(Self {
+                preset: "Panteon".into(),
+                tope_por_objeto: 4,
+                grupo: 0,
+                prioridad: 1.0,
+                sombra_por_prioridad: true,
+                umbral_sombra: 1.0,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Perfil implícito de una luz sin componente de perfil.
+    pub fn implicito() -> Self {
+        Self {
+            preset: "Custom".into(),
+            tope_por_objeto: 8,
+            grupo: 0,
+            prioridad: 1.0,
+            sombra_por_prioridad: false,
+            umbral_sombra: 0.0,
         }
     }
 }
@@ -1085,6 +1199,10 @@ pub struct EntityData {
     pub particles: Option<ParticleEmitterData>,
     pub camera: Option<CameraData>,
     pub light: Option<LightData>,
+    /// Perfil de iluminación (integración de iluminación).
+    /// `#[serde(default)]`: las escenas anteriores no traen el campo.
+    #[serde(default)]
+    pub light_profile: Option<LightProfileData>,
     /// Bloque de niebla de escena (Fase 2). `#[serde(default)]`: las
     /// escenas anteriores no traen el campo.
     #[serde(default)]
@@ -1176,6 +1294,11 @@ impl EntityData {
         } else {
             None
         };
+        let light_profile = if components.iter().any(|c| c == "LightProfile") {
+            Some(LightProfileData::default())
+        } else {
+            None
+        };
         let canvas = if components.iter().any(|c| c == "Canvas") {
             Some(CanvasData::default())
         } else {
@@ -1232,6 +1355,7 @@ impl EntityData {
             particles,
             camera,
             light,
+            light_profile,
             fog: None,
             canvas,
             rect_transform,
@@ -2901,4 +3025,43 @@ mod scene_index_tests {
         assert!(s.get_entity(padre).is_some());
         assert_eq!(s.entities.len(), 4); // padre, hijo2, nieto, relleno
     }
+    #[test]
+    fn luz_sin_campos_spot_parsea_con_defaults() {
+        let json = r#"{"light_type":"Point","color":[1.0,1.0,1.0],"intensity":1.0,"range":10.0}"#;
+        let light: LightData = serde_json::from_str(json).unwrap();
+        assert_eq!(light.spot_outer_deg, 45.0);
+        assert_eq!(light.spot_inner_deg, 35.0);
+    }
+
+    #[test]
+    fn spot_cone_cos_sanea() {
+        let mut light = LightData::default();
+        light.spot_outer_deg = 30.0;
+        light.spot_inner_deg = 50.0;
+        let (cos_outer, cos_inner) = light.spot_cone_cos();
+        assert!((cos_inner - cos_outer).abs() < 1e-6);
+
+        light.spot_outer_deg = 200.0;
+        light.spot_inner_deg = 10.0;
+        let (cos_outer, _) = light.spot_cone_cos();
+        assert!((cos_outer - 179.0_f32.to_radians().cos()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn presets_de_perfil() {
+        assert_eq!(LightProfileData::preset("Vela").unwrap().prioridad, 0.3);
+        let linterna = LightProfileData::preset("LinternaArma").unwrap();
+        assert_eq!(linterna.grupo, 1);
+        assert_eq!(linterna.tope_por_objeto, 2);
+        assert!(LightProfileData::preset("Panteon").unwrap().sombra_por_prioridad);
+        assert!(LightProfileData::preset("Inexistente").is_none());
+    }
+
+    #[test]
+    fn perfil_sin_campos_parsea_con_defaults() {
+        let profile: LightProfileData = serde_json::from_str(r#"{"preset":"Custom"}"#).unwrap();
+        assert_eq!(profile.tope_por_objeto, 4);
+        assert_eq!(profile.prioridad, 1.0);
+    }
+
 }
