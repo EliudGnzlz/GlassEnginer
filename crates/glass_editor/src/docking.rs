@@ -262,6 +262,47 @@ impl EditorDockingLayout {
             s.spacing.indent = 14.0;
         }
 
+        // --- Importación por arrastre desde el SO ---
+        // Al soltar archivos sobre la ventana del editor se copian
+        // a la carpeta visible del panel Project (con nombre libre
+        // si colisionan); el panel refresca y lo anota en su estado.
+        let soltados: Vec<std::path::PathBuf> = ui.ctx().input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path().to_path_buf())
+                .collect()
+        });
+        if !soltados.is_empty() {
+            self.project.importar_soltados(&soltados);
+        }
+        // Aviso mientras se sobrevuela arrastrando archivos.
+        if ui.ctx().input(|i| !i.raw.hovered_files.is_empty()) {
+            let rect = ui.ctx().content_rect();
+            let painter = ui.ctx().layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("aviso_soltar_importar"),
+            ));
+            painter.rect_filled(
+                rect,
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(10, 60, 110, 90),
+            );
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                format!(
+                    "Suelta para importar en {}",
+                    crate::panels::project::ruta_legible(
+                        &self.project.assets_root,
+                        &self.project.current_dir
+                    )
+                ),
+                egui::FontId::proportional(22.0),
+                egui::Color32::WHITE,
+            );
+        }
+
         let mut selected_id = self.hierarchy.selected_entity;
 
         // --- 0. ATAJOS DE TECLADO GLOBALES ESTILO UNITY ---

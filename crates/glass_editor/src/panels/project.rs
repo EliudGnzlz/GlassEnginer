@@ -347,6 +347,29 @@ pub fn ruta_libre_en(dir: &Path, nombre: &str) -> Result<PathBuf, String> {
     }
 }
 
+/// Copia un archivo soltado desde el SO a `dir_destino`, con
+/// nombre libre si hay colisión (vía `ruta_libre_en`). Devuelve la
+/// ruta creada. Los directorios se rechazan.
+pub fn importar_archivo(origen: &Path, dir_destino: &Path) -> Result<PathBuf, String> {
+    if !origen.exists() {
+        return Err(format!("No existe {}", origen.display()));
+    }
+    if origen.is_dir() {
+        return Err(format!(
+            "{} es una carpeta; la importación por arrastre acepta archivos",
+            origen.display()
+        ));
+    }
+    let nombre = origen
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .ok_or_else(|| format!("El origen no tiene nombre de archivo: {}", origen.display()))?;
+    let destino = ruta_libre_en(dir_destino, &nombre)?;
+    std::fs::copy(origen, &destino)
+        .map_err(|e| format!("No se pudo importar {}: {e}", origen.display()))?;
+    Ok(destino)
+}
+
 /// Mueve un elemento a `.project_trash/` (hermana de `assets/`). Nada se borra.
 pub fn mover_a_papelera(raiz_proyecto: &Path, ruta: &Path) -> Result<PathBuf, String> {
     if !ruta.exists() {
@@ -558,6 +581,39 @@ impl ProjectPanel {
                 self.entradas.clear();
                 self.set_error(e);
             }
+        }
+    }
+
+    /// Importa los archivos soltados desde el SO al directorio
+    /// visible: copia cada uno con nombre libre si colisiona, sin
+    /// que un error detenga el resto; anota el resultado en la
+    /// línea de estado y refresca la lista si entró algo.
+    pub fn importar_soltados(&mut self, rutas: &[PathBuf]) {
+        let mut importados: Vec<PathBuf> = Vec::new();
+        let mut errores: Vec<String> = Vec::new();
+        for ruta in rutas {
+            match importar_archivo(ruta, &self.current_dir) {
+                Ok(destino) => importados.push(destino),
+                Err(e) => errores.push(e),
+            }
+        }
+        if !importados.is_empty() {
+            self.refrescar();
+            self.seleccion = importados.last().cloned();
+        }
+        if let Some(primero) = errores.into_iter().next() {
+            self.set_error(primero);
+        } else if importados.len() == 1 {
+            self.set_info(format!(
+                "Importado: {}",
+                ruta_legible(&self.assets_root, &importados[0])
+            ));
+        } else if importados.len() > 1 {
+            self.set_info(format!(
+                "Importados {} archivos en {}",
+                importados.len(),
+                self.ruta_actual_legible()
+            ));
         }
     }
 
@@ -974,6 +1030,29 @@ mod tests {
         assert!(entradas[0].es_dir);
         assert_eq!(entradas[1].nombre, "alfa.txt");
         assert_eq!(entradas[2].nombre, "Beta.txt");
+
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn importar_archivo_copia_y_resuelve_colision() {
+        let raiz = temp_dir_unico("importar");
+        let origen_dir = raiz.join("fuera");
+        std::fs::create_dir_all(&origen_dir).unwrap();
+        let origen = origen_dir.join("modelo.glb");
+        std::fs::write(&origen, b"glb-falso").unwrap();
+        let destino_dir = raiz.join("assets");
+        std::fs::create_dir_all(&destino_dir).unwrap();
+
+        let creado = importar_archivo(&origen, &destino_dir).unwrap();
+        assert_eq!(creado, destino_dir.join("modelo.glb"));
+        assert_eq!(std::fs::read(&creado).unwrap(), b"glb-falso");
+
+        let creado2 = importar_archivo(&origen, &destino_dir).unwrap();
+        assert_eq!(creado2, destino_dir.join("modelo (2).glb"));
+
+        assert!(importar_archivo(&origen_dir, &destino_dir).is_err());
+        assert!(importar_archivo(&raiz.join("nope.glb"), &destino_dir).is_err());
 
         let _ = std::fs::remove_dir_all(&raiz);
     }
