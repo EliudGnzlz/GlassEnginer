@@ -115,6 +115,13 @@ impl AssetCache {
         // expulsarse en el mismo sitio: ver evict_idle.)
     }
 
+    /// Registra cotas locales (min, max) sin exigir la geometría CPU
+    /// completa (primitivas integradas: generadas en memoria, nunca
+    /// cargadas vía insert_geometry). No toca `geometries`.
+    pub fn insert_bounds(&mut self, name: impl Into<String>, min: [f32; 3], max: [f32; 3]) {
+        self.bounds.insert(name.into(), (min, max));
+    }
+
     /// Geometría retenida de un modelo, si la hay.
     pub fn geometry(&self, name: &str) -> Option<&(Vec<[f32; 3]>, Vec<u32>)> {
         self.geometries.get(name)

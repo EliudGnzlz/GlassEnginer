@@ -713,6 +713,18 @@ mod tests {
     }
 
     #[test]
+    fn frustum_de_sombra_filtra_fuera_de_la_caja_ortografica() {
+        // Sol cenital sobre el origen, caja de ±25 m (como
+        // SHADOW_ORTHO_HALF en producción, back/front 60).
+        let vp = directional_shadow_vp([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 25.0, 2048, 60.0, 60.0);
+        let frustum = Frustum::from_view_proj(&vp);
+        // Dentro de la caja: puede proyectar.
+        assert!(frustum.intersects_aabb([4.5, -0.5, 4.5], [5.5, 0.5, 5.5]));
+        // A 500 m del centro: fuera de la caja, no proyecta.
+        assert!(!frustum.intersects_aabb([499.5, -0.5, 499.5], [500.5, 0.5, 500.5]));
+    }
+
+    #[test]
     fn aabb_rejects_box_outside_right() {
         let frustum = Frustum::from_view_proj(&make_vp());
         // fov 90 a z=-5: semiancho = 5, por lo que x=10 queda fuera.

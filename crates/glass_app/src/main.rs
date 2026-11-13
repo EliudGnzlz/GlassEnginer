@@ -4098,6 +4098,28 @@ let resueltos = colliders_resueltos(body, shape);
             // para la tool glass_render_stats.
             let frustum_scene = glass_core::math::Frustum::from_view_proj(&vp_scene);
             let frustum_game = vp_game_opt.map(|vp| glass_core::math::Frustum::from_view_proj(&vp));
+            // Frustum de la LUZ para filtrar casters: el VP de sombra
+            // se calcula aquí, ANTES de la recolección, con los mismos
+            // datos que el bloque de publicación de más abajo (que lo
+            // reutiliza tal cual: no pueden desincronizarse). Quien
+            // esté fuera de la caja ortográfica de la luz no puede
+            // proyectar en el mapa. Sin luz activa no hay pase de
+            // sombras: no entra ningún caster.
+            let shadow_active = light_color[0] + light_color[1] + light_color[2] > 0.0 || light_dir[3] > 0.1;
+            let vp_shadow_pre = if shadow_active {
+                let sc = eye_game_opt.unwrap_or(eye_scene);
+                Some(glass_core::directional_shadow_vp(
+                    [sc[0], sc[1], sc[2]],
+                    [light_dir[0], light_dir[1], light_dir[2]],
+                    glass_renderer::shadow::SHADOW_ORTHO_HALF,
+                    glass_renderer::shadow::SHADOW_MAP_SIZE,
+                    glass_renderer::shadow::SHADOW_BACK,
+                    glass_renderer::shadow::SHADOW_FRONT,
+                ))
+            } else {
+                None
+            };
+            let frustum_shadow = vp_shadow_pre.map(|vp| glass_core::math::Frustum::from_view_proj(&vp));
             let mut stats_considered: u32 = 0;
             let mut stats_outline: u32 = 0;
             let mut stats_culled: u32 = 0;
@@ -4182,6 +4204,12 @@ let resueltos = colliders_resueltos(body, shape);
                         if frustum_game.is_some() && !vis_game {
                             stats_culled += 1;
                         }
+                        // ¿Puede esta entidad proyectar sombra? Solo
+                        // si corta la caja ortográfica de la luz.
+                        let visible_shadow = frustum_shadow
+                            .as_ref()
+                            .map(|f| f.intersects_aabb(wmin, wmax))
+                            .unwrap_or(false);
                         // Uso registrado para la expulsión de ociosos (P2).
                         cache.touch(if using_model { model_key.unwrap() } else { "cube" });
 
@@ -4586,7 +4614,7 @@ let resueltos = colliders_resueltos(body, shape);
                                             .get(&ent.id)
                                             .map(|(s, _)| *s)
                                             .unwrap_or(tex_set);
-                                        shadow_graph_statics.push((
+                                        if visible_shadow { shadow_graph_statics.push((
                                             ent_mesh,
                                             model,
                                             gname,
@@ -4600,7 +4628,7 @@ let resueltos = colliders_resueltos(body, shape);
                                             } else {
                                                 Some(rangos_entidad.clone())
                                             },
-                                        ));
+                                        )); }
                                     } else {
                                         // Auditoría C3: la sombra usa los
                                         // rangos del nivel LOD activo, como
@@ -4615,7 +4643,7 @@ let resueltos = colliders_resueltos(body, shape);
                                                 [ojo[0], ojo[1], ojo[2]],
                                             )
                                         });
-                                        shadow_statics.push((ent_mesh, model, rangos));
+                                        if visible_shadow { shadow_statics.push((ent_mesh, model, rangos)); }
                                     }
                                 }
                             }
@@ -4633,7 +4661,7 @@ let resueltos = colliders_resueltos(body, shape);
                                 if tex == vk::DescriptorSet::null() {
                                     continue;
                                 }
-                                shadow_skinned.push((skinned_mesh, model, joints_set));
+                                if visible_shadow { shadow_skinned.push((skinned_mesh, model, joints_set)); }
                                 if vis_scene { scene_skinned.push((skinned_mesh, glass_renderer::MeshPushConstants {
                                     mvp: mvp_scene,
                                     model,
@@ -5043,16 +5071,10 @@ let resueltos = colliders_resueltos(body, shape);
             // `light_dir`/`light_color` de los lotes. Sin luz: el canal
             // se publica inactivo y el pase ni se graba.
             {
-                let shadow_center = eye_game_opt.unwrap_or(eye_scene);
-                if light_color[0] + light_color[1] + light_color[2] > 0.0 || light_dir[3] > 0.1 {
-                    let vp = glass_core::directional_shadow_vp(
-                        [shadow_center[0], shadow_center[1], shadow_center[2]],
-                        [light_dir[0], light_dir[1], light_dir[2]],
-                        glass_renderer::shadow::SHADOW_ORTHO_HALF,
-                        glass_renderer::shadow::SHADOW_MAP_SIZE,
-                        glass_renderer::shadow::SHADOW_BACK,
-                        glass_renderer::shadow::SHADOW_FRONT,
-                    );
+                // El VP ya se calculó antes de la recolección (es el
+                // frustum con el que se filtraron los casters): aquí
+                // solo se publica.
+                if let Some(vp) = vp_shadow_pre {
                     renderer.set_shadow_frame(vp, [
                         1.0 / glass_renderer::shadow::SHADOW_MAP_SIZE as f32,
                         glass_renderer::shadow::SHADOW_DEPTH_BIAS,
@@ -5961,6 +5983,17 @@ impl ApplicationHandler for GlassEngineApp {
                         let mut alloc = renderer.allocator.lock().unwrap();
                         let mut cache = self.asset_cache.write().unwrap();
                         cache.insert_mesh(&renderer.device, &mut *alloc, "plane", gpu_mesh);
+                        // Cotas reales desde los vértices (culling):
+                        // sin registrarlas, la primitiva cae en el
+                        // respaldo ±1e6 y nunca se descarta.
+                        let (mut pmin, mut pmax) = ([f32::MAX; 3], [f32::MIN; 3]);
+                        for v in &vertices {
+                            for i in 0..3 {
+                                pmin[i] = pmin[i].min(v.position[i]);
+                                pmax[i] = pmax[i].max(v.position[i]);
+                            }
+                        }
+                        cache.insert_bounds("plane", pmin, pmax);
                         log::info!(
                             "main: Primitiva 'plane' registrada ({} vértices, {} índices).",
                             vertices.len(),
@@ -5988,6 +6021,16 @@ impl ApplicationHandler for GlassEngineApp {
                 continue;
             }
             let (vertices, indices) = generator();
+            // Cotas reales desde los vértices generados (culling):
+            // sin registrarlas, estas primitivas caen en el respaldo
+            // ±1e6 del bucle de render y nunca se descartan.
+            let (mut pmin, mut pmax) = ([f32::MAX; 3], [f32::MIN; 3]);
+            for v in &vertices {
+                for i in 0..3 {
+                    pmin[i] = pmin[i].min(v.position[i]);
+                    pmax[i] = pmax[i].max(v.position[i]);
+                }
+            }
             let upload_res = {
                 let mut alloc = renderer.allocator.lock().unwrap();
                 glass_renderer::MeshLoader::upload_to_gpu(
@@ -6004,6 +6047,7 @@ impl ApplicationHandler for GlassEngineApp {
                     let mut alloc = renderer.allocator.lock().unwrap();
                     let mut cache = self.asset_cache.write().unwrap();
                     cache.insert_mesh(&renderer.device, &mut *alloc, name, gpu_mesh);
+                    cache.insert_bounds(name, pmin, pmax);
                     log::info!(
                         "main: Primitiva '{}' registrada ({} vértices, {} índices).",
                         name,

@@ -2,7 +2,7 @@
 
 Motor de videojuegos open source tipo Unity, en desarrollo activo (beta). Núcleo en Rust con render Vulkan 1.3, scripting en C# con API estilo Unity y un servidor MCP nativo pensado como vía principal para trabajar el motor con IA.
 
-Está pensado para flujos procedurales: generar y borrar grandes cantidades de objetos en tiempo real, creando y regenerando mundos repetidamente sin grandes cargas de memoria ni de procesos.
+Está pensado para flujos procedurales: generar y borrar grandes cantidades de objetos en tiempo real, creando y regenerando mundos repetidamente sin grandes cargas de memoria ni de procesos. Medido con la escalera de spawn/despawn de esferas (informe completo en `INFORME_ESFERAS.md`): **1.000.000 de entidades generadas en ~134 s y borradas en ~141 s, con un pico de ~2,5 GB de RAM y sin fugas entre ciclos**; 100.000 entidades con física dinámica sostenidas en la misma prueba.
 
 Versión actual: **0.1.0**.
 
@@ -78,6 +78,7 @@ Sistemas implementados hoy, verificados en el código:
 - **Escena escaparate**: demo del motor — avenida PBR y toon, clima (lluvia y tormenta de arena) y portal en vivo.
 - **Demo FPS**: demo del motor que ejercita la física, las consultas, las partículas y la prueba integral en una misma escena.
 - **Cúmulos de cubos**: escenas de estrés de spawn y física (1.000 / 5.000 / 10.000 cuerpos).
+- **Escalera de esferas**: estrés procedural de spawn/despawn (1.000 / 10.000 / 100.000 / 1.000.000 de entidades, con y sin física).
 
 El acabado visual de las demos está en pulido; su función hoy es ejercitar y medir los sistemas del motor.
 

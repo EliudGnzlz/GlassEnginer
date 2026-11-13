@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Profundidad máxima de jerarquía que el motor recorre al componer matrices de
 /// mundo. `reparent` ya rechaza ciclos, así que este tope es una red de
@@ -1257,6 +1258,11 @@ pub struct SceneState {
     /// trabaja sobre arrays contiguos; la fuente autoral sigue
     /// siendo `EntityData.transform`.
     pub transform_store: std::cell::RefCell<crate::transforms::TransformStore>,
+    /// Índice id -> posición en `entities`. No asumir que está
+    /// siempre sincronizado: código externo puede mutar `entities`
+    /// directamente (push/retain en tests de canvas_ui.rs). Usar
+    /// siempre `ensure_index`/`index_lookup` antes de leerlo.
+    id_index: std::cell::RefCell<HashMap<u64, usize>>,
 }
 
 impl Default for SceneState {
@@ -1272,6 +1278,7 @@ impl Default for SceneState {
             viewport_snapshot_png: None,
             shaders_reloaded_flag: false,
             transform_store: std::cell::RefCell::new(crate::transforms::TransformStore::new()),
+            id_index: std::cell::RefCell::new(HashMap::new()),
         }
     }
 }
@@ -1326,10 +1333,74 @@ impl SceneState {
         Self::default()
     }
 
+    /// Reconstruye el índice completo id->posición. O(N).
+    fn rebuild_index(&self) {
+        let mut idx = self.id_index.borrow_mut();
+        idx.clear();
+        idx.reserve(self.entities.len());
+        for (pos, e) in self.entities.iter().enumerate() {
+            idx.insert(e.id, pos);
+        }
+    }
+
+    /// Verificación barata + reparación puntual antes de cada lookup.
+    /// - Longitud distinta (push/retain externo, carga de escena):
+    ///   reconstrucción completa.
+    /// - Longitud igual pero entrada de `id` desalineada: búsqueda
+    ///   lineal puntual y reparación solo de esa entrada.
+    fn ensure_index(&self, id: u64) {
+        let needs_full_rebuild = {
+            let idx = self.id_index.borrow();
+            idx.len() != self.entities.len()
+        };
+        if needs_full_rebuild {
+            self.rebuild_index();
+            return;
+        }
+        let stale = {
+            let idx = self.id_index.borrow();
+            match idx.get(&id) {
+                Some(&pos) => self.entities.get(pos).map(|e| e.id != id).unwrap_or(true),
+                None => false,
+            }
+        };
+        if stale {
+            if let Some(pos) = self.entities.iter().position(|e| e.id == id) {
+                self.id_index.borrow_mut().insert(id, pos);
+            } else {
+                self.id_index.borrow_mut().remove(&id);
+            }
+        }
+    }
+
+    /// Resuelve la posición de `id` en `entities`, O(1) amortizado.
+    fn index_lookup(&self, id: u64) -> Option<usize> {
+        self.ensure_index(id);
+        {
+            let idx = self.id_index.borrow();
+            if let Some(&pos) = idx.get(&id) {
+                if self.entities.get(pos).map(|e| e.id == id).unwrap_or(false) {
+                    return Some(pos);
+                }
+            }
+        }
+        // Fallback defensivo: búsqueda lineal + reparación.
+        if let Some(pos) = self.entities.iter().position(|e| e.id == id) {
+            self.id_index.borrow_mut().insert(id, pos);
+            return Some(pos);
+        }
+        None
+    }
+
     pub fn create_entity(&mut self, name: String, components: Vec<String>) -> u64 {
         let id = self.next_entity_id;
         self.next_entity_id += 1;
+        // Mantener el índice sincronizado incrementalmente: O(1).
+        // Si estaba desincronizado (mutación externa previa), el
+        // próximo lookup lo reconstruirá por diferencia de longitud.
+        let pos = self.entities.len();
         self.entities.push(EntityData::new(id, name, components));
+        self.id_index.borrow_mut().insert(id, pos);
         id
     }
 
@@ -1354,8 +1425,21 @@ impl SceneState {
             }
         }
 
-        if let Some(pos) = self.entities.iter().position(|e| e.id == id) {
-            self.entities.remove(pos);
+        // NOTA de orden: swap_remove reemplaza al borrado por el
+        // último elemento del Vec. Único efecto observable: el orden
+        // relativo de las entidades restantes en `entities` ya no se
+        // preserva tras un borrado (antes sí, con Vec::remove). La
+        // jerarquía (parent/children) no vive en el orden del Vec.
+        if let Some(pos) = self.index_lookup(id) {
+            self.entities.swap_remove(pos);
+            let mut idx = self.id_index.borrow_mut();
+            idx.remove(&id);
+            // La entidad que estaba al final ahora ocupa `pos`
+            // (salvo que `pos` fuera ya la última posición).
+            if let Some(moved) = self.entities.get(pos) {
+                let moved_id = moved.id;
+                idx.insert(moved_id, pos);
+            }
             true
         } else {
             false
@@ -1665,11 +1749,13 @@ impl SceneState {
         mapa
     }
     pub fn get_entity(&self, id: u64) -> Option<&EntityData> {
-        self.entities.iter().find(|e| e.id == id)
+        let pos = self.index_lookup(id)?;
+        self.entities.get(pos)
     }
 
     pub fn get_entity_mut(&mut self, id: u64) -> Option<&mut EntityData> {
-        self.entities.iter_mut().find(|e| e.id == id)
+        let pos = self.index_lookup(id)?;
+        self.entities.get_mut(pos)
     }
 
     pub fn modify_transform(
@@ -2718,5 +2804,101 @@ mod tests_material {
         assert_eq!(mesh.shader, "standard");
         assert_eq!(mesh.color, [1.0, 0.0, 0.0]);
         assert!(!mesh.wireframe);
+    }
+}
+
+
+#[cfg(test)]
+mod scene_index_tests {
+    use super::*;
+
+    fn fresh_scene() -> SceneState {
+        let mut s = SceneState::new();
+        s.entities.clear();
+        s.next_entity_id = 1;
+        s.id_index.borrow_mut().clear();
+        s
+    }
+
+    #[test]
+    fn lookups_equivalentes_tras_crear_y_borrar_en_desorden() {
+        let mut s = fresh_scene();
+        let ids: Vec<u64> = (0..20).map(|i| s.create_entity(format!("E{i}"), vec![])).collect();
+
+        // Borrar en desorden: pares primero, luego algunos impares
+        for &id in ids.iter().step_by(2) {
+            assert!(s.delete_entity(id));
+        }
+        for &id in ids.iter().skip(1).step_by(4) {
+            assert!(s.delete_entity(id));
+        }
+
+        // Verificación cruzada: lo que queda en el Vec debe ser
+        // exactamente lo que resuelve get_entity, y nada más.
+        let restantes: std::collections::HashSet<u64> =
+            s.entities.iter().map(|e| e.id).collect();
+        for id in &ids {
+            let existe_en_vec = restantes.contains(id);
+            let existe_en_lookup = s.get_entity(*id).is_some();
+            assert_eq!(existe_en_vec, existe_en_lookup, "id {id} inconsistente");
+        }
+        assert_eq!(s.entities.len(), restantes.len());
+    }
+
+    #[test]
+    fn tolera_push_externo_directo_al_vec() {
+        let mut s = fresh_scene();
+        let a = s.create_entity("A".into(), vec![]);
+
+        // Simula código externo (canvas_ui.rs tests) mutando el Vec sin pasar por create_entity.
+        s.entities.push(EntityData::new(999, "Externa".into(), vec![]));
+
+        // El índice está desincronizado en longitud; debe repararse sola.
+        assert!(s.get_entity(999).is_some());
+        assert!(s.get_entity(a).is_some());
+
+        // Ahora retain externo que borra `a` sin pasar por delete_entity.
+        s.entities.retain(|e| e.id != a);
+        assert!(s.get_entity(a).is_none());
+        assert!(s.get_entity(999).is_some());
+
+        // create_entity tras la mutación externa sigue siendo correcto.
+        let b = s.create_entity("B".into(), vec![]);
+        assert!(s.get_entity(b).is_some());
+        assert_eq!(s.entities.len(), 2);
+    }
+
+    #[test]
+    fn delete_conserva_semantica_de_padre_e_hijos_con_swap_remove() {
+        let mut s = fresh_scene();
+        let padre = s.create_entity("Padre".into(), vec![]);
+        let hijo1 = s.create_entity("Hijo1".into(), vec![]);
+        let hijo2 = s.create_entity("Hijo2".into(), vec![]);
+        let nieto = s.create_entity("Nieto".into(), vec![]);
+        // relleno para forzar swap_remove no trivial
+        let relleno = s.create_entity("Relleno".into(), vec![]);
+
+        s.reparent(hijo1, Some(padre));
+        s.reparent(hijo2, Some(padre));
+        s.reparent(nieto, Some(hijo1));
+
+        // Borrar hijo1: sus hijos (nieto) deben pasar al padre (abuelo),
+        // y padre debe perder a hijo1 pero ganar a nieto.
+        assert!(s.delete_entity(hijo1));
+
+        assert!(s.get_entity(hijo1).is_none());
+        let p = s.get_entity(padre).unwrap();
+        assert!(!p.children.contains(&hijo1));
+        assert!(p.children.contains(&hijo2));
+        assert!(p.children.contains(&nieto));
+
+        let n = s.get_entity(nieto).unwrap();
+        assert_eq!(n.parent, Some(padre));
+
+        // El resto de entidades siguen siendo resolubles tras el swap_remove.
+        assert!(s.get_entity(hijo2).is_some());
+        assert!(s.get_entity(relleno).is_some());
+        assert!(s.get_entity(padre).is_some());
+        assert_eq!(s.entities.len(), 4); // padre, hijo2, nieto, relleno
     }
 }

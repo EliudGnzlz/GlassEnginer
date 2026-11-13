@@ -94,3 +94,21 @@ Verificación obligatoria: las cifras reproducibles de la Fase 10
 (caída a 100 m = 1,46 m) con el solver paralelo. Hueco natural:
 tras la iluminación y antes del bloque online. Decisión final al
 cerrar la escalera de esferas.
+
+**Cierre de la sección 6 (2026-11-12)**: la Fase B se implementó
+y pasó su puerta de adopción el mismo día (informe
+`INFORME_FASE_B_MULTINUCLEO.md`, commit `3bfbb48`): eventos
+ordenados, feature `parallel` con pool propio, partículas y
+transforms en paralelo; suite en 386 tests. El bloque queda
+cerrado; no ocupa hueco en la cola activa.
+
+## 7. Online — herramienta y complemento (decisión 2026-11-12)
+
+El bloque online SALE de la cola activa y cambia de naturaleza:
+cuando llegue su momento se manejará como **herramienta y
+complemento** del motor, no como bloque central, y su diseño
+partirá de esa óptica. El documento `BLOQUE_ONLINE.md` queda como
+referencia (P2P con anfitrión 4–8, replicación con el mínimo
+desync posible); no se implementa nada por ahora. El servidor
+dedicado 50+ de la sección 1 sigue siendo un escalón aparte y
+posterior.
