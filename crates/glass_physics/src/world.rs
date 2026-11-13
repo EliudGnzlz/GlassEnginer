@@ -981,6 +981,126 @@ impl PhysicsWorld {
         false
     }
 
+    pub fn set_mass(&mut self, handle: BodyHandle, mass: f32) -> bool {
+        if !mass.is_finite() || mass <= 0.0 {
+            return false;
+        }
+        let Some((rapier, _)) = self.get_rapier_handle(handle) else {
+            return false;
+        };
+        let Some(rb) = self.rigid_body_set.get(rapier) else {
+            return false;
+        };
+        // Se suma la masa de los colliders (no rb.mass()) porque rb.mass() no se
+        // actualiza hasta el siguiente step: dos set_mass seguidos acumularían el factor.
+        let colliders: Vec<(rapier3d::geometry::ColliderHandle, f32, f32)> = rb
+            .colliders()
+            .iter()
+            .filter_map(|&ch| self.collider_set.get(ch).map(|c| (ch, c.density(), c.mass())))
+            .collect();
+        let current: f32 = colliders.iter().map(|&(_, _, m)| m).sum();
+        if current <= 1e-6 {
+            return false;
+        }
+        let factor = mass / current;
+        for (ch, density, _) in colliders {
+            if let Some(c) = self.collider_set.get_mut(ch) {
+                c.set_density(density * factor);
+            }
+        }
+        true
+    }
+
+    pub fn get_mass(&self, handle: BodyHandle) -> Option<f32> {
+        let (rapier, _) = self.get_rapier_handle(handle)?;
+        self.rigid_body_set.get(rapier).map(|rb| rb.mass())
+    }
+
+    pub fn set_linear_damping(&mut self, handle: BodyHandle, damping: f32) -> bool {
+        let Some((rapier, _)) = self.get_rapier_handle(handle) else {
+            return false;
+        };
+        match self.rigid_body_set.get_mut(rapier) {
+            Some(rb) => {
+                rb.set_linear_damping(damping);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn get_linear_damping(&self, handle: BodyHandle) -> Option<f32> {
+        let (rapier, _) = self.get_rapier_handle(handle)?;
+        self.rigid_body_set.get(rapier).map(|rb| rb.linear_damping())
+    }
+
+    pub fn set_gravity_scale(&mut self, handle: BodyHandle, scale: f32) -> bool {
+        let Some((rapier, _)) = self.get_rapier_handle(handle) else {
+            return false;
+        };
+        match self.rigid_body_set.get_mut(rapier) {
+            Some(rb) => {
+                rb.set_gravity_scale(scale, true);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn get_gravity_scale(&self, handle: BodyHandle) -> Option<f32> {
+        let (rapier, _) = self.get_rapier_handle(handle)?;
+        self.rigid_body_set.get(rapier).map(|rb| rb.gravity_scale())
+    }
+
+    pub fn set_ccd_enabled(&mut self, handle: BodyHandle, enabled: bool) -> bool {
+        let Some((rapier, _)) = self.get_rapier_handle(handle) else {
+            return false;
+        };
+        match self.rigid_body_set.get_mut(rapier) {
+            Some(rb) => {
+                rb.enable_ccd(enabled);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn ccd_enabled(&self, handle: BodyHandle) -> Option<bool> {
+        let (rapier, _) = self.get_rapier_handle(handle)?;
+        self.rigid_body_set.get(rapier).map(|rb| rb.is_ccd_enabled())
+    }
+
+    pub fn set_body_type(&mut self, handle: BodyHandle, tipo: BodyType) -> bool {
+        let Some((rapier, _)) = self.get_rapier_handle(handle) else {
+            return false;
+        };
+        let rapier_type = match tipo {
+            BodyType::Dynamic => RigidBodyType::Dynamic,
+            BodyType::Static => RigidBodyType::Fixed,
+            BodyType::Kinematic => RigidBodyType::KinematicPositionBased,
+        };
+        match self.rigid_body_set.get_mut(rapier) {
+            Some(rb) => {
+                rb.set_body_type(rapier_type, true);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn move_position(&mut self, handle: BodyHandle, pos: [f32; 3]) -> bool {
+        let Some((rapier, _)) = self.get_rapier_handle(handle) else {
+            return false;
+        };
+        match self.rigid_body_set.get_mut(rapier) {
+            Some(rb) if rb.body_type() == RigidBodyType::KinematicPositionBased => {
+                rb.set_next_kinematic_translation(vector![pos[0], pos[1], pos[2]]);
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn get_locked_axes(&self, body_handle: BodyHandle) -> Option<u8> {
         if let Some((handle, _)) = self.get_rapier_handle(body_handle) {
             if let Some(body) = self.rigid_body_set.get(handle) {

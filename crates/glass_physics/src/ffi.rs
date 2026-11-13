@@ -637,6 +637,143 @@ pub unsafe extern "C" fn glass_physics_set_locked_axes(body_handle: u64, bits: u
 /// # Safety
 /// No recibe punteros; es segura de llamar con cualquier valor.
 #[no_mangle]
+pub unsafe extern "C" fn glass_physics_set_mass(body_handle: u64, mass: f32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_mass(body_handle, mass) as i32;
+        }
+    }
+    0
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+/// Devuelve -1.0 si el cuerpo no existe.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_get_mass(body_handle: u64) -> f32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            return world.get_mass(body_handle).unwrap_or(-1.0);
+        }
+    }
+    -1.0
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_set_linear_damping(body_handle: u64, damping: f32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_linear_damping(body_handle, damping) as i32;
+        }
+    }
+    0
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+/// Devuelve -1.0 si el cuerpo no existe.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_get_linear_damping(body_handle: u64) -> f32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            return world.get_linear_damping(body_handle).unwrap_or(-1.0);
+        }
+    }
+    -1.0
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_set_gravity_scale(body_handle: u64, scale: f32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_gravity_scale(body_handle, scale) as i32;
+        }
+    }
+    0
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+/// Devuelve -1.0 si el cuerpo no existe.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_get_gravity_scale(body_handle: u64) -> f32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            return world.get_gravity_scale(body_handle).unwrap_or(-1.0);
+        }
+    }
+    -1.0
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+/// `enabled` distinto de 0 activa el CCD.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_set_ccd_enabled(body_handle: u64, enabled: i32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_ccd_enabled(body_handle, enabled != 0) as i32;
+        }
+    }
+    0
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+/// Devuelve 1 si el CCD está activo, 0 si no, -1 si el cuerpo no existe.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_get_ccd_enabled(body_handle: u64) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            return match world.ccd_enabled(body_handle) {
+                Some(true) => 1,
+                Some(false) => 0,
+                None => -1,
+            };
+        }
+    }
+    -1
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+/// `body_type`: 0 = Dynamic, 1 = Static, 2 = Kinematic (enum C# RigidBodyType).
+/// Devuelve 0 si el valor no es válido.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_set_body_type(body_handle: u64, body_type: i32) -> i32 {
+    let tipo = match body_type {
+        0 => crate::types::BodyType::Dynamic,
+        1 => crate::types::BodyType::Static,
+        2 => crate::types::BodyType::Kinematic,
+        _ => return 0,
+    };
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_body_type(body_handle, tipo) as i32;
+        }
+    }
+    0
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_move_position(body_handle: u64, x: f32, y: f32, z: f32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.move_position(body_handle, [x, y, z]) as i32;
+        }
+    }
+    0
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+#[no_mangle]
 pub unsafe extern "C" fn glass_physics_get_locked_axes(body_handle: u64) -> i32 {
     if let Some(sys) = get_global_physics_world() {
         if let Ok(world) = sys.lock() {
