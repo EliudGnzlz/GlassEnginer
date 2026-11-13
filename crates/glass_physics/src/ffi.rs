@@ -621,3 +621,29 @@ pub unsafe extern "C" fn glass_character_info(
     }
     0
 }
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_set_locked_axes(body_handle: u64, bits: u32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_locked_axes(body_handle, bits as u8) as i32;
+        }
+    }
+    0
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_get_locked_axes(body_handle: u64) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            if let Some(bits) = world.get_locked_axes(body_handle) {
+                return bits as i32;
+            }
+        }
+    }
+    -1
+}

@@ -60,7 +60,12 @@ public static class RuntimeBridge
     private static CharacterMoveDelegate? _characterMove;
     private static CharacterTeleportDelegate? _characterTeleport;
     private static CharacterDestroyDelegate? _characterDestroy;
+    private delegate int SetLockedAxesDelegate(ulong handle, int bits);
+    private delegate int GetLockedAxesDelegate(ulong handle);
+
     private static CharacterInfoDelegate? _characterInfo;
+    private static SetLockedAxesDelegate? _setLockedAxes;
+    private static GetLockedAxesDelegate? _getLockedAxes;
     private static AttachCapsuleColliderDelegate? _attachCapsuleCollider;
     private static AttachCylinderColliderDelegate? _attachCylinderCollider;
 
@@ -275,6 +280,8 @@ public static class RuntimeBridge
         public IntPtr CharacterTeleport;
         public IntPtr CharacterDestroy;
         public IntPtr CharacterInfo;
+        public IntPtr SetLockedAxes;
+        public IntPtr GetLockedAxes;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitPhysicsBridge")]
@@ -328,6 +335,14 @@ public static class RuntimeBridge
 
         if (callbacks->CharacterInfo != IntPtr.Zero)
             _characterInfo = Marshal.GetDelegateForFunctionPointer<CharacterInfoDelegate>(callbacks->CharacterInfo);
+            if (callbacks->SetLockedAxes != IntPtr.Zero)
+            {
+                _setLockedAxes = Marshal.GetDelegateForFunctionPointer<SetLockedAxesDelegate>(callbacks->SetLockedAxes);
+            }
+            if (callbacks->GetLockedAxes != IntPtr.Zero)
+            {
+                _getLockedAxes = Marshal.GetDelegateForFunctionPointer<GetLockedAxesDelegate>(callbacks->GetLockedAxes);
+            }
 
         Log(2, "GlassEngine.Core PhysicsBridge inicializado exitosamente desde Rust.");
     }
@@ -1413,6 +1428,23 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         grounded = groundedI32 != 0;
         sliding = slidingI32 != 0;
         return ok;
+    }
+
+    /// <summary>Aplica las restricciones por ejes (bits estilo Unity)
+    /// a un cuerpo. False si el host no trae el callback (host viejo)
+    /// o el cuerpo no existe.</summary>
+    public static bool SetLockedAxes(ulong handle, int bits)
+    {
+        if (_setLockedAxes is null) return false;
+        return _setLockedAxes(handle, bits) != 0;
+    }
+
+    /// <summary>Lee las restricciones por ejes de un cuerpo; -1 si el
+    /// host no trae el callback o el cuerpo no existe.</summary>
+    public static int GetLockedAxes(ulong handle)
+    {
+        if (_getLockedAxes is null) return -1;
+        return _getLockedAxes(handle);
     }
 
     /// <summary>

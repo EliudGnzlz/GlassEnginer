@@ -83,6 +83,8 @@ struct PhysicsBridgeCallbacks {
     character_teleport: *const c_void,
     character_destroy: *const c_void,
     character_info: *const c_void,
+    set_locked_axes: *const c_void,
+    get_locked_axes: *const c_void,
 }
 
 type InitPhysicsBridgeFn = unsafe extern "system" fn(*const PhysicsBridgeCallbacks);
@@ -400,6 +402,8 @@ impl ScriptHost {
                 character_teleport: glass_physics::glass_character_teleport as *const c_void,
                 character_destroy: glass_physics::glass_character_destroy as *const c_void,
                 character_info: glass_physics::glass_character_info as *const c_void,
+                set_locked_axes: glass_physics::glass_physics_set_locked_axes as *const c_void,
+                get_locked_axes: glass_physics::glass_physics_get_locked_axes as *const c_void,
             };
             unsafe {
                 init_physics_fn(&callbacks as *const PhysicsBridgeCallbacks);

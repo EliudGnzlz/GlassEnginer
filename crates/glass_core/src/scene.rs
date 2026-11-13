@@ -182,6 +182,10 @@ pub struct PhysicsData {
     /// Si es true, el collider es sensor (trigger): detecta sin bloquear.
     #[serde(default)]
     pub is_trigger: bool,
+    /// Restricciones por ejes estilo Unity (bits de RigidBodyConstraints:
+    /// 1/2/4 posición XYZ, 8/16/32 rotación XYZ). 0 = libre (defecto).
+    #[serde(default)]
+    pub constraints: u8,
     /// Colliders primitivos compuestos (Fase 1.5). Vacío = camino
     /// histórico de un solo collider inferido de la malla.
     #[serde(default)]
@@ -203,6 +207,7 @@ impl Default for PhysicsData {
             layer: 0,
             collision_mask: u32::MAX,
             is_trigger: false,
+            constraints: 0,
             colliders: Vec::new(),
             mesh_collider: MeshColliderMode::None,
         }
@@ -1256,6 +1261,7 @@ impl EntityData {
                 layer: 0,
                 collision_mask: u32::MAX,
                 is_trigger: false,
+                constraints: 0,
                 colliders: Vec::new(),
                 mesh_collider: MeshColliderMode::None,
             })

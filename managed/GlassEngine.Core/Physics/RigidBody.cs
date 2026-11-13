@@ -10,6 +10,24 @@ public enum RigidBodyType
     Kinematic = 2
 }
 
+/// <summary>Restricciones por ejes, con los mismos bits que Unity
+/// (RigidbodyConstraints). Por defecto None: el cuerpo se mueve y
+/// rota libre; el bloqueo es una opción por cuerpo, no global.</summary>
+[Flags]
+public enum RigidBodyConstraints
+{
+    None = 0,
+    FreezePositionX = 1,
+    FreezePositionY = 2,
+    FreezePositionZ = 4,
+    FreezeRotationX = 8,
+    FreezeRotationY = 16,
+    FreezeRotationZ = 32,
+    FreezePosition = FreezePositionX | FreezePositionY | FreezePositionZ,
+    FreezeRotation = FreezeRotationX | FreezeRotationY | FreezeRotationZ,
+    FreezeAll = FreezePosition | FreezeRotation
+}
+
 public sealed class RigidBody
 {
     public ulong EntityId { get; private set; }
@@ -23,6 +41,33 @@ public sealed class RigidBody
         EntityId = entityId;
         BodyType = type;
         Handle = RuntimeBridge.CreateRigidBody(entityId, (int)type, position, rotation);
+        if (_constraints != RigidBodyConstraints.None)
+        {
+            RuntimeBridge.SetLockedAxes(Handle, (int)_constraints);
+        }
+    }
+
+    private RigidBodyConstraints _constraints;
+
+    public RigidBodyConstraints Constraints
+    {
+        get => _constraints;
+        set
+        {
+            _constraints = value;
+            if (IsValid)
+            {
+                RuntimeBridge.SetLockedAxes(Handle, (int)value);
+            }
+        }
+    }
+
+    public bool FreezeRotation
+    {
+        get => (Constraints & RigidBodyConstraints.FreezeRotation) == RigidBodyConstraints.FreezeRotation;
+        set => Constraints = value
+            ? Constraints | RigidBodyConstraints.FreezeRotation
+            : Constraints & ~RigidBodyConstraints.FreezeRotation;
     }
 
     public ulong AttachBoxCollider(Vector3 halfExtents, float restitution = 0.0f, float friction = 0.5f)

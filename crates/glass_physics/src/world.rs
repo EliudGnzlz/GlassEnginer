@@ -469,7 +469,9 @@ impl PhysicsWorld {
             .user_data(entity_id as u128);
 
         if rapier_type == RigidBodyType::Dynamic {
-            builder = builder.lock_rotations().linear_damping(1.5);
+            // Las rotaciones quedan libres por defecto (estilo Unity);
+            // el bloqueo pasa a ser opción por cuerpo vía set_locked_axes.
+            builder = builder.linear_damping(1.5);
         }
 
         let rigid_body = builder.build();
@@ -948,6 +950,64 @@ impl PhysicsWorld {
     }
 
     /// Removes a rigid body and its attached colliders.
+    pub fn set_locked_axes(&mut self, body_handle: BodyHandle, bits: u8) -> bool {
+        if let Some((handle, _)) = self.get_rapier_handle(body_handle) {
+            if let Some(body) = self.rigid_body_set.get_mut(handle) {
+                let mut axes = rapier3d::dynamics::LockedAxes::empty();
+                if bits & 1 != 0 {
+                    axes |= rapier3d::dynamics::LockedAxes::TRANSLATION_LOCKED_X;
+                }
+                if bits & 2 != 0 {
+                    axes |= rapier3d::dynamics::LockedAxes::TRANSLATION_LOCKED_Y;
+                }
+                if bits & 4 != 0 {
+                    axes |= rapier3d::dynamics::LockedAxes::TRANSLATION_LOCKED_Z;
+                }
+                if bits & 8 != 0 {
+                    axes |= rapier3d::dynamics::LockedAxes::ROTATION_LOCKED_X;
+                }
+                if bits & 16 != 0 {
+                    axes |= rapier3d::dynamics::LockedAxes::ROTATION_LOCKED_Y;
+                }
+                if bits & 32 != 0 {
+                    axes |= rapier3d::dynamics::LockedAxes::ROTATION_LOCKED_Z;
+                }
+                body.set_locked_axes(axes, true);
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn get_locked_axes(&self, body_handle: BodyHandle) -> Option<u8> {
+        if let Some((handle, _)) = self.get_rapier_handle(body_handle) {
+            if let Some(body) = self.rigid_body_set.get(handle) {
+                let axes = body.locked_axes();
+                let mut bits: u8 = 0;
+                if axes.contains(rapier3d::dynamics::LockedAxes::TRANSLATION_LOCKED_X) {
+                    bits |= 1;
+                }
+                if axes.contains(rapier3d::dynamics::LockedAxes::TRANSLATION_LOCKED_Y) {
+                    bits |= 2;
+                }
+                if axes.contains(rapier3d::dynamics::LockedAxes::TRANSLATION_LOCKED_Z) {
+                    bits |= 4;
+                }
+                if axes.contains(rapier3d::dynamics::LockedAxes::ROTATION_LOCKED_X) {
+                    bits |= 8;
+                }
+                if axes.contains(rapier3d::dynamics::LockedAxes::ROTATION_LOCKED_Y) {
+                    bits |= 16;
+                }
+                if axes.contains(rapier3d::dynamics::LockedAxes::ROTATION_LOCKED_Z) {
+                    bits |= 32;
+                }
+                return Some(bits);
+            }
+        }
+        None
+    }
+
     pub fn remove_rigid_body(&mut self, body_handle: BodyHandle) -> bool {
         if let Some((rapier_handle, _)) = self.body_map.remove(&body_handle) {
             self.handle_lookup.remove(&rapier_handle);

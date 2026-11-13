@@ -90,6 +90,8 @@ struct SpawnedBodySpec {
     model: String,
     /// Escala de mundo (para escalar los puntos del collider).
     world_scale: [f32; 3],
+    /// Restricciones por ejes estilo Unity (PhysicsData.constraints).
+    constraints: u8,
 }
 
 impl EngineSceneBridge {
@@ -130,6 +132,7 @@ impl EngineSceneBridge {
             mesh_collider: body.mesh_collider,
             model: model.to_string(),
             world_scale: glass_core::mat4_scale(world),
+            constraints: body.constraints,
         })
     }
 
@@ -155,6 +158,9 @@ impl EngineSceneBridge {
             return;
         }
         let handle = physics.create_rigid_body(spec.entity_id, spec.body_type, spec.position, spec.rotation);
+        if spec.constraints != 0 {
+            physics.set_locked_axes(handle, spec.constraints);
+        }
         // El collider de malla, si cuela, SUSTITUYE a los primitivos
         // (la misma semántica que rebuild_physics_from_scene). OJO,
         // orden deliberado: se pasa (friction, restitution) a la firma
