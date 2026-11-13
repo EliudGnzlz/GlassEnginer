@@ -97,3 +97,20 @@ Capturas de las tres pasadas en `fase1/test-red/`.
   del archivo entero — razonamiento sin contenido —; la partición en
   dos paquetes pequeños entregó a la primera: 5.608 + 4.774).
 - Claude 0 · Kimi 0 · Opus 0. La UI y la integración son de Rayo.
+
+## Addenda (2026-11-13): primer Release publicado
+
+Por orden suya del mismo día se creó el primer Release del
+Launcher, `v0.1.0-alpha`:
+https://github.com/EliudGnzlz/GlassEnginer/releases/tag/v0.1.0-alpha
+
+- Activo: `GlassEnginer-Launcher-0.1.0-alpha-linux-x64.zip`
+  (build `--release` de `glass_app` + LEEME; SHA-256
+  `abb34b70f4c11dfdd811c305c8abdc3a012ca6d077d818befc059c7723ff0ea3`)
+  y `checksums.txt` en el formato que `expected_sha256` consume.
+- El binario del paquete se probó antes de publicar: abre el Hub
+  marcando «v0.1.0-alpha · Vulkan 1.3 · Modo local (sin conexión)».
+- El README ganó la sección «Descargar el Launcher» con el enlace.
+- Sigue pendiente SU decisión de visibilidad: con el repo privado,
+  el enlace funciona con su sesión, pero la comprobación automática
+  del Launcher recibe 404 sin autenticar (sin tokens por diseño).

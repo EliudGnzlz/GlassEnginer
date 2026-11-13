@@ -6,6 +6,14 @@ Está pensado para flujos procedurales: generar y borrar grandes cantidades de o
 
 Versión actual: **0.1.0**.
 
+## Descargar el Launcher
+
+El Launcher es la puerta de entrada al motor: estilo Hub antiguo de Unity (tema claro), con los proyectos en cuadrícula de tarjetas. Funciona **siempre offline**; internet solo se usa para descargar el motor y sus actualizaciones, y para la comunidad.
+
+- **Último paquete (alpha):** [GlassEnginer Launcher v0.1.0-alpha](https://github.com/EliudGnzlz/GlassEnginer/releases/tag/v0.1.0-alpha) — [descarga directa para Linux x64](https://github.com/EliudGnzlz/GlassEnginer/releases/download/v0.1.0-alpha/GlassEnginer-Launcher-0.1.0-alpha-linux-x64.zip) (zip de ~11 MB).
+- Junto al paquete se publica `checksums.txt` con su **SHA-256**: el propio Launcher comprueba las versiones nuevas contra estos Releases y **solo instala si el hash coincide**.
+- Contenido del paquete: el binario `glass_app` (Launcher + editor) y un LEEME con los requisitos (driver Vulkan 1.3 y runtime de .NET 8 para los scripts C#).
+
 ## Qué es
 
 Sistemas implementados hoy, verificados en el código:
