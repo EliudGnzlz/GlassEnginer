@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=GlassEnginer
+Comment=Launcher del motor GlassEnginer
+Exec=glass_app
+Icon=glassenginer
+Categories=Development;Game;
+Terminal=false

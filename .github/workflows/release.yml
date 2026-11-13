@@ -1,0 +1,233 @@
+# Workflow de Release: compila Windows y Linux, genera instaladores y publica el release.
+#
+# Nota: no se define RUSTFLAGS con -D warnings. Es la primera build de Windows de la
+# historia del proyecto; lo que importa son los errores reales, no los warnings.
+#
+# Nota: la parte C# se compila con `dotnet build` SIN -c Release, así que la salida queda
+# en bin/Debug/net8.0. Es intencionado: la app resuelve la DLL en esa ruta relativa al
+# directorio de trabajo, aunque el binario Rust sea release.
+#
+# Nota: este workflow no genera un .zip de Windows. El auto-update del Launcher en
+# Windows solo considera .zip con "windows-x64" en el nombre, así que no encontrará
+# paquete en este release. El .exe es solo para instalación manual.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Etiqueta del release"
+        type: string
+        default: "v0.1.1-alpha"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  # Tag efectivo: input en workflow_dispatch, nombre del tag en push.
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Versión (tag sin la "v")
+        shell: pwsh
+        run: |
+          $version = $env:TAG -replace '^v', ''
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Compilar glass_app (release)
+        run: cargo build --release -p glass_app --locked
+
+      - name: Compilar GlassEngine.Core (sin -c, queda en bin/Debug/net8.0)
+        run: dotnet build managed/GlassEngine.Core/GlassEngine.Core.csproj
+
+      - name: Montar payload en dist/payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $payload = 'dist/payload'
+          New-Item -ItemType Directory -Force -Path $payload | Out-Null
+
+          # Binario
+          Copy-Item 'target/release/glass_app.exe' -Destination $payload
+
+          # Carpeta managed completa (DLL + runtimeconfig + dependencias)
+          $managedParent = "$payload/managed/GlassEngine.Core/bin/Debug"
+          New-Item -ItemType Directory -Force -Path $managedParent | Out-Null
+          Copy-Item 'managed/GlassEngine.Core/bin/Debug/net8.0' -Destination $managedParent -Recurse
+
+          # Recursos de runtime, sin las fuentes crudas del pack
+          Copy-Item 'assets' -Destination "$payload/assets" -Recurse
+          $proto = "$payload/assets/polygon-prototype"
+          if (Test-Path $proto) { Remove-Item $proto -Recurse -Force }
+
+          if (-not (Test-Path "$payload/managed/GlassEngine.Core/bin/Debug/net8.0/GlassEngine.Core.dll")) {
+            throw "Falta GlassEngine.Core.dll en el payload"
+          }
+
+      - name: Compilar instalador con Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            Write-Error "No se encontró Inno Setup 6 en '$iscc'. El runner no lo trae; instálalo (p. ej. 'choco install innosetup') antes de este paso."
+            exit 1
+          }
+          $root = (Get-Location).Path
+          & $iscc "/DAppVersion=$env:VERSION" "/DPayloadDir=$root\dist\payload" "/DOutputDir=$root\dist" "installer\GlassEnginer.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC falló con código $LASTEXITCODE" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: instalador-windows
+          path: dist/*.exe
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Dependencias del sistema (mismas que el CI)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvulkan-dev mesa-vulkan-drivers libxkbcommon-dev libxkbcommon-x11-0 \
+            libudev-dev libx11-dev libxcb1-dev libwayland-dev libasound2-dev \
+            pkg-config xvfb
+
+      - name: Versión (tag sin la "v")
+        run: echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Compilar glass_app (release)
+        run: cargo build --release -p glass_app --locked
+
+      - name: Compilar GlassEngine.Core (sin -c, queda en bin/Debug/net8.0)
+        run: dotnet build managed/GlassEngine.Core/GlassEngine.Core.csproj
+
+      - name: Montar payload en dist/payload
+        run: |
+          set -euo pipefail
+          payload=dist/payload
+          mkdir -p "$payload/managed/GlassEngine.Core/bin/Debug"
+
+          # Binario
+          cp target/release/glass_app "$payload/"
+
+          # Carpeta managed completa
+          cp -a managed/GlassEngine.Core/bin/Debug/net8.0 "$payload/managed/GlassEngine.Core/bin/Debug/"
+
+          # Recursos de runtime, sin las fuentes crudas del pack
+          cp -a assets "$payload/assets"
+          rm -rf "$payload/assets/polygon-prototype"
+
+          test -f "$payload/managed/GlassEngine.Core/bin/Debug/net8.0/GlassEngine.Core.dll"
+
+      - name: Crear zip (payload en la raíz)
+        run: |
+          set -euo pipefail
+          zip_name="GlassEnginer-Launcher-${VERSION}-linux-x64.zip"
+          (cd dist/payload && zip -r -q "../${zip_name}" .)
+          ls -l "dist/${zip_name}"
+
+      - name: Montar AppDir
+        run: |
+          set -euo pipefail
+          appdir=dist/AppDir
+          mkdir -p "$appdir/usr/bin"
+          cp -a dist/payload/. "$appdir/usr/bin/"
+
+          cp installer/AppRun "$appdir/AppRun"
+          chmod +x "$appdir/AppRun"
+          cp installer/glassenginer.desktop "$appdir/glassenginer.desktop"
+
+          # appimagetool exige un icono PNG/SVG con el nombre de Icon= en la raíz del AppDir.
+          if [ ! -f installer/glassenginer.png ]; then
+            echo "::error::Falta installer/glassenginer.png (icono requerido por appimagetool)"
+            exit 1
+          fi
+          cp installer/glassenginer.png "$appdir/glassenginer.png"
+
+      - name: Generar AppImage
+        run: |
+          set -euo pipefail
+          curl -fsSL -o appimagetool \
+            https://github.com/AppImage/AppImageKit/releases/download/12/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          # --appimage-extract-and-run evita depender de FUSE en el runner.
+          ARCH=x86_64 ./appimagetool --appimage-extract-and-run \
+            dist/AppDir "dist/GlassEnginer-Launcher-${VERSION}-linux-x64.AppImage"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paquetes-linux
+          path: |
+            dist/*.zip
+            dist/*.AppImage
+          if-no-files-found: error
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [windows, linux]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "{instalador-windows,paquetes-linux}"
+          path: dist
+          merge-multiple: true
+
+      - name: Generar checksums.txt (formato sha256sum)
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum *.exe *.zip *.AppImage > checksums.txt
+          cat checksums.txt
+
+      - name: Crear release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cat > notas.md <<EOF
+          Versión alpha de GlassEnginer Launcher (${TAG}). Puede contener errores.
+
+          Artefactos:
+          - Instalador de Windows (.exe): instalación manual en Windows x64.
+          - Paquete Linux (.zip): lo usa el auto-update del Launcher en Linux x64.
+          - AppImage de Linux: ejecutable portable para instalación manual en Linux x64.
+
+          checksums.txt contiene los SHA-256 de los tres artefactos.
+          EOF
+
+          # Si el tag no existe aún (workflow_dispatch), se crea en el commit compilado.
+          gh release create "$TAG" \
+            --title "GlassEnginer Launcher $TAG" \
+            --prerelease \
+            --notes-file notas.md \
+            --target "${{ github.sha }}" \
+            *.exe *.zip *.AppImage checksums.txt

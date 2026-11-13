@@ -29,3 +29,6 @@ __pycache__/
 
 # Informes del soak test (se publican como artefacto en CI)
 soak-report/
+
+# Salida del workflow de Release (payload, instaladores, AppImage)
+dist/
