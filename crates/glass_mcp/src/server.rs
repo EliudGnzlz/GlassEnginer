@@ -653,6 +653,16 @@ impl McpServer {
                             "description": "Iluminación del último frame (Fase 2S): luz direccional principal, luces puntuales publicadas en el UBO (posición, color, intensidad, rango y cubo de sombra) y niebla de la escena. Es la misma foto que consumen los nodos de luz de los grafos.",
                             "inputSchema": {"type": "object", "properties": {}}
                         },
+                        {
+                            "name": "glass_light_assignment",
+                            "description": "Asignación de luces POR OBJETO del último frame (integración de iluminación): dada una entidad con malla (entity_id), devuelve su ranura en el buffer dinámico de luces y los ids de las luces que la alumbran según la asignación con histéresis. Sin entity_id devuelve el modo (global/por objeto) y cuántos objetos tienen asignación.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": {"type": "integer", "description": "Id de la entidad a consultar (opcional)."}
+                                }
+                            }
+                        },
                         
                         {
                             "name": "glass_texture_info",
@@ -1393,6 +1403,34 @@ impl McpServer {
 
             // Texturas en VRAM (Fase 2): formato, tamaño y bytes de la
             // caché de assets global que registra la app al arrancar.
+            "glass_light_assignment" => {
+                let snap = glass_core::lighting_stats::light_assignments_snapshot();
+                let datos = match args.get("entity_id").and_then(|v| v.as_u64()) {
+                    Some(entidad) => match snap.objects.get(&entidad) {
+                        Some(a) => json!({
+                            "entity_id": entidad,
+                            "slot": a.slot,
+                            "lights": a.lights,
+                            "light_count": a.lights.len(),
+                            "global_mode": snap.global_mode,
+                        }),
+                        None => json!({
+                            "entity_id": entidad,
+                            "slot": 0,
+                            "lights": [],
+                            "light_count": 0,
+                            "global_mode": snap.global_mode,
+                            "note": "sin asignación propia: usa el UBO global (ranura 0)",
+                        }),
+                    },
+                    None => json!({
+                        "global_mode": snap.global_mode,
+                        "assigned_objects": snap.objects.len(),
+                    }),
+                };
+                let texto = serde_json::to_string_pretty(&datos).unwrap_or_default();
+                McpResponse::success(id, json!({"content": [{"type": "text", "text": texto}]}))
+            }
             "glass_texture_info" => {
                 let filtro = args.get("model").and_then(|m| m.as_str()).map(|s| s.to_string());
                 let datos = match glass_renderer::global_asset_cache() {

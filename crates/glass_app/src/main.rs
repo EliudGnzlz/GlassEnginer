@@ -5173,6 +5173,27 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                         }
                     }
                 }
+                // Foto de las asignaciones para la tool MCP
+                // glass_light_assignment.
+                glass_core::lighting_stats::record_light_assignments(
+                    glass_core::lighting_stats::AssignmentStatsSnapshot {
+                        global_mode: self.luces_global,
+                        objects: self
+                            .sistema_luces
+                            .por_entidad
+                            .iter()
+                            .map(|(id, a)| {
+                                (
+                                    *id,
+                                    glass_core::lighting_stats::LightAssignmentSnapshot {
+                                        slot: a.ranura,
+                                        lights: a.luces.clone(),
+                                    },
+                                )
+                            })
+                            .collect(),
+                    },
+                );
                 // Niebla de la escena (Fase 2): la publica la primera
                 // entidad con FogData; sin ella, niebla desactivada.
                 match self.scene_state.lock() {

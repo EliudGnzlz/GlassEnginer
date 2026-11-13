@@ -48,6 +48,43 @@ pub fn lighting_stats_snapshot() -> LightingStatsSnapshot {
     *lock_state()
 }
 
+/// Asignación de luces de un objeto en el último frame (integración
+/// de iluminación): su ranura en el buffer dinámico de luces y los
+/// ids de las luces que lo alumbran, en orden de slot del UBO.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct LightAssignmentSnapshot {
+    pub slot: u32,
+    pub lights: Vec<u64>,
+}
+
+/// Foto de las asignaciones por objeto del último frame: el modo
+/// (global o por objeto) y el mapa entidad → asignación. La rellena
+/// la app y la lee la tool MCP glass_light_assignment.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct AssignmentStatsSnapshot {
+    pub global_mode: bool,
+    pub objects: std::collections::HashMap<u64, LightAssignmentSnapshot>,
+}
+
+static ASSIGN_STATE: OnceLock<Mutex<AssignmentStatsSnapshot>> = OnceLock::new();
+
+fn assign_state() -> &'static Mutex<AssignmentStatsSnapshot> {
+    ASSIGN_STATE.get_or_init(|| Mutex::new(AssignmentStatsSnapshot::default()))
+}
+
+pub fn record_light_assignments(stats: AssignmentStatsSnapshot) {
+    *assign_state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = stats;
+}
+
+pub fn light_assignments_snapshot() -> AssignmentStatsSnapshot {
+    assign_state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
