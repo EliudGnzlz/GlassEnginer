@@ -1061,9 +1061,13 @@ fn avanzar_animadores_fsm(
     scene: &mut SceneState,
     cache: &glass_renderer::AssetCache,
     dt: f32,
-) -> Vec<(u64, glass_core::animator::FiredAnimEvent)> {
+) -> (
+    Vec<(u64, glass_core::animator::FiredAnimEvent)>,
+    Vec<(u64, glass_core::animator::StateChangeEvent)>,
+) {
     anim_pose.clear();
     let mut eventos_out: Vec<(u64, glass_core::animator::FiredAnimEvent)> = Vec::new();
+    let mut cambios_out: Vec<(u64, glass_core::animator::StateChangeEvent)> = Vec::new();
     for ent in scene.entities.iter_mut() {
         let Some(anim) = ent.animator.as_mut() else {
             continue;
@@ -1103,6 +1107,9 @@ fn avanzar_animadores_fsm(
                 // junto a la entidad dueña para despacharlos fuera.
                 for ev in &out.fired_events {
                     eventos_out.push((ent.id, ev.clone()));
+                }
+                for cambio in &out.state_events {
+                    cambios_out.push((ent.id, cambio.clone()));
                 }
                 anim_pose.insert(
                     ent.id,
@@ -1144,7 +1151,7 @@ fn avanzar_animadores_fsm(
             }
         }
     }
-    eventos_out
+    (eventos_out, cambios_out)
 }
 
 
@@ -4140,8 +4147,9 @@ let resueltos = colliders_resueltos(body, shape);
         // mutable un instante, antes del bloqueo en inmutable del bucle
         // de dibujo que consume las decisiones.
         let mut eventos_anim: Vec<(u64, glass_core::animator::FiredAnimEvent)> = Vec::new();
+        let mut cambios_anim: Vec<(u64, glass_core::animator::StateChangeEvent)> = Vec::new();
         if let Ok(mut scene) = self.scene_state.lock() {
-            eventos_anim = avanzar_animadores_fsm(
+            (eventos_anim, cambios_anim) = avanzar_animadores_fsm(
                 &mut self.animator_controllers,
                 &mut self.anim_pose,
                 &mut self.anim_free_fade,
@@ -4156,6 +4164,12 @@ let resueltos = colliders_resueltos(body, shape);
             glass_core::animator_stats::record_anim_event(*entidad, ev);
             self.script_host
                 .dispatch_anim_event(*entidad, &ev.name, ev.value, ev.text.as_deref());
+        }
+        // Cambios de estado del frame: telemetría MCP y entrega a C#.
+        for (entidad, cambio) in &cambios_anim {
+            glass_core::animator_stats::record_state_event(*entidad, cambio);
+            self.script_host
+                .dispatch_state_event(*entidad, &cambio.state, cambio.entered);
         }
         if let Some(cube_mesh) = cache.meshes.get("cube") {
             let mut scene_batches: Vec<glass_renderer::MeshDrawItem<'_>> = Vec::new();

@@ -222,6 +222,8 @@ type DispatchContactEventFn = unsafe extern "system" fn(u64, u64, i32, i32, *con
 /// Evento de animación hacia un script C#: (entidad, nombre del evento,
 /// valor numérico, hay_valor, texto opcional).
 type DispatchAnimEventFn = unsafe extern "system" fn(u64, *const std::ffi::c_char, f32, i32, *const std::ffi::c_char);
+/// Cambio de estado de la FSM: (entidad, nombre del estado, entró 1/0).
+type DispatchStateEventFn = unsafe extern "system" fn(u64, *const std::ffi::c_char, i32);
 /// Init dedicado del lote de transforms (patrón de la casa: Init
 /// nuevo y separado; nunca se toca un Init existente). Recibe los
 /// dos punteros que C# usará para pedir y devolver el lote completo
@@ -240,6 +242,7 @@ pub struct ScriptHost {
     tick_all_fn: Option<TickAllScriptsFn>,
     contact_event_fn: Option<DispatchContactEventFn>,
     anim_event_fn: Option<DispatchAnimEventFn>,
+    state_event_fn: Option<DispatchStateEventFn>,
     active_instances: HashMap<i32, (u64, String)>, // handle -> (entity_id, script_name)
 }
 
@@ -255,6 +258,7 @@ impl ScriptHost {
             tick_all_fn: None,
             contact_event_fn: None,
             anim_event_fn: None,
+            state_event_fn: None,
             active_instances: HashMap::new(),
         }
     }
@@ -813,6 +817,22 @@ impl ScriptHost {
             );
         }
         self.anim_event_fn = anim_event_fn.map(|f| *f);
+
+        // Cambios de estado de la FSM: misma resolución tolerante — si el
+        // ensamblado no los exporta, el motor arranca igual y los
+        // cambios simplemente no llegan a los scripts.
+        let state_event_fn = loader
+            .get_function_with_unmanaged_callers_only::<DispatchStateEventFn>(
+                bridge_type,
+                pdcstr!("DispatchStateEvent"),
+            )
+            .ok();
+        if state_event_fn.is_none() {
+            log::warn!(
+                "El ensamblado managed no exporta DispatchStateEvent: los cambios de estado no llegarán a los scripts."
+            );
+        }
+        self.state_event_fn = state_event_fn.map(|f| *f);
         self.tick_all_fn = tick_all_fn.map(|f| *f);
         self.invoke_click_fn = invoke_click_fn.map(|f| *f);
         self.create_instance_fn = Some(*create_fn);
@@ -893,6 +913,20 @@ impl ScriptHost {
             Some(f) => {
                 let name_c = std::ffi::CString::new(other_name).unwrap_or_default();
                 unsafe { f(entity_id, other_entity_id, kind, is_trigger as i32, name_c.as_ptr()) };
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Entrega un cambio de estado de la FSM a los scripts de UNA
+    /// entidad (StateMachineBehaviours: OnStateEnter/OnStateExit).
+    /// Devuelve false si el ensamblado no exporta DispatchStateEvent.
+    pub fn dispatch_state_event(&self, entity_id: u64, state: &str, entered: bool) -> bool {
+        match self.state_event_fn {
+            Some(f) => {
+                let state_c = std::ffi::CString::new(state).unwrap_or_default();
+                unsafe { f(entity_id, state_c.as_ptr(), entered as i32) };
                 true
             }
             None => false,

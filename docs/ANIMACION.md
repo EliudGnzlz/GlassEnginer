@@ -23,9 +23,11 @@ código). Alcance de la beta:
 - Skinning GPU con clips glTF (incl. modelos de Mixamo).
 - Tools MCP: `glass_animator_state`, `glass_animator_set_param`.
 - **Eventos de animación** (integrados el 2026-11-13, ver abajo).
+- **StateMachineBehaviours**: `OnStateEnter` / `OnStateExit` en C#
+  (integrados el 2026-11-13, ver abajo).
 
 Fuera de la beta (Post-1.0): blend trees 2D/Direct, capas,
-AvatarMask, IK, root motion, StateMachineBehaviours,
+AvatarMask, IK, root motion,
 OverrideController, Playables, retargeting/Avatar, Blend Shapes (el
 importador los salta a propósito) y edición de curvas/keyframes.
 
@@ -59,6 +61,36 @@ Declarados en el JSON del controlador, en el estado (`events` de
   `eventos_test` (blend) y `eventos_simple` (estado simple) y el
   guión `EventosAnimTest.cs`: PasoIzq/PasoDer alternando por ciclo y
   PasoSimple por ciclo, verificados en el log y por MCP.
+
+## StateMachineBehaviours
+
+El behaviour de una entidad con Animator recibe los cambios de
+estado de su máquina:
+
+```csharp
+public override void OnStateEnter(string state) { }
+public override void OnStateExit(string state) { }
+```
+
+- La detección vive en `AnimatorData::advance`: se compara el
+  estado a la entrada y a la salida del frame, lo que cubre
+  transiciones por condición, peticiones `Play`/`CrossFade` y el
+  **alta inicial** (el primer frame emite solo la entrada al
+  estado por defecto, sin salida).
+- En un fundido, la salida del origen y la entrada al destino se
+  notifican **al arrancar el fundido**, no al completarse: un
+  `CrossFade` de 0,5 s entrega ambos callbacks en el mismo frame.
+  Un cambio intermedio dentro del mismo frame (fundido
+  interrumpido) notifica el cambio neto del frame.
+- `Play` al estado ya activo no emite nada (sin salida ni
+  re-entrada), como en Unity.
+- Entrega: export gestionado `DispatchStateEvent` con la misma
+  resolución tolerante que los eventos; telemetría en
+  `glass_animator_state` como `recent_state_events`.
+- Prueba física: `PruebaEstadosAnim.scene.json` con
+  `EstadoAnimTest.cs` sobre el controlador `xbot`: secuencia
+  completa Idle → Walk → Idle → Walk (CrossFade) → Idle verificada
+  en el log y por MCP, sin duplicados al completarse los fundidos.
 
 **Auto-rigging** (último de la cola): requiere antes una vista de
 huesos en el editor (hoy no existe). El rig de manos y dedos NO va

@@ -311,10 +311,20 @@ pub struct FiredAnimEvent {
 /// estado con blend tree aporta sus hijos; durante un fundido van
 /// los samples del origen escalados por (1−w) y los del destino por w.
 #[derive(Debug, Clone, PartialEq)]
+pub struct StateChangeEvent {
+    /// Estado que se entra o se sale.
+    pub state: String,
+    /// true = entrada (OnStateEnter); false = salida (OnStateExit).
+    pub entered: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct AdvanceOutput {
     pub samples: Vec<ClipSample>,
     /// Eventos de animación disparados en este frame.
     pub fired_events: Vec<FiredAnimEvent>,
+    /// Cambios de estado del frame — entradas y salidas — para StateMachineBehaviours.
+    pub state_events: Vec<StateChangeEvent>,
 }
 
 // ---------------------------------------------------------------------------
@@ -400,6 +410,12 @@ impl AnimatorData {
     where
         F: Fn(&str) -> Option<f32>,
     {
+        // Estado a la entrada del frame (para StateMachineBehaviours):
+        // si no existe en el controlador (p. ej. el primer frame, con
+        // current_state vacío), no cuenta como «salida» de nada.
+        let estado_previo = self.current_state.clone();
+        let previo_valido = controller.state(&estado_previo).is_some();
+
         // Inicializar estado actual si hace falta.
         if controller.state(&self.current_state).is_none() {
             self.current_state = controller.default_state.clone();
@@ -653,6 +669,25 @@ impl AnimatorData {
             }
         }
 
+        // Cambios de estado del frame (StateMachineBehaviours):
+        // comparación entrada/salida de advance — cubre transiciones,
+        // peticiones Play/CrossFade y el alta inicial. En un fundido,
+        // la entrada/salida se notifica al ARRANCAR el fundido (el
+        // estado destino ya es el actual), no al completarse.
+        let mut cambios_estado: Vec<StateChangeEvent> = Vec::new();
+        if estado_previo != self.current_state {
+            if previo_valido {
+                cambios_estado.push(StateChangeEvent {
+                    state: estado_previo.clone(),
+                    entered: false,
+                });
+            }
+            cambios_estado.push(StateChangeEvent {
+                state: self.current_state.clone(),
+                entered: true,
+            });
+        }
+
         // 3) Construir la muestra del frame.
         if let Some(from) = self.fade_from_state.clone() {
             let w = if self.fade_duration > 0.0 {
@@ -677,12 +712,14 @@ impl AnimatorData {
             AdvanceOutput {
                 samples,
                 fired_events: eventos,
+                state_events: cambios_estado,
             }
         } else {
             let actual = self.current_state.clone();
             AdvanceOutput {
                 samples: self.state_samples(controller, &actual, &self.blend_times),
                 fired_events: eventos,
+                state_events: cambios_estado,
             }
         }
     }
@@ -1382,5 +1419,158 @@ mod tests_eventos {
 
         let out = a.advance(0.3, &c, dur);
         assert!(out.fired_events.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod tests_estados {
+    use super::*;
+    use crate::scene::AnimatorData;
+
+    fn dur(clip: &str) -> Option<f32> {
+        match clip {
+            "idle" | "walk" => Some(2.0),
+            "jump" => Some(0.8),
+            _ => None,
+        }
+    }
+
+    fn estado(name: &str, clip: &str, bucle: bool) -> StateDef {
+        StateDef {
+            name: name.to_string(),
+            clip: clip.to_string(),
+            speed: 1.0,
+            r#loop: bucle,
+            blend: None,
+            events: Vec::new(),
+        }
+    }
+
+    fn ctrl() -> AnimatorController {
+        AnimatorController {
+            parameters: vec![
+                ParamDef { name: "walk".to_string(), kind: ParamKind::Bool, default: 0.0 },
+                ParamDef { name: "jump".to_string(), kind: ParamKind::Trigger, default: 0.0 },
+            ],
+            states: vec![
+                estado("Idle", "idle", true),
+                estado("Walk", "walk", true),
+                estado("Jump", "jump", false),
+            ],
+            transitions: vec![
+                TransitionDef {
+                    from: "Idle".to_string(),
+                    to: "Walk".to_string(),
+                    conditions: vec![Condition {
+                        param: "walk".to_string(),
+                        op: ConditionOp::Eq,
+                        value: 1.0,
+                    }],
+                    fade: 0.25,
+                    exit_time: None,
+                },
+                TransitionDef {
+                    from: "Walk".to_string(),
+                    to: "Idle".to_string(),
+                    conditions: vec![Condition {
+                        param: "walk".to_string(),
+                        op: ConditionOp::Eq,
+                        value: 0.0,
+                    }],
+                    fade: 0.25,
+                    exit_time: None,
+                },
+                TransitionDef {
+                    from: "*".to_string(),
+                    to: "Jump".to_string(),
+                    conditions: vec![Condition {
+                        param: "jump".to_string(),
+                        op: ConditionOp::Eq,
+                        value: 1.0,
+                    }],
+                    fade: 0.1,
+                    exit_time: None,
+                },
+            ],
+            default_state: "Idle".to_string(),
+        }
+    }
+
+    fn anim(current: &str) -> AnimatorData {
+        AnimatorData {
+            current_state: current.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn resumen(out: &AdvanceOutput) -> Vec<(&str, bool)> {
+        out.state_events.iter().map(|e| (e.state.as_str(), e.entered)).collect()
+    }
+
+    #[test]
+    fn primer_avance_solo_enter_sin_exit() {
+        let c = ctrl();
+        let mut a = anim("");
+        let out = a.advance(0.1, &c, dur);
+        assert_eq!(resumen(&out), vec![("Idle", true)]);
+    }
+
+    #[test]
+    fn ya_en_estado_no_emite_enter() {
+        let c = ctrl();
+        let mut a = anim("Idle");
+        let out = a.advance(0.1, &c, dur);
+        assert!(out.state_events.is_empty());
+    }
+
+    #[test]
+    fn transicion_exit_luego_enter() {
+        let c = ctrl();
+        let mut a = anim("Idle");
+        a.params.insert("walk".to_string(), 1.0);
+        let out = a.advance(0.1, &c, dur);
+        assert_eq!(resumen(&out), vec![("Idle", false), ("Walk", true)]);
+    }
+
+    #[test]
+    fn sin_cambio_frames_siguientes_vacios() {
+        let c = ctrl();
+        let mut a = anim("Idle");
+        a.params.insert("walk".to_string(), 1.0);
+        let _ = a.advance(0.1, &c, dur);
+        // El fundido (0,25 s) se completa en estos frames: sin eventos.
+        assert!(a.advance(0.1, &c, dur).state_events.is_empty());
+        assert!(a.advance(0.3, &c, dur).state_events.is_empty());
+    }
+
+    #[test]
+    fn crossfade_notifica_al_arrancar_no_al_completar() {
+        let c = ctrl();
+        let mut a = anim("Idle");
+        a.pending_play = Some(("Walk".to_string(), 0.5));
+        let out = a.advance(0.1, &c, dur);
+        assert_eq!(resumen(&out), vec![("Idle", false), ("Walk", true)]);
+        assert!(a.advance(0.6, &c, dur).state_events.is_empty());
+    }
+
+    #[test]
+    fn play_instantaneo_mismo_frame() {
+        let c = ctrl();
+        let mut a = anim("Idle");
+        a.pending_play = Some(("Walk".to_string(), 0.0));
+        let out = a.advance(0.1, &c, dur);
+        assert_eq!(resumen(&out), vec![("Idle", false), ("Walk", true)]);
+    }
+
+    #[test]
+    fn anystate_trigger_cambia_desde_walk() {
+        let c = ctrl();
+        let mut a = anim("Walk");
+        // walk=1 mantiene falsa la condición de vuelta a Idle: así la
+        // transición que dispara es la de AnyState (orden de declaración).
+        a.params.insert("walk".to_string(), 1.0);
+        a.params.insert("jump".to_string(), 1.0);
+        let out = a.advance(0.1, &c, dur);
+        assert_eq!(resumen(&out), vec![("Walk", false), ("Jump", true)]);
     }
 }

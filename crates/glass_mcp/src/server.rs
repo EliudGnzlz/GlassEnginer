@@ -2507,6 +2507,7 @@ impl McpServer {
                     "params": anim.params,
                     "blend": blend_json,
                     "recent_events": glass_core::animator_stats::recent_anim_events(entity_id, 10),
+                    "recent_state_events": glass_core::animator_stats::recent_state_events(entity_id, 10),
                 });
                 McpResponse::success(
                     id,

@@ -76,11 +76,13 @@ pasos por ciclo.
 Evaluado contra el código tras integrar los eventos. Propuesta a
 la espera de su decisión:
 
-- **StateMachineBehaviours (OnStateEnter/OnStateExit en C#): el
-  único otro candidato barato.** `advance` ya detecta transiciones
-  y fundidos; la entrega espeja `DispatchAnimEvent` (un export más
-  y dos virtuales). Se propone como compañero natural de los
-  eventos **si él lo quiere**; sin su sí, no se toca.
+- **StateMachineBehaviours (OnStateEnter/OnStateExit en C#):
+  APROBADO por D3m3tr10 el 2026-11-13 y HECHO el mismo día**
+  (registro: `REGISTRO_ESTADOS_ANIMACION.md`). Detección por
+  comparación entrada/salida en `advance` (cubre transiciones,
+  Play/CrossFade y el alta inicial; notificación al arrancar el
+  fundido), entrega espejo de los eventos y telemetría
+  `recent_state_events`. Suite 426/426 y prueba física completa.
 - **Blend trees 2D/Direct**: coste medio (pesos por triangulación
   2D + datos). Sin demanda de gameplay concreta todavía:
   **Post-beta**.

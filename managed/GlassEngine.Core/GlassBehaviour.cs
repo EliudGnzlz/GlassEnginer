@@ -29,6 +29,19 @@ public abstract class GlassBehaviour
     /// </summary>
     public virtual void OnAnimationEvent(string name, float? value, string? text) { }
 
+    /// <summary>
+    /// La máquina de estados del Animator de esta entidad acaba de
+    /// entrar en el estado `state` (al arrancar el fundido si lo hay,
+    /// y también para el estado inicial al primer frame).
+    /// </summary>
+    public virtual void OnStateEnter(string state) { }
+
+    /// <summary>
+    /// La máquina de estados del Animator de esta entidad acaba de
+    /// salir del estado `state` porque entra otro.
+    /// </summary>
+    public virtual void OnStateExit(string state) { }
+
     /// <summary>Un collider no-trigger de esta entidad empieza a tocar otro.</summary>
     public virtual void OnCollisionEnter(Collision collision) { }
 

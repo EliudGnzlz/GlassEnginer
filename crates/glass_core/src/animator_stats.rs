@@ -23,12 +23,27 @@ pub struct AnimEventRecord {
     pub seq: u64,
 }
 
+/// Un cambio de estado de la FSM ya ocurrido, tal como lo registró la
+/// app: alimenta el campo `recent_state_events` de glass_animator_state.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StateEventRecord {
+    /// Entidad cuyo Animator cambió de estado.
+    pub entity: u64,
+    /// Estado entrado o salido.
+    pub state: String,
+    /// true = entrada (OnStateEnter); false = salida (OnStateExit).
+    pub entered: bool,
+    /// Nº de orden global y monótono (compartido con los eventos).
+    pub seq: u64,
+}
+
 /// Capacidad del anillo global de eventos recientes.
 const CAP: usize = 128;
 
 #[derive(Default)]
 struct AnimStatsState {
     events: VecDeque<AnimEventRecord>,
+    state_events: VecDeque<StateEventRecord>,
     seq: u64,
 }
 
@@ -68,6 +83,35 @@ pub fn record_anim_event(entity: u64, ev: &crate::animator::FiredAnimEvent) {
 pub fn recent_anim_events(entity: u64, max: usize) -> Vec<AnimEventRecord> {
     let st = lock_state();
     st.events
+        .iter()
+        .rev()
+        .filter(|e| e.entity == entity)
+        .take(max)
+        .cloned()
+        .collect()
+}
+
+/// Registra un cambio de estado (lo llama la app al despacharlo a C#).
+pub fn record_state_event(entity: u64, change: &crate::animator::StateChangeEvent) {
+    let mut st = lock_state();
+    st.seq += 1;
+    let seq = st.seq;
+    if st.state_events.len() >= CAP {
+        st.state_events.pop_front();
+    }
+    st.state_events.push_back(StateEventRecord {
+        entity,
+        state: change.state.clone(),
+        entered: change.entered,
+        seq,
+    });
+}
+
+/// Los cambios de estado recientes de UNA entidad, del más nuevo al
+/// más viejo.
+pub fn recent_state_events(entity: u64, max: usize) -> Vec<StateEventRecord> {
+    let st = lock_state();
+    st.state_events
         .iter()
         .rev()
         .filter(|e| e.entity == entity)

@@ -1668,6 +1668,44 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
     /// OnAnimationEvent. Sin instancia no hace nada. Las excepciones se
     /// capturan y se registran: un script roto no debe tumbar el motor.
     /// </summary>
+    /// <summary>
+    /// Punto de entrada nativo de los cambios de estado de la FSM: el
+    /// motor lo llama cuando el Animator de una entidad entra o sale
+    /// de un estado. Busca el behaviour de la entidad y le invoca
+    /// OnStateEnter u OnStateExit. Sin instancia no hace nada. Las
+    /// excepciones se capturan y se registran.
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "DispatchStateEvent")]
+    public static void DispatchStateEvent(ulong entityId, IntPtr statePtr, int entered)
+    {
+        GlassBehaviour? instance = null;
+        lock (_sync)
+        {
+            foreach (var inst in _instances.Values)
+            {
+                if (inst.EntityId == entityId)
+                {
+                    instance = inst;
+                    break;
+                }
+            }
+        }
+        if (instance is null)
+        {
+            return;
+        }
+        string state = statePtr == IntPtr.Zero ? string.Empty : Marshal.PtrToStringUTF8(statePtr) ?? string.Empty;
+        try
+        {
+            if (entered != 0) instance.OnStateEnter(state);
+            else instance.OnStateExit(state);
+        }
+        catch (Exception ex)
+        {
+            Log(4, $"[{instance.GetType().Name}] Excepción en OnStateEnter/OnStateExit: {ex}");
+        }
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "DispatchAnimEvent")]
     public static void DispatchAnimEvent(ulong entityId, IntPtr namePtr, float value, int hasValue, IntPtr textPtr)
     {
