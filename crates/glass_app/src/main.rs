@@ -1328,6 +1328,7 @@ fn reconcile_spawned_scripts(
 static SHUTDOWN_REQUESTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+#[cfg(unix)]
 extern "C" fn handle_termination_signal(_sig: libc::c_int) {
     SHUTDOWN_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
 }
@@ -1336,6 +1337,7 @@ extern "C" fn handle_termination_signal(_sig: libc::c_int) {
 ///
 /// Sólo se hace `store` sobre un atómico: es lo único async-signal-safe que
 /// necesitamos aquí.
+#[cfg(unix)]
 fn install_signal_handlers() {
     unsafe {
         for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
@@ -1352,6 +1354,12 @@ fn install_signal_handlers() {
         }
     }
 }
+
+/// En Windows no hay señales POSIX: el apagado ordenado llega por el
+/// cierre de la ventana (winit). Puerto mínimo del bloque anterior,
+/// que era Unix puro (primera compilación en Windows, 2026-11-13).
+#[cfg(not(unix))]
+fn install_signal_handlers() {}
 
 use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
