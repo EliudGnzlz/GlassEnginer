@@ -3973,6 +3973,12 @@ impl Drop for GlassRenderer {
                 .destroy_descriptor_pool(self.graph_props_pool, None);
             self.device
                 .destroy_descriptor_set_layout(self.graph_globals_layout, None);
+            // Set 6 (IBL): pool y UBO de parámetros creados en el init;
+            // se destruyen aquí como el resto de pools del renderer
+            // (sin esto, además, los campos quedaban «nunca leídos» y
+            // el CI con -D warnings no compilaba glass_renderer).
+            self.device.destroy_descriptor_pool(self.ibl_pool, None);
+            self.device.destroy_buffer(self.ibl_params_buffer, None);
         }
         self.ui.destroy(&mut *self.allocator.lock().unwrap());
         if let Some(ui_img) = &mut self.ui_images {
