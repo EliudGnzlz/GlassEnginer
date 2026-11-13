@@ -70,6 +70,8 @@ pub type SkinnedDrawItem<'a> = (
     vk::DescriptorSet,
     vk::DescriptorSet,
     (u32, u32),
+    // Ranura de luces del objeto; 0 = global.
+    u32,
 );
 
 #[derive(Error, Debug)]
@@ -191,6 +193,8 @@ pub type MeshDrawItem<'a> = (
     Option<String>,
     (u32, u32),
     Option<vk::DescriptorSet>,
+    // Ranura de luces del objeto; 0 = global.
+    u32,
 );
 
 const IDENTITY_MAT4: [f32; 16] = [
@@ -234,6 +238,9 @@ const _: () = assert!(std::mem::align_of::<MeshPushConstants>() == 4);
 
 pub const MAX_POINT_LIGHTS: usize = 8;
 pub const POINT_LIGHTS_UBO_SIZE: u64 = 656;
+/// Ranuras del buffer de luces: la 0 es el UBO global y las demás
+/// son los UBO por objeto de la asignación de luces por objeto.
+pub const POINT_LIGHT_SLOTS: u64 = 1024;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -310,7 +317,7 @@ fn create_point_lights_set_layout(
 ) -> Result<vk::DescriptorSetLayout, vk::Result> {
     let binding = [vk::DescriptorSetLayoutBinding::default()
         .binding(0)
-        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+        .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
         .descriptor_count(1)
         .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
     let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&binding);
@@ -529,6 +536,11 @@ pub struct GlassRenderer {
     point_lights_mapped: *mut u8,
     /// Valor actual del UBO de luces en el lado CPU.
     point_lights: PointLightsUbo,
+    /// Paso entre ranuras del buffer de luces (656 alineado al
+    /// `min_uniform_buffer_offset_alignment` del dispositivo).
+    point_lights_stride: u64,
+    /// Ranuras por objeto pendientes de volcar en `upload_frame_ubos`.
+    object_lights_pending: Vec<(u32, PointLightsUbo)>,
     /// Sets 4 y 5 (lightmap horneado): atlas + UBO de grupos. Mismo
     /// patrón de propiedad que el set 3. Sin bake publicado, el set 4
     /// enlaza una textura 1×1 negra y el UBO está a ceros: el PBR se
@@ -1061,16 +1073,23 @@ impl GlassRenderer {
         // Mismo patrón que 5b; el contenido inicial es todo ceros
         // (count = 0: ninguna luz, resultado idéntico al de antes).
         let (point_lights_pool, point_lights_set, point_lights_buffer,
-             point_lights_allocation, point_lights_mapped) = unsafe {
+             point_lights_allocation, point_lights_mapped, point_lights_stride) = unsafe {
             let pool_sizes = [vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                .ty(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
                 .descriptor_count(1)];
             let pool_info = vk::DescriptorPoolCreateInfo::default()
                 .pool_sizes(&pool_sizes)
                 .max_sets(1);
             let pool = device.create_descriptor_pool(&pool_info, None)?;
 
-            let size = POINT_LIGHTS_UBO_SIZE;
+            fn alinear_arriba(v: u64, a: u64) -> u64 {
+                if a == 0 { v } else { (v + a - 1) / a * a }
+            }
+            let point_lights_stride = alinear_arriba(
+                POINT_LIGHTS_UBO_SIZE,
+                context.physical_device_properties.limits.min_uniform_buffer_offset_alignment as u64,
+            );
+            let size = point_lights_stride * POINT_LIGHT_SLOTS;
             let buffer_info = vk::BufferCreateInfo::default()
                 .size(size)
                 .usage(vk::BufferUsageFlags::UNIFORM_BUFFER)
@@ -1103,11 +1122,11 @@ impl GlassRenderer {
             let buffer_desc = [vk::DescriptorBufferInfo::default()
                 .buffer(buffer)
                 .offset(0)
-                .range(size)];
+                .range(POINT_LIGHTS_UBO_SIZE)];
             let write = [vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
                 .buffer_info(&buffer_desc)];
             device.update_descriptor_sets(&write, &[]);
 
@@ -1119,7 +1138,7 @@ impl GlassRenderer {
                 ))?;
             std::ptr::write_bytes(mapped, 0, size as usize);
 
-            (pool, set, buffer, Some(allocation), mapped)
+            (pool, set, buffer, Some(allocation), mapped, point_lights_stride)
         };
 
         // 6. Command Pool y Buffers
@@ -1397,6 +1416,8 @@ impl GlassRenderer {
             point_lights_allocation,
             point_lights_mapped,
             point_lights: PointLightsUbo::default(),
+            point_lights_stride,
+            object_lights_pending: Vec::new(),
             lm_tex_layout,
             lm_data_layout,
             lm_pool,
@@ -1473,7 +1494,7 @@ impl GlassRenderer {
             vk::PipelineBindPoint::GRAPHICS,
             pipe.pipeline,
         );
-        for (mesh, push_consts, tex_set, joints_set, range) in items {
+        for (mesh, push_consts, tex_set, joints_set, range, light_slot) in items {
             let sets = [*tex_set, *joints_set];
             self.device.cmd_bind_descriptor_sets(
                 cmd,
@@ -1492,15 +1513,9 @@ impl GlassRenderer {
                 &[self.shadow.set],
                 &[],
             );
-            // Set 3: el UBO de luces puntuales (mismo fragmento PBR).
-            self.device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                pipe.layout,
-                3,
-                &[self.point_lights_set],
-                &[],
-            );
+            // Set 3: el UBO de luces puntuales (mismo fragmento PBR),
+            // con el desplazamiento dinámico de la ranura del objeto.
+            self.bind_point_lights_set(cmd, pipe, *light_slot);
             // Sets 4 y 5: el lightmap (mismo fragmento PBR).
             self.bind_lightmap_sets(cmd, pipe);
             let push_bytes = bytemuck::bytes_of(push_consts);
@@ -1590,6 +1605,20 @@ impl GlassRenderer {
         self.point_lights = lights;
     }
 
+    /// Publica el UBO de luces de UN objeto (su ranura se vuelca en
+    /// `upload_frame_ubos`). La ranura 0 es el global: no usarla aquí.
+    pub fn set_object_lights(&mut self, slot: u32, lights: PointLightsUbo) {
+        if slot == 0 || slot as u64 >= POINT_LIGHT_SLOTS {
+            return;
+        }
+        self.object_lights_pending.push((slot, lights));
+    }
+
+    /// Paso entre ranuras del buffer de luces, en bytes.
+    pub fn point_lights_stride(&self) -> u64 {
+        self.point_lights_stride
+    }
+
     /// Publica la niebla del frame (Fase 2): color lineal, distancias de
     /// inicio y total en metros y si está activa. Viaja en el UBO de
     /// frame (set 2) junto a los parámetros de sombra.
@@ -1607,7 +1636,7 @@ impl GlassRenderer {
     /// Enlaza el set 3 en un dibujo cuyo pipeline lo declara (PBR; la
     /// piel lo enlaza dentro de `draw_skinned`). Los grafos y el
     /// Lambert no lo declaran y no lo reciben.
-    unsafe fn bind_point_lights_set(&self, cmd: vk::CommandBuffer, pipe: &GraphicsPipeline) {
+    unsafe fn bind_point_lights_set(&self, cmd: vk::CommandBuffer, pipe: &GraphicsPipeline, slot: u32) {
         if pipe.point_lights_set_layout.is_some() {
             self.device.cmd_bind_descriptor_sets(
                 cmd,
@@ -1615,7 +1644,7 @@ impl GlassRenderer {
                 pipe.layout,
                 3,
                 &[self.point_lights_set],
-                &[],
+                &[(slot as u64 * self.point_lights_stride) as u32],
             );
         }
     }
@@ -2244,6 +2273,18 @@ impl GlassRenderer {
             pl_bytes.len(),
         );
 
+        // Ranuras por objeto pendientes de volcar.
+        let pending = std::mem::take(&mut self.object_lights_pending);
+        for (slot, ubo) in pending {
+            let bytes = bytemuck::bytes_of(&ubo);
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                self.point_lights_mapped
+                    .add((slot as u64 * self.point_lights_stride) as usize),
+                bytes.len(),
+            );
+        }
+
         // UBO de sombras del frame (mismo patrón): la VP fijada por
         // la app y los parámetros, con el flag de actividad
         // combinado con el del renderer (GLASS_SHADOWS=0 lo apaga
@@ -2594,7 +2635,7 @@ impl GlassRenderer {
                 // El pipeline se enlaza por lote: PBR por defecto o el
                 // material de grafo que pida la entidad.
                 let mut bound: *const GraphicsPipeline = std::ptr::null();
-                for (mesh, push_consts, tex_set, shader_name, range, props_set) in meshes {
+                for (mesh, push_consts, tex_set, shader_name, range, props_set, light_slot) in meshes {
                     let pipe = self.pipeline_for(shader_name, legacy);
                     if !std::ptr::eq(bound, pipe) {
                         self.device.cmd_bind_pipeline(
@@ -2618,7 +2659,7 @@ impl GlassRenderer {
                     }
                     self.bind_graph_globals(cmd, pipe, *props_set);
                     self.bind_shadow_set(cmd, pipe);
-                    self.bind_point_lights_set(cmd, pipe);
+                    self.bind_point_lights_set(cmd, pipe, *light_slot);
                     self.bind_lightmap_sets(cmd, pipe);
                     {
                         let mut desc = 0u32;
@@ -3047,7 +3088,7 @@ impl GlassRenderer {
     ) -> Result<(), RendererError> {
         let pc_list: Vec<MeshDrawItem> = meshes
             .iter()
-            .map(|(m, mvp)| (*m, MeshPushConstants::new(*mvp), self.fallback_set, None, (0, m.index_count), None))
+            .map(|(m, mvp)| (*m, MeshPushConstants::new(*mvp), self.fallback_set, None, (0, m.index_count), None, 0))
             .collect();
         self.render_views(queue, &pc_list, None, &[], None, None, &[], None, None)
     }

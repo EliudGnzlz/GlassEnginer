@@ -26,6 +26,7 @@ use glass_scripting::{
 };
 mod bake;
 mod canvas_ui;
+mod luces_objeto;
 mod mouse_input;
 
 use std::ffi::CStr;
@@ -1581,6 +1582,14 @@ struct GlassEngineApp {
     /// frame con la pose evaluada. Se liberan en `Drop` y al cambiar de
     /// escena.
     skin_joint_buffers: std::collections::HashMap<u64, glass_renderer::JointBuffer>,
+    /// Sistema de asignación de luces por objeto (integración de
+    /// iluminación): ranuras del UBO dinámico por entidad con malla.
+    sistema_luces: luces_objeto::SistemaAsignacion,
+    /// true si GLASS_LUCES_GLOBAL=1: se usa solo el UBO global
+    /// (comparación A/B del sistema por objeto).
+    luces_global: bool,
+    /// Contador de frames para el refresco rotativo de asignaciones.
+    luces_frame: u64,
     /// Estado de reproducción por entidad: (clip en curso, tiempo en
     /// segundos). El tiempo NO viaja en la escena serializada: es estado
     /// de runtime, como el tiempo acumulado de un Animator de Unity.
@@ -1896,6 +1905,9 @@ impl GlassEngineApp {
             button_click_tracker: canvas_ui::ButtonClickTracker::new(),
             ui_drag_session: None,
             skin_joint_buffers: std::collections::HashMap::new(),
+            sistema_luces: luces_objeto::SistemaAsignacion::nueva(),
+            luces_global: std::env::var("GLASS_LUCES_GLOBAL").map(|v| v == "1").unwrap_or(false),
+            luces_frame: 0,
             anim_runtime: std::collections::HashMap::new(),
             animator_controllers: std::collections::HashMap::new(),
             anim_pose: std::collections::HashMap::new(),
@@ -4555,6 +4567,13 @@ let resueltos = colliders_resueltos(body, shape);
                         };
 
                         let lm_params = renderer.lm_params_for(ent.id);
+                        // Ranura del UBO de luces de ESTE objeto (0 =
+                        // global si aún no tiene asignación propia).
+                        let ranura_luz = if self.luces_global {
+                            0
+                        } else {
+                            self.sistema_luces.ranura_de(ent.id)
+                        };
                         // Rangos de los draw items (nivel LOD activo)
                         // para el proyector de grafo en sombras (C3).
                         let rangos_entidad: Vec<(u32, u32)> =
@@ -4673,7 +4692,7 @@ let resueltos = colliders_resueltos(body, shape);
                                     lm_params,
                                     emissive: em_item,
                                     uv_transform: uv_item,
-                                }, tex, joints_set, range)); }
+                                }, tex, joints_set, range, ranura_luz)); }
                                 if let Some(vp_game) = vp_game_opt.filter(|_| vis_game) {
                                     let mvp_game = matmul(&vp_game, &model);
                                     game_skinned.push((skinned_mesh, glass_renderer::MeshPushConstants {
@@ -4687,7 +4706,7 @@ let resueltos = colliders_resueltos(body, shape);
                                         lm_params,
                                         emissive: em_item,
                                         uv_transform: uv_item,
-                                    }, tex, joints_set, range));
+                                    }, tex, joints_set, range, ranura_luz));
                                 }
                                 continue;
                             }
@@ -4775,7 +4794,7 @@ let resueltos = colliders_resueltos(body, shape);
                                 lm_params,
                                 emissive: em_item,
                                 uv_transform: uv_item,
-                            }, tex_set_grafo.unwrap_or(tex_set), shader_name.clone(), range, props_set)); }
+                            }, tex_set_grafo.unwrap_or(tex_set), shader_name.clone(), range, props_set, ranura_luz)); }
                                 if let Some((nombre_o, color_o, ancho_o)) = &contorno {
                                     scene_batches.push((ent_mesh, glass_renderer::MeshPushConstants {
                                         mvp: mvp_scene,
@@ -4788,7 +4807,7 @@ let resueltos = colliders_resueltos(body, shape);
                                         lm_params,
                                         emissive: em_item,
                                         uv_transform: uv_item,
-                                    }, tex_set_grafo.unwrap_or(tex_set), Some(nombre_o.clone()), range, props_set));
+                                    }, tex_set_grafo.unwrap_or(tex_set), Some(nombre_o.clone()), range, props_set, ranura_luz));
                                 }
 
                             if let Some(vp_game) = vp_game_opt.filter(|_| vis_game) {
@@ -4807,7 +4826,7 @@ let resueltos = colliders_resueltos(body, shape);
                                     lm_params,
                                     emissive: em_item,
                                     uv_transform: uv_item,
-                                }, tex_set_grafo.unwrap_or(tex_set), shader_name.clone(), range, props_set));
+                                }, tex_set_grafo.unwrap_or(tex_set), shader_name.clone(), range, props_set, ranura_luz));
                                     if let Some((nombre_o, color_o, ancho_o)) = &contorno {
                                         stats_outline += 1;
                                         game_batches.push((ent_mesh, glass_renderer::MeshPushConstants {
@@ -4821,7 +4840,7 @@ let resueltos = colliders_resueltos(body, shape);
                                             lm_params,
                                             emissive: em_item,
                                             uv_transform: uv_item,
-                                        }, tex_set_grafo.unwrap_or(tex_set), Some(nombre_o.clone()), range, props_set));
+                                        }, tex_set_grafo.unwrap_or(tex_set), Some(nombre_o.clone()), range, props_set, ranura_luz));
                                     }
                             }
                         }
@@ -5014,10 +5033,10 @@ let resueltos = colliders_resueltos(body, shape);
                         // virtuales: la de salida quedaría pegada
                         // al plano cercano y taparía el centro de
                         // su propia vista con su cara trasera.
-                        items_a.retain(|(_, pc, _, _, _, _)| {
+                        items_a.retain(|(_, pc, _, _, _, _, _)| {
                             pc.model != world_a && pc.model != world_b
                         });
-                        items_b.retain(|(_, pc, _, _, _, _)| {
+                        items_b.retain(|(_, pc, _, _, _, _, _)| {
                             pc.model != world_a && pc.model != world_b
                         });
                         portal_render = Some((items_a, piel_a, items_b, piel_b));
@@ -5036,10 +5055,10 @@ let resueltos = colliders_resueltos(body, shape);
 
                         // Fuera de los lotes normales (la
                         // superficie la dibuja el pase de portal).
-                        scene_batches.retain(|(_, pc, _, _, _, _)| {
+                        scene_batches.retain(|(_, pc, _, _, _, _, _)| {
                             pc.model != world_a && pc.model != world_b
                         });
-                        game_batches.retain(|(_, pc, _, _, _, _)| {
+                        game_batches.retain(|(_, pc, _, _, _, _, _)| {
                             pc.model != world_a && pc.model != world_b
                         });
                     }
@@ -5101,6 +5120,59 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 };
                 renderer.set_point_lights(ubo_luces);
                 renderer.set_point_shadow_lights(luces_sombra);
+                // Asignación de luces POR OBJETO (integración de
+                // iluminación): las entidades con malla resuelven
+                // sus luces (rango → score, con histéresis) y su UBO
+                // se publica en su ranura del buffer dinámico. Las
+                // ranuras son estables entre frames; el contenido se
+                // refresca aquí, antes de registrar los dibujos.
+                if !self.luces_global {
+                    self.luces_frame += 1;
+                    let frame = self.luces_frame;
+                    if let Ok(scene) = self.scene_state.lock() {
+                        let (luces, cubos) = recolectar_luces_escena(
+                            &scene,
+                            [pl_eye[0], pl_eye[1], pl_eye[2]],
+                        );
+                        self.sistema_luces.observar_luces(&luces);
+                        let vivas: std::collections::HashSet<u64> =
+                            scene.entities.iter().map(|e| e.id).collect();
+                        self.sistema_luces.podar(&vivas);
+                        let por_id: std::collections::HashMap<u64, &luces_objeto::LuzEscena> =
+                            luces.iter().map(|l| (l.id, l)).collect();
+                        let mundos = scene.compute_world_matrices();
+                        for ent in &scene.entities {
+                            if !ent.active || ent.mesh.is_none() {
+                                continue;
+                            }
+                            let centro = mundos
+                                .get(&ent.id)
+                                .map(|m| [m[12], m[13], m[14]])
+                                .unwrap_or(ent.transform.position);
+                            if !self.sistema_luces.necesita(ent.id, centro, frame) {
+                                continue;
+                            }
+                            // Radio aproximado desde la escala (las
+                            // primitivas son unitarias); la prueba de
+                            // rango lleva el margen del propio rango.
+                            let s = ent.transform.scale;
+                            let radio = 0.5
+                                * s[0].abs().max(s[1].abs()).max(s[2].abs());
+                            let resuelto = self.sistema_luces.resolver(
+                                ent.id,
+                                centro,
+                                radio,
+                                &luces,
+                            );
+                            if let Some((ranura, lista)) =
+                                resuelto.map(|a| (a.ranura, a.luces.clone()))
+                            {
+                                let ubo = luces_objeto::construir_ubo(&lista, &por_id, &cubos);
+                                renderer.set_object_lights(ranura, ubo);
+                            }
+                        }
+                    }
+                }
                 // Niebla de la escena (Fase 2): la publica la primera
                 // entidad con FogData; sin ella, niebla desactivada.
                 match self.scene_state.lock() {
@@ -7099,11 +7171,11 @@ fn clonar_lotes_portal<'x>(
 ) -> Vec<glass_renderer::MeshDrawItem<'x>> {
     lotes
         .iter()
-        .map(|(m, pc, tex, sh, r, ps)| {
+        .map(|(m, pc, tex, sh, r, ps, ranura)| {
             let mut pc2 = *pc;
             pc2.mvp = matmul(&vp, &pc.model);
             pc2.camera_pos = ojo;
-            (*m, pc2, *tex, sh.clone(), *r, *ps)
+            (*m, pc2, *tex, sh.clone(), *r, *ps, *ranura)
         })
         .collect()
 }
@@ -7116,11 +7188,11 @@ fn clonar_piel_portal<'x>(
 ) -> Vec<glass_renderer::SkinnedDrawItem<'x>> {
     lotes
         .iter()
-        .map(|(m, pc, tex, joints, r)| {
+        .map(|(m, pc, tex, joints, r, ranura)| {
             let mut pc2 = *pc;
             pc2.mvp = matmul(&vp, &pc.model);
             pc2.camera_pos = ojo;
-            (*m, pc2, *tex, *joints, *r)
+            (*m, pc2, *tex, *joints, *r, *ranura)
         })
         .collect()
 }
@@ -7134,8 +7206,8 @@ fn robar_superficie<'x>(
 ) -> Option<(&'x glass_renderer::GpuMesh, (u32, u32))> {
     lotes
         .iter()
-        .find(|(_, pc, _, _, _, _)| pc.model == w)
-        .map(|(m, _, _, _, r, _)| (*m, *r))
+        .find(|(_, pc, _, _, _, _, _)| pc.model == w)
+        .map(|(m, _, _, _, r, _, _)| (*m, *r))
 }
 
 /// Añade el dibujo de una superficie de portal a las listas
@@ -7257,6 +7329,81 @@ fn recolectar_luces_puntuales(
     ubo.count = n as u32;
 
     (ubo, luces_sombra)
+}
+
+/// Recolecta las luces Point/Spot de la escena como `LuzEscena` (para
+/// la asignación por objeto) y el mapa de cubos de sombra global:
+/// las 4 luces con `cast_shadow` más cercanas al ojo reciben los
+/// cubos 0..3, con la misma regla que `recolectar_luces_puntuales`.
+fn recolectar_luces_escena(
+    scene: &SceneState,
+    eye: [f32; 3],
+) -> (Vec<luces_objeto::LuzEscena>, std::collections::HashMap<u64, i32>) {
+    let mundos = scene.compute_world_matrices();
+    let mut luces: Vec<luces_objeto::LuzEscena> = Vec::new();
+    let mut por_distancia: Vec<(f32, u64, bool)> = Vec::new();
+    for ent in &scene.entities {
+        if !ent.active {
+            continue;
+        }
+        let Some(l) = ent.light.as_ref() else { continue };
+        if l.light_type != "Point" && l.light_type != "Spot" {
+            continue;
+        }
+        let m_opt = mundos.get(&ent.id);
+        let p = m_opt
+            .map(|m| [m[12], m[13], m[14]])
+            .unwrap_or(ent.transform.position);
+        let es_spot = l.light_type == "Spot";
+        let (dir, cos_outer, cos_inner) = if es_spot {
+            let dir = if let Some(m) = m_opt {
+                let z = [m[8], m[9], m[10]];
+                let fwd = [-z[0], -z[1], -z[2]];
+                let len = (fwd[0] * fwd[0] + fwd[1] * fwd[1] + fwd[2] * fwd[2])
+                    .sqrt()
+                    .max(0.0001);
+                [fwd[0] / len, fwd[1] / len, fwd[2] / len]
+            } else {
+                [0.0, 0.0, -1.0]
+            };
+            let (co, ci) = l.spot_cone_cos();
+            (dir, co, ci)
+        } else {
+            ([0.0, 0.0, -1.0], 1.0, 1.0)
+        };
+        let perfil = ent
+            .light_profile
+            .clone()
+            .unwrap_or_else(glass_core::LightProfileData::implicito);
+        luces.push(luces_objeto::LuzEscena {
+            id: ent.id,
+            pos: p,
+            dir,
+            color_int: [l.color[0], l.color[1], l.color[2], l.intensity.max(0.0)],
+            range: l.range.max(0.0),
+            cos_outer,
+            cos_inner,
+            es_spot,
+            cast_shadow: l.cast_shadow,
+            prioridad: perfil.prioridad,
+            grupo: perfil.grupo,
+            tope_grupo: perfil.tope_por_objeto,
+        });
+        let dx = p[0] - eye[0];
+        let dy = p[1] - eye[1];
+        let dz = p[2] - eye[2];
+        por_distancia.push((dx * dx + dy * dy + dz * dz, ent.id, l.cast_shadow));
+    }
+    por_distancia.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut cubos: std::collections::HashMap<u64, i32> = std::collections::HashMap::new();
+    let mut siguiente_cubo = 0i32;
+    for (_, id, con_sombra) in &por_distancia {
+        if *con_sombra && siguiente_cubo < 4 {
+            cubos.insert(*id, siguiente_cubo);
+            siguiente_cubo += 1;
+        }
+    }
+    (luces, cubos)
 }
 
 /// Registro de la muestra de frame de la Fase 0: alimenta el registro global
