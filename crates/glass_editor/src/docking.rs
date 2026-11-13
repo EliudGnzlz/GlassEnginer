@@ -49,6 +49,13 @@ pub input_axes_edit: Option<Vec<glass_scripting::input_axes::InputAxisDef>>,
     /// Diálogo "Save Scene As" (equivalente al de Unity).
     pub show_save_as_dialog: bool,
     pub save_as_name: String,
+    /// Historial de deshacer/rehacer por instantáneas (módulo `undo`).
+    pub undo_history: crate::undo::UndoHistory,
+    /// Nombre de la escena activa visto en el último frame: si
+    /// cambia, la app aplicó una carga y el historial se reinicia.
+    undo_escena: String,
+    /// True mientras Play/Pause está activo (historial en pausa).
+    undo_suspendido: bool,
 }
 
 impl Default for EditorDockingLayout {
@@ -76,6 +83,9 @@ impl EditorDockingLayout {
             input_axes_edit: None,
             show_save_as_dialog: false,
             save_as_name: String::new(),
+            undo_history: crate::undo::UndoHistory::new(),
+            undo_escena: String::new(),
+            undo_suspendido: false,
             project_settings: glass_core::ProjectSettings::load_or_default("project.json"),
             status_message: None,
         };
@@ -145,6 +155,36 @@ impl EditorDockingLayout {
                 self.dock_state = state;
             }
         }
+    }
+
+    /// Aplica un paso de deshacer (`redo = false`) o rehacer
+    /// sobre la escena compartida y ajusta la selección única:
+    /// se conserva si la entidad sigue existiendo tras el paso.
+    /// Devuelve si se aplicó algún paso.
+    fn apply_history(&mut self, scene_state: &Arc<Mutex<SceneState>>, redo: bool) -> bool {
+        let Ok(mut sc) = scene_state.lock() else {
+            return false;
+        };
+        let snap = if redo {
+            self.undo_history.redo(&sc.entities, sc.next_entity_id)
+        } else {
+            self.undo_history.undo(&sc.entities, sc.next_entity_id)
+        };
+        let Some(snap) = snap else {
+            return false;
+        };
+        sc.entities = snap.entities;
+        sc.next_entity_id = snap.next_entity_id;
+        if let Some(sel) = self.hierarchy.selected_entity {
+            if !sc.entities.iter().any(|e| e.id == sel) {
+                self.hierarchy.selected_entity = None;
+            }
+        }
+        self.status_message = Some((
+            if redo { "↪ Rehecho".into() } else { "↩ Deshecho".into() },
+            std::time::Instant::now(),
+        ));
+        true
     }
 
     /// Guarda la escena activa en la ruta que dicta el `SceneManager`.
@@ -324,6 +364,26 @@ impl EditorDockingLayout {
         if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
             self.save_scene_to(scene_state, scene_manager, None);
         }
+        // Deshacer / rehacer de la escena. Con un campo de texto
+        // enfocado, las teclas son del campo (que tiene su propio
+        // deshacer), no de la escena.
+        let texto_enfocado = ui.ctx().memory(|m| m.focused().is_some());
+        if !texto_enfocado {
+            let (deshacer, rehacer) = ui.input(|i| {
+                (
+                    i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::Z),
+                    i.modifiers.command
+                        && (i.key_pressed(egui::Key::Y)
+                            || (i.modifiers.shift && i.key_pressed(egui::Key::Z))),
+                )
+            });
+            if deshacer && self.apply_history(scene_state, false) {
+                selected_id = self.hierarchy.selected_entity;
+            }
+            if rehacer && self.apply_history(scene_state, true) {
+                selected_id = self.hierarchy.selected_entity;
+            }
+        }
 
         // --- 1. BARRA DE MENÚS PRINCIPAL ESTILO UNITY / UNREAL ---
         ui.horizontal(|ui| {
@@ -335,6 +395,7 @@ impl EditorDockingLayout {
                         sc.next_entity_id = 1;
                         sc.create_entity("Main Camera".into(), vec!["Transform".into(), "Camera".into()]);
                         sc.create_entity("Directional Light".into(), vec!["Transform".into(), "Light".into()]);
+                        self.undo_history.reset(&sc.entities, sc.next_entity_id);
                     }
                     self.status_message = Some(("Nueva escena inicializada".into(), std::time::Instant::now()));
                     ui.close();
@@ -386,6 +447,19 @@ impl EditorDockingLayout {
             });
 
             ui.menu_button("Edit", |ui| {
+                if ui.add_enabled(self.undo_history.can_undo(), egui::Button::new("↩ Undo\tCtrl+Z")).clicked() {
+                    if self.apply_history(scene_state, false) {
+                        selected_id = self.hierarchy.selected_entity;
+                    }
+                    ui.close();
+                }
+                if ui.add_enabled(self.undo_history.can_redo(), egui::Button::new("↪ Redo\tCtrl+Y")).clicked() {
+                    if self.apply_history(scene_state, true) {
+                        selected_id = self.hierarchy.selected_entity;
+                    }
+                    ui.close();
+                }
+                ui.separator();
                 let play_label = if self.viewport.play_state == PlayState::Playing { "⏹ Stop\tCtrl+P" } else { "▶ Play\tCtrl+P" };
                 if ui.button(play_label).clicked() {
                     self.viewport.play_state = match self.viewport.play_state {
@@ -885,6 +959,37 @@ impl EditorDockingLayout {
         if selected_id != self.hierarchy.selected_entity {
             self.hierarchy.selected_entity = selected_id;
             ui.ctx().request_repaint();
+        }
+
+        // --- VIGÍA DE DESHACER (módulo `undo`) ---
+        // Si cambió el nombre de la escena activa, la app aplicó
+        // una carga (menús o panel Project): historial nuevo con
+        // la escena cargada como base.
+        let nombre_escena = scene_manager
+            .lock()
+            .map(|m| m.active_scene_name().to_string())
+            .unwrap_or_default();
+        if nombre_escena != self.undo_escena {
+            self.undo_escena = nombre_escena;
+            if let Ok(sc) = scene_state.lock() {
+                self.undo_history.reset(&sc.entities, sc.next_entity_id);
+            }
+        }
+        if self.viewport.play_state != PlayState::Edit {
+            // En Play el runtime muta la escena: el historial se
+            // limpia al entrar y queda en pausa hasta volver.
+            if !self.undo_suspendido {
+                self.undo_history = crate::undo::UndoHistory::new();
+                self.undo_suspendido = true;
+            }
+        } else {
+            self.undo_suspendido = false;
+            let editando = ui.ctx().memory(|m| m.focused().is_some())
+                || ui.input(|i| i.pointer.any_down());
+            if let Ok(sc) = scene_state.lock() {
+                self.undo_history
+                    .observe(&sc.entities, sc.next_entity_id, editando);
+            }
         }
 
         // --- DIÁLOGOS MODALES ESTILO UNITY (Project Settings y Build Settings) ---
