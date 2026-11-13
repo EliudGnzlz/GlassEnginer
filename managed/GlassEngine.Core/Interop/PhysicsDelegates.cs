@@ -158,3 +158,23 @@ public delegate int OverlapSphereDelegate(
 // `glass_physics_body_handle`. Devuelve 0 si no hay cuerpo.
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate ulong GetBodyHandleDelegate(ulong entityId);
+
+// Crea un personaje kinemático: espejo de `glass_character_create`.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate bool CharacterCreateDelegate(ulong entityId, float posX, float posY, float posZ, float radius, float height, float skin, float stepOffset, float slopeLimitDeg, float snap);
+
+// Mueve un personaje kinemático: espejo de `glass_character_move`.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate bool CharacterMoveDelegate(ulong entityId, float dx, float dy, float dz, float dt, out float appliedX, out float appliedY, out float appliedZ, out int grounded, out int sliding);
+
+// Teletransporta un personaje kinemático: espejo de `glass_character_teleport`.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate bool CharacterTeleportDelegate(ulong entityId, float posX, float posY, float posZ);
+
+// Destruye un personaje kinemático: espejo de `glass_character_destroy`.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate bool CharacterDestroyDelegate(ulong entityId);
+
+// Consulta un personaje kinemático: espejo de `glass_character_info`.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate bool CharacterInfoDelegate(ulong entityId, out float posX, out float posY, out float posZ, out int grounded, out int sliding);

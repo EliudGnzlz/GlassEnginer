@@ -56,6 +56,11 @@ public static class RuntimeBridge
     private static CastSphereDelegate? _castSphere;
     private static OverlapSphereDelegate? _overlapSphere;
     private static GetBodyHandleDelegate? _getBodyHandle;
+    private static CharacterCreateDelegate? _characterCreate;
+    private static CharacterMoveDelegate? _characterMove;
+    private static CharacterTeleportDelegate? _characterTeleport;
+    private static CharacterDestroyDelegate? _characterDestroy;
+    private static CharacterInfoDelegate? _characterInfo;
     private static AttachCapsuleColliderDelegate? _attachCapsuleCollider;
     private static AttachCylinderColliderDelegate? _attachCylinderCollider;
 
@@ -262,6 +267,14 @@ public static class RuntimeBridge
         public IntPtr OverlapSphere;
         // Decimosexto, AL FINAL (Fase 9): entidad → handle de cuerpo.
         public IntPtr GetBodyHandle;
+
+        // Decimoséptimo a vigesimoprimero, AL FINAL (bloque
+        // CharacterController): personaje kinemático de Rapier.
+        public IntPtr CharacterCreate;
+        public IntPtr CharacterMove;
+        public IntPtr CharacterTeleport;
+        public IntPtr CharacterDestroy;
+        public IntPtr CharacterInfo;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitPhysicsBridge")]
@@ -300,6 +313,21 @@ public static class RuntimeBridge
             _overlapSphere = Marshal.GetDelegateForFunctionPointer<OverlapSphereDelegate>(callbacks->OverlapSphere);
         if (callbacks->GetBodyHandle != IntPtr.Zero)
             _getBodyHandle = Marshal.GetDelegateForFunctionPointer<GetBodyHandleDelegate>(callbacks->GetBodyHandle);
+
+        if (callbacks->CharacterCreate != IntPtr.Zero)
+            _characterCreate = Marshal.GetDelegateForFunctionPointer<CharacterCreateDelegate>(callbacks->CharacterCreate);
+
+        if (callbacks->CharacterMove != IntPtr.Zero)
+            _characterMove = Marshal.GetDelegateForFunctionPointer<CharacterMoveDelegate>(callbacks->CharacterMove);
+
+        if (callbacks->CharacterTeleport != IntPtr.Zero)
+            _characterTeleport = Marshal.GetDelegateForFunctionPointer<CharacterTeleportDelegate>(callbacks->CharacterTeleport);
+
+        if (callbacks->CharacterDestroy != IntPtr.Zero)
+            _characterDestroy = Marshal.GetDelegateForFunctionPointer<CharacterDestroyDelegate>(callbacks->CharacterDestroy);
+
+        if (callbacks->CharacterInfo != IntPtr.Zero)
+            _characterInfo = Marshal.GetDelegateForFunctionPointer<CharacterInfoDelegate>(callbacks->CharacterInfo);
 
         Log(2, "GlassEngine.Core PhysicsBridge inicializado exitosamente desde Rust.");
     }
@@ -1327,6 +1355,64 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
     {
         if (_getBodyHandle is null) return 0;
         return _getBodyHandle(entityId);
+    }
+
+    public static bool CharacterCreate(ulong entityId, Vector3 position, float radius, float height, float skin, float stepOffset, float slopeLimitDeg, float snap)
+    {
+        if (_characterCreate is null) return false;
+        return _characterCreate(entityId, position.X, position.Y, position.Z, radius, height, skin, stepOffset, slopeLimitDeg, snap);
+    }
+
+    public static bool CharacterMove(ulong entityId, Vector3 motion, float dt, out Vector3 applied, out bool grounded, out bool sliding)
+    {
+        if (_characterMove is null)
+        {
+            applied = Vector3.Zero;
+            grounded = false;
+            sliding = false;
+            return false;
+        }
+
+        bool ok = _characterMove(entityId, motion.X, motion.Y, motion.Z, dt,
+            out float appliedX, out float appliedY, out float appliedZ,
+            out int groundedI32, out int slidingI32);
+
+        applied = new Vector3(appliedX, appliedY, appliedZ);
+        grounded = groundedI32 != 0;
+        sliding = slidingI32 != 0;
+        return ok;
+    }
+
+    public static bool CharacterTeleport(ulong entityId, Vector3 position)
+    {
+        if (_characterTeleport is null) return false;
+        return _characterTeleport(entityId, position.X, position.Y, position.Z);
+    }
+
+    public static bool CharacterDestroy(ulong entityId)
+    {
+        if (_characterDestroy is null) return false;
+        return _characterDestroy(entityId);
+    }
+
+    public static bool CharacterInfo(ulong entityId, out Vector3 position, out bool grounded, out bool sliding)
+    {
+        if (_characterInfo is null)
+        {
+            position = Vector3.Zero;
+            grounded = false;
+            sliding = false;
+            return false;
+        }
+
+        bool ok = _characterInfo(entityId,
+            out float posX, out float posY, out float posZ,
+            out int groundedI32, out int slidingI32);
+
+        position = new Vector3(posX, posY, posZ);
+        grounded = groundedI32 != 0;
+        sliding = slidingI32 != 0;
+        return ok;
     }
 
     /// <summary>

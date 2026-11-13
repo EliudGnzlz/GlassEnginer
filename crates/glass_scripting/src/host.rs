@@ -75,6 +75,14 @@ struct PhysicsBridgeCallbacks {
     overlap_sphere: *const c_void,
     // Añadido AL FINAL (Fase 9): resolver entidad → handle de cuerpo.
     get_body_handle: *const c_void,
+    // Añadidos AL FINAL (bloque CharacterController): personaje
+    // kinemático de Rapier — crear, mover, teleportar, destruir y
+    // consultar, con la misma convención de siempre.
+    character_create: *const c_void,
+    character_move: *const c_void,
+    character_teleport: *const c_void,
+    character_destroy: *const c_void,
+    character_info: *const c_void,
 }
 
 type InitPhysicsBridgeFn = unsafe extern "system" fn(*const PhysicsBridgeCallbacks);
@@ -387,6 +395,11 @@ impl ScriptHost {
                 cast_sphere: glass_physics::glass_physics_cast_sphere as *const c_void,
                 overlap_sphere: glass_physics::glass_physics_overlap_sphere as *const c_void,
                 get_body_handle: glass_physics::glass_physics_body_handle as *const c_void,
+                character_create: glass_physics::glass_character_create as *const c_void,
+                character_move: glass_physics::glass_character_move as *const c_void,
+                character_teleport: glass_physics::glass_character_teleport as *const c_void,
+                character_destroy: glass_physics::glass_character_destroy as *const c_void,
+                character_info: glass_physics::glass_character_info as *const c_void,
             };
             unsafe {
                 init_physics_fn(&callbacks as *const PhysicsBridgeCallbacks);

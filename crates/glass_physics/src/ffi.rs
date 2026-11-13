@@ -506,3 +506,118 @@ pub unsafe extern "C" fn glass_physics_overlap_sphere(
     }
     0
 }
+
+// ── CharacterController (bloque CC): personajes kinemáticos ─────────
+// Espejo de los delegates de PhysicsDelegates.cs (Character*Delegate).
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+#[no_mangle]
+pub unsafe extern "C" fn glass_character_create(
+    entity_id: u64,
+    pos_x: f32, pos_y: f32, pos_z: f32,
+    radius: f32, height: f32, skin: f32,
+    step_offset: f32, slope_limit_deg: f32, snap: f32,
+) -> i32 {
+    if !all_finite(&[pos_x, pos_y, pos_z, radius, height, skin, step_offset, slope_limit_deg, snap]) {
+        return 0;
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            let cfg = crate::character::CharacterConfig {
+                radius, height, skin, step_offset, slope_limit_deg, snap,
+            };
+            return world.create_character(entity_id, [pos_x, pos_y, pos_z], cfg) as i32;
+        }
+    }
+    0
+}
+
+/// # Safety
+/// `out_applied_x/y/z`, `out_grounded` y `out_sliding` deben ser null o
+/// apuntar a memoria válida y escribible durante la llamada (la función
+/// comprueba el null antes de escribir).
+#[no_mangle]
+pub unsafe extern "C" fn glass_character_move(
+    entity_id: u64,
+    dx: f32, dy: f32, dz: f32, dt: f32,
+    out_ax: *mut f32, out_ay: *mut f32, out_az: *mut f32,
+    out_grounded: *mut i32, out_sliding: *mut i32,
+) -> i32 {
+    if !all_finite(&[dx, dy, dz, dt]) {
+        return 0;
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            if let Some((applied, grounded, sliding)) =
+                world.move_character(entity_id, [dx, dy, dz], dt)
+            {
+                unsafe {
+                    if !out_ax.is_null() { *out_ax = applied[0]; }
+                    if !out_ay.is_null() { *out_ay = applied[1]; }
+                    if !out_az.is_null() { *out_az = applied[2]; }
+                    if !out_grounded.is_null() { *out_grounded = grounded as i32; }
+                    if !out_sliding.is_null() { *out_sliding = sliding as i32; }
+                }
+                return 1;
+            }
+        }
+    }
+    0
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+#[no_mangle]
+pub unsafe extern "C" fn glass_character_teleport(
+    entity_id: u64, pos_x: f32, pos_y: f32, pos_z: f32,
+) -> i32 {
+    if !all_finite(&[pos_x, pos_y, pos_z]) {
+        return 0;
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.teleport_character(entity_id, [pos_x, pos_y, pos_z]) as i32;
+        }
+    }
+    0
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+#[no_mangle]
+pub unsafe extern "C" fn glass_character_destroy(entity_id: u64) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.destroy_character(entity_id) as i32;
+        }
+    }
+    0
+}
+
+/// # Safety
+/// `out_pos_x/y/z`, `out_grounded` y `out_sliding` deben ser null o
+/// apuntar a memoria válida y escribible durante la llamada (la función
+/// comprueba el null antes de escribir).
+#[no_mangle]
+pub unsafe extern "C" fn glass_character_info(
+    entity_id: u64,
+    out_x: *mut f32, out_y: *mut f32, out_z: *mut f32,
+    out_grounded: *mut i32, out_sliding: *mut i32,
+) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            if let Some((pos, grounded, sliding)) = world.character_info(entity_id) {
+                unsafe {
+                    if !out_x.is_null() { *out_x = pos[0]; }
+                    if !out_y.is_null() { *out_y = pos[1]; }
+                    if !out_z.is_null() { *out_z = pos[2]; }
+                    if !out_grounded.is_null() { *out_grounded = grounded as i32; }
+                    if !out_sliding.is_null() { *out_sliding = sliding as i32; }
+                }
+                return 1;
+            }
+        }
+    }
+    0
+}

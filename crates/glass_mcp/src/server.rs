@@ -634,6 +634,17 @@ impl McpServer {
                             }
                         },
                         {
+                            "name": "glass_character_state",
+                            "description": "Estado del CharacterController (bloque CC) de una entidad: si existe, la posición del centro de su cápsula y si está apoyado (grounded) o deslizándose por una pendiente (sliding), del mundo físico vivo.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": {"type": "integer", "description": "Id de la entidad con CharacterController."}
+                                },
+                                "required": ["entity_id"]
+                            }
+                        },
+                        {
                             "name": "glass_list_contact_events",
                             "description": "Pares de contacto activos y últimos eventos Enter/Exit del mundo físico vivo (Fase 1), con el contador de substeps.",
                             "inputSchema": {
@@ -1926,6 +1937,26 @@ impl McpServer {
                     }),
                 )
             }
+            "glass_character_state" => {
+                let entity_id = match args.get("entity_id").and_then(|n| n.as_u64()) {
+                    Some(v) => v,
+                    None => return McpResponse::invalid_params(id, "Field 'entity_id' is required"),
+                };
+                let info = glass_physics::get_global_physics_world().and_then(|sys| {
+                    sys.lock().ok().and_then(|w| w.character_info(entity_id))
+                });
+                let datos = match info {
+                    Some((pos, grounded, sliding)) => json!({
+                        "entity_id": entity_id, "exists": true,
+                        "position": [pos[0], pos[1], pos[2]],
+                        "grounded": grounded, "sliding": sliding
+                    }),
+                    None => json!({"entity_id": entity_id, "exists": false}),
+                };
+                let texto = serde_json::to_string_pretty(&datos).unwrap_or_default();
+                McpResponse::success(id, json!({"content": [{"type": "text", "text": texto}]}))
+            }
+
             "glass_physics_cast" => {
                 let v3 = |v: &serde_json::Value| -> Option<[f32; 3]> {
                     let a = v.as_array()?;

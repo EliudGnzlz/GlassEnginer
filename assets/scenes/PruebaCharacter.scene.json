@@ -1,0 +1,1002 @@
+[
+ {
+  "id": 1,
+  "name": "Camara",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "transform": {
+   "position": [
+    11.0,
+    7.5,
+    17.0
+   ],
+   "rotation": [
+    -16.0,
+    30.0,
+    0.0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ]
+  },
+  "components": [
+   "Transform",
+   "Camera"
+  ],
+  "mesh": null,
+  "camera": {
+   "fov": 60,
+   "near_clip": 0.1,
+   "far_clip": 300,
+   "is_main": true
+  },
+  "light": null,
+  "physics": null,
+  "script": null,
+  "script_data": null,
+  "audio": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "portal": null,
+  "animator": null,
+  "fog": {
+   "color": [
+    0.62,
+    0.7,
+    0.82
+   ],
+   "near": 40.0,
+   "far": 160.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.98,
+    0.92
+   ],
+   "intensity": 0.45,
+   "light_type": "Directional",
+   "range": 10.0,
+   "cast_shadow": true
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": "GlassEngine.Core.Scripts.SolDiaNoche",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.SolDiaNoche"
+  },
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 2,
+  "name": "Sol",
+  "components": [
+   "Transform",
+   "Light",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    3.0,
+    0.0
+   ],
+   "rotation": [
+    -50,
+    30,
+    0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.45,
+    0.48,
+    0.52
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    30.0,
+    0.5,
+    35.0
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 3,
+  "name": "Suelo",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -0.5,
+    -2.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    60.0,
+    1.0,
+    70.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.75,
+    0.35,
+    0.3
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    4.0,
+    1.5,
+    0.25
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 4,
+  "name": "Pared",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    1.5,
+    1.25
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    8.0,
+    3.0,
+    0.5
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.35,
+    0.55,
+    0.75
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.45,
+    0.175,
+    1.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 5,
+  "name": "Peldano1",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    6.45,
+    0.175,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.9,
+    0.35,
+    3.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.35,
+    0.55,
+    0.75
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.45,
+    0.35,
+    1.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 6,
+  "name": "Peldano2",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    7.3500000000000005,
+    0.35,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.9,
+    0.7,
+    3.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.35,
+    0.55,
+    0.75
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.45,
+    0.5249999999999999,
+    1.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 7,
+  "name": "Peldano3",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    8.25,
+    0.5249999999999999,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.9,
+    1.0499999999999998,
+    3.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.35,
+    0.55,
+    0.75
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.45,
+    0.7,
+    1.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 8,
+  "name": "Peldano4",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    9.15,
+    0.7,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.9,
+    1.4,
+    3.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.35,
+    0.55,
+    0.75
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.45,
+    0.875,
+    1.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 9,
+  "name": "Peldano5",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    10.05,
+    0.875,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.9,
+    1.75,
+    3.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.35,
+    0.55,
+    0.75
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.45,
+    1.0499999999999998,
+    1.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 10,
+  "name": "Peldano6",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    10.95,
+    1.0499999999999998,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.9,
+    2.0999999999999996,
+    3.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.35,
+    0.55,
+    0.75
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.45,
+    1.2249999999999999,
+    1.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 11,
+  "name": "Peldano7",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    11.850000000000001,
+    1.2249999999999999,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.9,
+    2.4499999999999997,
+    3.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.35,
+    0.55,
+    0.75
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.45,
+    1.4,
+    1.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 12,
+  "name": "Peldano8",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    12.75,
+    1.4,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.9,
+    2.8,
+    3.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.35,
+    0.55,
+    0.75
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.5,
+    1.4,
+    1.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 13,
+  "name": "Plataforma",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    14.7,
+    1.4,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    3.0,
+    2.8,
+    3.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.4,
+    0.7,
+    0.45
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    2.0,
+    0.15,
+    3.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 14,
+  "name": "Rampa",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    1.35,
+    -13.5
+   ],
+   "rotation": [
+    30.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    4.0,
+    0.3,
+    7.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    1.0,
+    0.55,
+    0.15
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": "GlassEngine.Core.Scripts.CharacterTest",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.CharacterTest"
+  },
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 15,
+  "name": "PersonajeCC",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.9,
+    6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.7,
+    1.8,
+    0.7
+   ]
+  }
+ }
+]

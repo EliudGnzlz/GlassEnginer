@@ -21,6 +21,7 @@ pub struct PhysicsWorld {
     pub rigid_body_set: RigidBodySet,
     pub collider_set: ColliderSet,
     pub query_pipeline: QueryPipeline,
+    pub characters: HashMap<u64, crate::character::CharacterState>,
 
     /// Handler de eventos de colisión de Rapier: vuelca los CollisionEvent
     /// de cada substep en el canal que drena `step()`.
@@ -134,6 +135,7 @@ impl PhysicsWorld {
             rigid_body_set: RigidBodySet::new(),
             collider_set: ColliderSet::new(),
             query_pipeline: QueryPipeline::new(),
+            characters: HashMap::new(),
             event_handler: ChannelEventCollector::new(event_sender, force_sender),
             event_receiver,
             force_event_receiver,
