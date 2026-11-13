@@ -204,12 +204,9 @@ impl HierarchyPanel {
         let mouse_pos = ui.input(|i| i.pointer.hover_pos());
         let is_pointer_released = ui.input(|i| i.pointer.any_released());
 
-        // Atajo teclado: tecla Delete borra el objeto seleccionado
-        if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
-            if let Some(sel_id) = self.selected_entity {
-                pending_action = Some(HierarchyAction::Delete(sel_id));
-            }
-        }
+        // La tecla Supr ya no se comprueba aquí: es un comando
+        // global del marco del editor (docking), para que borre
+        // la selección única sea cual sea el panel con el foco.
 
         // Barra superior estilo Unity
         ui.horizontal(|ui| {

@@ -344,6 +344,7 @@ impl EditorDockingLayout {
         }
 
         let mut selected_id = self.hierarchy.selected_entity;
+        let seleccion_inicial = selected_id;
 
         // --- 0. ATAJOS DE TECLADO GLOBALES ESTILO UNITY ---
         if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::B)) {
@@ -382,6 +383,27 @@ impl EditorDockingLayout {
             }
             if rehacer && self.apply_history(scene_state, true) {
                 selected_id = self.hierarchy.selected_entity;
+            }
+            // Supr: borra la selección única desde cualquier
+            // parte del editor (antes solo lo comprobaba el
+            // panel Hierarchy, y solo con su selección local).
+            if self.viewport.play_state == PlayState::Edit
+                && ui.input(|i| i.key_pressed(egui::Key::Delete))
+            {
+                if let Some(id) = selected_id {
+                    let borrado = scene_state
+                        .lock()
+                        .map(|mut sc| sc.delete_entity(id))
+                        .unwrap_or(false);
+                    if borrado {
+                        self.hierarchy.selected_entity = None;
+                        selected_id = None;
+                        self.status_message = Some((
+                            "🗑 Objeto eliminado".into(),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                }
             }
         }
 
@@ -955,9 +977,21 @@ impl EditorDockingLayout {
             self.status_message = Some((mensaje, std::time::Instant::now()));
         }
 
-        // Sincronizar selección de entidad de vuelta a la jerarquía
-        if selected_id != self.hierarchy.selected_entity {
-            self.hierarchy.selected_entity = selected_id;
+        // Sincronizar la selección ÚNICA del editor: vale el
+        // cambio hecho este frame, venga del panel Hierarchy
+        // (que escribe en su propio campo) o de la vista 3D /
+        // el Inspector (que escriben en `selected_id`). Antes
+        // esto sobrescribía siempre con `selected_id` y la
+        // selección hecha clicando en el Hierarchy no persistía.
+        if self.hierarchy.selected_entity != selected_id {
+            if self.hierarchy.selected_entity == seleccion_inicial {
+                // La vista 3D / el Inspector cambiaron la
+                // selección: el panel adopta el valor compartido.
+                // (Si la cambió el panel, su campo ya vale lo
+                // correcto y `selected_id` se reinicializa de él
+                // al empezar el siguiente frame.)
+                self.hierarchy.selected_entity = selected_id;
+            }
             ui.ctx().request_repaint();
         }
 
