@@ -57,11 +57,48 @@ StateMachineBehaviours, OverrideController, Playables,
 retargeting/Avatar, Blend Shapes (el importador los salta a
 propósito) y edición de curvas/keyframes.
 
-## 4. Eventos de animación — hueco SEÑALADO, sin decisión
+## 4. Eventos de animación — HECHO el 2026-11-13
 
-Los eventos de animación quedan registrados como el **único hueco
-barato candidato a colarse antes de la beta**. Están señalados, sin
-decisión de implementarlos todavía: requieren orden expresa.
+Los eventos de animación eran el **único hueco barato candidato a
+colarse antes de la beta**. D3m3tr10 ordenó el 2026-11-13 empezar
+por ellos dentro del bloque de animación diferida, y están
+**integrados y verificados** (registro:
+`REGISTRO_EVENTOS_ANIMACION.md`; detalle en `docs/ANIMACION.md`):
+eventos en estados y en hijos de blend tree, disparo puro en
+`advance` (wrap, clamp, dt gigante = 1 ocurrencia), entrega a C#
+por `DispatchAnimEvent` → `OnAnimationEvent` y telemetría MCP
+(`recent_events` en `glass_animator_state`). Suite 419/419 y
+prueba física con dos X Bot (blend y estado simple) disparando
+pasos por ciclo.
+
+### 4b. Evaluación del resto de la lista diferida (2026-11-13)
+
+Evaluado contra el código tras integrar los eventos. Propuesta a
+la espera de su decisión:
+
+- **StateMachineBehaviours (OnStateEnter/OnStateExit en C#): el
+  único otro candidato barato.** `advance` ya detecta transiciones
+  y fundidos; la entrega espeja `DispatchAnimEvent` (un export más
+  y dos virtuales). Se propone como compañero natural de los
+  eventos **si él lo quiere**; sin su sí, no se toca.
+- **Blend trees 2D/Direct**: coste medio (pesos por triangulación
+  2D + datos). Sin demanda de gameplay concreta todavía:
+  **Post-beta**.
+- **Root motion**: coste medio-alto (delta del hueso raíz al
+  muestrear aplicado a transform/física, opt-in por estado):
+  **Post-beta**.
+- **Capas + AvatarMask**: coste alto (mezcla por hueso y capa en
+  el skinning): **Post-1.0**.
+- **IK**: coste alto: **Post-1.0**.
+- **Retargeting/Avatar**: coste alto: **Post-1.0**.
+- **Blend Shapes**: coste medio-alto (morph targets en el pipeline
+  de skinning; el importador hoy los salta a propósito):
+  **Post-1.0**.
+- **Edición de curvas/keyframes en el editor**: coste alto
+  (subsistema de editor): **Post-1.0**.
+- **Vista de huesos en el editor**: coste medio; sigue siendo el
+  requisito previo del auto-rigging y un bloque propio post-beta.
+- **Auto-rigging**: sigue **el último de la cola** (ver §5).
 
 ## 5. Requisitos del bloque de auto-rigging (el último de la cola)
 

@@ -1661,6 +1661,44 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
     /// excepciones del callback se capturan y se registran: un script roto
     /// no debe tumbar el motor.
     /// </summary>
+    /// <summary>
+    /// Punto de entrada nativo de los eventos de animación: el motor lo
+    /// llama cuando el Animator de una entidad cruza un evento declarado
+    /// en su controlador. Busca el behaviour de la entidad y le invoca
+    /// OnAnimationEvent. Sin instancia no hace nada. Las excepciones se
+    /// capturan y se registran: un script roto no debe tumbar el motor.
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "DispatchAnimEvent")]
+    public static void DispatchAnimEvent(ulong entityId, IntPtr namePtr, float value, int hasValue, IntPtr textPtr)
+    {
+        GlassBehaviour? instance = null;
+        lock (_sync)
+        {
+            foreach (var inst in _instances.Values)
+            {
+                if (inst.EntityId == entityId)
+                {
+                    instance = inst;
+                    break;
+                }
+            }
+        }
+        if (instance is null)
+        {
+            return;
+        }
+        string name = namePtr == IntPtr.Zero ? string.Empty : Marshal.PtrToStringUTF8(namePtr) ?? string.Empty;
+        string? text = textPtr == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(textPtr);
+        try
+        {
+            instance.OnAnimationEvent(name, hasValue != 0 ? value : null, text);
+        }
+        catch (Exception ex)
+        {
+            Log(4, $"[{instance.GetType().Name}] Excepción en OnAnimationEvent: {ex}");
+        }
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "DispatchContactEvent")]
     public static void DispatchContactEvent(ulong entityId, ulong otherEntityId, int kind, int isTrigger, IntPtr otherNamePtr)
     {

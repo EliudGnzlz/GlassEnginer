@@ -218,6 +218,10 @@ type InvokeButtonClickFn = unsafe extern "system" fn(u64, *const c_char) -> i32;
 type TickAllScriptsFn = unsafe extern "system" fn(f32);
 /// Export managed de la Fase 1: (entidad, otra entidad, kind, es_trigger).
 type DispatchContactEventFn = unsafe extern "system" fn(u64, u64, i32, i32, *const std::ffi::c_char);
+
+/// Evento de animación hacia un script C#: (entidad, nombre del evento,
+/// valor numérico, hay_valor, texto opcional).
+type DispatchAnimEventFn = unsafe extern "system" fn(u64, *const std::ffi::c_char, f32, i32, *const std::ffi::c_char);
 /// Init dedicado del lote de transforms (patrón de la casa: Init
 /// nuevo y separado; nunca se toca un Init existente). Recibe los
 /// dos punteros que C# usará para pedir y devolver el lote completo
@@ -235,6 +239,7 @@ pub struct ScriptHost {
     /// frame en lugar de una por instancia activa.
     tick_all_fn: Option<TickAllScriptsFn>,
     contact_event_fn: Option<DispatchContactEventFn>,
+    anim_event_fn: Option<DispatchAnimEventFn>,
     active_instances: HashMap<i32, (u64, String)>, // handle -> (entity_id, script_name)
 }
 
@@ -249,6 +254,7 @@ impl ScriptHost {
             invoke_click_fn: None,
             tick_all_fn: None,
             contact_event_fn: None,
+            anim_event_fn: None,
             active_instances: HashMap::new(),
         }
     }
@@ -791,6 +797,22 @@ impl ScriptHost {
             );
         }
         self.contact_event_fn = contact_event_fn.map(|f| *f);
+
+        // Eventos de animación: misma resolución tolerante — si el
+        // ensamblado no los exporta, el motor arranca igual y los
+        // eventos simplemente no llegan a los scripts.
+        let anim_event_fn = loader
+            .get_function_with_unmanaged_callers_only::<DispatchAnimEventFn>(
+                bridge_type,
+                pdcstr!("DispatchAnimEvent"),
+            )
+            .ok();
+        if anim_event_fn.is_none() {
+            log::warn!(
+                "El ensamblado managed no exporta DispatchAnimEvent: los eventos de animación no llegarán a los scripts."
+            );
+        }
+        self.anim_event_fn = anim_event_fn.map(|f| *f);
         self.tick_all_fn = tick_all_fn.map(|f| *f);
         self.invoke_click_fn = invoke_click_fn.map(|f| *f);
         self.create_instance_fn = Some(*create_fn);
@@ -871,6 +893,41 @@ impl ScriptHost {
             Some(f) => {
                 let name_c = std::ffi::CString::new(other_name).unwrap_or_default();
                 unsafe { f(entity_id, other_entity_id, kind, is_trigger as i32, name_c.as_ptr()) };
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Entrega un evento de animación a los scripts de UNA entidad.
+    /// Devuelve false si el ensamblado no exporta DispatchAnimEvent.
+    pub fn dispatch_anim_event(
+        &self,
+        entity_id: u64,
+        name: &str,
+        value: Option<f32>,
+        text: Option<&str>,
+    ) -> bool {
+        match self.anim_event_fn {
+            Some(f) => {
+                let name_c = std::ffi::CString::new(name).unwrap_or_default();
+                let text_c = text.map(|t| std::ffi::CString::new(t).unwrap_or_default());
+                let (v, has) = match value {
+                    Some(v) => (v, 1),
+                    None => (0.0, 0),
+                };
+                unsafe {
+                    f(
+                        entity_id,
+                        name_c.as_ptr(),
+                        v,
+                        has,
+                        text_c
+                            .as_ref()
+                            .map(|c| c.as_ptr())
+                            .unwrap_or(std::ptr::null()),
+                    )
+                };
                 true
             }
             None => false,

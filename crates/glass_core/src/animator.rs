@@ -51,6 +51,9 @@ pub struct StateDef {
     /// parámetro.
     #[serde(default)]
     pub blend: Option<BlendTree1D>,
+    /// Eventos de animación declarados en este estado.
+    #[serde(default)]
+    pub events: Vec<AnimEvent>,
 }
 
 /// Un hijo de un blend tree 1D: un clip que entra en la mezcla al
@@ -63,6 +66,9 @@ pub struct BlendChild {
     pub threshold: f32,
     #[serde(default = "default_speed")]
     pub speed: f32,
+    /// Eventos de animación declarados en este hijo del blend tree.
+    #[serde(default)]
+    pub events: Vec<AnimEvent>,
 }
 
 /// Blend tree 1D (Fase 4): mezcla clips según un parámetro float,
@@ -150,6 +156,47 @@ fn state_reference_clip(
     }
 }
 
+/// Recolecta los eventos de animación disparados al avanzar el tiempo del
+/// clip de `prev` a `next` (segundos), sobre un clip de duración `dur`.
+fn recolectar_eventos(
+    defs: &[AnimEvent],
+    state: &str,
+    clip: &str,
+    prev: f32,
+    next: f32,
+    dur: f32,
+    bucle: bool,
+    out: &mut Vec<FiredAnimEvent>,
+) {
+    if dur <= 0.0 || defs.is_empty() || next <= prev {
+        return;
+    }
+    for def in defs {
+        let at = def.time.clamp(0.0, 1.0) * dur;
+        let dispara = if bucle {
+            // En bucle: subir el instante del evento hasta el primer ciclo
+            // posterior a `prev`; como mucho un disparo por evento.
+            let mut t = at;
+            if t <= prev {
+                t += (((prev - t) / dur).floor() + 1.0) * dur;
+            }
+            t <= next
+        } else {
+            prev < at && at <= next
+        };
+        if dispara {
+            out.push(FiredAnimEvent {
+                state: state.to_string(),
+                clip: clip.to_string(),
+                name: def.name.clone(),
+                value: def.value,
+                text: def.text.clone(),
+                time: at,
+            });
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConditionOp {
@@ -226,6 +273,39 @@ pub struct ClipSample {
     pub weight: f32,
 }
 
+/// Evento de animación declarado en un estado o en un hijo de blend tree.
+/// `time` está normalizado en 0..1 sobre la duración del clip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnimEvent {
+    /// Nombre del evento.
+    pub name: String,
+    /// Instante normalizado (0..1) dentro de la duración del clip.
+    pub time: f32,
+    /// Valor numérico opcional asociado al evento.
+    #[serde(default)]
+    pub value: Option<f32>,
+    /// Texto opcional asociado al evento.
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+/// Evento de animación ya disparado en un frame concreto.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FiredAnimEvent {
+    /// Estado que lo disparó.
+    pub state: String,
+    /// Nombre del clip dentro del .glb del modelo.
+    pub clip: String,
+    /// Nombre del evento.
+    pub name: String,
+    /// Valor numérico opcional asociado al evento.
+    pub value: Option<f32>,
+    /// Texto opcional asociado al evento.
+    pub text: Option<String>,
+    /// Instante absoluto (segundos) dentro del clip.
+    pub time: f32,
+}
+
 /// Qué hay que muestrear este frame: la lista de clips con sus
 /// tiempos y pesos. Un estado normal aporta un sample a peso 1; un
 /// estado con blend tree aporta sus hijos; durante un fundido van
@@ -233,6 +313,8 @@ pub struct ClipSample {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AdvanceOutput {
     pub samples: Vec<ClipSample>,
+    /// Eventos de animación disparados en este frame.
+    pub fired_events: Vec<FiredAnimEvent>,
 }
 
 // ---------------------------------------------------------------------------
@@ -360,6 +442,10 @@ impl AnimatorData {
             self.params.entry(p.name.clone()).or_insert(init);
         }
 
+        // Acumulador de eventos de animación disparados en este frame.
+        let mut eventos: Vec<FiredAnimEvent> = Vec::new();
+        let prev_state_time = self.state_time;
+        let prev_blend_times = self.blend_times.clone();
         // 1) Avanzar el tiempo del estado actual (× speed; clamp si no-loop).
         let (cur_speed, cur_loop) = controller
             .state(&self.current_state)
@@ -397,9 +483,58 @@ impl AnimatorData {
         // Relojes de los hijos del blend tree del estado actual.
         Self::advance_blend_clocks(controller, &self.current_state.clone(), &mut self.blend_times, dt);
 
+        // Evaluar los eventos del estado actual.
+        if let Some(st) = controller.state(&self.current_state).cloned() {
+            match &st.blend {
+                None => {
+                    if let Some(d) = clip_duration(&st.clip) {
+                        let next_eval = if cur_loop {
+                            prev_state_time + dt * cur_speed
+                        } else {
+                            (prev_state_time + dt * cur_speed).min(d)
+                        };
+                        recolectar_eventos(
+                            &st.events,
+                            &st.name,
+                            &st.clip,
+                            prev_state_time,
+                            next_eval,
+                            d,
+                            cur_loop,
+                            &mut eventos,
+                        );
+                    }
+                }
+                Some(tree) => {
+                    let valor = self.params.get(&tree.param).copied().unwrap_or(0.0);
+                    for (child, w) in blend_weights(tree, valor) {
+                        if w <= 0.0 {
+                            continue;
+                        }
+                        if let Some(d) = clip_duration(&child.clip) {
+                            let prev = prev_blend_times.get(&child.clip).copied().unwrap_or(0.0);
+                            let next = self.blend_times.get(&child.clip).copied().unwrap_or(prev);
+                            recolectar_eventos(
+                                &child.events,
+                                &st.name,
+                                &child.clip,
+                                prev,
+                                next,
+                                d,
+                                true,
+                                &mut eventos,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         if self.fade_from_state.is_some() {
             // 2a) Fundido en curso: avanzar temporizadores y tiempo del origen.
             self.fade_elapsed += dt;
+            let prev_fade_from_time = self.fade_from_time;
+            let prev_fade_blend_times = self.fade_blend_times.clone();
             if let Some(from) = self.fade_from_state.clone() {
                 let (fs_speed, fs_loop) = controller
                     .state(&from)
@@ -416,6 +551,61 @@ impl AnimatorData {
             }
             if let Some(from) = self.fade_from_state.clone() {
                 Self::advance_blend_clocks(controller, &from, &mut self.fade_blend_times, dt);
+
+                // Evaluar los eventos del estado origen del fundido.
+                if let Some(st) = controller.state(&from).cloned() {
+                    let (fs_speed, fs_loop) = (st.speed, st.r#loop);
+                    match &st.blend {
+                        None => {
+                            if let Some(d) = clip_duration(&st.clip) {
+                                let next_eval = if fs_loop {
+                                    prev_fade_from_time + dt * fs_speed
+                                } else {
+                                    (prev_fade_from_time + dt * fs_speed).min(d)
+                                };
+                                recolectar_eventos(
+                                    &st.events,
+                                    &st.name,
+                                    &st.clip,
+                                    prev_fade_from_time,
+                                    next_eval,
+                                    d,
+                                    fs_loop,
+                                    &mut eventos,
+                                );
+                            }
+                        }
+                        Some(tree) => {
+                            let valor = self.params.get(&tree.param).copied().unwrap_or(0.0);
+                            for (child, w) in blend_weights(tree, valor) {
+                                if w <= 0.0 {
+                                    continue;
+                                }
+                                if let Some(d) = clip_duration(&child.clip) {
+                                    let prev = prev_fade_blend_times
+                                        .get(&child.clip)
+                                        .copied()
+                                        .unwrap_or(0.0);
+                                    let next = self
+                                        .fade_blend_times
+                                        .get(&child.clip)
+                                        .copied()
+                                        .unwrap_or(prev);
+                                    recolectar_eventos(
+                                        &child.events,
+                                        &st.name,
+                                        &child.clip,
+                                        prev,
+                                        next,
+                                        d,
+                                        true,
+                                        &mut eventos,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
             }
             if self.fade_duration <= 0.0 || self.fade_elapsed >= self.fade_duration {
                 self.fade_from_state = None;
@@ -484,11 +674,15 @@ impl AnimatorData {
                     samples.push(s);
                 }
             }
-            AdvanceOutput { samples }
+            AdvanceOutput {
+                samples,
+                fired_events: eventos,
+            }
         } else {
             let actual = self.current_state.clone();
             AdvanceOutput {
                 samples: self.state_samples(controller, &actual, &self.blend_times),
+                fired_events: eventos,
             }
         }
     }
@@ -643,6 +837,7 @@ mod fsm_tests {
             speed: 1.0,
             r#loop: looping,
             blend: None,
+            events: Vec::new(),
         }
     }
 
@@ -805,11 +1000,12 @@ mod fsm_tests {
             blend: Some(BlendTree1D {
                 param: "Speed".to_string(),
                 children: vec![
-                    BlendChild { clip: "idle".to_string(), threshold: 0.0, speed: 1.0 },
-                    BlendChild { clip: "walk".to_string(), threshold: 2.5, speed: 1.0 },
-                    BlendChild { clip: "jump".to_string(), threshold: 5.0, speed: 1.0 },
+                    BlendChild { clip: "idle".to_string(), threshold: 0.0, speed: 1.0, events: Vec::new() },
+                    BlendChild { clip: "walk".to_string(), threshold: 2.5, speed: 1.0, events: Vec::new() },
+                    BlendChild { clip: "jump".to_string(), threshold: 5.0, speed: 1.0, events: Vec::new() },
                 ],
             }),
+            events: Vec::new(),
         });
         c.transitions.clear();
         let mut a = animator();
@@ -837,9 +1033,9 @@ mod fsm_tests {
         let tree = BlendTree1D {
             param: "Speed".to_string(),
             children: vec![
-                BlendChild { clip: "idle".to_string(), threshold: 0.0, speed: 1.0 },
-                BlendChild { clip: "walk".to_string(), threshold: 0.0, speed: 1.0 },
-                BlendChild { clip: "jump".to_string(), threshold: 1.0, speed: 1.0 },
+                BlendChild { clip: "idle".to_string(), threshold: 0.0, speed: 1.0, events: Vec::new() },
+                BlendChild { clip: "walk".to_string(), threshold: 0.0, speed: 1.0, events: Vec::new() },
+                BlendChild { clip: "jump".to_string(), threshold: 1.0, speed: 1.0, events: Vec::new() },
             ],
         };
         let w0 = blend_weights(&tree, 0.0);
@@ -869,10 +1065,11 @@ mod fsm_tests {
             blend: Some(BlendTree1D {
                 param: "Speed".to_string(),
                 children: vec![
-                    BlendChild { clip: "idle".to_string(), threshold: 0.0, speed: 1.0 },
-                    BlendChild { clip: "jump".to_string(), threshold: 5.0, speed: 1.0 },
+                    BlendChild { clip: "idle".to_string(), threshold: 0.0, speed: 1.0, events: Vec::new() },
+                    BlendChild { clip: "jump".to_string(), threshold: 5.0, speed: 1.0, events: Vec::new() },
                 ],
             }),
+            events: Vec::new(),
         });
         c.transitions.push(transition("Locomocion", "Idle", vec![], 0.0, Some(0.5)));
 
@@ -916,5 +1113,274 @@ mod fsm_tests {
         a.state_time = 5.0; // idle dura 2,0 s
         a.advance(0.0, &c, clip_duration);
         assert!((a.state_time - 1.0).abs() < 1e-4, "state_time={}", a.state_time);
+    }
+}
+
+#[cfg(test)]
+mod tests_eventos {
+    use super::*;
+    use crate::scene::AnimatorData;
+
+    fn ev(name: &str, time: f32) -> AnimEvent {
+        AnimEvent {
+            name: name.to_string(),
+            time,
+            value: None,
+            text: None,
+        }
+    }
+
+    fn state_def(
+        name: &str,
+        clip: &str,
+        speed: f32,
+        bucle: bool,
+        blend: Option<BlendTree1D>,
+        events: Vec<AnimEvent>,
+    ) -> StateDef {
+        StateDef {
+            name: name.to_string(),
+            clip: clip.to_string(),
+            speed,
+            r#loop: bucle,
+            blend,
+            events,
+        }
+    }
+
+    fn child_def(clip: &str, threshold: f32, events: Vec<AnimEvent>) -> BlendChild {
+        BlendChild {
+            clip: clip.to_string(),
+            threshold,
+            speed: 1.0,
+            events,
+        }
+    }
+
+    fn controller(states: Vec<StateDef>, default_state: &str) -> AnimatorController {
+        AnimatorController {
+            parameters: vec![],
+            states,
+            transitions: vec![],
+            default_state: default_state.to_string(),
+        }
+    }
+
+    fn animator(current_state: &str) -> AnimatorData {
+        AnimatorData {
+            current_state: current_state.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn dur(clip: &str) -> Option<f32> {
+        match clip {
+            "idle" | "walk" => Some(2.0),
+            "jump" => Some(0.8),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn evento_simple_loop_dispara_al_cruzar() {
+        let c = controller(
+            vec![state_def(
+                "Walk",
+                "walk",
+                1.0,
+                true,
+                None,
+                vec![ev("Paso", 0.5)],
+            )],
+            "Walk",
+        );
+        let mut a = animator("Walk");
+
+        let out = a.advance(0.6, &c, dur);
+        assert!(out.fired_events.is_empty());
+
+        let out = a.advance(0.6, &c, dur);
+        assert_eq!(out.fired_events.len(), 1);
+        let e = &out.fired_events[0];
+        assert_eq!(e.name.as_str(), "Paso");
+        assert_eq!(e.state.as_str(), "Walk");
+        assert!((e.time - 1.0).abs() < 1e-4, "time={}", e.time);
+    }
+
+    #[test]
+    fn evento_al_envolver_el_ciclo() {
+        let c = controller(
+            vec![state_def(
+                "Walk",
+                "walk",
+                1.0,
+                true,
+                None,
+                vec![ev("Paso", 0.9)],
+            )],
+            "Walk",
+        );
+        let mut a = animator("Walk");
+        a.state_time = 1.5;
+
+        let out = a.advance(0.6, &c, dur);
+        assert_eq!(out.fired_events.len(), 1);
+    }
+
+    #[test]
+    fn evento_no_loop_una_sola_vez() {
+        let c = controller(
+            vec![state_def(
+                "Jump",
+                "jump",
+                1.0,
+                false,
+                None,
+                vec![ev("Aterrizar", 0.75)],
+            )],
+            "Jump",
+        );
+        let mut a = animator("Jump");
+
+        let out = a.advance(0.5, &c, dur);
+        assert!(out.fired_events.is_empty());
+
+        let out = a.advance(0.5, &c, dur);
+        assert_eq!(out.fired_events.len(), 1);
+
+        let out = a.advance(0.5, &c, dur);
+        assert!(out.fired_events.is_empty());
+    }
+
+    #[test]
+    fn evento_en_hijo_de_blend() {
+        let tree = BlendTree1D {
+            param: "Speed".to_string(),
+            children: vec![
+                child_def("idle", 0.0, vec![]),
+                child_def("walk", 2.5, vec![ev("PasoWalk", 0.5)]),
+            ],
+        };
+        let c = controller(
+            vec![state_def(
+                "Locomocion",
+                "walk",
+                1.0,
+                true,
+                Some(tree),
+                vec![],
+            )],
+            "Locomocion",
+        );
+        let mut a = animator("Locomocion");
+        a.params.insert("Speed".to_string(), 2.5);
+
+        let out = a.advance(1.2, &c, dur);
+        assert_eq!(out.fired_events.len(), 1);
+        assert_eq!(out.fired_events[0].clip.as_str(), "walk");
+    }
+
+    #[test]
+    fn hijo_sin_peso_no_dispara() {
+        let tree = BlendTree1D {
+            param: "Speed".to_string(),
+            children: vec![
+                child_def("idle", 0.0, vec![]),
+                child_def("walk", 2.5, vec![ev("PasoWalk", 0.5)]),
+            ],
+        };
+        let c = controller(
+            vec![state_def(
+                "Locomocion",
+                "walk",
+                1.0,
+                true,
+                Some(tree),
+                vec![],
+            )],
+            "Locomocion",
+        );
+        let mut a = animator("Locomocion");
+        a.params.insert("Speed".to_string(), 0.0);
+
+        let out = a.advance(1.2, &c, dur);
+        assert!(out.fired_events.is_empty());
+    }
+
+    #[test]
+    fn dt_gigante_una_sola_ocurrencia() {
+        let c = controller(
+            vec![state_def(
+                "Walk",
+                "walk",
+                1.0,
+                true,
+                None,
+                vec![ev("Paso", 0.5)],
+            )],
+            "Walk",
+        );
+        let mut a = animator("Walk");
+
+        let out = a.advance(5.5, &c, dur);
+        assert_eq!(out.fired_events.len(), 1);
+    }
+
+    #[test]
+    fn speed_doble_llega_antes() {
+        let c = controller(
+            vec![state_def(
+                "Walk",
+                "walk",
+                2.0,
+                true,
+                None,
+                vec![ev("Paso", 0.5)],
+            )],
+            "Walk",
+        );
+        let mut a = animator("Walk");
+
+        let out = a.advance(0.6, &c, dur);
+        assert_eq!(out.fired_events.len(), 1);
+    }
+
+    #[test]
+    fn origen_del_fundido_sigue_disparando() {
+        let c = controller(
+            vec![
+                state_def("Walk", "walk", 1.0, true, None, vec![]),
+                state_def("Idle", "idle", 1.0, true, None, vec![ev("PasoIdle", 0.5)]),
+            ],
+            "Walk",
+        );
+        let mut a = animator("Walk");
+        a.fade_from_state = Some("Idle".to_string());
+        a.fade_from_time = 0.9;
+        a.fade_duration = 1.0;
+        a.fade_elapsed = 0.0;
+
+        let out = a.advance(0.2, &c, dur);
+        assert_eq!(out.fired_events.len(), 1);
+        assert_eq!(out.fired_events[0].state.as_str(), "Idle");
+    }
+
+    #[test]
+    fn sin_cruce_no_hay_eventos() {
+        let c = controller(
+            vec![state_def(
+                "Walk",
+                "walk",
+                1.0,
+                true,
+                None,
+                vec![ev("Paso", 0.5)],
+            )],
+            "Walk",
+        );
+        let mut a = animator("Walk");
+
+        let out = a.advance(0.3, &c, dur);
+        assert!(out.fired_events.is_empty());
     }
 }

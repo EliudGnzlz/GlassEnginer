@@ -1,0 +1,1 @@
+{"default_state":"Marcha","parameters":[],"states":[{"clip":"Walk","events":[{"name":"PasoSimple","text":"simple","time":0.5,"value":3.0}],"loop":true,"name":"Marcha","speed":1.0}],"transitions":[]}

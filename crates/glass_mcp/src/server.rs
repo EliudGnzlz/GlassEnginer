@@ -2506,6 +2506,7 @@ impl McpServer {
                     "fade_weight": fade_weight,
                     "params": anim.params,
                     "blend": blend_json,
+                    "recent_events": glass_core::animator_stats::recent_anim_events(entity_id, 10),
                 });
                 McpResponse::success(
                     id,

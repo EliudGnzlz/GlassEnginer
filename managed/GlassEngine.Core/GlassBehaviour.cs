@@ -22,6 +22,13 @@ public abstract class GlassBehaviour
     /// fachada <c>MonoBehaviour</c>, que no es la que se ticka).
     public virtual void FixedUpdate() { }
 
+    /// <summary>
+    /// Un evento de animación declarado en el controlador (estado o hijo
+    /// de blend tree) acaba de dispararse en esta entidad. `value` y
+    /// `text` son los datos opcionales del evento (null si no trae).
+    /// </summary>
+    public virtual void OnAnimationEvent(string name, float? value, string? text) { }
+
     /// <summary>Un collider no-trigger de esta entidad empieza a tocar otro.</summary>
     public virtual void OnCollisionEnter(Collision collision) { }
 
