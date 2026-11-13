@@ -74,7 +74,7 @@ impl PhysicsWorld {
                     arc_rotation(&dir),
                 );
                 ColliderBuilder::capsule_y(half_height, s.radius)
-                    .position_wrt_parent(iso)
+                    .position(iso)
                     .friction(0.7)
                     .build()
             } else {
