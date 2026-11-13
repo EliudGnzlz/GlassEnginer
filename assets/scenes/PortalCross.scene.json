@@ -1357,6 +1357,7 @@
   "script_data": null,
   "physics": {
    "body_type": "Dynamic",
+   "constraints": 56,
    "mass": 1.0,
    "friction": 0.0,
    "restitution": 0.1,

@@ -44,6 +44,10 @@ public sealed class PlayerController : GlassBehaviour
     {
         Log($"PlayerController: Inicializando cuerpo Dynamic y colisionador Box en entidad #{EntityId}");
         _rigidBody.Initialize(EntityId, RigidBodyType.Dynamic, Position, Rotation);
+        // El cubo jugador escala plataformas: no debe tumbar.
+        // FreezeRotation por opción (el bloqueo global se retiró
+        // el 2026-11-13; el comportamiento se conserva a propósito).
+        _rigidBody.Constraints = RigidBodyConstraints.FreezeRotation;
         _rigidBody.AttachBoxCollider(new Vector3(0.5f, 0.5f, 0.5f), restitution: 0.0f, friction: 0.8f);
 
         AudioSource.PlayClipAtPoint("beep_440", Position, volume: 0.5f, pitch: 1.0f);

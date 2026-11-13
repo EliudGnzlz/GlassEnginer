@@ -68,6 +68,10 @@ namespace GlassEngine.Core.Scripts
         {
             _body = new RigidBody();
             _body.Initialize(EntityId, RigidBodyType.Dynamic, Position, Rotation);
+            // El jugador no debe tumbar: FreezeRotation por opción
+            // (antes lo garantizaba el bloqueo global, retirado el
+            // 2026-11-13; el comportamiento se conserva a propósito).
+            _body.Constraints = RigidBodyConstraints.FreezeRotation;
 
             _spawnPosition = Position;
 
