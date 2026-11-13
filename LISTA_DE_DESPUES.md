@@ -83,9 +83,11 @@ la espera de su decisión:
   Play/CrossFade y el alta inicial; notificación al arrancar el
   fundido), entrega espejo de los eventos y telemetría
   `recent_state_events`. Suite 426/426 y prueba física completa.
-- **Blend trees 2D/Direct**: coste medio (pesos por triangulación
-  2D + datos). Sin demanda de gameplay concreta todavía:
-  **Post-beta**.
+- **Blend trees 2D: HECHO el 2026-11-13** por orden expresa de
+  D3m3tr10 (adelanto del post-beta; registro
+  `REGISTRO_BLEND2D.md`). Pesos por distancia inversa al
+  cuadrado (sin triangulación), eventos y exit_time por el mismo
+  camino que el 1D; el tipo Direct queda fuera.
 - **Root motion**: coste medio-alto (delta del hueso raíz al
   muestrear aplicado a transform/física, opt-in por estado):
   **Post-beta**.

@@ -51,6 +51,10 @@ pub struct StateDef {
     /// parámetro.
     #[serde(default)]
     pub blend: Option<BlendTree1D>,
+    /// Blend tree 2D opcional: si está presente, manda sobre
+    /// `blend` y sobre `clip` (precedencia: blend2d > blend > clip).
+    #[serde(default)]
+    pub blend2d: Option<BlendTree2D>,
     /// Eventos de animación declarados en este estado.
     #[serde(default)]
     pub events: Vec<AnimEvent>,
@@ -131,6 +135,101 @@ pub fn blend_weights(tree: &BlendTree1D, value: f32) -> Vec<(&BlendChild, f32)> 
     vec![(sorted[last], 1.0)]
 }
 
+/// Un hijo de un blend tree 2D: un clip situado en una posición
+/// (x, y) del espacio de los dos parámetros.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlendChild2D {
+    /// Nombre del clip dentro del .glb del modelo.
+    pub clip: String,
+    /// Posición (x, y) en el espacio de los parámetros.
+    pub position: [f32; 2],
+    #[serde(default = "default_speed")]
+    pub speed: f32,
+    /// Eventos de animación declarados en este hijo del blend tree.
+    #[serde(default)]
+    pub events: Vec<AnimEvent>,
+}
+
+/// Blend tree 2D: mezcla clips según DOS parámetros float
+/// (p. ej. SpeedX/SpeedY para locomoción direccional). Cada hijo
+/// pesa por distancia inversa al cuadrado a su posición (Shepard),
+/// normalizado a suma 1.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlendTree2D {
+    /// Nombre del parámetro float del eje X.
+    pub param_x: String,
+    /// Nombre del parámetro float del eje Y.
+    pub param_y: String,
+    pub children: Vec<BlendChild2D>,
+}
+
+/// Pesos de los hijos de un blend tree 2D para el punto (x, y).
+/// Coincidencia (casi) exacta con la posición de un hijo ⇒ ese
+/// hijo pesa 1. En el resto, peso = (1/d²) normalizado; se podan
+/// los pesos <= 1e-3 y se renormaliza. Solo pesos > 0. Función pura.
+pub fn blend_weights_2d(tree: &BlendTree2D, x: f32, y: f32) -> Vec<(&BlendChild2D, f32)> {
+    if tree.children.is_empty() {
+        return Vec::new();
+    }
+    if tree.children.len() == 1 {
+        return vec![(&tree.children[0], 1.0)];
+    }
+    let mut inv: Vec<f32> = Vec::with_capacity(tree.children.len());
+    for c in &tree.children {
+        let dx = x - c.position[0];
+        let dy = y - c.position[1];
+        let d2 = dx * dx + dy * dy;
+        if d2 <= 1e-12 {
+            return vec![(c, 1.0)];
+        }
+        inv.push(1.0 / d2);
+    }
+    let suma: f32 = inv.iter().sum();
+    if suma <= 0.0 || !suma.is_finite() {
+        return vec![(&tree.children[0], 1.0)];
+    }
+    let mut out: Vec<(&BlendChild2D, f32)> = tree
+        .children
+        .iter()
+        .zip(inv.iter())
+        .map(|(c, i)| (c, i / suma))
+        .filter(|(_, w)| *w > 1e-3)
+        .collect();
+    let s2: f32 = out.iter().map(|(_, w)| *w).sum();
+    if s2 > 0.0 {
+        for (_, w) in out.iter_mut() {
+            *w /= s2;
+        }
+    }
+    out
+}
+
+/// Hijos ponderados (clip, eventos, peso) de un estado con blend
+/// tree, sea 1D o 2D (el 2D manda si están los dos). `None` si el
+/// estado no tiene blend de ningún tipo. Solo pesos > 0.
+fn weighted_children<'a>(
+    st: &'a StateDef,
+    params: &std::collections::HashMap<String, f32>,
+) -> Option<Vec<(&'a str, &'a Vec<AnimEvent>, f32)>> {
+    if let Some(t2) = &st.blend2d {
+        let x = params.get(&t2.param_x).copied().unwrap_or(0.0);
+        let y = params.get(&t2.param_y).copied().unwrap_or(0.0);
+        return Some(
+            blend_weights_2d(t2, x, y)
+                .into_iter()
+                .map(|(c, w)| (c.clip.as_str(), &c.events, w))
+                .collect(),
+        );
+    }
+    st.blend.as_ref().map(|t| {
+        let v = params.get(&t.param).copied().unwrap_or(0.0);
+        blend_weights(t, v)
+            .into_iter()
+            .map(|(c, w)| (c.clip.as_str(), &c.events, w))
+            .collect()
+    })
+}
+
 /// Clip de referencia de un estado para `exit_time`: el suyo, o el
 /// hijo de menor umbral si es un estado con blend tree.
 /// Clip de referencia de un estado para medir tiempos (exit_time):
@@ -143,16 +242,12 @@ fn state_reference_clip(
     params: &std::collections::HashMap<String, f32>,
 ) -> Option<String> {
     let st = controller.state(state_name)?;
-    match &st.blend {
+    match weighted_children(st, params) {
+        Some(hijos) => hijos
+            .iter()
+            .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(clip, _, _)| clip.to_string()),
         None => Some(st.clip.clone()),
-        Some(tree) => {
-            let value = params.get(&tree.param).copied().unwrap_or(0.0);
-            let pesos = blend_weights(tree, value);
-            pesos
-                .iter()
-                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(c, _)| c.clip.clone())
-        }
     }
 }
 
@@ -360,11 +455,15 @@ impl AnimatorData {
         let Some(st) = controller.state(state_name) else {
             return;
         };
-        let Some(tree) = &st.blend else {
-            return;
-        };
-        for child in &tree.children {
-            *times.entry(child.clip.clone()).or_insert(0.0) += dt * st.speed * child.speed;
+        if let Some(tree) = &st.blend {
+            for child in &tree.children {
+                *times.entry(child.clip.clone()).or_insert(0.0) += dt * st.speed * child.speed;
+            }
+        }
+        if let Some(tree) = &st.blend2d {
+            for child in &tree.children {
+                *times.entry(child.clip.clone()).or_insert(0.0) += dt * st.speed * child.speed;
+            }
         }
     }
 
@@ -379,23 +478,20 @@ impl AnimatorData {
         let Some(st) = controller.state(state_name) else {
             return Vec::new();
         };
-        match &st.blend {
+        match weighted_children(st, &self.params) {
             None => vec![ClipSample {
                 clip: st.clip.clone(),
                 time: self.state_time_for(state_name),
                 weight: 1.0,
             }],
-            Some(tree) => {
-                let v = self.params.get(&tree.param).copied().unwrap_or(0.0);
-                blend_weights(tree, v)
-                    .into_iter()
-                    .map(|(child, w)| ClipSample {
-                        clip: child.clip.clone(),
-                        time: times.get(&child.clip).copied().unwrap_or(0.0),
-                        weight: w,
-                    })
-                    .collect()
-            }
+            Some(hijos) => hijos
+                .into_iter()
+                .map(|(clip, _, w)| ClipSample {
+                    clip: clip.to_string(),
+                    time: times.get(clip).copied().unwrap_or(0.0),
+                    weight: w,
+                })
+                .collect(),
         }
     }
 
@@ -452,6 +548,11 @@ impl AnimatorData {
                         validos.insert(ch.clip.as_str());
                     }
                 }
+                if let Some(tree) = &st.blend2d {
+                    for ch in &tree.children {
+                        validos.insert(ch.clip.as_str());
+                    }
+                }
             }
             self.blend_times.retain(|k, _| validos.contains(k.as_str()));
             self.fade_blend_times.retain(|k, _| validos.contains(k.as_str()));
@@ -488,7 +589,7 @@ impl AnimatorData {
             }
         } else if controller
             .state(&self.current_state)
-            .map(|s| s.blend.is_none())
+            .map(|s| s.blend.is_none() && s.blend2d.is_none())
             .unwrap_or(false)
         {
             // Auditoría (menor): en loop, el reloj del estado se
@@ -510,7 +611,30 @@ impl AnimatorData {
 
         // Evaluar los eventos del estado actual.
         if let Some(st) = controller.state(&self.current_state).cloned() {
-            match &st.blend {
+            match weighted_children(&st, &self.params) {
+                Some(hijos) => {
+                    for (clip, evts, w) in hijos {
+                        if w <= 0.0 {
+                            continue;
+                        }
+                        if let Some(d) = clip_duration(clip) {
+                            let prev = prev_blend_times.get(clip).copied().unwrap_or(0.0);
+                            let next = self.blend_times.get(clip).copied().unwrap_or(prev);
+                            recolectar_eventos(
+                                evts,
+                                TramoClip {
+                                    state: &st.name,
+                                    clip,
+                                    prev,
+                                    next,
+                                    dur: d,
+                                    bucle: true,
+                                },
+                                &mut eventos,
+                            );
+                        }
+                    }
+                }
                 None => {
                     if let Some(d) = clip_duration(&st.clip) {
                         let next_eval = if cur_loop {
@@ -530,30 +654,6 @@ impl AnimatorData {
                             },
                             &mut eventos,
                         );
-                    }
-                }
-                Some(tree) => {
-                    let valor = self.params.get(&tree.param).copied().unwrap_or(0.0);
-                    for (child, w) in blend_weights(tree, valor) {
-                        if w <= 0.0 {
-                            continue;
-                        }
-                        if let Some(d) = clip_duration(&child.clip) {
-                            let prev = prev_blend_times.get(&child.clip).copied().unwrap_or(0.0);
-                            let next = self.blend_times.get(&child.clip).copied().unwrap_or(prev);
-                            recolectar_eventos(
-                                &child.events,
-                                TramoClip {
-                                    state: &st.name,
-                                    clip: &child.clip,
-                                    prev,
-                                    next,
-                                    dur: d,
-                                    bucle: true,
-                                },
-                                &mut eventos,
-                            );
-                        }
                     }
                 }
             }
@@ -584,7 +684,37 @@ impl AnimatorData {
                 // Evaluar los eventos del estado origen del fundido.
                 if let Some(st) = controller.state(&from).cloned() {
                     let (fs_speed, fs_loop) = (st.speed, st.r#loop);
-                    match &st.blend {
+                    match weighted_children(&st, &self.params) {
+                        Some(hijos) => {
+                            for (clip, evts, w) in hijos {
+                                if w <= 0.0 {
+                                    continue;
+                                }
+                                if let Some(d) = clip_duration(clip) {
+                                    let prev = prev_fade_blend_times
+                                        .get(clip)
+                                        .copied()
+                                        .unwrap_or(0.0);
+                                    let next = self
+                                        .fade_blend_times
+                                        .get(clip)
+                                        .copied()
+                                        .unwrap_or(prev);
+                                    recolectar_eventos(
+                                        evts,
+                                        TramoClip {
+                                            state: &st.name,
+                                            clip,
+                                            prev,
+                                            next,
+                                            dur: d,
+                                            bucle: true,
+                                        },
+                                        &mut eventos,
+                                    );
+                                }
+                            }
+                        }
                         None => {
                             if let Some(d) = clip_duration(&st.clip) {
                                 let next_eval = if fs_loop {
@@ -604,37 +734,6 @@ impl AnimatorData {
                                     },
                                     &mut eventos,
                                 );
-                            }
-                        }
-                        Some(tree) => {
-                            let valor = self.params.get(&tree.param).copied().unwrap_or(0.0);
-                            for (child, w) in blend_weights(tree, valor) {
-                                if w <= 0.0 {
-                                    continue;
-                                }
-                                if let Some(d) = clip_duration(&child.clip) {
-                                    let prev = prev_fade_blend_times
-                                        .get(&child.clip)
-                                        .copied()
-                                        .unwrap_or(0.0);
-                                    let next = self
-                                        .fade_blend_times
-                                        .get(&child.clip)
-                                        .copied()
-                                        .unwrap_or(prev);
-                                    recolectar_eventos(
-                                        &child.events,
-                                        TramoClip {
-                                            state: &st.name,
-                                            clip: &child.clip,
-                                            prev,
-                                            next,
-                                            dur: d,
-                                            bucle: true,
-                                        },
-                                        &mut eventos,
-                                    );
-                                }
                             }
                         }
                     }
@@ -891,6 +990,7 @@ mod fsm_tests {
             speed: 1.0,
             r#loop: looping,
             blend: None,
+            blend2d: None,
             events: Vec::new(),
         }
     }
@@ -1059,6 +1159,7 @@ mod fsm_tests {
                     BlendChild { clip: "jump".to_string(), threshold: 5.0, speed: 1.0, events: Vec::new() },
                 ],
             }),
+            blend2d: None,
             events: Vec::new(),
         });
         c.transitions.clear();
@@ -1123,6 +1224,7 @@ mod fsm_tests {
                     BlendChild { clip: "jump".to_string(), threshold: 5.0, speed: 1.0, events: Vec::new() },
                 ],
             }),
+            blend2d: None,
             events: Vec::new(),
         });
         c.transitions.push(transition("Locomocion", "Idle", vec![], 0.0, Some(0.5)));
@@ -1198,6 +1300,7 @@ mod tests_eventos {
             speed,
             r#loop: bucle,
             blend,
+            blend2d: None,
             events,
         }
     }
@@ -1335,6 +1438,116 @@ mod tests_eventos {
     }
 
     #[test]
+    fn blend2d_pesos_basicos() {
+        let tree = BlendTree2D {
+            param_x: "X".to_string(),
+            param_y: "Y".to_string(),
+            children: vec![
+                BlendChild2D { clip: "a".to_string(), position: [-1.0, -1.0], speed: 1.0, events: vec![] },
+                BlendChild2D { clip: "b".to_string(), position: [1.0, -1.0], speed: 1.0, events: vec![] },
+                BlendChild2D { clip: "c".to_string(), position: [-1.0, 1.0], speed: 1.0, events: vec![] },
+                BlendChild2D { clip: "d".to_string(), position: [1.0, 1.0], speed: 1.0, events: vec![] },
+            ],
+        };
+        // En el centro, las cuatro esquinas pesan lo mismo.
+        let w = blend_weights_2d(&tree, 0.0, 0.0);
+        assert_eq!(w.len(), 4);
+        for (_, peso) in &w {
+            assert!((peso - 0.25).abs() < 1e-4, "peso {peso}");
+        }
+        // Sobre la posición de un hijo, ese hijo pesa 1.
+        let w = blend_weights_2d(&tree, 1.0, 1.0);
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].0.clip, "d");
+        assert_eq!(w[0].1, 1.0);
+        // La suma es 1 en un punto arbitrario.
+        let w = blend_weights_2d(&tree, 0.3, -0.7);
+        let suma: f32 = w.iter().map(|(_, p)| p).sum();
+        assert!((suma - 1.0).abs() < 1e-5, "suma {suma}");
+        // Árbol vacío y de un solo hijo.
+        let vacio = BlendTree2D { param_x: "X".to_string(), param_y: "Y".to_string(), children: vec![] };
+        assert!(blend_weights_2d(&vacio, 0.0, 0.0).is_empty());
+        let uno = BlendTree2D {
+            param_x: "X".to_string(),
+            param_y: "Y".to_string(),
+            children: vec![BlendChild2D { clip: "a".to_string(), position: [3.0, 4.0], speed: 1.0, events: vec![] }],
+        };
+        let w = blend_weights_2d(&uno, 0.0, 0.0);
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].1, 1.0);
+    }
+
+    #[test]
+    fn blend2d_mezcla_por_parametros() {
+        let st = StateDef {
+            name: "Movimiento".to_string(),
+            clip: String::new(),
+            speed: 1.0,
+            r#loop: true,
+            blend: None,
+            blend2d: Some(BlendTree2D {
+                param_x: "SpeedX".to_string(),
+                param_y: "SpeedY".to_string(),
+                children: vec![
+                    BlendChild2D { clip: "idle".to_string(), position: [0.0, 0.0], speed: 1.0, events: vec![] },
+                    BlendChild2D { clip: "walk".to_string(), position: [2.0, 0.0], speed: 1.0, events: vec![] },
+                    BlendChild2D { clip: "jump".to_string(), position: [0.0, 2.0], speed: 1.0, events: vec![] },
+                ],
+            }),
+            events: vec![],
+        };
+        let c = controller(vec![st], "Movimiento");
+        let mut a = animator("Movimiento");
+        // En (0,0) solo idle.
+        let out = a.advance(0.1, &c, dur);
+        assert_eq!(out.samples.len(), 1);
+        assert_eq!(out.samples[0].clip, "idle");
+        assert_eq!(out.samples[0].weight, 1.0);
+        // En (1,1) los tres están a la misma distancia² (2): tercios.
+        a.params.insert("SpeedX".to_string(), 1.0);
+        a.params.insert("SpeedY".to_string(), 1.0);
+        let out = a.advance(0.1, &c, dur);
+        assert_eq!(out.samples.len(), 3);
+        for s in &out.samples {
+            assert!((s.weight - 1.0 / 3.0).abs() < 1e-3, "{} {}", s.clip, s.weight);
+        }
+        // Sobre walk, solo walk.
+        a.params.insert("SpeedX".to_string(), 2.0);
+        a.params.insert("SpeedY".to_string(), 0.0);
+        let out = a.advance(0.1, &c, dur);
+        assert_eq!(out.samples.len(), 1);
+        assert_eq!(out.samples[0].clip, "walk");
+    }
+
+    #[test]
+    fn evento_en_hijo_de_blend2d() {
+        let st = StateDef {
+            name: "Movimiento".to_string(),
+            clip: String::new(),
+            speed: 1.0,
+            r#loop: true,
+            blend: None,
+            blend2d: Some(BlendTree2D {
+                param_x: "SpeedX".to_string(),
+                param_y: "SpeedY".to_string(),
+                children: vec![
+                    BlendChild2D { clip: "idle".to_string(), position: [0.0, 0.0], speed: 1.0, events: vec![] },
+                    BlendChild2D { clip: "walk".to_string(), position: [2.5, 0.0], speed: 1.0, events: vec![ev("PasoWalk", 0.5)] },
+                ],
+            }),
+            events: vec![],
+        };
+        let c = controller(vec![st], "Movimiento");
+        let mut a = animator("Movimiento");
+        a.params.insert("SpeedX".to_string(), 2.5);
+        a.params.insert("SpeedY".to_string(), 0.0);
+
+        let out = a.advance(1.2, &c, dur);
+        assert_eq!(out.fired_events.len(), 1);
+        assert_eq!(out.fired_events[0].clip.as_str(), "walk");
+    }
+
+    #[test]
     fn hijo_sin_peso_no_dispara() {
         let tree = BlendTree1D {
             param: "Speed".to_string(),
@@ -1459,6 +1672,7 @@ mod tests_estados {
             speed: 1.0,
             r#loop: bucle,
             blend: None,
+            blend2d: None,
             events: Vec::new(),
         }
     }

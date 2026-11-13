@@ -25,8 +25,9 @@ código). Alcance de la beta:
 - **Eventos de animación** (integrados el 2026-11-13, ver abajo).
 - **StateMachineBehaviours**: `OnStateEnter` / `OnStateExit` en C#
   (integrados el 2026-11-13, ver abajo).
+- **Blend trees 2D** (integrados el 2026-11-13, ver abajo).
 
-Fuera de la beta (Post-1.0): blend trees 2D/Direct, capas,
+Fuera de la beta (Post-1.0): blend tree Direct, capas,
 AvatarMask, IK, root motion,
 OverrideController, Playables, retargeting/Avatar, Blend Shapes (el
 importador los salta a propósito) y edición de curvas/keyframes.
@@ -91,6 +92,41 @@ public override void OnStateExit(string state) { }
   `EstadoAnimTest.cs` sobre el controlador `xbot`: secuencia
   completa Idle → Walk → Idle → Walk (CrossFade) → Idle verificada
   en el log y por MCP, sin duplicados al completarse los fundidos.
+
+## Blend trees 2D
+
+Adelanto post-beta por orden de D3m3tr10 (2026-11-13). Un estado
+puede declarar `blend2d` en vez de `blend` o `clip` (precedencia:
+blend2d > blend > clip):
+
+```json
+{ "name": "Movimiento", "clip": "", "loop": true,
+  "blend2d": {
+    "param_x": "SpeedX", "param_y": "SpeedY",
+    "children": [
+      { "clip": "Idle", "position": [0, 0] },
+      { "clip": "Walk", "position": [0, 2] },
+      { "clip": "Run",  "position": [2, 0] }
+    ] } }
+```
+
+- Cada hijo vive en una posición (x, y) del espacio de los dos
+  parámetros float. Pesos por **distancia inversa al cuadrado**
+  (Shepard) normalizada a suma 1; sobre la posición de un hijo,
+  ese hijo pesa 1; pesos ≤ 1e-3 se podan y se renormaliza.
+- Todo lo demás es lo mismo que en el 1D: relojes propios por
+  hijo, eventos de animación en los hijos (solo con peso > 0),
+  exit_time contra el hijo dominante y fundidos entre estados.
+- `glass_animator_state` informa del árbol activo: con 1D trae
+  `param`/`value`; con 2D, `param_x`/`param_y`/`value_x`/`value_y`
+  y los hijos con su `position`, `weight` y `time`.
+- El tipo «Direct» de Unity y el freeform direccional quedan
+  fuera (sin demanda concreta).
+- Prueba física: `PruebaBlend2D.scene.json` con el controlador
+  `blend2d_test` (X Bot): pesos verificados por MCP en (0,0),
+  (0,2), (1,1) — tercios exactos — y (2,0), y el evento
+  `PasoBlend2D` del hijo Walk recibido. Registro:
+  `REGISTRO_BLEND2D.md`.
 
 **Auto-rigging** (último de la cola): requiere antes una vista de
 huesos en el editor (hoy no existe). El rig de manos y dedos NO va

@@ -2492,6 +2492,32 @@ impl McpServer {
                                     "value": v,
                                     "children": hijos,
                                 });
+                            } else if let Some(tree) = &st.blend2d {
+                                let x = anim.params.get(&tree.param_x).copied().unwrap_or(0.0);
+                                let y = anim.params.get(&tree.param_y).copied().unwrap_or(0.0);
+                                let hijos: Vec<serde_json::Value> =
+                                    glass_core::animator::blend_weights_2d(tree, x, y)
+                                        .into_iter()
+                                        .map(|(c, w)| {
+                                            json!({
+                                                "clip": c.clip,
+                                                "position": c.position,
+                                                "weight": w,
+                                                "time": anim
+                                                    .blend_times
+                                                    .get(&c.clip)
+                                                    .copied()
+                                                    .unwrap_or(0.0),
+                                            })
+                                        })
+                                        .collect();
+                                blend_json = json!({
+                                    "param_x": tree.param_x,
+                                    "param_y": tree.param_y,
+                                    "value_x": x,
+                                    "value_y": y,
+                                    "children": hijos,
+                                });
                             }
                         }
                     }
