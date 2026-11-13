@@ -152,9 +152,103 @@ impl TransformStore {
         }
     }
 
-    /// Resuelve todos los mundos en una pasada lineal en orden
-    /// topológico. Devuelve cuántas matrices se calcularon.
+    /// Resuelve todos los mundos. En jerarquías grandes y anchas
+    /// paraleliza por niveles de `depth_order` (contiguo por
+    /// profundidad por construcción en rebuild): dentro de un nivel
+    /// ningún elemento es padre de otro, así que cada mundo se
+    /// calcula en paralelo leyendo el `world` del padre (de un nivel
+    /// ya cerrado) y el resultado se vuelca al cerrar el nivel, sin
+    /// leer y escribir `world` a la vez. Si la estructura no
+    /// garantiza esa propiedad (restos de ciclos con el padre dentro
+    /// del mismo nivel), o por debajo de los umbrales, se usa la
+    /// pasada secuencial histórica. Devuelve cuántas matrices se
+    /// calcularon.
     pub fn compute_world(&mut self) -> usize {
+        let n = self.depth_order.len();
+        if n < 8192 {
+            return self.compute_world_secuencial();
+        }
+        // Profundidad de cada posición de depth_order, derivada de
+        // parent_idx en una pasada (el padre precede al hijo).
+        let mut pos_en_orden = vec![usize::MAX; n];
+        for (k, &i) in self.depth_order.iter().enumerate() {
+            pos_en_orden[i] = k;
+        }
+        let mut profundidad = vec![0u32; n];
+        for (k, &i) in self.depth_order.iter().enumerate() {
+            let p = self.parent_idx[i];
+            profundidad[k] = if p >= 0 {
+                let pk = pos_en_orden[p as usize];
+                if pk == usize::MAX {
+                    0
+                } else {
+                    profundidad[pk] + 1
+                }
+            } else {
+                0
+            };
+        }
+        let mut rangos: Vec<(usize, usize)> = Vec::new();
+        let mut inicio = 0usize;
+        for k in 1..n {
+            if profundidad[k] != profundidad[inicio] {
+                rangos.push((inicio, k));
+                inicio = k;
+            }
+        }
+        rangos.push((inicio, n));
+        let ancho_max = rangos.iter().map(|(a, b)| b - a).max().unwrap_or(0);
+        if ancho_max < 512 {
+            return self.compute_world_secuencial();
+        }
+        // Garantía de nivel: ningún padre dentro del mismo rango que
+        // su hijo (solo podría pasar con restos de ciclos).
+        for &(a, b) in &rangos {
+            for k in a..b {
+                let p = self.parent_idx[self.depth_order[k]];
+                if p >= 0 {
+                    let pk = pos_en_orden[p as usize];
+                    if pk >= a && pk < b {
+                        return self.compute_world_secuencial();
+                    }
+                }
+            }
+        }
+        use rayon::prelude::*;
+        let mut hechas = 0usize;
+        for (a, b) in rangos {
+            let indices = &self.depth_order[a..b];
+            let positions = &self.positions;
+            let rotations = &self.rotations;
+            let scales = &self.scales;
+            let parent_idx = &self.parent_idx;
+            let world = &self.world;
+            let calculadas: Vec<[f32; 16]> = indices
+                .par_iter()
+                .map(|&i| {
+                    let local = crate::math::mat4_from_trs_quat(
+                        positions[i],
+                        rotations[i],
+                        scales[i],
+                    );
+                    let p = parent_idx[i];
+                    if p >= 0 {
+                        crate::math::mat4_mul(world[p as usize], local)
+                    } else {
+                        local
+                    }
+                })
+                .collect();
+            for (j, &i) in indices.iter().enumerate() {
+                self.world[i] = calculadas[j];
+            }
+            hechas += indices.len();
+        }
+        hechas
+    }
+
+    /// La pasada histórica: lineal en orden topológico.
+    fn compute_world_secuencial(&mut self) -> usize {
         let mut hechas = 0usize;
         for k in 0..self.depth_order.len() {
             let i = self.depth_order[k];
@@ -280,6 +374,27 @@ mod tests {
             let mut store = TransformStore::new();
             store.rebuild(&scene);
             store.compute_world();
+            let mapa = store.world_map();
+            assert_eq!(mapa.len(), referencia.len(), "modo {modo}");
+            for (id, w) in &referencia {
+                let otro = mapa.get(id).expect("falta id");
+                assert!(casi_iguales(w, otro), "modo {modo}, id {id}");
+            }
+        }
+    }
+
+    #[test]
+    fn paralelo_equivale_a_la_referencia_en_escenas_grandes() {
+        // Por encima del umbral (8192) y con niveles anchos (>= 512)
+        // compute_world toma el camino paralelo por niveles: el
+        // resultado debe coincidir con el algoritmo histórico.
+        for (modo, n) in [("plano", 9_000usize), ("arbol", 10_000usize)] {
+            let scene = escena_con(modo, n);
+            let referencia = mundos_referencia(&scene);
+            let mut store = TransformStore::new();
+            store.rebuild(&scene);
+            let hechas = store.compute_world();
+            assert_eq!(hechas, n, "modo {modo}");
             let mapa = store.world_map();
             assert_eq!(mapa.len(), referencia.len(), "modo {modo}");
             for (id, w) in &referencia {

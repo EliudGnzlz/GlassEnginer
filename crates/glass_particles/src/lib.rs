@@ -361,6 +361,8 @@ impl Emitter {
         basis: &[[f32; 3]; 3],
         prev_origin: [f32; 3],
     ) {
+        const UMBRAL_PAR: usize = 8192;
+
         if dt <= 0.0 {
             return;
         }
@@ -372,8 +374,15 @@ impl Emitter {
                 origin[2] - prev_origin[2],
             ];
             if delta != [0.0, 0.0, 0.0] {
-                for i in 0..self.pool.alive {
-                    self.pool.pos[i] = v_add(self.pool.pos[i], delta);
+                if self.pool.alive >= UMBRAL_PAR {
+                    use rayon::prelude::*;
+                    self.pool.pos[..self.pool.alive]
+                        .par_iter_mut()
+                        .for_each(|p| *p = v_add(*p, delta));
+                } else {
+                    for i in 0..self.pool.alive {
+                        self.pool.pos[i] = v_add(self.pool.pos[i], delta);
+                    }
                 }
             }
         }
@@ -390,22 +399,50 @@ impl Emitter {
         // Integración Euler: gravedad, drag, posición, edad.
         let drag_factor = (1.0 - self.config.drag * dt).max(0.0);
         let g = self.config.gravity;
-        let mut i = 0;
-        while i < self.pool.alive {
-            self.pool.age[i] += dt;
-            if self.pool.age[i] >= self.pool.life[i] {
-                self.pool.kill(i);
-                continue;
+        if self.pool.alive >= UMBRAL_PAR {
+            use rayon::prelude::*;
+            let alive = self.pool.alive;
+            self.pool.pos[..alive]
+                .par_iter_mut()
+                .zip(self.pool.vel[..alive].par_iter_mut())
+                .zip(self.pool.age[..alive].par_iter_mut())
+                .for_each(|((pos, vel), age)| {
+                    *age += dt;
+                    let v = *vel;
+                    let v = [
+                        (v[0] + g[0] * dt) * drag_factor,
+                        (v[1] + g[1] * dt) * drag_factor,
+                        (v[2] + g[2] * dt) * drag_factor,
+                    ];
+                    *vel = v;
+                    *pos = v_add(*pos, v_scale(v, dt));
+                });
+            let mut i = 0;
+            while i < self.pool.alive {
+                if self.pool.age[i] >= self.pool.life[i] {
+                    self.pool.kill(i);
+                    continue;
+                }
+                i += 1;
             }
-            let v = self.pool.vel[i];
-            let v = [
-                (v[0] + g[0] * dt) * drag_factor,
-                (v[1] + g[1] * dt) * drag_factor,
-                (v[2] + g[2] * dt) * drag_factor,
-            ];
-            self.pool.vel[i] = v;
-            self.pool.pos[i] = v_add(self.pool.pos[i], v_scale(v, dt));
-            i += 1;
+        } else {
+            let mut i = 0;
+            while i < self.pool.alive {
+                self.pool.age[i] += dt;
+                if self.pool.age[i] >= self.pool.life[i] {
+                    self.pool.kill(i);
+                    continue;
+                }
+                let v = self.pool.vel[i];
+                let v = [
+                    (v[0] + g[0] * dt) * drag_factor,
+                    (v[1] + g[1] * dt) * drag_factor,
+                    (v[2] + g[2] * dt) * drag_factor,
+                ];
+                self.pool.vel[i] = v;
+                self.pool.pos[i] = v_add(self.pool.pos[i], v_scale(v, dt));
+                i += 1;
+            }
         }
     }
 
@@ -487,6 +524,58 @@ mod tests {
             e.update(1.0 / 60.0, [0.0, 0.0, 0.0], &BASIS, [0.0, 0.0, 0.0]);
         }
         assert_eq!(e.pool.alive, 60);
+    }
+
+    #[test]
+    fn paralelo_equivale_al_secuencial_con_mas_de_8192() {
+        // Por encima de UMBRAL_PAR el update integra en paralelo y
+        // compacta después: el conjunto de supervivientes y sus
+        // valores deben ser bit a bit los del modelo secuencial.
+        let mut cfg = config_base();
+        cfg.rate = 0.0;
+        cfg.max_particles = 20_000;
+        cfg.gravity = [0.0, -9.8, 0.0];
+        cfg.drag = 0.5;
+        cfg.local_space = true;
+        let mut e = Emitter::new(cfg);
+        e.burst(20_000, [0.0, 0.0, 0.0], &BASIS);
+        assert_eq!(e.pool.alive, 20_000);
+        // La mitad muere en este paso (vida 0,05 < dt 0,1).
+        for i in 0..e.pool.alive {
+            e.pool.life[i] = if i % 2 == 0 { 0.05 } else { 10.0 };
+            e.pool.vel[i] = [i as f32 * 0.01, 1.0, -2.0];
+        }
+        let pos0: Vec<[f32; 3]> = e.pool.pos[..e.pool.alive].to_vec();
+        let vel0: Vec<[f32; 3]> = e.pool.vel[..e.pool.alive].to_vec();
+        let dt = 0.1f32;
+        let delta = [1.0, 0.0, 0.0];
+        e.update(dt, delta, &BASIS, [0.0, 0.0, 0.0]);
+        // Modelo secuencial: arrastre, edad, muerte o integración.
+        let drag_factor = (1.0f32 - 0.5 * dt).max(0.0);
+        let mut esperado: Vec<([f32; 3], [f32; 3])> = Vec::new();
+        for i in (0..pos0.len()).step_by(2) {
+            let _ = i; // las pares murieron; solo sobreviven las impares
+        }
+        for i in (1..pos0.len()).step_by(2) {
+            let pos = v_add(pos0[i], delta);
+            let v = vel0[i];
+            let v = [
+                (v[0] + 0.0 * dt) * drag_factor,
+                (v[1] + -9.8 * dt) * drag_factor,
+                (v[2] + 0.0 * dt) * drag_factor,
+            ];
+            esperado.push((v_add(pos, v_scale(v, dt)), v));
+        }
+        let mut obtenido: Vec<([f32; 3], [f32; 3])> = (0..e.pool.alive)
+            .map(|i| (e.pool.pos[i], e.pool.vel[i]))
+            .collect();
+        let clave = |x: &([f32; 3], [f32; 3])| {
+            (x.0[0].to_bits(), x.0[1].to_bits(), x.0[2].to_bits())
+        };
+        esperado.sort_by_key(clave);
+        obtenido.sort_by_key(clave);
+        assert_eq!(obtenido.len(), esperado.len());
+        assert_eq!(obtenido, esperado);
     }
 
     #[test]

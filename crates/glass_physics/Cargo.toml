@@ -5,6 +5,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+# La matriz de adopción se corre cambiando este default.
+default = ["parallel"]
+parallel = ["rapier3d/parallel", "dep:rayon"]
+
 [dependencies]
 glass_core.workspace = true
 log.workspace = true
@@ -13,6 +18,7 @@ rapier3d.workspace = true
 crossbeam-queue.workspace = true
 crossbeam.workspace = true
 serde.workspace = true
+rayon = { version = "1", optional = true }
 
 [dev-dependencies]
 env_logger.workspace = true

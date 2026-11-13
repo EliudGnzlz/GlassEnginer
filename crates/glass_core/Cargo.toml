@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 log.workspace = true
+rayon = "1"
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true

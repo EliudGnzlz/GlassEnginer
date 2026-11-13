@@ -50,6 +50,11 @@ pub struct PhysicsWorld {
     handle_lookup: HashMap<RigidBodyHandle, BodyHandle>,
     accumulator: f32,
     pub fixed_timestep: f32,
+
+    /// Pool propio de la física: aísla el paralelismo de Rapier del pool
+    /// global de rayon. Solo se usa dentro de `step()`.
+    #[cfg(feature = "parallel")]
+    pool: rayon::ThreadPool,
 }
 
 /// Aplica la configuración de la Fase 1 a un builder de collider: grupos
@@ -77,10 +82,39 @@ fn apply_config(builder: ColliderBuilder, cfg: ColliderConfig) -> ColliderBuilde
         .sensor(cfg.is_trigger)
 }
 
+/// Hilos del pool de física: GLASS_PHYSICS_THREADS si parsea a un valor >= 1;
+/// si no, (available_parallelism - 1) acotado a [1, 4].
+#[cfg(feature = "parallel")]
+fn physics_thread_count() -> usize {
+    std::env::var("GLASS_PHYSICS_THREADS")
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1)
+                .saturating_sub(1)
+                .clamp(1, 4)
+        })
+}
+
 impl PhysicsWorld {
     pub fn new() -> Self {
         let (event_sender, event_receiver) = crossbeam::channel::unbounded();
         let (force_sender, force_event_receiver) = crossbeam::channel::unbounded();
+
+        #[cfg(feature = "parallel")]
+        let pool = {
+            let threads = physics_thread_count();
+            log::info!("Física: pool paralelo con {threads} hilo(s).");
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .thread_name(|i| format!("glass-phys-{i}"))
+                .build()
+                .expect("Física: no se pudo crear el pool de hilos de rayon")
+        };
+
         Self {
             gravity: vector![0.0, -9.81, 0.0],
             integration_parameters: IntegrationParameters::default(),
@@ -109,10 +143,18 @@ impl PhysicsWorld {
             handle_lookup: HashMap::new(),
             accumulator: 0.0,
             fixed_timestep: 1.0 / 60.0,
+            #[cfg(feature = "parallel")]
+            pool,
         }
     }
 
     /// Steps the physics simulation using a fixed timestep accumulator to guarantee stability and prevent jitter.
+    ///
+    /// REGLA (feature `parallel`): `physics_pipeline.step` corre dentro del
+    /// pool de rayon. Ningún PhysicsHooks ni EventHandler propio puede llamar
+    /// a C# (ni tocar estado no Sync) porque podría ejecutarse en un hilo
+    /// `glass-phys-*`. Los eventos solo se encolan y se procesan aquí, en el
+    /// hilo llamante, en `collect_contact_events`.
     pub fn step(&mut self, dt: f32) {
         let dt = if dt.is_finite() && dt >= 0.0 { dt } else { 0.0 };
         if !self.accumulator.is_finite() {
@@ -125,6 +167,44 @@ impl PhysicsWorld {
         // Prevent spiral of death by capping max substeps per frame
         let mut substeps = 0;
         while self.accumulator >= fixed_dt && substeps < 4 {
+            #[cfg(feature = "parallel")]
+            {
+                // Préstamo disjunto explícito: el closure no captura `self` entero.
+                let Self {
+                    pool,
+                    physics_pipeline,
+                    gravity,
+                    integration_parameters,
+                    island_manager,
+                    broad_phase,
+                    narrow_phase,
+                    rigid_body_set,
+                    collider_set,
+                    impulse_joint_set,
+                    multibody_joint_set,
+                    ccd_solver,
+                    event_handler,
+                    ..
+                } = self;
+                pool.install(|| {
+                    physics_pipeline.step(
+                        &*gravity,
+                        &*integration_parameters,
+                        island_manager,
+                        broad_phase,
+                        narrow_phase,
+                        rigid_body_set,
+                        collider_set,
+                        impulse_joint_set,
+                        multibody_joint_set,
+                        ccd_solver,
+                        None,
+                        &(),
+                        &*event_handler,
+                    )
+                });
+            }
+            #[cfg(not(feature = "parallel"))]
             self.physics_pipeline.step(
                 &self.gravity,
                 &self.integration_parameters,
@@ -157,11 +237,32 @@ impl PhysicsWorld {
     /// acumula para `drain_contact_events` y los guarda en el anillo de
     /// inspección. Los eventos entre colliders del mismo cuerpo se
     /// descartan (no son contacto entre entidades).
+    ///
+    /// Determinismo: con la narrow phase paralela el orden de llegada al
+    /// canal varía. Se drena todo y se ordena con clave total (Started
+    /// antes que Stopped; dentro de cada grupo, por par crudo ordenado
+    /// (índice, generación)). Un Stopped procesado antes que un Started
+    /// del mismo substep generaría Enter/Exit espurios en entidades
+    /// multi-collider.
     fn collect_contact_events(&mut self) {
         // Las fuerzas de contacto no se consumen: se drena su canal para
         // que no crezca sin límite.
         while self.force_event_receiver.try_recv().is_ok() {}
-        while let Ok(event) = self.event_receiver.try_recv() {
+
+        let mut events: Vec<CollisionEvent> = self.event_receiver.try_iter().collect();
+        // Los empates (mismo rango y mismo par) son indistinguibles para la
+        // máquina de estados, así que el resultado es determinista.
+        events.sort_unstable_by_key(|event| {
+            let (rank, h1, h2) = match *event {
+                CollisionEvent::Started(h1, h2, _) => (0u8, h1, h2),
+                CollisionEvent::Stopped(h1, h2, _) => (1u8, h1, h2),
+            };
+            let (a, b) = (h1.into_raw_parts(), h2.into_raw_parts());
+            let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+            (rank, lo, hi)
+        });
+
+        for event in events {
             match event {
                 CollisionEvent::Started(h1, h2, _) => {
                     let (Some(e1), Some(e2)) =
@@ -1894,4 +1995,110 @@ fn convex_hull_sostiene_como_caja() {
         assert!(resultado_rep.is_none(), "una malla degenerada debe devolver None");
     }
 
+
+    /// Puerta multinúcleo (Fase B): determinismo entre ejecuciones.
+    /// 10 mundos idénticos (pila de cajas + una bola, una sola isla
+    /// grande de contactos) corren 600 pasos; el hash de los bits de
+    /// posiciones y velocidades finales debe ser idéntico en los 10.
+    /// Con la feature `parallel` esto valida que el solver paralelo
+    /// no introduce deriva entre ejecuciones en esta escena.
+    #[test]
+    fn determinismo_entre_ejecuciones_x10() {
+        fn correr() -> u64 {
+            let (mut world, _suelo) = mundo_con_suelo();
+            let mut cuerpos = Vec::new();
+            let mut id = 100u64;
+            for x in 0..3 {
+                for z in 0..2 {
+                    for y in 0..2 {
+                        id += 1;
+                        let b = world.create_rigid_body(
+                            id,
+                            BodyType::Dynamic,
+                            [x as f32 * 1.1 - 1.1, 2.0 + y as f32 * 1.05, z as f32 * 1.1 - 0.55],
+                            [0.0, 0.0, 0.0, 1.0],
+                        );
+                        world
+                            .attach_box_collider(b, [0.5, 0.5, 0.5], 0.0, 0.9)
+                            .expect("collider caja");
+                        cuerpos.push(b);
+                    }
+                }
+            }
+            id += 1;
+            let bola = world.create_rigid_body(id, BodyType::Dynamic, [0.0, 6.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+            world
+                .attach_collider(bola, ColliderShape::Ball { radius: 0.5 }, 0.0, 0.9)
+                .expect("collider bola");
+            cuerpos.push(bola);
+            asentar(&mut world, 600);
+            let mut hash: u64 = 0xcbf29ce484222325;
+            for b in &cuerpos {
+                let t = world.get_transform(*b).expect("transform");
+                let v = world.get_linear_velocity(*b).expect("velocidad");
+                for x in t.position.iter().chain(v.iter()) {
+                    for byte in x.to_bits().to_le_bytes() {
+                        hash ^= byte as u64;
+                        hash = hash.wrapping_mul(0x100000001b3);
+                    }
+                }
+            }
+            hash
+        }
+        let referencia = correr();
+        for _ in 1..10 {
+            assert_eq!(correr(), referencia);
+        }
+    }
+
+    /// Puerta multinúcleo (Fase B): la secuencia de ContactEvent que
+    /// ve C# debe ser idéntica entre ejecuciones aunque la narrow
+    /// phase emita en paralelo. Escena con entidades multi-collider
+    /// (el caso del Enter/Exit espurio): dos cuerpos con dos
+    /// colliders cada uno caen sobre el suelo y luego se retira uno
+    /// (Exit). 20 mundos frescos, secuencias idénticas.
+    #[test]
+    fn secuencia_de_eventos_identica_x20() {
+        fn correr() -> Vec<(u64, u64, u8, bool, u64)> {
+            let (mut world, _suelo) = mundo_con_suelo();
+            let cfg = ColliderConfig::default();
+            let mut cuerpos = Vec::new();
+            for (n, x) in [(200u64, -2.0f32), (300u64, 2.0f32)] {
+                let b = world.create_rigid_body(n, BodyType::Dynamic, [x, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+                for dx in [-0.6f32, 0.6] {
+                    world
+                        .attach_collider_with_config_at(
+                            b,
+                            ColliderShape::Cuboid { half_extents: [0.5, 0.5, 0.5] },
+                            0.0,
+                            0.9,
+                            cfg,
+                            [dx, 0.0, 0.0],
+                        )
+                        .expect("collider offset");
+                }
+                cuerpos.push(b);
+            }
+            let mut secuencia = Vec::new();
+            for paso in 0..240 {
+                world.step(1.0 / 60.0);
+                if paso == 150 {
+                    world.remove_rigid_body(cuerpos[0]);
+                }
+                for ev in world.drain_contact_events() {
+                    let kind = match ev.kind {
+                        ContactKind::Enter => 0u8,
+                        ContactKind::Exit => 1u8,
+                    };
+                    secuencia.push((ev.a, ev.b, kind, ev.is_trigger, ev.step));
+                }
+            }
+            secuencia
+        }
+        let referencia = correr();
+        assert!(!referencia.is_empty());
+        for _ in 1..20 {
+            assert_eq!(correr(), referencia);
+        }
+    }
 }
