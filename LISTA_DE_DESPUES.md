@@ -88,9 +88,11 @@ la espera de su decisión:
   `REGISTRO_BLEND2D.md`). Pesos por distancia inversa al
   cuadrado (sin triangulación), eventos y exit_time por el mismo
   camino que el 1D; el tipo Direct queda fuera.
-- **Root motion**: coste medio-alto (delta del hueso raíz al
-  muestrear aplicado a transform/física, opt-in por estado):
-  **Post-beta**.
+- **Root motion: HECHO el 2026-11-13** por orden expresa de
+  D3m3tr10 (segundo del adelanto post-beta; registro
+  `REGISTRO_ROOTMOTION.md`). Opt-in por estado, delta global de
+  la raíz aplicado al transform y al cuerpo, pose fijada; v1
+  solo en el plano XZ.
 - **Capas + AvatarMask**: coste alto (mezcla por hueso y capa en
   el skinning): **Post-1.0**.
 - **IK**: coste alto: **Post-1.0**.

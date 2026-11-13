@@ -1,0 +1,1 @@
+{"default_state":"Anda","name":"rootmotion_control","params":{},"states":[{"clip":"Walk","loop":true,"name":"Anda","root_motion":false,"speed":1.0,"transitions":[]}]}

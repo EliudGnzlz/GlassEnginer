@@ -297,6 +297,114 @@ fn compose_skin_matrices(skin: &SkinData, globals: &[[f32; 16]]) -> Vec<[f32; 16
 /// `bind_pose_con_armadura_transformada_da_identidad`).
 /// Las globales se calculan con memoización: el orden de los nodos en el
 /// archivo no garantiza padres antes que hijos.
+/// Nodo raíz del esqueleto para root motion: la primera
+/// articulación cuyo padre no es otra articulación (en Mixamo,
+/// las caderas). `None` si la piel no tiene articulaciones.
+pub fn root_node_index(skin: &SkinData) -> Option<usize> {
+    let joints: std::collections::HashSet<usize> = skin.joints.iter().copied().collect();
+    skin.joints.iter().copied().find(|&j| {
+        skin.nodes
+            .get(j)
+            .and_then(|n| n.parent)
+            .is_none_or(|p| !joints.contains(&p))
+    })
+}
+
+/// Traslación global (espacio del modelo) del nodo raíz en la
+/// pose de `clip` a `time`: incluye la escala y la rotación de
+/// los nodos padre (la armadura de Mixamo escala 0,01, así que
+/// el resultado ya está en metros del modelo). `None` si no hay
+/// raíz o el índice sale del grafo.
+pub fn root_global_translation(
+    skin: &SkinData,
+    clip: Option<&AnimationClip>,
+    time: f32,
+) -> Option<[f32; 3]> {
+    let root = root_node_index(skin)?;
+    let pose = sample_local_pose(skin, clip, time);
+    let globals = compute_globals(skin, &pose);
+    let g = globals.get(root)?;
+    Some([g[12], g[13], g[14]])
+}
+
+/// Seguidor de root motion: calcula el desplazamiento del nodo
+/// raíz entre frames a partir de los samples del frame (clip,
+/// tiempo, peso), con desenvoltura de bucle por clip (si el
+/// reloj envuelve, el tramo hasta el fin del clip más el tramo
+/// desde su inicio suman el ciclo). Los clips que no estaban en
+/// el frame anterior aportan 0: entrar en un clip no
+/// teletransporta.
+#[derive(Debug, Default)]
+pub struct RootMotionTracker {
+    prev: Vec<(String, f32, [f32; 3])>,
+}
+
+impl RootMotionTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Olvida el historial (cambio de estado o de escena: el
+    /// siguiente `delta` arranca de cero).
+    pub fn reset(&mut self) {
+        self.prev.clear();
+    }
+
+    /// Desplazamiento mezclado del frame, en espacio del modelo.
+    pub fn delta(
+        &mut self,
+        skin: &SkinData,
+        samples: &[(Option<&AnimationClip>, f32, f32)],
+    ) -> [f32; 3] {
+        let total: f32 = samples.iter().map(|s| s.2.max(0.0)).sum();
+        if total <= 1e-6 {
+            self.prev.clear();
+            return [0.0, 0.0, 0.0];
+        }
+        let mut acc = [0.0f32; 3];
+        let mut new_prev: Vec<(String, f32, [f32; 3])> = Vec::with_capacity(samples.len());
+        for &(clip, time, peso) in samples {
+            let w = peso.max(0.0) / total;
+            if w <= 0.0 {
+                continue;
+            }
+            let Some(clip) = clip else {
+                continue;
+            };
+            let Some(cur) = root_global_translation(skin, Some(clip), time) else {
+                continue;
+            };
+            let d = match self.prev.iter().find(|(n, _, _)| n == &clip.name) {
+                Some((_, pt, ppos)) if time >= pt - 1e-4 => {
+                    [cur[0] - ppos[0], cur[1] - ppos[1], cur[2] - ppos[2]]
+                }
+                Some((_, _, ppos)) => {
+                    // El fin del clip se muestrea un pelo antes:
+                    // `sample_local_pose` envuelve el tiempo por la
+                    // duración, y muestrear exactamente en ella
+                    // devolvería la posición del inicio.
+                    let t_fin = clip.duration * (1.0 - 1e-6);
+                    let end = root_global_translation(skin, Some(clip), t_fin)
+                        .unwrap_or(cur);
+                    let start = root_global_translation(skin, Some(clip), 0.0).unwrap_or(cur);
+                    [
+                        (end[0] - ppos[0]) + (cur[0] - start[0]),
+                        (end[1] - ppos[1]) + (cur[1] - start[1]),
+                        (end[2] - ppos[2]) + (cur[2] - start[2]),
+                    ]
+                }
+                None => [0.0, 0.0, 0.0],
+            };
+            acc[0] += d[0] * w;
+            acc[1] += d[1] * w;
+            acc[2] += d[2] * w;
+            new_prev.push((clip.name.clone(), time, cur));
+        }
+        self.prev = new_prev;
+        acc
+    }
+}
+
 pub fn evaluate_skin_matrices(
     skin: &SkinData,
     clip: Option<&AnimationClip>,
@@ -331,6 +439,20 @@ pub fn evaluate_skin_matrices_multi(
     skin: &SkinData,
     samples: &[(Option<&AnimationClip>, f32, f32)],
 ) -> Vec<[f32; 16]> {
+    evaluate_skin_matrices_multi_pinned(skin, samples, false)
+}
+
+/// Igual que `evaluate_skin_matrices_multi`, pero con `pin_root`
+/// la traslación local del nodo raíz queda fijada a su valor de
+/// reposo en la pose mezclada: es la mitad visual del root
+/// motion (el desplazamiento lo aporta el transform de la
+/// entidad, no la pose, y el personaje no se escapa de su
+/// origen).
+pub fn evaluate_skin_matrices_multi_pinned(
+    skin: &SkinData,
+    samples: &[(Option<&AnimationClip>, f32, f32)],
+    pin_root: bool,
+) -> Vec<[f32; 16]> {
     let node_count = skin.nodes.len();
     let total: f32 = samples.iter().map(|s| s.2.max(0.0)).sum();
     if samples.is_empty() || total <= 1e-6 {
@@ -364,11 +486,16 @@ pub fn evaluate_skin_matrices_multi(
         }
         acumulado += w;
     }
-    let pose = LocalPose {
+    let mut pose = LocalPose {
         translations,
         rotations,
         scales,
     };
+    if pin_root {
+        if let Some(root) = root_node_index(skin) {
+            pose.translations[root] = skin.nodes[root].translation;
+        }
+    }
     let globals = compute_globals(skin, &pose);
     compose_skin_matrices(skin, &globals)
 }
@@ -569,6 +696,84 @@ mod tests {
                 values: AnimChannelValues::Rotation(vec![q(0.0), q(completo)]),
             }],
         }
+    }
+
+    /// Esqueleto para root motion: raíz (nodo 0, articulación,
+    /// sin padre) en (0,1,0), hija (nodo 1, articulación) a
+    /// +0,5 en Y, y el nodo-malla (2). IBM identidad: la matriz
+    /// de piel de la raíz es su global.
+    fn skin_raiz() -> SkinData {
+        let raiz = GltfNodeData {
+            parent: None,
+            translation: [0.0, 1.0, 0.0],
+            ..Default::default()
+        };
+        let hija = GltfNodeData {
+            parent: Some(0),
+            translation: [0.0, 0.5, 0.0],
+            ..Default::default()
+        };
+        SkinData {
+            nodes: vec![raiz, hija, GltfNodeData::default()],
+            joints: vec![0, 1],
+            inverse_bind_matrices: vec![
+                glass_core::math::mat4_identity(),
+                glass_core::math::mat4_identity(),
+            ],
+            mesh_node: 2,
+        }
+    }
+
+    /// Clip «Anda»: la raíz se traslada de (0,1,0) a (0,1,2) en
+    /// 1 s (avanza 2 m en +Z por ciclo).
+    fn clip_anda() -> AnimationClip {
+        AnimationClip {
+            name: "Anda".into(),
+            duration: 1.0,
+            channels: vec![AnimChannel {
+                node: 0,
+                interpolation: Interpolation::Linear,
+                times: vec![0.0, 1.0],
+                values: AnimChannelValues::Translation(vec![[0.0, 1.0, 0.0], [0.0, 1.0, 2.0]]),
+            }],
+        }
+    }
+
+    #[test]
+    fn raiz_es_la_articulacion_sin_padre_articulacion() {
+        let skin = skin_raiz();
+        assert_eq!(root_node_index(&skin), Some(0));
+        let p = root_global_translation(&skin, Some(&clip_anda()), 0.5).unwrap();
+        assert!((p[0]).abs() < 1e-5 && (p[1] - 1.0).abs() < 1e-5 && (p[2] - 1.0).abs() < 1e-5,
+            "p={p:?}");
+    }
+
+    #[test]
+    fn tracker_suma_el_ciclo_con_envoltura() {
+        let skin = skin_raiz();
+        let clip = clip_anda();
+        let mut tr = RootMotionTracker::new();
+        let s = |t: f32| vec![(Some(&clip), t, 1.0)];
+        let d = tr.delta(&skin, &s(0.0));
+        assert!(d.iter().all(|v| v.abs() < 1e-6), "primer frame {d:?}");
+        let d = tr.delta(&skin, &s(0.5));
+        assert!((d[2] - 1.0).abs() < 1e-5, "mitad {d:?}");
+        let d = tr.delta(&skin, &s(0.9));
+        assert!((d[2] - 0.8).abs() < 1e-5, "hasta 0.9 {d:?}");
+        // Envoltura: 0.9 -> 0.1 aporta (2 - 1.8) + (0.2 - 0) = 0.4.
+        let d = tr.delta(&skin, &s(0.1));
+        assert!((d[2] - 0.4).abs() < 1e-5, "envoltura {d:?}");
+    }
+
+    #[test]
+    fn pose_fijada_mantiene_la_raiz_en_reposo() {
+        let skin = skin_raiz();
+        let clip = clip_anda();
+        let libre = evaluate_skin_matrices_multi(&skin, &[(Some(&clip), 0.5, 1.0)]);
+        assert!((libre[0][14] - 1.0).abs() < 1e-5, "sin fijar z={}", libre[0][14]);
+        let fijada = evaluate_skin_matrices_multi_pinned(&skin, &[(Some(&clip), 0.5, 1.0)], true);
+        assert!((fijada[0][14]).abs() < 1e-5, "fijada z={}", fijada[0][14]);
+        assert!((fijada[0][13] - 1.0).abs() < 1e-5, "fijada y={}", fijada[0][13]);
     }
 
     #[test]

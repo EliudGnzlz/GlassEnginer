@@ -55,6 +55,11 @@ pub struct StateDef {
     /// `blend` y sobre `clip` (precedencia: blend2d > blend > clip).
     #[serde(default)]
     pub blend2d: Option<BlendTree2D>,
+    /// Root motion: el desplazamiento del nodo raíz del clip
+    /// mueve el transform de la entidad y la pose fija la raíz
+    /// en su traslación de reposo.
+    #[serde(default)]
+    pub root_motion: bool,
     /// Eventos de animación declarados en este estado.
     #[serde(default)]
     pub events: Vec<AnimEvent>,
@@ -991,6 +996,7 @@ mod fsm_tests {
             r#loop: looping,
             blend: None,
             blend2d: None,
+            root_motion: false,
             events: Vec::new(),
         }
     }
@@ -1160,6 +1166,7 @@ mod fsm_tests {
                 ],
             }),
             blend2d: None,
+            root_motion: false,
             events: Vec::new(),
         });
         c.transitions.clear();
@@ -1225,6 +1232,7 @@ mod fsm_tests {
                 ],
             }),
             blend2d: None,
+            root_motion: false,
             events: Vec::new(),
         });
         c.transitions.push(transition("Locomocion", "Idle", vec![], 0.0, Some(0.5)));
@@ -1301,6 +1309,7 @@ mod tests_eventos {
             r#loop: bucle,
             blend,
             blend2d: None,
+            root_motion: false,
             events,
         }
     }
@@ -1494,6 +1503,7 @@ mod tests_eventos {
                     BlendChild2D { clip: "jump".to_string(), position: [0.0, 2.0], speed: 1.0, events: vec![] },
                 ],
             }),
+            root_motion: false,
             events: vec![],
         };
         let c = controller(vec![st], "Movimiento");
@@ -1535,6 +1545,7 @@ mod tests_eventos {
                     BlendChild2D { clip: "walk".to_string(), position: [2.5, 0.0], speed: 1.0, events: vec![ev("PasoWalk", 0.5)] },
                 ],
             }),
+            root_motion: false,
             events: vec![],
         };
         let c = controller(vec![st], "Movimiento");
@@ -1673,6 +1684,7 @@ mod tests_estados {
             r#loop: bucle,
             blend: None,
             blend2d: None,
+            root_motion: false,
             events: Vec::new(),
         }
     }

@@ -1060,16 +1060,26 @@ type SalidaAvanceAnimadores = (
     Vec<(u64, glass_core::animator::StateChangeEvent)>,
 );
 
+/// Mapas mutables que consume el pase previo de animadores:
+/// agrupados en una estructura para no superar el límite de
+/// argumentos por función (Clippy) al crecer el pase.
+struct EstadoAnimadores<'a> {
+    controllers: &'a mut std::collections::HashMap<String, glass_core::animator::AnimatorController>,
+    pose: &'a mut std::collections::HashMap<u64, Vec<(String, f32, f32)>>,
+    root_trackers: &'a mut std::collections::HashMap<u64, glass_renderer::skin::RootMotionTracker>,
+    root_pin: &'a mut std::collections::HashMap<u64, bool>,
+    free_fade: &'a mut std::collections::HashMap<u64, FreeFadeRt>,
+    runtime: &'a mut std::collections::HashMap<u64, (String, f32)>,
+}
+
 fn avanzar_animadores_fsm(
-    animator_controllers: &mut std::collections::HashMap<String, glass_core::animator::AnimatorController>,
-    anim_pose: &mut std::collections::HashMap<u64, Vec<(String, f32, f32)>>,
-    anim_free_fade: &mut std::collections::HashMap<u64, FreeFadeRt>,
-    anim_runtime: &mut std::collections::HashMap<u64, (String, f32)>,
+    est: &mut EstadoAnimadores,
     scene: &mut SceneState,
     cache: &glass_renderer::AssetCache,
     dt: f32,
 ) -> SalidaAvanceAnimadores {
-    anim_pose.clear();
+    est.pose.clear();
+    est.root_pin.clear();
     let mut eventos_out: Vec<(u64, glass_core::animator::FiredAnimEvent)> = Vec::new();
     let mut cambios_out: Vec<(u64, glass_core::animator::StateChangeEvent)> = Vec::new();
     for ent in scene.entities.iter_mut() {
@@ -1090,11 +1100,11 @@ fn avanzar_animadores_fsm(
 
         if !anim.controller.is_empty() {
             let name = anim.controller.clone();
-            if !animator_controllers.contains_key(&name) {
+            if !est.controllers.contains_key(&name) {
                 let path = format!("assets/animators/{name}.animator.json");
                 match glass_core::animator::AnimatorController::load_from_file(&path) {
                     Ok(c) => {
-                        animator_controllers.insert(name.clone(), c);
+                        est.controllers.insert(name.clone(), c);
                     }
                     Err(e) => {
                         log::error!(
@@ -1105,7 +1115,7 @@ fn avanzar_animadores_fsm(
                     }
                 }
             }
-            if let Some(ctrl) = animator_controllers.get(&name) {
+            if let Some(ctrl) = est.controllers.get(&name) {
                 let out = anim.advance(dt * anim.speed.max(0.0), ctrl, duration);
                 // Eventos disparados este frame por el FSM: se acumulan
                 // junto a la entidad dueña para despacharlos fuera.
@@ -1115,13 +1125,78 @@ fn avanzar_animadores_fsm(
                 for cambio in &out.state_events {
                     cambios_out.push((ent.id, cambio.clone()));
                 }
-                anim_pose.insert(
+                est.pose.insert(
                     ent.id,
                     out.samples
                         .iter()
                         .map(|s| (s.clip.clone(), s.time, s.weight))
                         .collect(),
                 );
+                // Root motion: si el estado actual lo activa, el
+                // desplazamiento global de la raíz mueve el
+                // transform (y el cuerpo físico, si lo hay) y la
+                // pose se fijará en el bucle de dibujo.
+                let rm_activo = ctrl
+                    .states
+                    .iter()
+                    .find(|s| s.name == anim.current_state)
+                    .map(|s| s.root_motion)
+                    .unwrap_or(false);
+                if rm_activo {
+                    if let Some(skin) = ent
+                        .mesh
+                        .as_ref()
+                        .and_then(|m| cache.skins.get(&m.model))
+                    {
+                        let resueltos: Vec<(
+                            Option<&glass_renderer::AnimationClip>,
+                            f32,
+                            f32,
+                        )> = out
+                            .samples
+                            .iter()
+                            .map(|s| {
+                                (clips.iter().find(|c| c.name == s.clip), s.time, s.weight)
+                            })
+                            .collect();
+                        let tracker = est.root_trackers
+                            .entry(ent.id)
+                            .or_default();
+                        let delta = tracker.delta(skin, &resueltos);
+                        if delta != [0.0, 0.0, 0.0] {
+                            let mundo3 = glass_core::math::quat_rotate_vec3(
+                                ent.transform.rotation_quat(),
+                                delta,
+                            );
+                            // v1: el root motion mueve en el plano
+                            // XZ; la Y del clip no se aplica (la
+                            // cadera conserva su altura de reposo en
+                            // la pose fijada; ni siquiera el clip
+                            // impecable cierra el bucle en altura y
+                            // el personaje se hundiría caminando).
+                            let mundo = [mundo3[0], 0.0, mundo3[2]];
+                            ent.transform.position = [
+                                ent.transform.position[0] + mundo[0],
+                                ent.transform.position[1] + mundo[1],
+                                ent.transform.position[2] + mundo[2],
+                            ];
+                            if let Some(sys) = glass_physics::get_global_physics_world() {
+                                if let Ok(mut world) = sys.lock() {
+                                    if let Some(handle) = world.get_body_by_entity(ent.id) {
+                                        world.set_transform(
+                                            handle,
+                                            ent.transform.position,
+                                            ent.transform.rotation_quat(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        est.root_pin.insert(ent.id, true);
+                    }
+                } else {
+                    est.root_trackers.remove(&ent.id);
+                }
                 continue;
             }
         }
@@ -1136,11 +1211,11 @@ fn avanzar_animadores_fsm(
             } else {
                 anim.clip.clone()
             };
-            let from_time = anim_runtime
+            let from_time = est.runtime
                 .get(&ent.id)
                 .map(|e| e.1)
                 .unwrap_or(0.0);
-            anim_free_fade.insert(
+            est.free_fade.insert(
                 ent.id,
                 FreeFadeRt {
                     from_clip,
@@ -1150,7 +1225,7 @@ fn avanzar_animadores_fsm(
                 },
             );
             anim.clip = dest;
-            if let Some(e) = anim_runtime.get_mut(&ent.id) {
+            if let Some(e) = est.runtime.get_mut(&ent.id) {
                 e.0.clear(); // el bucle reinicia el reloj del entrante
             }
         }
@@ -1681,6 +1756,13 @@ struct GlassEngineApp {
     /// y la consume el bucle de dibujo, que itera la escena en inmutable.
     /// (clip_a, tiempo_a, clip_b, tiempo_b, peso_b).
     anim_pose: std::collections::HashMap<u64, Vec<(String, f32, f32)>>,
+    /// Seguidores de root motion por entidad (historial de la
+    /// posición de la raíz entre frames).
+    anim_root_trackers: std::collections::HashMap<u64, glass_renderer::skin::RootMotionTracker>,
+    /// Entidades cuya pose de este frame va con la raíz fijada
+    /// (root motion activo): lo rellena el pase previo y lo lee
+    /// el bucle de dibujo, igual que `anim_pose`.
+    anim_root_pin: std::collections::HashMap<u64, bool>,
     /// Emisores de partículas de runtime (Fase 8P), por entidad.
     particle_emitters: std::collections::HashMap<u64, glass_particles::Emitter>,
     /// Último dato de escena aplicado a cada emisor (si cambia, el
@@ -2048,6 +2130,8 @@ impl GlassEngineApp {
             anim_runtime: std::collections::HashMap::new(),
             animator_controllers: std::collections::HashMap::new(),
             anim_pose: std::collections::HashMap::new(),
+            anim_root_trackers: std::collections::HashMap::new(),
+            anim_root_pin: std::collections::HashMap::new(),
             particle_emitters: std::collections::HashMap::new(),
             particle_applied: std::collections::HashMap::new(),
             particle_prev_origin: std::collections::HashMap::new(),
@@ -2755,6 +2839,8 @@ impl GlassEngineApp {
         self.retired_joint_buffers.extend(vivos);
         self.anim_runtime.clear();
         self.anim_pose.clear();
+        self.anim_root_trackers.clear();
+        self.anim_root_pin.clear();
         self.anim_free_fade.clear();
         self.last_anim_instant = Instant::now();
     }
@@ -4197,10 +4283,14 @@ let resueltos = colliders_resueltos(body, shape);
         let mut cambios_anim: Vec<(u64, glass_core::animator::StateChangeEvent)> = Vec::new();
         if let Ok(mut scene) = self.scene_state.lock() {
             (eventos_anim, cambios_anim) = avanzar_animadores_fsm(
-                &mut self.animator_controllers,
-                &mut self.anim_pose,
-                &mut self.anim_free_fade,
-                &mut self.anim_runtime,
+                &mut EstadoAnimadores {
+                    controllers: &mut self.animator_controllers,
+                    pose: &mut self.anim_pose,
+                    root_trackers: &mut self.anim_root_trackers,
+                    root_pin: &mut self.anim_root_pin,
+                    free_fade: &mut self.anim_free_fade,
+                    runtime: &mut self.anim_runtime,
+                },
                 &mut scene,
                 &cache,
                 anim_dt,
@@ -4631,9 +4721,20 @@ let resueltos = colliders_resueltos(body, shape);
                                         (clips.iter().find(|c| &c.name == n), *t, *w)
                                     })
                                     .collect();
-                                glass_renderer::skin::evaluate_skin_matrices_multi(
-                                    skin, &resueltos,
-                                )
+                                if self
+                                    .anim_root_pin
+                                    .get(&ent.id)
+                                    .copied()
+                                    .unwrap_or(false)
+                                {
+                                    glass_renderer::skin::evaluate_skin_matrices_multi_pinned(
+                                        skin, &resueltos, true,
+                                    )
+                                } else {
+                                    glass_renderer::skin::evaluate_skin_matrices_multi(
+                                        skin, &resueltos,
+                                    )
+                                }
                             } else if self.anim_free_fade.contains_key(&ent.id) {
                                 let (from_name, from_t, w, done) = {
                                     let f = self.anim_free_fade.get_mut(&ent.id).unwrap();

@@ -2463,12 +2463,14 @@ impl McpServer {
                     }
                 };
                 let mut blend_json = serde_json::Value::Null;
+                let mut root_motion = false;
                 if !anim.controller.is_empty() {
                     let path = format!("assets/animators/{}.animator.json", anim.controller);
                     if let Ok(ctrl) =
                         glass_core::animator::AnimatorController::load_from_file(&path)
                     {
                         if let Some(st) = ctrl.state(&anim.current_state) {
+                            root_motion = st.root_motion;
                             if let Some(tree) = &st.blend {
                                 let v = anim.params.get(&tree.param).copied().unwrap_or(0.0);
                                 let hijos: Vec<serde_json::Value> =
@@ -2532,6 +2534,8 @@ impl McpServer {
                     "controller": anim.controller,
                     "state": anim.current_state,
                     "state_time": anim.state_time,
+                    "position": ent.transform.position,
+                    "root_motion": root_motion,
                     "fading_from": anim.fade_from_state,
                     "fade_weight": fade_weight,
                     "params": anim.params,

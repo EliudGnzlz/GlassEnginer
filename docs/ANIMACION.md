@@ -26,9 +26,10 @@ código). Alcance de la beta:
 - **StateMachineBehaviours**: `OnStateEnter` / `OnStateExit` en C#
   (integrados el 2026-11-13, ver abajo).
 - **Blend trees 2D** (integrados el 2026-11-13, ver abajo).
+- **Root motion** (integrado el 2026-11-13, ver abajo).
 
 Fuera de la beta (Post-1.0): blend tree Direct, capas,
-AvatarMask, IK, root motion,
+AvatarMask, IK,
 OverrideController, Playables, retargeting/Avatar, Blend Shapes (el
 importador los salta a propósito) y edición de curvas/keyframes.
 
@@ -133,3 +134,35 @@ huesos en el editor (hoy no existe). El rig de manos y dedos NO va
 en el auto-rig principal: será un **auto-rig secundario y
 opcional**, un módulo aparte que el desarrollador usa solo si lo
 quiere. Detalle en `LISTA_DE_DESPUES.md`.
+
+## Root motion
+
+Adelanto post-beta por orden de D3m3tr10 (2026-11-13). Un estado
+lo activa con `root_motion: true` en el JSON del controlador:
+
+```json
+{ "name": "Anda", "clip": "Walk", "loop": true, "root_motion": true }
+```
+
+- El desplazamiento se mide sobre el **nodo raíz** (la primera
+  articulación cuyo padre no es articulación; en Mixamo, las
+  caderas) en **espacio global del modelo**: la escala y la
+  rotación de la armadura ya quedan aplicadas.
+- Por frame, un seguidor (`RootMotionTracker`) compara la
+  posición global de la raíz con la del frame anterior por cada
+  clip muestreado (con desenvoltura de bucle) y mezcla los
+  deltas por peso. El delta, rotado por la orientación de la
+  entidad, se suma a su posición; si la entidad tiene cuerpo
+  físico, el cuerpo se teletransporta con ella.
+- La pose se evalúa con la raíz **fijada a su traslación de
+  reposo**: el personaje no se escapa de su origen, se mueve la
+  entidad.
+- **v1 mueve solo en el plano XZ**: la Y del clip no se aplica
+  (el Walk de Mixamo ni siquiera cierra el bucle en altura y el
+  personaje se hundía caminando).
+- `glass_animator_state` informa `root_motion` y la `position`
+  actual de la entidad.
+- Prueba física: `PruebaRootMotion.scene.json` con los
+  controladores `rootmotion_test` (con el flag) y
+  `rootmotion_control` (sin él): 46,62 m de avance recto frente
+  a 0,0000 m del control.

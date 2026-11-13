@@ -1,0 +1,1 @@
+{"default_state":"Anda","name":"rootmotion_test","params":{},"states":[{"clip":"Walk","loop":true,"name":"Anda","root_motion":true,"speed":1.0,"transitions":[]}]}
