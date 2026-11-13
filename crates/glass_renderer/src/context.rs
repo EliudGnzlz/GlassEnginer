@@ -263,12 +263,13 @@ impl VulkanContext {
                     // Bonus por memoria VRAM local disponible
                     let mem_props = unsafe { instance.get_physical_device_memory_properties(pdevice) };
                     let mut local_vram_mb = 0u64;
-                    for i in 0..mem_props.memory_heap_count as usize {
-                        if mem_props.memory_heaps[i]
-                            .flags
-                            .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
-                        {
-                            local_vram_mb += mem_props.memory_heaps[i].size / (1024 * 1024);
+                    for heap in mem_props
+                        .memory_heaps
+                        .iter()
+                        .take(mem_props.memory_heap_count as usize)
+                    {
+                        if heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL) {
+                            local_vram_mb += heap.size / (1024 * 1024);
                         }
                     }
                     score += (local_vram_mb / 100).min(3000) as u32;

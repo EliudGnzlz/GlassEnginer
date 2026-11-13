@@ -114,3 +114,18 @@ diagnósticos** entre lib y tests de las 9 crates.
   verde, C# 0 errores, tests del workspace todos `ok`
   (0 fallos). La verificación que manda es la corrida real de
   Actions (ver el cierre en el chat principal).
+
+## Addenda (2026-11-13): el lint que solo veía el CI
+
+La corrida #39 (`cb223cf`) dejó el paso de Clippy en rojo por
+UN solo lint que la limpieza local no detectó: la VM trabajaba
+con Rust 1.99.1 y el CI instala el stable del día (1.100), cuyo
+Clippy marca `needless_range_loop` en
+`crates/glass_renderer/src/context.rs` — el bucle que suma la
+VRAM local iteraba `0..memory_heap_count` indexando
+`memory_heaps[i]`. Arreglo: iterar
+`memory_heaps.iter().take(memory_heap_count)` y usar el heap
+directamente (sin `#[allow]`). La toolchain local se actualizó
+a 1.100.0 y se repitió la verificación completa con ella:
+Clippy del workspace exit 0, builds con `-D warnings` en
+verde, C# 0 errores y 429/429 tests.
