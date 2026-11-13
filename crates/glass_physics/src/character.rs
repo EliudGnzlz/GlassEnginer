@@ -26,6 +26,10 @@ pub struct CharacterState {
     pub pos: [f32; 3],
     pub grounded: bool,
     pub sliding: bool,
+    /// Cuerpo Rapier del suelo actual (memoria de suelo para plataformas móviles).
+    pub ground_body: Option<RigidBodyHandle>,
+    /// Translation de `ground_body` cuando se registró.
+    pub ground_pos: [f32; 3],
 }
 
 impl PhysicsWorld {
@@ -86,6 +90,8 @@ impl PhysicsWorld {
                 pos,
                 grounded: false,
                 sliding: false,
+                ground_body: None,
+                ground_pos: [0.0, 0.0, 0.0],
             },
         );
 
@@ -98,17 +104,43 @@ impl PhysicsWorld {
         desired: [f32; 3],
         dt: f32,
     ) -> Option<([f32; 3], bool, bool)> {
+        // Sincroniza los colliders del cuerpo suelo con su cuerpo ANTES
+        // de consultar: las posiciones de collider solo se propagan
+        // desde los cuerpos al hacer step(), y el personaje se mueve
+        // desde los scripts, antes del step. Sin esto, la geometría de
+        // la plataforma iría siempre un paso por detrás del arrastre
+        // (y en un mundo sin steps quedaría congelada en su posición
+        // de creación, cancelando el carry vertical en cada frame).
+        let suelo = self
+            .characters
+            .get(&entity_id)
+            .and_then(|s| s.ground_body)
+            .and_then(|gb| self.rigid_body_set.get(gb))
+            .map(|rb| (*rb.position(), rb.colliders().to_vec()));
+        if let Some((iso, handles)) = suelo {
+            for h in handles {
+                if let Some(col) = self.collider_set.get_mut(h) {
+                    if let Some(local) = col.position_wrt_parent() {
+                        let local = *local;
+                        col.set_position(iso * local);
+                    }
+                }
+            }
+        }
+
         self.query_pipeline.update(&self.collider_set);
 
         let state = self.characters.get(&entity_id)?;
         let controller = state.controller;
         let half_height = state.half_height;
         let radius = state.radius;
-        let pos = state.pos;
+        let mut pos = state.pos;
         let rapier_collider = state.rapier_collider;
         let body = state.body;
         let skin = state.skin;
         let grounded_prev = state.grounded;
+        let ground_body = state.ground_body;
+        let ground_pos = state.ground_pos;
 
         // Una pasada de move_shape desde `desde` con el deseo dado.
         let pasada = |ctrl: &KinematicCharacterController, desde: [f32; 3], deseo: [f32; 3]| {
@@ -131,12 +163,51 @@ impl PhysicsWorld {
         // y luego el vertical (gravedad y snap); si el horizontal se
         // bloquea contra un escalón, esta capa lo sube a mano. En el
         // aire o saltando, una sola pasada con el vector completo.
+        // Arrastre por plataforma: el personaje se mueve CON su suelo antes de
+        // aplicar su propio deseo. Solo translation: el controller no rota, así
+        // que una plataforma que gira no arrastra la rotación (fuera de v1).
+        // Si el cuerpo ya no existe, carry = 0; la sonda de abajo reescribe el
+        // suelo (y lo olvida si no hay impacto).
+        let mut carry = [0.0f32; 3];
+        if grounded_prev {
+            if let Some(gb) = ground_body {
+                if let Some(rb) = self.rigid_body_set.get(gb) {
+                    let t = rb.translation();
+                    carry = [
+                        t.x - ground_pos[0],
+                        t.y - ground_pos[1],
+                        t.z - ground_pos[2],
+                    ];
+                }
+            }
+        }
+        pos = [pos[0] + carry[0], pos[1] + carry[1], pos[2] + carry[2]];
+
         let separar = grounded_prev
             && desired[1] < 0.0
             && (desired[0] != 0.0 || desired[2] != 0.0);
         let movement = if separar {
             let step = state.step_offset;
-            let m1 = pasada(&controller, pos, [desired[0], 0.0, desired[2]]);
+            // Sobre suelo CINEMÁTICO, la pasada horizontal sale una
+            // piel por encima: la fricción cinemática de Rapier
+            // proyecta el movimiento restante sobre la normal del
+            // suelo y anula el empuje normal minúsculo con el que
+            // move_shape se separa de la superficie; sin él, el
+            // barrido horizontal nace dentro de la distancia
+            // objetivo (offset) y se auto-bloquea en un bucle de
+            // impactos a toi 0 — el personaje no puede caminar
+            // sobre plataformas cinemáticas (verificado contra
+            // Rapier 0.23.1: sobre cuerpo Fixed la misma pasada
+            // mueve; sobre Kinematic devuelve [0,0,0]). Saliendo
+            // una piel por encima, el barrido nace fuera de esa
+            // distancia y la pasada vertical posterior asienta.
+            let suelo_kinematico = ground_body
+                .and_then(|gb| self.rigid_body_set.get(gb))
+                .map(|rb| rb.is_kinematic())
+                .unwrap_or(false);
+            let lift = if suelo_kinematico { skin } else { 0.0 };
+            let pos_h = [pos[0], pos[1] + lift, pos[2]];
+            let m1 = pasada(&controller, pos_h, [desired[0], 0.0, desired[2]]);
             // ¿Bloqueado contra una pared/escalón? Se intenta el
             // escalón propio: subir, avanzar y asentar (ver la nota
             // en create_character sobre el autostep de Rapier).
@@ -253,13 +324,18 @@ impl PhysicsWorld {
                 Some(m) => m,
                 None => {
                     let pos1 = [
-                        pos[0] + m1.translation.x,
-                        pos[1] + m1.translation.y,
-                        pos[2] + m1.translation.z,
+                        pos_h[0] + m1.translation.x,
+                        pos_h[1] + m1.translation.y,
+                        pos_h[2] + m1.translation.z,
                     ];
                     let m2 = pasada(&controller, pos1, [0.0, desired[1], 0.0]);
                     rapier3d::control::EffectiveCharacterMovement {
-                        translation: m1.translation + m2.translation,
+                        // El lift se devuelve aquí: la posición final
+                        // es pos_h + m1 + m2, y el movimiento se mide
+                        // desde la `pos` sin levantar.
+                        translation: m1.translation
+                            + m2.translation
+                            + vector![0.0, lift, 0.0],
                         grounded: m2.grounded,
                         is_sliding_down_slope: m1.is_sliding_down_slope
                             || m2.is_sliding_down_slope,
@@ -270,17 +346,56 @@ impl PhysicsWorld {
             pasada(&controller, pos, desired)
         };
 
-        let applied = [
-            movement.translation.x,
-            movement.translation.y,
-            movement.translation.z,
+        // `pos` ya incluye el carry: se suma una sola vez a new_pos.
+        let new_pos = [
+            pos[0] + movement.translation.x,
+            pos[1] + movement.translation.y,
+            pos[2] + movement.translation.z,
         ];
-        let new_pos = [pos[0] + applied[0], pos[1] + applied[1], pos[2] + applied[2]];
+        // Desplazamiento real del frame: carry + movimiento propio.
+        let applied = [
+            carry[0] + movement.translation.x,
+            carry[1] + movement.translation.y,
+            carry[2] + movement.translation.z,
+        ];
+
+        // Sonda de suelo: resuelve (padre, translation) a valores propios antes
+        // de mutar el estado.
+        let (nuevo_suelo, nuevo_suelo_pos) = if movement.grounded {
+            let shape_pos = Isometry::translation(new_pos[0], new_pos[1], new_pos[2]);
+            let filter = QueryFilter::default().exclude_collider(rapier_collider);
+            let options = ShapeCastOptions {
+                max_time_of_impact: skin + 0.06,
+                target_distance: skin,
+                stop_at_penetration: true,
+                compute_impact_geometry_on_penetration: true,
+            };
+            self.query_pipeline
+                .cast_shape(
+                    &self.rigid_body_set,
+                    &self.collider_set,
+                    &shape_pos,
+                    &Vector::new(0.0, -1.0, 0.0),
+                    self.collider_set[rapier_collider].shape(),
+                    options,
+                    filter,
+                )
+                .and_then(|(hit, _)| self.collider_set[hit].parent())
+                .and_then(|padre| {
+                    let t = self.rigid_body_set.get(padre)?.translation();
+                    Some((padre, [t.x, t.y, t.z]))
+                })
+                .map_or((None, [0.0, 0.0, 0.0]), |(padre, t)| (Some(padre), t))
+        } else {
+            (None, [0.0, 0.0, 0.0])
+        };
 
         if let Some(state) = self.characters.get_mut(&entity_id) {
             state.pos = new_pos;
             state.grounded = movement.grounded;
             state.sliding = movement.is_sliding_down_slope;
+            state.ground_body = nuevo_suelo;
+            state.ground_pos = nuevo_suelo_pos;
         }
 
         self.set_transform(body, new_pos, [0.0, 0.0, 0.0, 1.0]);
@@ -292,6 +407,8 @@ impl PhysicsWorld {
         let body = if let Some(state) = self.characters.get_mut(&entity_id) {
             state.pos = pos;
             state.grounded = false;
+            // Sin arrastre residual tras teletransportar.
+            state.ground_body = None;
             state.body
         } else {
             return false;

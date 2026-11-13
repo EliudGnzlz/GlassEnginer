@@ -204,3 +204,41 @@ CharacterController:
 Consumo de la auditoría: Kimi 14.682 (borrador de cruce) · la
 verificación contra el código y la redacción final son de Rayo.
 El desbloqueo asociado (`ede6bd1`): Sonnet 5, 12.490.
+
+## Addenda 2026-11-13 — Criterios «mejor que Unity» del CharacterController
+
+Orden suya (14:10): dos modos de fallo de Unity señalados por él como
+previsión de diseño — en la lectura correcta de sus descripciones
+(precisión de las 14:13), él señala DÓNDE ocurre el problema, no
+cómo debe construirse la solución; la exigencia es que el fallo no
+exista aquí ni en las mecánicas similares. Estado tras implementarlos
+y verificarlos:
+
+| Modo de fallo de Unity a prevenir | En Unity | En GlassEnginer | Verificación |
+|---|---|---|---|
+| Teletransporte del CharacterController | Hay que desactivar el componente un frame (`enabled=false`, mover, `enabled=true`) porque el estado de colisión del barrido pelea con el cambio de posición | **Nativo**: `Teleport` es operación de primera clase (fija la posición y limpia el estado en el acto, incluido el suelo recordado: sin empujes ni arrastres residuales al llegar) | Test Rust `teletransporte_limpia_el_arrastre` + fase en vivo `teletransporte_limpio` (x constante ±0,01 tras saltar de un ascensor en marcha al suelo) |
+| Plataformas móviles y ascensores | El personaje NO hereda el movimiento de la plataforma: hay que programar el arrastre a mano en cada script | **Nativo**: el controlador recuerda su suelo (sonda tras cada Move) y aplica el delta del cuerpo suelo antes de su propio deseo, en horizontal y en vertical; bajar caminando se suelta solo al cambiar el suelo bajo los pies | Tests Rust `plataforma_horizontal_arrastra`, `ascensor_sube_y_baja_sin_despegarse`, `bajar_caminando_suelta_la_plataforma` + escena en vivo `PruebaPlataformasCC` |
+
+La misma previsión ya aplicada en mecánicas parecidas: el
+`isGrounded` que parpadea al bajar (§3.4) se previene por diseño
+con el snap + la sonda de suelo (el suelo recordado solo se suelta
+al perder el contacto real), y el teletransporte limpio cubre
+también los respawns y portales que recolocan al personaje (el
+cruce de portal de la Fase 9 conserva el impulso por la misma vía).
+
+Dos hallazgos de la implementación, por honestidad técnica:
+(1) las posiciones de los colliders de Rapier solo se propagan
+desde sus cuerpos al hacer `step()`, y el personaje se mueve desde
+los scripts ANTES del step: `move_character` sincroniza ahora los
+colliders del cuerpo suelo antes de consultar, o la geometría de
+la plataforma iría siempre un paso por detrás del arrastre.
+(2) La fricción cinemática interna de Rapier 0.23 (sin interruptor
+en esta versión) anula el empuje normal con el que `move_shape` se
+separa de la superficie, y el barrido horizontal sobre un cuerpo
+cinemático se auto-bloqueaba en un bucle de impactos a toi 0
+(verificado: la misma pasada mueve sobre Fixed y devuelve
+[0,0,0] sobre Kinematic): la pasada horizontal separada sale una
+piel por encima cuando el suelo es cinemático y la vertical
+posterior asienta al personaje. El arrastre cubre la TRASLACIÓN
+del suelo; una plataforma que ROTA bajo los pies queda fuera de
+esta versión (el CharacterController no rota por diseño).

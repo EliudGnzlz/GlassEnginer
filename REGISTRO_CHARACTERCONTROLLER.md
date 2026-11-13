@@ -92,3 +92,42 @@ DeepSeek (deepseek-flash): P1 núcleo Rust 7.181 · P2 puente y
 componente C# 7.323 · P3 script de prueba 10.256 = **24.760**.
 Claude 0 · Kimi 0. La integración, el diagnóstico del escalón y
 los arreglos fueron trabajo directo de Rayo.
+
+## Addenda 2026-11-13 — Criterios «mejor que Unity» (teletransporte y plataformas)
+
+Orden suya (14:10): los dos modos de fallo señalados como
+requisitos de diseño y pruebas de aceptación.
+
+- **Teletransporte**: ya era operación de primera clase; ahora
+  además limpia el suelo recordado (sin arrastre residual).
+  Verificado en Rust (`teletransporte_limpia_el_arrastre`) y en
+  vivo (`teletransporte_limpio`: x = −6,00 exacta tras saltar del
+  ascensor en marcha al suelo).
+- **Plataformas y ascensores NATIVOS**: `CharacterState` recuerda
+  su suelo (cuerpo + translation, vía sonda descendente tras cada
+  Move con grounded) y el siguiente Move aplica primero el delta
+  de ese cuerpo: la plataforma lleva al personaje en horizontal y
+  en vertical sin scripts; bajar caminando se suelta solo al
+  cambiar el suelo bajo los pies. Solo traslación (la plataforma
+  que rota queda fuera de v1; el controller no rota por diseño).
+- Dos arreglos que la implementación destapó: (1) los colliders
+  de Rapier solo se propagan desde los cuerpos al hacer step() y
+  el personaje se mueve desde scripts antes del step —
+  `move_character` sincroniza los colliders del cuerpo suelo
+  antes de consultar; (2) la fricción cinemática de Rapier 0.23
+  (sin interruptor) anula el empuje normal de separación y el
+  barrido horizontal sobre un cuerpo cinemático se auto-bloqueaba
+  en un bucle de impactos a toi 0 (sobre Fixed mueve, sobre
+  Kinematic devolvía [0,0,0]): la pasada horizontal separada sale
+  una piel por encima si el suelo es cinemático.
+- Pruebas: `tests/character_platforms.rs` 4/4 (arrastre
+  horizontal, ascensor sube/baja sin despegarse, bajada caminando
+  con suelta, teletransporte limpio) + escena en vivo
+  `PruebaPlataformasCC` con `PlataformasCCTest`: GLOBAL OK
+  (viaje charX 2,98 frente a platX 3,00; ascensor a y=3,67 sin
+  ningún frame en el aire). Suite completa 457/457.
+- Consumo: Opus 5.5: 23.125 (núcleo 10.731 + tests 10.335 +
+  diagnóstico de pasarela 2.059). El primer intento del paquete
+  sin partir murió por el timeout de lectura de 120 s del helper
+  de Claude (pasarela sana: 3,6 s en prueba corta); el arreglo
+  fue partir el paquete, sin cambiar de proveedor.
