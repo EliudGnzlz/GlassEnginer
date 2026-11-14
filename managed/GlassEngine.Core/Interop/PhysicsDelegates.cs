@@ -214,3 +214,18 @@ public delegate int SetBodyTypeDelegate(ulong handle, int bodyType);
 // Teletransporte de posición: espejo de `glass_physics_move_position`.
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate int MovePositionDelegate(ulong handle, float x, float y, float z);
+
+// Impacto del CharacterController en bruto (espejo de CharacterHitFfi de Rust).
+[StructLayout(LayoutKind.Sequential)]
+public struct CharacterHitFfi
+{
+    public ulong Entity;
+    public float PointX, PointY, PointZ;
+    public float NormalX, NormalY, NormalZ;
+    public float MoveDirX, MoveDirY, MoveDirZ;
+    public float MoveLength;
+}
+
+// Último Move del personaje: espejo de `glass_character_last_move`.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate uint CharacterLastMoveDelegate(ulong entityId, out uint flags, float[] velocity, CharacterHitFfi[] hits, uint cap);

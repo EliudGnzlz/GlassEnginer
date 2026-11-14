@@ -64,6 +64,7 @@ public static class RuntimeBridge
     private delegate int GetLockedAxesDelegate(ulong handle);
 
     private static CharacterInfoDelegate? _characterInfo;
+    private static CharacterLastMoveDelegate? _characterLastMove;
     private static SetLockedAxesDelegate? _setLockedAxes;
     private static GetLockedAxesDelegate? _getLockedAxes;
     private static AttachCapsuleColliderDelegate? _attachCapsuleCollider;
@@ -305,6 +306,7 @@ public static class RuntimeBridge
         public IntPtr GetCcdEnabled;
         public IntPtr SetBodyType;
         public IntPtr MovePosition;
+        public IntPtr CharacterLastMove;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitPhysicsBridge")]
@@ -358,6 +360,9 @@ public static class RuntimeBridge
 
         if (callbacks->CharacterInfo != IntPtr.Zero)
             _characterInfo = Marshal.GetDelegateForFunctionPointer<CharacterInfoDelegate>(callbacks->CharacterInfo);
+
+        if (callbacks->CharacterLastMove != IntPtr.Zero)
+            _characterLastMove = Marshal.GetDelegateForFunctionPointer<CharacterLastMoveDelegate>(callbacks->CharacterLastMove);
             if (callbacks->SetLockedAxes != IntPtr.Zero)
             {
                 _setLockedAxes = Marshal.GetDelegateForFunctionPointer<SetLockedAxesDelegate>(callbacks->SetLockedAxes);
@@ -1531,6 +1536,49 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         grounded = groundedI32 != 0;
         sliding = slidingI32 != 0;
         return ok;
+    }
+
+    /// <summary>Lee los ojos del último Move del personaje: flags
+    /// estilo Unity, velocidad aplicada e impactos. False si el host
+    /// no trae el callback (host viejo).</summary>
+    public static bool CharacterLastMove(ulong entityId, out uint flags, out Vector3 velocity, CharacterHitFfi[] buffer, out int totalHits)
+    {
+        flags = 0;
+        velocity = Vector3.Zero;
+        totalHits = 0;
+        if (_characterLastMove is null) return false;
+        var vel = new float[3];
+        uint total = _characterLastMove(entityId, out flags, vel, buffer, (uint)buffer.Length);
+        velocity = new Vector3(vel[0], vel[1], vel[2]);
+        totalHits = (int)total;
+        return true;
+    }
+
+    /// <summary>Entrega un impacto del CharacterController al
+    /// GlassBehaviour de la entidad (OnControllerColliderHit).</summary>
+    public static void DispatchControllerHit(ulong entityId, Physics.ControllerColliderHit hit)
+    {
+        GlassBehaviour? instance = null;
+        lock (_sync)
+        {
+            foreach (var inst in _instances.Values)
+            {
+                if (inst.EntityId == entityId)
+                {
+                    instance = inst;
+                    break;
+                }
+            }
+        }
+        if (instance is null) return;
+        try
+        {
+            instance.OnControllerColliderHit(hit);
+        }
+        catch (Exception ex)
+        {
+            Log(4, $"[{instance.GetType().Name}] Excepción en OnControllerColliderHit: {ex}");
+        }
     }
 
     /// <summary>Aplica las restricciones por ejes (bits estilo Unity)

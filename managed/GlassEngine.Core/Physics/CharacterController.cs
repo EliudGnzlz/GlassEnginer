@@ -56,7 +56,31 @@ namespace GlassEngine.Core.Physics
         }
 
         // Mueve el personaje y devuelve el desplazamiento aplicado.
-        public Vector3 Move(Vector3 motion, float dt)
+        private const int MaxHits = 16;
+    private readonly CharacterHitFfi[] _hitBuffer = new CharacterHitFfi[MaxHits];
+
+    public Vector3 Velocity { get; private set; }
+    public CollisionFlags LastFlags { get; private set; }
+
+    public Vector3 Move(Vector3 motion, float dt)
+    {
+        Vector3 applied = MoveCore(motion, dt);
+        ReadLastMove();
+        return applied;
+    }
+
+    private void ReadLastMove()
+    {
+        if (!RuntimeBridge.CharacterLastMove(EntityId, out uint flags, out Vector3 velocity, _hitBuffer, out int total))
+            return;
+        Velocity = velocity;
+        LastFlags = (CollisionFlags)flags;
+        int count = Math.Min(total, _hitBuffer.Length);
+        for (int i = 0; i < count; i++)
+            RuntimeBridge.DispatchControllerHit(EntityId, ControllerColliderHit.FromFfi(in _hitBuffer[i]));
+    }
+
+    private Vector3 MoveCore(Vector3 motion, float dt)
         {
             if (!IsCreated && !Create())
                 return Vector3.Zero;

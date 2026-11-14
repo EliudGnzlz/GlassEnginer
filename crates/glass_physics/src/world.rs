@@ -459,7 +459,7 @@ impl PhysicsWorld {
     }
 
     /// Entidad propietaria de un collider, vía el `user_data` de su cuerpo.
-    fn entity_of_collider(&self, h: rapier3d::geometry::ColliderHandle) -> Option<u64> {
+    pub(crate) fn entity_of_collider(&self, h: rapier3d::geometry::ColliderHandle) -> Option<u64> {
         let collider = self.collider_set.get(h)?;
         let body = self.rigid_body_set.get(collider.parent()?)?;
         Some(body.user_data as u64)

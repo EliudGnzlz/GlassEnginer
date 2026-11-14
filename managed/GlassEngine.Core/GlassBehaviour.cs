@@ -45,6 +45,8 @@ public abstract class GlassBehaviour
     /// <summary>Un collider no-trigger de esta entidad empieza a tocar otro.</summary>
     public virtual void OnCollisionEnter(Collision collision) { }
 
+    public virtual void OnControllerColliderHit(Physics.ControllerColliderHit hit) { }
+
     /// <summary>Cada frame mientras dos colliders no-trigger siguen en contacto.</summary>
     public virtual void OnCollisionStay(Collision collision) { }
 

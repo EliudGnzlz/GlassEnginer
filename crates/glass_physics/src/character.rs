@@ -16,6 +16,9 @@ pub struct CharacterConfig {
 }
 
 pub struct CharacterState {
+    pub last_hits: Vec<CharacterHit>,
+    pub last_flags: u32,
+    pub last_velocity: [f32; 3],
     pub controller: KinematicCharacterController,
     pub body: BodyHandle,
     pub rapier_collider: ColliderHandle,
@@ -31,6 +34,21 @@ pub struct CharacterState {
     /// Translation de `ground_body` cuando se registró.
     pub ground_pos: [f32; 3],
 }
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CharacterHit {
+    pub entity: u64,
+    pub point: [f32; 3],
+    pub normal: [f32; 3],
+    pub move_direction: [f32; 3],
+    pub move_length: f32,
+}
+
+/// Bits de `CharacterState::last_flags` (espejo de `CollisionFlags` de Unity).
+pub const CHARACTER_FLAG_BELOW: u32 = 1;
+pub const CHARACTER_FLAG_SIDES: u32 = 2;
+pub const CHARACTER_FLAG_ABOVE: u32 = 4;
+pub const MAX_CHARACTER_HITS: usize = 16;
 
 impl PhysicsWorld {
     pub fn create_character(&mut self, entity_id: u64, pos: [f32; 3], cfg: CharacterConfig) -> bool {
@@ -92,6 +110,9 @@ impl PhysicsWorld {
                 sliding: false,
                 ground_body: None,
                 ground_pos: [0.0, 0.0, 0.0],
+                last_hits: Vec::new(),
+                last_flags: 0,
+                last_velocity: [0.0, 0.0, 0.0],
             },
         );
 
@@ -143,6 +164,8 @@ impl PhysicsWorld {
         let ground_pos = state.ground_pos;
 
         // Una pasada de move_shape desde `desde` con el deseo dado.
+        let hits: std::cell::RefCell<Vec<rapier3d::control::CharacterCollision>> =
+            std::cell::RefCell::new(Vec::new());
         let pasada = |ctrl: &KinematicCharacterController, desde: [f32; 3], deseo: [f32; 3]| {
             ctrl.move_shape(
                 dt.max(1e-4),
@@ -153,7 +176,7 @@ impl PhysicsWorld {
                 &Isometry::translation(desde[0], desde[1], desde[2]),
                 vector![deseo[0], deseo[1], deseo[2]],
                 QueryFilter::new().exclude_collider(rapier_collider),
-                |_| {},
+                |c| hits.borrow_mut().push(c),
             )
         };
 
@@ -390,12 +413,57 @@ impl PhysicsWorld {
             (None, [0.0, 0.0, 0.0])
         };
 
+        // Ojos del controlador: convierte las colisiones recogidas por
+        // las pasadas en hits con flags estilo Unity y la velocidad
+        // aplicada, y lo guarda para character_last_move.
+        let deseado_len = (desired[0] * desired[0] + desired[1] * desired[1] + desired[2] * desired[2]).sqrt();
+        let dir = if deseado_len > 1e-6 {
+            [desired[0] / deseado_len, desired[1] / deseado_len, desired[2] / deseado_len]
+        } else {
+            [0.0, 0.0, 0.0]
+        };
+        let mut flags = if movement.grounded { CHARACTER_FLAG_BELOW } else { 0 };
+        let mut hits_out: Vec<CharacterHit> = Vec::new();
+        for c in hits.borrow().iter() {
+            let Some(ent) = self.entity_of_collider(c.handle) else { continue };
+            if ent == entity_id {
+                continue;
+            }
+            let n = c.hit.normal1;
+            if n.y > 0.6 {
+                flags |= CHARACTER_FLAG_BELOW;
+            } else if n.y < -0.6 {
+                flags |= CHARACTER_FLAG_ABOVE;
+            } else {
+                flags |= CHARACTER_FLAG_SIDES;
+            }
+            let ta = c.translation_applied;
+            hits_out.push(CharacterHit {
+                entity: ent,
+                point: [c.hit.witness2.x, c.hit.witness2.y, c.hit.witness2.z],
+                normal: [n.x, n.y, n.z],
+                move_direction: dir,
+                move_length: (ta.x * ta.x + ta.y * ta.y + ta.z * ta.z).sqrt(),
+            });
+            if hits_out.len() >= MAX_CHARACTER_HITS {
+                break;
+            }
+        }
+        let velocidad = if dt > 1e-6 {
+            [applied[0] / dt, applied[1] / dt, applied[2] / dt]
+        } else {
+            [0.0, 0.0, 0.0]
+        };
+
         if let Some(state) = self.characters.get_mut(&entity_id) {
             state.pos = new_pos;
             state.grounded = movement.grounded;
             state.sliding = movement.is_sliding_down_slope;
             state.ground_body = nuevo_suelo;
             state.ground_pos = nuevo_suelo_pos;
+            state.last_hits = hits_out;
+            state.last_flags = flags;
+            state.last_velocity = velocidad;
         }
 
         self.set_transform(body, new_pos, [0.0, 0.0, 0.0, 1.0]);
@@ -425,6 +493,15 @@ impl PhysicsWorld {
         } else {
             false
         }
+    }
+
+    /// (flags, velocidad, hits) del último `move_character` de la entidad.
+    pub fn character_last_move(
+        &self,
+        entity_id: u64,
+    ) -> Option<(u32, [f32; 3], Vec<CharacterHit>)> {
+        let state = self.characters.get(&entity_id)?;
+        Some((state.last_flags, state.last_velocity, state.last_hits.clone()))
     }
 
     pub fn character_info(&self, entity_id: u64) -> Option<([f32; 3], bool, bool)> {

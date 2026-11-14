@@ -599,7 +599,71 @@ pub unsafe extern "C" fn glass_character_destroy(entity_id: u64) -> i32 {
 /// `out_pos_x/y/z`, `out_grounded` y `out_sliding` deben ser null o
 /// apuntar a memoria válida y escribible durante la llamada (la función
 /// comprueba el null antes de escribir).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CharacterHitFfi {
+    pub entity: u64,
+    pub point: [f32; 3],
+    pub normal: [f32; 3],
+    pub move_direction: [f32; 3],
+    pub move_length: f32,
+}
+
+/// Escribe flags y velocidad del último Move, copia hasta `cap` hits y devuelve
+/// el total de hits (puede exceder `cap`). Sin personaje: devuelve 0 y flags 0.
+///
+/// # Safety
+/// `out_flags` debe ser válido para escribir un `u32`, `out_vel` para 3 `f32`
+/// y `out_hits` para `cap` elementos; cualquiera puede ser nulo («solo contar»).
 #[no_mangle]
+pub unsafe extern "C" fn glass_character_last_move(
+    entity_id: u64,
+    out_flags: *mut u32,
+    out_vel: *mut f32,
+    out_hits: *mut CharacterHitFfi,
+    cap: u32,
+) -> u32 {
+    // Mismo acceso al mundo global que glass_character_info.
+    let datos = match get_global_physics_world() {
+        Some(sys) => match sys.lock() {
+            Ok(world) => world.character_last_move(entity_id),
+            Err(_) => None,
+        },
+        None => None,
+    };
+    let Some((flags, vel, hits)) = datos else {
+        unsafe {
+            if !out_flags.is_null() {
+                *out_flags = 0;
+            }
+            if !out_vel.is_null() {
+                std::ptr::write_bytes(out_vel, 0, 3);
+            }
+        }
+        return 0;
+    };
+    unsafe {
+        if !out_flags.is_null() {
+            *out_flags = flags;
+        }
+        if !out_vel.is_null() {
+            std::ptr::copy_nonoverlapping(vel.as_ptr(), out_vel, 3);
+        }
+        if !out_hits.is_null() {
+            for (i, h) in hits.iter().take(cap as usize).enumerate() {
+                out_hits.add(i).write(CharacterHitFfi {
+                    entity: h.entity,
+                    point: h.point,
+                    normal: h.normal,
+                    move_direction: h.move_direction,
+                    move_length: h.move_length,
+                });
+            }
+        }
+    }
+    hits.len() as u32
+}
+
 pub unsafe extern "C" fn glass_character_info(
     entity_id: u64,
     out_x: *mut f32, out_y: *mut f32, out_z: *mut f32,
