@@ -19,7 +19,7 @@ on:
       tag:
         description: "Etiqueta del release"
         type: string
-        default: "v0.1.1-alpha"
+        default: "v0.10.0-beta"
   push:
     tags:
       - "v*"
