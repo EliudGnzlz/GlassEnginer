@@ -242,3 +242,76 @@ piel por encima cuando el suelo es cinemático y la vertical
 posterior asienta al personaje. El arrastre cubre la TRASLACIÓN
 del suelo; una plataforma que ROTA bajo los pies queda fuera de
 esta versión (el CharacterController no rota por diseño).
+
+---
+
+## Addenda 2026-11-13 (noche) — Bloque de huecos beta IMPLEMENTADO
+
+Orden del usuario (15:31): implementar los huecos clasificados
+para la beta. Estado tras el bloque (commits `c0b3053`, `a0aa31d`,
+`471fe0d`, `e8c0b5f`, `0ad38db`, `924af33`):
+
+**Rigidbody — de 11 TIENE · 10 PARCIAL · 36 NO TIENE (≈28 %) a:**
+
+- `mass` **cableada de verdad**: mundo (reescalado de densidades),
+  FFI, escena (las DOS rutas: spawn en vivo y rebuild) y C#
+  `RigidBody.Mass` (se re-aplica al adjuntar colliders, porque la
+  masa manda sobre la densidad y los colliders llegan después).
+- `linearDamping` configurable: `PhysicsData.linear_damping`
+  (defecto 1.5, el histórico) y `RigidBody.LinearDamping`. El
+  1.5 fijo dejó de ser invisible.
+- `useGravity` por cuerpo: `PhysicsData.use_gravity` +
+  `RigidBody.UseGravity`/`GravityScale` (gravity_scale de Rapier).
+- `ForceMode` completo en `ApplyForce`/`ApplyImpulse`:
+  Force, Impulse, Acceleration (f × masa) y VelocityChange
+  (Δv directo, verificado en vivo: v = 3,00 exactos con masa 5).
+- `collisionDetectionMode`: `PhysicsData.ccd` +
+  `RigidBody.CollisionDetection`; verificado en vivo (proyectil
+  a 80 m/s frenado por CCD; su gemelo discreto tunela la pared).
+- `isKinematic` mutable en caliente (`set_body_type`: Dynamic /
+  Static / KinematicPositionBased) + `MovePosition` cinemático
+  que empuja dinámicos (test de superficie).
+- Carga `Collision` **con contactos**: punto (media de los puntos
+  del manifold), normal orientada por dueño del collider
+  (semántica Unity; el orden de creación ya no la invierte),
+  velocidad relativa por receptor e impulso — el del manifold
+  llega a 0 en el Enter, así que si es cero se estima como masa
+  reducida × velocidad de aproximación (verificado en vivo:
+  2 kg a 4,73 m/s → 9,46).
+- `interpolation`: captura por substep del transform previo,
+  mezcla por resto del acumulador con slerp y regla de salto
+  (>2 m no se barre). `RigidBody.Interpolate` por entidad.
+
+Recuento: TIENE **19** · PARCIAL **10** · NO TIENE **28** de 57
+(≈42 % ponderado). Siguen fuera, Post-1.0 según la clasificación:
+drag angular y tensor de inercia, solverIterations y familia,
+maxDepenetrationVelocity, centerOfMass automático, Sleep/wake
+con umbrales configurables, `AddExplosionForce` como API
+directa (el patrón compuesto de la Fase 10 sigue siendo la vía),
+consultas de barrido del Rigidbody (sweep test) y la familia de
+`ComputePenetration` fina.
+
+**CharacterController — de 6/3/16 (30 %) a:**
+
+- `velocity` legible: `CharacterController.Velocity` (desplazamiento
+  aplicado ÷ dt del último Move).
+- `CollisionFlags` + `OnControllerColliderHit`: las
+  `CharacterCollision` ya no se descartan; se convierten en
+  `ControllerColliderHit` (entidad, punto witness2, normal1,
+  dirección y longitud) con flags Below/Sides/Above por la
+  normal (verificado en vivo contra la pared: normal −X,
+  entidad correcta, flags Below|Sides). La corrección de API la
+  detectó el paquete: en Rapier 0.23 el impacto es
+  `hit: ShapeCastHit` de parry, no `toi: TOI`.
+
+Recuento: TIENE **9** · PARCIAL **3** · NO TIENE **13** de 25
+(42 %). Quedan fuera (Post-1.0): `minMoveDistance`,
+`detectCollisions` desactivable, stepOffset/slopeLimit como
+propiedades mutables tras crear (hoy van en la configuración de
+creación), y la familia heredada de Collider (material físico
+por personaje y bounds).
+
+**Verificación del bloque:** tests de mundo — superficie RB 6/6,
+contactos 4/4, hits del CC 3/3, interpolación 3/3, sin regresión
+en escalones/plataformas del CC — y **prueba en vivo
+`PruebaHuecosBeta` GLOBAL OK** (escena y scripts en el repo).
