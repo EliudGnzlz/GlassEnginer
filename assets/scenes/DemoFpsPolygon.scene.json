@@ -142,9 +142,9 @@
    "friction": 0.7,
    "restitution": 0.05,
    "box_extents": [
-    60.0,
+    22.0,
     0.5,
-    70.0
+    34.0
    ],
    "linear_velocity": [
     0,
@@ -169,8 +169,8 @@
   "transform": {
    "position": [
     0.0,
-    -0.06,
-    -40.0
+    -0.5,
+    -21.0
    ],
    "rotation": [
     0.0,
@@ -178,9 +178,9 @@
     0.0
    ],
    "scale": [
-    120.0,
-    1.0,
-    140.0
+    22.0,
+    0.45,
+    34.0
    ]
   }
  },
@@ -211,8 +211,8 @@
    "friction": 0.7,
    "restitution": 0.05,
    "box_extents": [
-    60.0,
-    3.0,
+    4.0,
+    2.0,
     0.5
    ],
    "linear_velocity": [
@@ -237,9 +237,9 @@
   ],
   "transform": {
    "position": [
-    0.0,
-    3.0,
-    -118.0
+    30.0,
+    2.0,
+    -107.0
    ],
    "rotation": [
     0.0,
@@ -247,9 +247,9 @@
     0.0
    ],
    "scale": [
-    120.0,
-    6.0,
-    1.0
+    4.0,
+    2.0,
+    0.5
    ]
   }
  },
@@ -316,9 +316,9 @@
     0.0
    ],
    "scale": [
-    8.0,
-    0.5,
-    5.0
+    4.0,
+    0.25,
+    2.5
    ]
   }
  },
@@ -351,7 +351,7 @@
    "box_extents": [
     0.5,
     2.0,
-    65.0
+    34.0
    ],
    "linear_velocity": [
     0,
@@ -375,9 +375,9 @@
   ],
   "transform": {
    "position": [
-    -30.0,
+    -22.0,
     2.0,
-    -50.0
+    -21.0
    ],
    "rotation": [
     0.0,
@@ -385,9 +385,9 @@
     0.0
    ],
    "scale": [
-    1.0,
-    4.0,
-    130.0
+    0.5,
+    2.0,
+    34.0
    ]
   }
  },
@@ -420,7 +420,7 @@
    "box_extents": [
     0.5,
     2.0,
-    65.0
+    34.0
    ],
    "linear_velocity": [
     0,
@@ -444,9 +444,9 @@
   ],
   "transform": {
    "position": [
-    30.0,
+    22.0,
     2.0,
-    -50.0
+    -21.0
    ],
    "rotation": [
     0.0,
@@ -454,9 +454,150 @@
     0.0
    ],
    "scale": [
-    1.0,
-    4.0,
-    130.0
+    0.5,
+    2.0,
+    34.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.2,
+    0.15,
+    0.12
+   ],
+   "model": "cylinder",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.6,
+    0.6,
+    0.6
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": "GlassEngine.Core.Scripts.Diana",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Diana"
+  },
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 10,
+  "name": "Diana10",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Script",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    30.0,
+    1.6,
+    -10.0
+   ],
+   "rotation": [
+    90.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.2,
+    0.15,
+    1.2
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.3,
+    0.4,
+    0.9
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.09,
+    0.8,
+    0.09
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 14,
+  "name": "Poste10",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    30.0,
+    0.8,
+    -9.65
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.09,
+    0.8,
+    0.09
    ]
   }
  },
@@ -516,7 +657,7 @@
   ],
   "transform": {
    "position": [
-    -4.0,
+    30.0,
     1.6,
     -25.0
    ],
@@ -585,7 +726,7 @@
   ],
   "transform": {
    "position": [
-    -4.0,
+    30.0,
     0.8,
     -24.65
    ],
@@ -595,9 +736,9 @@
     0.0
    ],
    "scale": [
-    0.18,
-    1.6,
-    0.18
+    0.09,
+    0.8,
+    0.09
    ]
   }
  },
@@ -657,7 +798,7 @@
   ],
   "transform": {
    "position": [
-    5.0,
+    30.0,
     1.6,
     -50.0
    ],
@@ -670,6 +811,147 @@
     1.2,
     0.15,
     1.2
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.3,
+    0.4,
+    0.9
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.09,
+    0.8,
+    0.09
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 16,
+  "name": "Poste50",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    30.0,
+    0.8,
+    -49.65
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.09,
+    0.8,
+    0.09
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.3,
+    0.4,
+    0.9
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    1.8,
+    1.8,
+    0.1
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": "GlassEngine.Core.Scripts.Diana",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.Diana"
+  },
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 13,
+  "name": "Diana100Panel",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Script",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    30.0,
+    1.8,
+    -100.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.8,
+    1.8,
+    0.1
    ]
   }
  },
@@ -803,7 +1085,7 @@
    "position": [
     6.0,
     1.6,
-    -40.0
+    -30.0
    ],
    "rotation": [
     90.0,
@@ -871,7 +1153,7 @@
   "transform": {
    "position": [
     -6.0,
-    1.05,
+    1.1,
     -20.0
    ],
    "rotation": [
@@ -880,9 +1162,9 @@
     0.0
    ],
    "scale": [
-    7.5,
-    0.1,
-    0.6
+    3.75,
+    0.05,
+    0.3
    ]
   }
  },
@@ -940,8 +1222,8 @@
   "transform": {
    "position": [
     6.0,
-    1.05,
-    -40.0
+    1.1,
+    -30.0
    ],
    "rotation": [
     0.0,
@@ -949,9 +1231,9 @@
     0.0
    ],
    "scale": [
-    7.5,
-    0.1,
-    0.6
+    3.75,
+    0.05,
+    0.3
    ]
   }
  },
@@ -1155,9 +1437,9 @@
   ],
   "transform": {
    "position": [
-    5.0,
+    -5.0,
     0.7,
-    -60.0
+    -34.0
    ],
    "rotation": [
     0.0,
@@ -1500,9 +1782,9 @@
   ],
   "transform": {
    "position": [
-    5.8,
+    -4.5,
     0.4,
-    -58.0
+    -33.0
    ],
    "rotation": [
     0.0,
@@ -1569,9 +1851,9 @@
   ],
   "transform": {
    "position": [
-    4.0,
+    -5.5,
     0.4,
-    -61.5
+    -30.5
    ],
    "rotation": [
     0.0,
@@ -2922,1173 +3204,6 @@
   "script_data": {
    "class_name": "GlassEngine.Core.Scripts.ProyectilF10"
   }
- },
- {
-  "id": 120,
-  "name": "ModeloCercaF10",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -30,
-    0,
-    4
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "components": [
-   "Transform",
-   "MeshRenderer"
-  ],
-  "mesh": {
-   "model": "fase6_test",
-   "color": [
-    1.0,
-    0.55,
-    0.15
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv"
-  },
-  "camera": null,
-  "light": null,
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 121,
-  "name": "ModeloVaivenF10",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -16,
-    1,
-    4
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "Script"
-  ],
-  "mesh": {
-   "model": "fase6_test",
-   "color": [
-    1.0,
-    0.55,
-    0.15
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv"
-  },
-  "camera": null,
-  "light": null,
-  "physics": null,
-  "script": "GlassEngine.Core.Scripts.VaivenLod",
-  "script_data": {
-   "class_name": "GlassEngine.Core.Scripts.VaivenLod"
-  },
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 125,
-  "name": "FuegoZona",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -18,
-    0.5,
-    12
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "components": [
-   "Transform",
-   "ParticleEmitter"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": null,
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null,
-  "particles": {
-   "rate": 1000.0,
-   "max_particles": 2000,
-   "lifetime": [
-    1.8,
-    2.6
-   ],
-   "seed": 7
-  }
- },
- {
-  "id": 126,
-  "name": "TrazadoraZona",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -26,
-    2,
-    -2
-   ],
-   "rotation": [
-    0,
-    0,
-    -90
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "components": [
-   "Transform",
-   "ParticleEmitter"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": null,
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null,
-  "particles": {
-   "rate": 300.0,
-   "max_particles": 600,
-   "lifetime": [
-    0.4,
-    0.7
-   ],
-   "seed": 91,
-   "start_speed": [
-    6.0,
-    8.0
-   ],
-   "start_size": [
-    0.05,
-    0.09
-   ],
-   "gravity": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "drag": 0.0,
-   "color_start": [
-    0.7,
-    0.85,
-    1.0,
-    0.8
-   ],
-   "color_end": [
-    0.3,
-    0.5,
-    1.0,
-    0.1
-   ],
-   "stretched": true,
-   "stretch_factor": 0.6
-  }
- },
- {
-  "id": 130,
-  "name": "LuzEstres0",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": false,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -40.0,
-    3.2,
-    -16.0
-   ],
-   "rotation": [
-    0,
-    0,
-    0
-   ],
-   "scale": [
-    1,
-    1,
-    1
-   ]
-  },
-  "components": [
-   "Transform",
-   "Light"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": {
-   "light_type": "Point",
-   "color": [
-    1,
-    0.6,
-    0.3
-   ],
-   "intensity": 0.9,
-   "range": 9.0,
-   "cast_shadow": true
-  },
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 131,
-  "name": "LuzEstres1",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": false,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -34.0,
-    3.2,
-    -16.0
-   ],
-   "rotation": [
-    0,
-    0,
-    0
-   ],
-   "scale": [
-    1,
-    1,
-    1
-   ]
-  },
-  "components": [
-   "Transform",
-   "Light"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": {
-   "light_type": "Point",
-   "color": [
-    0.4,
-    0.6,
-    1
-   ],
-   "intensity": 0.9,
-   "range": 9.0,
-   "cast_shadow": true
-  },
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 132,
-  "name": "LuzEstres2",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": false,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -28.0,
-    3.2,
-    -16.0
-   ],
-   "rotation": [
-    0,
-    0,
-    0
-   ],
-   "scale": [
-    1,
-    1,
-    1
-   ]
-  },
-  "components": [
-   "Transform",
-   "Light"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": {
-   "light_type": "Point",
-   "color": [
-    0.5,
-    1,
-    0.5
-   ],
-   "intensity": 0.9,
-   "range": 9.0,
-   "cast_shadow": false
-  },
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 133,
-  "name": "LuzEstres3",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": false,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -22.0,
-    3.2,
-    -16.0
-   ],
-   "rotation": [
-    0,
-    0,
-    0
-   ],
-   "scale": [
-    1,
-    1,
-    1
-   ]
-  },
-  "components": [
-   "Transform",
-   "Light"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": {
-   "light_type": "Point",
-   "color": [
-    1,
-    0.4,
-    0.8
-   ],
-   "intensity": 0.9,
-   "range": 9.0,
-   "cast_shadow": false
-  },
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 134,
-  "name": "LuzEstres4",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": false,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -40.0,
-    3.2,
-    -24.0
-   ],
-   "rotation": [
-    0,
-    0,
-    0
-   ],
-   "scale": [
-    1,
-    1,
-    1
-   ]
-  },
-  "components": [
-   "Transform",
-   "Light"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": {
-   "light_type": "Point",
-   "color": [
-    0.4,
-    0.6,
-    1
-   ],
-   "intensity": 0.9,
-   "range": 9.0,
-   "cast_shadow": false
-  },
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 135,
-  "name": "LuzEstres5",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": false,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -34.0,
-    3.2,
-    -24.0
-   ],
-   "rotation": [
-    0,
-    0,
-    0
-   ],
-   "scale": [
-    1,
-    1,
-    1
-   ]
-  },
-  "components": [
-   "Transform",
-   "Light"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": {
-   "light_type": "Point",
-   "color": [
-    0.5,
-    1,
-    0.5
-   ],
-   "intensity": 0.9,
-   "range": 9.0,
-   "cast_shadow": false
-  },
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 136,
-  "name": "LuzEstres6",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": false,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -28.0,
-    3.2,
-    -24.0
-   ],
-   "rotation": [
-    0,
-    0,
-    0
-   ],
-   "scale": [
-    1,
-    1,
-    1
-   ]
-  },
-  "components": [
-   "Transform",
-   "Light"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": {
-   "light_type": "Point",
-   "color": [
-    1,
-    0.4,
-    0.8
-   ],
-   "intensity": 0.9,
-   "range": 9.0,
-   "cast_shadow": false
-  },
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 137,
-  "name": "LuzEstres7",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": false,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -22.0,
-    3.2,
-    -24.0
-   ],
-   "rotation": [
-    0,
-    0,
-    0
-   ],
-   "scale": [
-    1,
-    1,
-    1
-   ]
-  },
-  "components": [
-   "Transform",
-   "Light"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": {
-   "light_type": "Point",
-   "color": [
-    1,
-    0.6,
-    0.3
-   ],
-   "intensity": 0.9,
-   "range": 9.0,
-   "cast_shadow": false
-  },
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 138,
-  "name": "LuzEstres8",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": false,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -40.0,
-    3.2,
-    -32.0
-   ],
-   "rotation": [
-    0,
-    0,
-    0
-   ],
-   "scale": [
-    1,
-    1,
-    1
-   ]
-  },
-  "components": [
-   "Transform",
-   "Light"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": {
-   "light_type": "Point",
-   "color": [
-    0.5,
-    1,
-    0.5
-   ],
-   "intensity": 0.9,
-   "range": 9.0,
-   "cast_shadow": false
-  },
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 139,
-  "name": "LuzEstres9",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": false,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -34.0,
-    3.2,
-    -32.0
-   ],
-   "rotation": [
-    0,
-    0,
-    0
-   ],
-   "scale": [
-    1,
-    1,
-    1
-   ]
-  },
-  "components": [
-   "Transform",
-   "Light"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": {
-   "light_type": "Point",
-   "color": [
-    1,
-    0.4,
-    0.8
-   ],
-   "intensity": 0.9,
-   "range": 9.0,
-   "cast_shadow": false
-  },
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 140,
-  "name": "LuzEstres10",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": false,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -28.0,
-    3.2,
-    -32.0
-   ],
-   "rotation": [
-    0,
-    0,
-    0
-   ],
-   "scale": [
-    1,
-    1,
-    1
-   ]
-  },
-  "components": [
-   "Transform",
-   "Light"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": {
-   "light_type": "Point",
-   "color": [
-    1,
-    0.6,
-    0.3
-   ],
-   "intensity": 0.9,
-   "range": 9.0,
-   "cast_shadow": false
-  },
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 141,
-  "name": "LuzEstres11",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": false,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -22.0,
-    3.2,
-    -32.0
-   ],
-   "rotation": [
-    0,
-    0,
-    0
-   ],
-   "scale": [
-    1,
-    1,
-    1
-   ]
-  },
-  "components": [
-   "Transform",
-   "Light"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": {
-   "light_type": "Point",
-   "color": [
-    0.4,
-    0.6,
-    1
-   ],
-   "intensity": 0.9,
-   "range": 9.0,
-   "cast_shadow": false
-  },
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 142,
-  "name": "LuzEstres12",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": false,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -40.0,
-    3.2,
-    -40.0
-   ],
-   "rotation": [
-    0,
-    0,
-    0
-   ],
-   "scale": [
-    1,
-    1,
-    1
-   ]
-  },
-  "components": [
-   "Transform",
-   "Light"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": {
-   "light_type": "Point",
-   "color": [
-    1,
-    0.4,
-    0.8
-   ],
-   "intensity": 0.9,
-   "range": 9.0,
-   "cast_shadow": false
-  },
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 143,
-  "name": "LuzEstres13",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": false,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -34.0,
-    3.2,
-    -40.0
-   ],
-   "rotation": [
-    0,
-    0,
-    0
-   ],
-   "scale": [
-    1,
-    1,
-    1
-   ]
-  },
-  "components": [
-   "Transform",
-   "Light"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": {
-   "light_type": "Point",
-   "color": [
-    1,
-    0.6,
-    0.3
-   ],
-   "intensity": 0.9,
-   "range": 9.0,
-   "cast_shadow": false
-  },
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 144,
-  "name": "LuzEstres14",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": false,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -28.0,
-    3.2,
-    -40.0
-   ],
-   "rotation": [
-    0,
-    0,
-    0
-   ],
-   "scale": [
-    1,
-    1,
-    1
-   ]
-  },
-  "components": [
-   "Transform",
-   "Light"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": {
-   "light_type": "Point",
-   "color": [
-    0.4,
-    0.6,
-    1
-   ],
-   "intensity": 0.9,
-   "range": 9.0,
-   "cast_shadow": false
-  },
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
- },
- {
-  "id": 145,
-  "name": "LuzEstres15",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "active": false,
-  "parent": null,
-  "children": [],
-  "transform": {
-   "position": [
-    -22.0,
-    3.2,
-    -40.0
-   ],
-   "rotation": [
-    0,
-    0,
-    0
-   ],
-   "scale": [
-    1,
-    1,
-    1
-   ]
-  },
-  "components": [
-   "Transform",
-   "Light"
-  ],
-  "mesh": null,
-  "camera": null,
-  "light": {
-   "light_type": "Point",
-   "color": [
-    0.5,
-    1,
-    0.5
-   ],
-   "intensity": 0.9,
-   "range": 9.0,
-   "cast_shadow": false
-  },
-  "physics": null,
-  "script": null,
-  "script_data": null,
-  "audio": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "portal": null,
-  "animator": null,
-  "fog": null
  },
  {
   "active": true,
@@ -24491,6 +23606,237 @@
   }
  },
  {
+  "id": 217,
+  "name": "SueloTiro",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    30.0,
+    -0.5,
+    -50.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    4.0,
+    0.45,
+    56.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.22,
+    0.22,
+    0.24
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    4.0,
+    0.5,
+    56.0
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 218,
+  "name": "MuroFrente",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    2.0,
+    13.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    22.0,
+    2.0,
+    0.5
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.22,
+    0.22,
+    0.24
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    22.0,
+    2.0,
+    0.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 219,
+  "name": "PuestoTiro",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    30.0,
+    0.25,
+    2.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    2.0,
+    0.25,
+    1.5
+   ]
+  },
+  "mesh": {
+   "color": [
+    0.22,
+    0.22,
+    0.24
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "cube"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.0,
+    0.25,
+    1.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
   "id": 300,
   "name": "Baldosa300",
   "tag": "Untagged",
@@ -24505,9 +23851,9 @@
   ],
   "transform": {
    "position": [
-    -12.5,
+    -15.0,
     0.0,
-    12.5
+    -55.0
    ],
    "rotation": [
     0.0,
@@ -24562,9 +23908,9 @@
   ],
   "transform": {
    "position": [
-    -12.5,
+    -15.0,
     0.0,
-    7.5
+    -50.0
    ],
    "rotation": [
     0.0,
@@ -24619,9 +23965,9 @@
   ],
   "transform": {
    "position": [
-    -12.5,
+    -15.0,
     0.0,
-    2.5
+    -45.0
    ],
    "rotation": [
     0.0,
@@ -24676,9 +24022,9 @@
   ],
   "transform": {
    "position": [
-    -12.5,
+    -15.0,
     0.0,
-    -2.5
+    -40.0
    ],
    "rotation": [
     0.0,
@@ -24733,9 +24079,9 @@
   ],
   "transform": {
    "position": [
-    -12.5,
+    -15.0,
     0.0,
-    -7.5
+    -35.0
    ],
    "rotation": [
     0.0,
@@ -24790,9 +24136,9 @@
   ],
   "transform": {
    "position": [
-    -12.5,
+    -15.0,
     0.0,
-    -12.5
+    -30.0
    ],
    "rotation": [
     0.0,
@@ -24847,9 +24193,9 @@
   ],
   "transform": {
    "position": [
-    -12.5,
+    -15.0,
     0.0,
-    -17.5
+    -25.0
    ],
    "rotation": [
     0.0,
@@ -24904,9 +24250,9 @@
   ],
   "transform": {
    "position": [
-    -12.5,
+    -15.0,
     0.0,
-    -22.5
+    -20.0
    ],
    "rotation": [
     0.0,
@@ -24961,9 +24307,9 @@
   ],
   "transform": {
    "position": [
-    -12.5,
+    -15.0,
     0.0,
-    -27.5
+    -15.0
    ],
    "rotation": [
     0.0,
@@ -25018,9 +24364,9 @@
   ],
   "transform": {
    "position": [
-    -12.5,
+    -15.0,
     0.0,
-    -32.5
+    -10.0
    ],
    "rotation": [
     0.0,
@@ -25075,9 +24421,9 @@
   ],
   "transform": {
    "position": [
-    -12.5,
+    -15.0,
     0.0,
-    -37.5
+    -5.0
    ],
    "rotation": [
     0.0,
@@ -25132,9 +24478,9 @@
   ],
   "transform": {
    "position": [
-    -12.5,
+    -15.0,
     0.0,
-    -42.5
+    0.0
    ],
    "rotation": [
     0.0,
@@ -25189,9 +24535,9 @@
   ],
   "transform": {
    "position": [
-    -12.5,
+    -15.0,
     0.0,
-    -47.5
+    5.0
    ],
    "rotation": [
     0.0,
@@ -25246,9 +24592,9 @@
   ],
   "transform": {
    "position": [
-    -12.5,
+    -15.0,
     0.0,
-    -52.5
+    10.0
    ],
    "rotation": [
     0.0,
@@ -25303,9 +24649,9 @@
   ],
   "transform": {
    "position": [
-    -12.5,
+    -10.0,
     0.0,
-    -57.5
+    -55.0
    ],
    "rotation": [
     0.0,
@@ -25360,9 +24706,9 @@
   ],
   "transform": {
    "position": [
-    -7.5,
+    -10.0,
     0.0,
-    12.5
+    -50.0
    ],
    "rotation": [
     0.0,
@@ -25417,9 +24763,9 @@
   ],
   "transform": {
    "position": [
-    -7.5,
+    -10.0,
     0.0,
-    7.5
+    -45.0
    ],
    "rotation": [
     0.0,
@@ -25474,9 +24820,9 @@
   ],
   "transform": {
    "position": [
-    -7.5,
+    -10.0,
     0.0,
-    2.5
+    -40.0
    ],
    "rotation": [
     0.0,
@@ -25531,9 +24877,9 @@
   ],
   "transform": {
    "position": [
-    -7.5,
+    -10.0,
     0.0,
-    -2.5
+    -35.0
    ],
    "rotation": [
     0.0,
@@ -25588,9 +24934,9 @@
   ],
   "transform": {
    "position": [
-    -7.5,
+    -10.0,
     0.0,
-    -7.5
+    -30.0
    ],
    "rotation": [
     0.0,
@@ -25645,9 +24991,9 @@
   ],
   "transform": {
    "position": [
-    -7.5,
+    -10.0,
     0.0,
-    -12.5
+    -25.0
    ],
    "rotation": [
     0.0,
@@ -25702,9 +25048,9 @@
   ],
   "transform": {
    "position": [
-    -7.5,
+    -10.0,
     0.0,
-    -17.5
+    -20.0
    ],
    "rotation": [
     0.0,
@@ -25759,9 +25105,9 @@
   ],
   "transform": {
    "position": [
-    -7.5,
+    -10.0,
     0.0,
-    -22.5
+    -15.0
    ],
    "rotation": [
     0.0,
@@ -25816,9 +25162,9 @@
   ],
   "transform": {
    "position": [
-    -7.5,
+    -10.0,
     0.0,
-    -27.5
+    -10.0
    ],
    "rotation": [
     0.0,
@@ -25873,9 +25219,9 @@
   ],
   "transform": {
    "position": [
-    -7.5,
+    -10.0,
     0.0,
-    -32.5
+    -5.0
    ],
    "rotation": [
     0.0,
@@ -25930,9 +25276,9 @@
   ],
   "transform": {
    "position": [
-    -7.5,
+    -10.0,
     0.0,
-    -37.5
+    0.0
    ],
    "rotation": [
     0.0,
@@ -25987,9 +25333,9 @@
   ],
   "transform": {
    "position": [
-    -7.5,
+    -10.0,
     0.0,
-    -42.5
+    5.0
    ],
    "rotation": [
     0.0,
@@ -26044,9 +25390,9 @@
   ],
   "transform": {
    "position": [
-    -7.5,
+    -10.0,
     0.0,
-    -47.5
+    10.0
    ],
    "rotation": [
     0.0,
@@ -26101,9 +25447,9 @@
   ],
   "transform": {
    "position": [
-    -7.5,
+    -5.0,
     0.0,
-    -52.5
+    -55.0
    ],
    "rotation": [
     0.0,
@@ -26158,9 +25504,9 @@
   ],
   "transform": {
    "position": [
-    -7.5,
+    -5.0,
     0.0,
-    -57.5
+    -50.0
    ],
    "rotation": [
     0.0,
@@ -26215,9 +25561,9 @@
   ],
   "transform": {
    "position": [
-    -2.5,
+    -5.0,
     0.0,
-    12.5
+    -45.0
    ],
    "rotation": [
     0.0,
@@ -26272,9 +25618,9 @@
   ],
   "transform": {
    "position": [
-    -2.5,
+    -5.0,
     0.0,
-    7.5
+    -40.0
    ],
    "rotation": [
     0.0,
@@ -26329,9 +25675,9 @@
   ],
   "transform": {
    "position": [
-    -2.5,
+    -5.0,
     0.0,
-    2.5
+    -35.0
    ],
    "rotation": [
     0.0,
@@ -26386,9 +25732,9 @@
   ],
   "transform": {
    "position": [
-    -2.5,
+    -5.0,
     0.0,
-    -2.5
+    -30.0
    ],
    "rotation": [
     0.0,
@@ -26443,9 +25789,9 @@
   ],
   "transform": {
    "position": [
-    -2.5,
+    -5.0,
     0.0,
-    -7.5
+    -25.0
    ],
    "rotation": [
     0.0,
@@ -26500,9 +25846,9 @@
   ],
   "transform": {
    "position": [
-    -2.5,
+    -5.0,
     0.0,
-    -12.5
+    -20.0
    ],
    "rotation": [
     0.0,
@@ -26557,9 +25903,9 @@
   ],
   "transform": {
    "position": [
-    -2.5,
+    -5.0,
     0.0,
-    -17.5
+    -15.0
    ],
    "rotation": [
     0.0,
@@ -26614,9 +25960,9 @@
   ],
   "transform": {
    "position": [
-    -2.5,
+    -5.0,
     0.0,
-    -22.5
+    -10.0
    ],
    "rotation": [
     0.0,
@@ -26671,9 +26017,9 @@
   ],
   "transform": {
    "position": [
-    -2.5,
+    -5.0,
     0.0,
-    -27.5
+    -5.0
    ],
    "rotation": [
     0.0,
@@ -26728,9 +26074,9 @@
   ],
   "transform": {
    "position": [
-    -2.5,
+    -5.0,
     0.0,
-    -32.5
+    0.0
    ],
    "rotation": [
     0.0,
@@ -26785,9 +26131,9 @@
   ],
   "transform": {
    "position": [
-    -2.5,
+    -5.0,
     0.0,
-    -37.5
+    5.0
    ],
    "rotation": [
     0.0,
@@ -26842,9 +26188,9 @@
   ],
   "transform": {
    "position": [
-    -2.5,
+    -5.0,
     0.0,
-    -42.5
+    10.0
    ],
    "rotation": [
     0.0,
@@ -26899,9 +26245,9 @@
   ],
   "transform": {
    "position": [
-    -2.5,
     0.0,
-    -47.5
+    0.0,
+    -55.0
    ],
    "rotation": [
     0.0,
@@ -26956,9 +26302,9 @@
   ],
   "transform": {
    "position": [
-    -2.5,
     0.0,
-    -52.5
+    0.0,
+    -50.0
    ],
    "rotation": [
     0.0,
@@ -27013,9 +26359,9 @@
   ],
   "transform": {
    "position": [
-    -2.5,
     0.0,
-    -57.5
+    0.0,
+    -45.0
    ],
    "rotation": [
     0.0,
@@ -27070,9 +26416,9 @@
   ],
   "transform": {
    "position": [
-    2.5,
     0.0,
-    12.5
+    0.0,
+    -40.0
    ],
    "rotation": [
     0.0,
@@ -27127,9 +26473,9 @@
   ],
   "transform": {
    "position": [
-    2.5,
     0.0,
-    7.5
+    0.0,
+    -35.0
    ],
    "rotation": [
     0.0,
@@ -27184,9 +26530,9 @@
   ],
   "transform": {
    "position": [
-    2.5,
     0.0,
-    2.5
+    0.0,
+    -30.0
    ],
    "rotation": [
     0.0,
@@ -27241,9 +26587,9 @@
   ],
   "transform": {
    "position": [
-    2.5,
     0.0,
-    -2.5
+    0.0,
+    -25.0
    ],
    "rotation": [
     0.0,
@@ -27298,9 +26644,9 @@
   ],
   "transform": {
    "position": [
-    2.5,
     0.0,
-    -7.5
+    0.0,
+    -20.0
    ],
    "rotation": [
     0.0,
@@ -27355,9 +26701,9 @@
   ],
   "transform": {
    "position": [
-    2.5,
     0.0,
-    -12.5
+    0.0,
+    -15.0
    ],
    "rotation": [
     0.0,
@@ -27412,9 +26758,9 @@
   ],
   "transform": {
    "position": [
-    2.5,
     0.0,
-    -17.5
+    0.0,
+    -10.0
    ],
    "rotation": [
     0.0,
@@ -27469,9 +26815,9 @@
   ],
   "transform": {
    "position": [
-    2.5,
     0.0,
-    -22.5
+    0.0,
+    -5.0
    ],
    "rotation": [
     0.0,
@@ -27526,9 +26872,9 @@
   ],
   "transform": {
    "position": [
-    2.5,
     0.0,
-    -27.5
+    0.0,
+    0.0
    ],
    "rotation": [
     0.0,
@@ -27583,9 +26929,9 @@
   ],
   "transform": {
    "position": [
-    2.5,
     0.0,
-    -32.5
+    0.0,
+    5.0
    ],
    "rotation": [
     0.0,
@@ -27640,9 +26986,9 @@
   ],
   "transform": {
    "position": [
-    2.5,
     0.0,
-    -37.5
+    0.0,
+    10.0
    ],
    "rotation": [
     0.0,
@@ -27697,9 +27043,9 @@
   ],
   "transform": {
    "position": [
-    2.5,
+    5.0,
     0.0,
-    -42.5
+    -55.0
    ],
    "rotation": [
     0.0,
@@ -27754,9 +27100,9 @@
   ],
   "transform": {
    "position": [
-    2.5,
+    5.0,
     0.0,
-    -47.5
+    -50.0
    ],
    "rotation": [
     0.0,
@@ -27811,9 +27157,9 @@
   ],
   "transform": {
    "position": [
-    2.5,
+    5.0,
     0.0,
-    -52.5
+    -45.0
    ],
    "rotation": [
     0.0,
@@ -27868,9 +27214,9 @@
   ],
   "transform": {
    "position": [
-    2.5,
+    5.0,
     0.0,
-    -57.5
+    -40.0
    ],
    "rotation": [
     0.0,
@@ -27925,9 +27271,9 @@
   ],
   "transform": {
    "position": [
-    7.5,
+    5.0,
     0.0,
-    12.5
+    -35.0
    ],
    "rotation": [
     0.0,
@@ -27982,9 +27328,9 @@
   ],
   "transform": {
    "position": [
-    7.5,
+    5.0,
     0.0,
-    7.5
+    -30.0
    ],
    "rotation": [
     0.0,
@@ -28039,9 +27385,9 @@
   ],
   "transform": {
    "position": [
-    7.5,
+    5.0,
     0.0,
-    2.5
+    -25.0
    ],
    "rotation": [
     0.0,
@@ -28096,9 +27442,9 @@
   ],
   "transform": {
    "position": [
-    7.5,
+    5.0,
     0.0,
-    -2.5
+    -20.0
    ],
    "rotation": [
     0.0,
@@ -28153,9 +27499,9 @@
   ],
   "transform": {
    "position": [
-    7.5,
+    5.0,
     0.0,
-    -7.5
+    -15.0
    ],
    "rotation": [
     0.0,
@@ -28210,9 +27556,9 @@
   ],
   "transform": {
    "position": [
-    7.5,
+    5.0,
     0.0,
-    -12.5
+    -10.0
    ],
    "rotation": [
     0.0,
@@ -28267,9 +27613,9 @@
   ],
   "transform": {
    "position": [
-    7.5,
+    5.0,
     0.0,
-    -17.5
+    -5.0
    ],
    "rotation": [
     0.0,
@@ -28324,9 +27670,9 @@
   ],
   "transform": {
    "position": [
-    7.5,
+    5.0,
     0.0,
-    -22.5
+    0.0
    ],
    "rotation": [
     0.0,
@@ -28381,9 +27727,9 @@
   ],
   "transform": {
    "position": [
-    7.5,
+    5.0,
     0.0,
-    -27.5
+    5.0
    ],
    "rotation": [
     0.0,
@@ -28438,9 +27784,9 @@
   ],
   "transform": {
    "position": [
-    7.5,
+    5.0,
     0.0,
-    -32.5
+    10.0
    ],
    "rotation": [
     0.0,
@@ -28495,9 +27841,9 @@
   ],
   "transform": {
    "position": [
-    7.5,
+    10.0,
     0.0,
-    -37.5
+    -55.0
    ],
    "rotation": [
     0.0,
@@ -28552,9 +27898,9 @@
   ],
   "transform": {
    "position": [
-    7.5,
+    10.0,
     0.0,
-    -42.5
+    -50.0
    ],
    "rotation": [
     0.0,
@@ -28609,9 +27955,9 @@
   ],
   "transform": {
    "position": [
-    7.5,
+    10.0,
     0.0,
-    -47.5
+    -45.0
    ],
    "rotation": [
     0.0,
@@ -28666,9 +28012,9 @@
   ],
   "transform": {
    "position": [
-    7.5,
+    10.0,
     0.0,
-    -52.5
+    -40.0
    ],
    "rotation": [
     0.0,
@@ -28723,9 +28069,9 @@
   ],
   "transform": {
    "position": [
-    7.5,
+    10.0,
     0.0,
-    -57.5
+    -35.0
    ],
    "rotation": [
     0.0,
@@ -28780,9 +28126,9 @@
   ],
   "transform": {
    "position": [
-    12.5,
+    10.0,
     0.0,
-    12.5
+    -30.0
    ],
    "rotation": [
     0.0,
@@ -28837,9 +28183,9 @@
   ],
   "transform": {
    "position": [
-    12.5,
+    10.0,
     0.0,
-    7.5
+    -25.0
    ],
    "rotation": [
     0.0,
@@ -28894,9 +28240,9 @@
   ],
   "transform": {
    "position": [
-    12.5,
+    10.0,
     0.0,
-    2.5
+    -20.0
    ],
    "rotation": [
     0.0,
@@ -28951,9 +28297,9 @@
   ],
   "transform": {
    "position": [
-    12.5,
+    10.0,
     0.0,
-    -2.5
+    -15.0
    ],
    "rotation": [
     0.0,
@@ -29008,9 +28354,9 @@
   ],
   "transform": {
    "position": [
-    12.5,
+    10.0,
     0.0,
-    -7.5
+    -10.0
    ],
    "rotation": [
     0.0,
@@ -29065,9 +28411,9 @@
   ],
   "transform": {
    "position": [
-    12.5,
+    10.0,
     0.0,
-    -12.5
+    -5.0
    ],
    "rotation": [
     0.0,
@@ -29122,9 +28468,9 @@
   ],
   "transform": {
    "position": [
-    12.5,
+    10.0,
     0.0,
-    -17.5
+    0.0
    ],
    "rotation": [
     0.0,
@@ -29179,9 +28525,9 @@
   ],
   "transform": {
    "position": [
-    12.5,
+    10.0,
     0.0,
-    -22.5
+    5.0
    ],
    "rotation": [
     0.0,
@@ -29236,9 +28582,9 @@
   ],
   "transform": {
    "position": [
-    12.5,
+    10.0,
     0.0,
-    -27.5
+    10.0
    ],
    "rotation": [
     0.0,
@@ -29293,9 +28639,9 @@
   ],
   "transform": {
    "position": [
-    12.5,
+    15.0,
     0.0,
-    -32.5
+    -55.0
    ],
    "rotation": [
     0.0,
@@ -29350,9 +28696,9 @@
   ],
   "transform": {
    "position": [
-    12.5,
+    15.0,
     0.0,
-    -37.5
+    -50.0
    ],
    "rotation": [
     0.0,
@@ -29407,9 +28753,9 @@
   ],
   "transform": {
    "position": [
-    12.5,
+    15.0,
     0.0,
-    -42.5
+    -45.0
    ],
    "rotation": [
     0.0,
@@ -29464,9 +28810,9 @@
   ],
   "transform": {
    "position": [
-    12.5,
+    15.0,
     0.0,
-    -47.5
+    -40.0
    ],
    "rotation": [
     0.0,
@@ -29521,9 +28867,9 @@
   ],
   "transform": {
    "position": [
-    12.5,
+    15.0,
     0.0,
-    -52.5
+    -35.0
    ],
    "rotation": [
     0.0,
@@ -29578,9 +28924,579 @@
   ],
   "transform": {
    "position": [
-    12.5,
+    15.0,
     0.0,
-    -57.5
+    -30.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 390,
+  "name": "Baldosa390",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    15.0,
+    0.0,
+    -25.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 391,
+  "name": "Baldosa391",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    15.0,
+    0.0,
+    -20.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 392,
+  "name": "Baldosa392",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    15.0,
+    0.0,
+    -15.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 393,
+  "name": "Baldosa393",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    15.0,
+    0.0,
+    -10.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 394,
+  "name": "Baldosa394",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    15.0,
+    0.0,
+    -5.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 395,
+  "name": "Baldosa395",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    15.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 396,
+  "name": "Baldosa396",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    15.0,
+    0.0,
+    5.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 397,
+  "name": "Baldosa397",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    15.0,
+    0.0,
+    10.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 398,
+  "name": "Baldosa398",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    20.0,
+    0.0,
+    -55.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 399,
+  "name": "Baldosa399",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    20.0,
+    0.0,
+    -50.0
    ],
    "rotation": [
     0.0,
@@ -29622,7 +29538,691 @@
  },
  {
   "id": 400,
-  "name": "MuroTras400",
+  "name": "Baldosa400",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    20.0,
+    0.0,
+    -45.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 401,
+  "name": "Baldosa401",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    20.0,
+    0.0,
+    -40.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 402,
+  "name": "Baldosa402",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    20.0,
+    0.0,
+    -35.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 403,
+  "name": "Baldosa403",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    20.0,
+    0.0,
+    -30.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 404,
+  "name": "Baldosa404",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    20.0,
+    0.0,
+    -25.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 405,
+  "name": "Baldosa405",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    20.0,
+    0.0,
+    -20.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 406,
+  "name": "Baldosa406",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    20.0,
+    0.0,
+    -15.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 407,
+  "name": "Baldosa407",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    20.0,
+    0.0,
+    -10.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 408,
+  "name": "Baldosa408",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    20.0,
+    0.0,
+    -5.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 409,
+  "name": "Baldosa409",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    20.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 410,
+  "name": "Baldosa410",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    20.0,
+    0.0,
+    5.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 411,
+  "name": "Baldosa411",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer"
+  ],
+  "transform": {
+   "position": [
+    20.0,
+    0.0,
+    10.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 420,
+  "name": "MuroTras420",
   "tag": "Untagged",
   "layer": "Default",
   "is_static": true,
@@ -29698,8 +30298,8 @@
   "light_profile": null
  },
  {
-  "id": 401,
-  "name": "MuroTras401",
+  "id": 421,
+  "name": "MuroTras421",
   "tag": "Untagged",
   "layer": "Default",
   "is_static": true,
@@ -29775,8 +30375,8 @@
   "light_profile": null
  },
  {
-  "id": 402,
-  "name": "MuroTras402",
+  "id": 422,
+  "name": "MuroTras422",
   "tag": "Untagged",
   "layer": "Default",
   "is_static": true,
@@ -29852,8 +30452,8 @@
   "light_profile": null
  },
  {
-  "id": 403,
-  "name": "MuroTras403",
+  "id": 423,
+  "name": "MuroTras423",
   "tag": "Untagged",
   "layer": "Default",
   "is_static": true,
@@ -29929,8 +30529,8 @@
   "light_profile": null
  },
  {
-  "id": 404,
-  "name": "MuroTras404",
+  "id": 424,
+  "name": "MuroTras424",
   "tag": "Untagged",
   "layer": "Default",
   "is_static": true,
@@ -30006,8 +30606,8 @@
   "light_profile": null
  },
  {
-  "id": 405,
-  "name": "MuroVent405",
+  "id": 425,
+  "name": "MuroVent425",
   "tag": "Untagged",
   "layer": "Default",
   "is_static": true,
@@ -30083,8 +30683,8 @@
   "light_profile": null
  },
  {
-  "id": 406,
-  "name": "MuroDel406",
+  "id": 426,
+  "name": "MuroDel426",
   "tag": "Untagged",
   "layer": "Default",
   "is_static": true,
@@ -30160,7 +30760,7 @@
   "light_profile": null
  },
  {
-  "id": 407,
+  "id": 427,
   "name": "MuroPuerta",
   "tag": "Untagged",
   "layer": "Default",
@@ -30238,1548 +30838,8 @@
   "light_profile": null
  },
  {
-  "id": 408,
-  "name": "MuroDel408",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    5,
-    1.5,
-    -37.65
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    1.5,
-    0.15
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 409,
-  "name": "MuroVent409",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    10,
-    1.5,
-    -37.65
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_WallWindow_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    1.5,
-    0.15
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 410,
-  "name": "MuroIzq410",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -12.65,
-    1.5,
-    -50
-   ],
-   "rotation": [
-    0.0,
-    90.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    0.15,
-    1.5,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 411,
-  "name": "MuroDer411",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    12.65,
-    1.5,
-    -50
-   ],
-   "rotation": [
-    0.0,
-    90.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    0.15,
-    1.5,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 412,
-  "name": "MuroIzq412",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -12.65,
-    1.5,
-    -45
-   ],
-   "rotation": [
-    0.0,
-    90.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    0.15,
-    1.5,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 413,
-  "name": "MuroDer413",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    12.65,
-    1.5,
-    -45
-   ],
-   "rotation": [
-    0.0,
-    90.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    0.15,
-    1.5,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 414,
-  "name": "MuroIzq414",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -12.65,
-    1.5,
-    -40
-   ],
-   "rotation": [
-    0.0,
-    90.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    0.15,
-    1.5,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 415,
-  "name": "MuroDer415",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    12.65,
-    1.5,
-    -40
-   ],
-   "rotation": [
-    0.0,
-    90.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    0.15,
-    1.5,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 416,
-  "name": "MuroTras416",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -10,
-    4.5,
-    -52.35
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    1.5,
-    0.15
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 417,
-  "name": "MuroTras417",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -5,
-    4.5,
-    -52.35
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    1.5,
-    0.15
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 418,
-  "name": "MuroTras418",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    0,
-    4.5,
-    -52.35
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    1.5,
-    0.15
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 419,
-  "name": "MuroTras419",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    5,
-    4.5,
-    -52.35
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    1.5,
-    0.15
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 420,
-  "name": "MuroTras420",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    10,
-    4.5,
-    -52.35
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    1.5,
-    0.15
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 421,
-  "name": "MuroVent421",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -10,
-    4.5,
-    -37.65
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_WallWindow_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    1.5,
-    0.15
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 422,
-  "name": "MuroDel422",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -5,
-    4.5,
-    -37.65
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    1.5,
-    0.15
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 423,
-  "name": "MuroVent423",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    0,
-    4.5,
-    -37.65
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_WallWindow_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    1.5,
-    0.15
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 424,
-  "name": "MuroDel424",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    5,
-    4.5,
-    -37.65
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    1.5,
-    0.15
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 425,
-  "name": "MuroVent425",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    10,
-    4.5,
-    -37.65
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_WallWindow_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    1.5,
-    0.15
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 426,
-  "name": "MuroIzq426",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -12.65,
-    4.5,
-    -50
-   ],
-   "rotation": [
-    0.0,
-    90.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    0.15,
-    1.5,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 427,
-  "name": "MuroDer427",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    12.65,
-    4.5,
-    -50
-   ],
-   "rotation": [
-    0.0,
-    90.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    0.15,
-    1.5,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
   "id": 428,
-  "name": "MuroIzq428",
+  "name": "MuroDel428",
   "tag": "Untagged",
   "layer": "Default",
   "is_static": true,
@@ -31793,13 +30853,13 @@
   ],
   "transform": {
    "position": [
-    -12.65,
-    4.5,
-    -45
+    5,
+    1.5,
+    -37.65
    ],
    "rotation": [
     0.0,
-    90.0,
+    0.0,
     0.0
    ],
    "scale": [
@@ -31826,9 +30886,9 @@
    "friction": 0.7,
    "restitution": 0.0,
    "box_extents": [
-    0.15,
+    2.5,
     1.5,
-    2.5
+    0.15
    ],
    "linear_velocity": [
     0,
@@ -31856,7 +30916,7 @@
  },
  {
   "id": 429,
-  "name": "MuroDer429",
+  "name": "MuroVent429",
   "tag": "Untagged",
   "layer": "Default",
   "is_static": true,
@@ -31870,13 +30930,13 @@
   ],
   "transform": {
    "position": [
-    12.65,
-    4.5,
-    -45
+    10,
+    1.5,
+    -37.65
    ],
    "rotation": [
     0.0,
-    90.0,
+    0.0,
     0.0
    ],
    "scale": [
@@ -31893,7 +30953,7 @@
    ],
    "wireframe": false,
    "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Wall_5x3_01"
+   "model": "SM_Buildings_WallWindow_5x3_01"
   },
   "script": null,
   "script_data": null,
@@ -31903,9 +30963,9 @@
    "friction": 0.7,
    "restitution": 0.0,
    "box_extents": [
-    0.15,
+    2.5,
     1.5,
-    2.5
+    0.15
    ],
    "linear_velocity": [
     0,
@@ -31948,8 +31008,8 @@
   "transform": {
    "position": [
     -12.65,
-    4.5,
-    -40
+    1.5,
+    -50
    ],
    "rotation": [
     0.0,
@@ -32025,6 +31085,1469 @@
   "transform": {
    "position": [
     12.65,
+    1.5,
+    -50
+   ],
+   "rotation": [
+    0.0,
+    90.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Wall_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    0.15,
+    1.5,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 432,
+  "name": "MuroIzq432",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    -12.65,
+    1.5,
+    -45
+   ],
+   "rotation": [
+    0.0,
+    90.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Wall_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    0.15,
+    1.5,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 433,
+  "name": "MuroDer433",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    12.65,
+    1.5,
+    -45
+   ],
+   "rotation": [
+    0.0,
+    90.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Wall_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    0.15,
+    1.5,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 434,
+  "name": "MuroIzq434",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    -12.65,
+    1.5,
+    -40
+   ],
+   "rotation": [
+    0.0,
+    90.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Wall_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    0.15,
+    1.5,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 435,
+  "name": "MuroDer435",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    12.65,
+    1.5,
+    -40
+   ],
+   "rotation": [
+    0.0,
+    90.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Wall_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    0.15,
+    1.5,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 436,
+  "name": "MuroTras436",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    -10,
+    4.5,
+    -52.35
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Wall_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    1.5,
+    0.15
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 437,
+  "name": "MuroTras437",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    -5,
+    4.5,
+    -52.35
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Wall_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    1.5,
+    0.15
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 438,
+  "name": "MuroTras438",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    0,
+    4.5,
+    -52.35
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Wall_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    1.5,
+    0.15
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 439,
+  "name": "MuroTras439",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    5,
+    4.5,
+    -52.35
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Wall_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    1.5,
+    0.15
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 440,
+  "name": "MuroTras440",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    10,
+    4.5,
+    -52.35
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Wall_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    1.5,
+    0.15
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 441,
+  "name": "MuroVent441",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    -10,
+    4.5,
+    -37.65
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_WallWindow_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    1.5,
+    0.15
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 442,
+  "name": "MuroDel442",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    -5,
+    4.5,
+    -37.65
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Wall_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    1.5,
+    0.15
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 443,
+  "name": "MuroVent443",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    0,
+    4.5,
+    -37.65
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_WallWindow_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    1.5,
+    0.15
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 444,
+  "name": "MuroDel444",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    5,
+    4.5,
+    -37.65
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Wall_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    1.5,
+    0.15
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 445,
+  "name": "MuroVent445",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    10,
+    4.5,
+    -37.65
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_WallWindow_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    1.5,
+    0.15
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 446,
+  "name": "MuroIzq446",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    -12.65,
+    4.5,
+    -50
+   ],
+   "rotation": [
+    0.0,
+    90.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Wall_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    0.15,
+    1.5,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 447,
+  "name": "MuroDer447",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    12.65,
+    4.5,
+    -50
+   ],
+   "rotation": [
+    0.0,
+    90.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Wall_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    0.15,
+    1.5,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 448,
+  "name": "MuroIzq448",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    -12.65,
+    4.5,
+    -45
+   ],
+   "rotation": [
+    0.0,
+    90.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Wall_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    0.15,
+    1.5,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 449,
+  "name": "MuroDer449",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    12.65,
+    4.5,
+    -45
+   ],
+   "rotation": [
+    0.0,
+    90.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Wall_5x3_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    0.15,
+    1.5,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 450,
+  "name": "MuroIzq450",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    -12.65,
     4.5,
     -40
    ],
@@ -32086,1471 +32609,8 @@
   "light_profile": null
  },
  {
-  "id": 432,
-  "name": "Losa432",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -10,
-    3.02,
-    -50
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 433,
-  "name": "Losa433",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -10,
-    3.02,
-    -45
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 434,
-  "name": "Losa434",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -10,
-    3.02,
-    -40
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 435,
-  "name": "Losa435",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -5,
-    3.02,
-    -50
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 436,
-  "name": "Losa436",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -5,
-    3.02,
-    -45
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 437,
-  "name": "Losa437",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -5,
-    3.02,
-    -40
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 438,
-  "name": "Losa438",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    0,
-    3.02,
-    -50
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 439,
-  "name": "Losa439",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    0,
-    3.02,
-    -45
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 440,
-  "name": "Losa440",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    0,
-    3.02,
-    -40
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 441,
-  "name": "Losa441",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    5,
-    3.02,
-    -50
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 442,
-  "name": "Losa442",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    5,
-    3.02,
-    -45
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 443,
-  "name": "Losa443",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    5,
-    3.02,
-    -40
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 444,
-  "name": "Losa444",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    10,
-    3.02,
-    -50
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 445,
-  "name": "Losa445",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    10,
-    3.02,
-    -45
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 446,
-  "name": "Losa446",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    10,
-    3.02,
-    -40
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 447,
-  "name": "Losa447",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -10,
-    6.02,
-    -50
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 448,
-  "name": "Losa448",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -10,
-    6.02,
-    -45
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 449,
-  "name": "Losa449",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -10,
-    6.02,
-    -40
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
-  "id": 450,
-  "name": "Losa450",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": true,
-  "active": true,
-  "parent": null,
-  "children": [],
-  "components": [
-   "Transform",
-   "MeshRenderer",
-   "RigidBody"
-  ],
-  "transform": {
-   "position": [
-    -5,
-    6.02,
-    -50
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": {
-   "color": [
-    1.0,
-    1.0,
-    1.0
-   ],
-   "wireframe": false,
-   "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
-  },
-  "script": null,
-  "script_data": null,
-  "physics": {
-   "body_type": "Static",
-   "mass": 1.0,
-   "friction": 0.7,
-   "restitution": 0.0,
-   "box_extents": [
-    2.5,
-    0.06,
-    2.5
-   ],
-   "linear_velocity": [
-    0,
-    0,
-    0
-   ],
-   "layer": 0,
-   "collision_mask": 4294967295,
-   "is_trigger": false,
-   "colliders": []
-  },
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "animator": null,
-  "portal": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "fog": null,
-  "light_profile": null
- },
- {
   "id": 451,
-  "name": "Losa451",
+  "name": "MuroDer451",
   "tag": "Untagged",
   "layer": "Default",
   "is_static": true,
@@ -33564,13 +32624,13 @@
   ],
   "transform": {
    "position": [
-    -5,
-    6.02,
-    -45
+    12.65,
+    4.5,
+    -40
    ],
    "rotation": [
     0.0,
-    0.0,
+    90.0,
     0.0
    ],
    "scale": [
@@ -33587,7 +32647,7 @@
    ],
    "wireframe": false,
    "shader": "pbr.vert.spv",
-   "model": "SM_Buildings_Floor_5x5_01"
+   "model": "SM_Buildings_Wall_5x3_01"
   },
   "script": null,
   "script_data": null,
@@ -33597,8 +32657,8 @@
    "friction": 0.7,
    "restitution": 0.0,
    "box_extents": [
-    2.5,
-    0.06,
+    0.15,
+    1.5,
     2.5
    ],
    "linear_velocity": [
@@ -33641,9 +32701,9 @@
   ],
   "transform": {
    "position": [
-    -5,
-    6.02,
-    -40
+    -10,
+    3.02,
+    -50
    ],
    "rotation": [
     0.0,
@@ -33718,9 +32778,9 @@
   ],
   "transform": {
    "position": [
-    0,
-    6.02,
-    -50
+    -10,
+    3.02,
+    -45
    ],
    "rotation": [
     0.0,
@@ -33795,9 +32855,9 @@
   ],
   "transform": {
    "position": [
-    0,
-    6.02,
-    -45
+    -10,
+    3.02,
+    -40
    ],
    "rotation": [
     0.0,
@@ -33872,9 +32932,9 @@
   ],
   "transform": {
    "position": [
-    0,
-    6.02,
-    -40
+    -5,
+    3.02,
+    -50
    ],
    "rotation": [
     0.0,
@@ -33949,9 +33009,9 @@
   ],
   "transform": {
    "position": [
-    5,
-    6.02,
-    -50
+    -5,
+    3.02,
+    -45
    ],
    "rotation": [
     0.0,
@@ -34026,6 +33086,1546 @@
   ],
   "transform": {
    "position": [
+    -5,
+    3.02,
+    -40
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 458,
+  "name": "Losa458",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    0,
+    3.02,
+    -50
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 459,
+  "name": "Losa459",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    0,
+    3.02,
+    -45
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 460,
+  "name": "Losa460",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    0,
+    3.02,
+    -40
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 461,
+  "name": "Losa461",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    5,
+    3.02,
+    -50
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 462,
+  "name": "Losa462",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    5,
+    3.02,
+    -45
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 463,
+  "name": "Losa463",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    5,
+    3.02,
+    -40
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 464,
+  "name": "Losa464",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    10,
+    3.02,
+    -50
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 465,
+  "name": "Losa465",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    10,
+    3.02,
+    -45
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 466,
+  "name": "Losa466",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    10,
+    3.02,
+    -40
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 467,
+  "name": "Losa467",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    -10,
+    6.02,
+    -50
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 468,
+  "name": "Losa468",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    -10,
+    6.02,
+    -45
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 469,
+  "name": "Losa469",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    -10,
+    6.02,
+    -40
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 470,
+  "name": "Losa470",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    -5,
+    6.02,
+    -50
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 471,
+  "name": "Losa471",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    -5,
+    6.02,
+    -45
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 472,
+  "name": "Losa472",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    -5,
+    6.02,
+    -40
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 473,
+  "name": "Losa473",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    0,
+    6.02,
+    -50
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 474,
+  "name": "Losa474",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    0,
+    6.02,
+    -45
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 475,
+  "name": "Losa475",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    0,
+    6.02,
+    -40
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 476,
+  "name": "Losa476",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
+    5,
+    6.02,
+    -50
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "SM_Buildings_Floor_5x5_01"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.0,
+   "box_extents": [
+    2.5,
+    0.06,
+    2.5
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ],
+   "layer": 0,
+   "collision_mask": 4294967295,
+   "is_trigger": false,
+   "colliders": []
+  },
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 477,
+  "name": "Losa477",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "RigidBody"
+  ],
+  "transform": {
+   "position": [
     5,
     6.02,
     -45
@@ -34088,8 +34688,8 @@
   "light_profile": null
  },
  {
-  "id": 458,
-  "name": "Losa458",
+  "id": 478,
+  "name": "Losa478",
   "tag": "Untagged",
   "layer": "Default",
   "is_static": true,
@@ -34165,8 +34765,8 @@
   "light_profile": null
  },
  {
-  "id": 459,
-  "name": "Losa459",
+  "id": 479,
+  "name": "Losa479",
   "tag": "Untagged",
   "layer": "Default",
   "is_static": true,
@@ -34242,8 +34842,8 @@
   "light_profile": null
  },
  {
-  "id": 460,
-  "name": "Losa460",
+  "id": 480,
+  "name": "Losa480",
   "tag": "Untagged",
   "layer": "Default",
   "is_static": true,
@@ -34319,8 +34919,8 @@
   "light_profile": null
  },
  {
-  "id": 461,
-  "name": "Losa461",
+  "id": 481,
+  "name": "Losa481",
   "tag": "Untagged",
   "layer": "Default",
   "is_static": true,
@@ -34396,7 +34996,7 @@
   "light_profile": null
  },
  {
-  "id": 462,
+  "id": 482,
   "name": "Escalera",
   "tag": "Untagged",
   "layer": "Default",
@@ -34474,7 +35074,7 @@
   "light_profile": null
  },
  {
-  "id": 463,
+  "id": 483,
   "name": "LuzEdificio0",
   "tag": "Untagged",
   "layer": "Default",
@@ -34540,7 +35140,7 @@
   }
  },
  {
-  "id": 464,
+  "id": 484,
   "name": "LuzEdificio1",
   "tag": "Untagged",
   "layer": "Default",
@@ -34606,7 +35206,7 @@
   }
  },
  {
-  "id": 465,
+  "id": 485,
   "name": "LuzEdificio2",
   "tag": "Untagged",
   "layer": "Default",
@@ -35678,6 +36278,765 @@
   },
   "script": null,
   "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 220,
+  "name": "CanvasNumDano",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Canvas"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": {
+   "render_mode": "ScreenSpaceOverlay",
+   "reference_resolution": [
+    1920.0,
+    1080.0
+   ],
+   "match_width_or_height": 0.5
+  },
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    1920.0,
+    1080.0
+   ],
+   "anchor_min": [
+    0.0,
+    0.0
+   ],
+   "anchor_max": [
+    1.0,
+    1.0
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 221,
+  "name": "NumeroDano0",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    100.0,
+    44.0
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": {
+   "text": "",
+   "font_size": 34.0,
+   "color": [
+    1.0,
+    0.85,
+    0.25,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 222,
+  "name": "NumeroDano1",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    100.0,
+    44.0
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": {
+   "text": "",
+   "font_size": 34.0,
+   "color": [
+    1.0,
+    0.85,
+    0.25,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 223,
+  "name": "NumeroDano2",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    100.0,
+    44.0
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": {
+   "text": "",
+   "font_size": 34.0,
+   "color": [
+    1.0,
+    0.85,
+    0.25,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 224,
+  "name": "NumeroDano3",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    100.0,
+    44.0
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": {
+   "text": "",
+   "font_size": 34.0,
+   "color": [
+    1.0,
+    0.85,
+    0.25,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 225,
+  "name": "NumeroDano4",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    100.0,
+    44.0
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": {
+   "text": "",
+   "font_size": 34.0,
+   "color": [
+    1.0,
+    0.85,
+    0.25,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 226,
+  "name": "NumeroDano5",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    100.0,
+    44.0
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": {
+   "text": "",
+   "font_size": 34.0,
+   "color": [
+    1.0,
+    0.85,
+    0.25,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 227,
+  "name": "NumeroDano6",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    100.0,
+    44.0
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": {
+   "text": "",
+   "font_size": 34.0,
+   "color": [
+    1.0,
+    0.85,
+    0.25,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 228,
+  "name": "NumeroDano7",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    100.0,
+    44.0
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": {
+   "text": "",
+   "font_size": 34.0,
+   "color": [
+    1.0,
+    0.85,
+    0.25,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 229,
+  "name": "NumerosDano",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": "GlassEngine.Core.Scripts.NumerosDanoDianas",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.NumerosDanoDianas"
+  },
   "physics": null,
   "audio": null,
   "camera": null,

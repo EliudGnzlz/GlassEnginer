@@ -10,6 +10,10 @@ namespace GlassEngine.Core.Scripts
     {
         public static JugadorPersonaje Instancia { get; private set; }
 
+        /// <summary>FOV vertical vigente de la cámara (lo mantiene AplicarFov;
+        /// lo lee NumerosDanoDianas para proyectar los números de daño).</summary>
+        public static float FovActual { get; private set; } = FovNormal;
+
         private const float FovNormal = 62f;
         private const float Sensibilidad = 0.15f;
         private const float PitchMax = 60f;
@@ -184,6 +188,7 @@ namespace GlassEngine.Core.Scripts
 
         private void AplicarFov(float fov)
         {
+            FovActual = fov;
             RuntimeBridge.SetCameraFov(fov);
         }
 
