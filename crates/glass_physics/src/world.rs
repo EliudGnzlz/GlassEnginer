@@ -380,7 +380,19 @@ impl PhysicsWorld {
             impulse = impulse.max(p.data.impulse);
         }
         let n = manifold.points.len() as f32;
-        let normal = manifold.data.normal;
+        // La normal del manifold apunta de collider1 a collider2. La que
+        // se entrega a `pair.0` debe apuntar DEL OTRO HACIA pair.0
+        // (semántica Unity): si pair.0 es el dueño de collider1, se
+        // invierte. El despacho espejo de la app la vuelve a invertir.
+        let cruda = manifold.data.normal;
+        let dueno1 = self
+            .collider_set
+            .get(pair_np.collider1)
+            .and_then(|c| c.parent())
+            .and_then(|p| self.rigid_body_set.get(p))
+            .map(|rb| rb.user_data as u64);
+        let signo = if dueno1 == Some(pair.0) { -1.0 } else { 1.0 };
+        let normal = [cruda.x * signo, cruda.y * signo, cruda.z * signo];
 
         let vel = |e: u64| {
             self.get_body_by_entity(e)
@@ -388,12 +400,47 @@ impl PhysicsWorld {
                 .unwrap_or([0.0; 3])
         };
         let (va, vb) = (vel(pair.0), vel(pair.1));
+        let relative_velocity = [va[0] - vb[0], va[1] - vb[1], va[2] - vb[2]];
+
+        // El solver de Rapier aún no ha escrito el impulso en el
+        // manifold cuando el evento Enter se recoge (mide 0): si es
+        // cero, se estima el impulso del impacto como masa reducida
+        // por velocidad de aproximación a lo largo de la normal.
+        let impulse = if impulse > 0.0 {
+            impulse
+        } else {
+            let masa = |e: u64| -> Option<f32> {
+                let h = self.get_body_by_entity(e)?;
+                let rb = self.rigid_body_set.get(
+                    *self.body_map.get(&h).map(|(r, _)| r)?,
+                )?;
+                if rb.is_fixed() || rb.is_kinematic() {
+                    None
+                } else {
+                    Some(rb.mass())
+                }
+            };
+            let reducida = match (masa(pair.0), masa(pair.1)) {
+                (Some(a), Some(b)) => a * b / (a + b),
+                (Some(a), None) => a,
+                (None, Some(b)) => b,
+                (None, None) => 0.0,
+            };
+            let acercamiento = -(relative_velocity[0] * normal[0]
+                + relative_velocity[1] * normal[1]
+                + relative_velocity[2] * normal[2]);
+            if acercamiento > 0.0 {
+                reducida * acercamiento
+            } else {
+                0.0
+            }
+        };
 
         Some(ContactInfo {
             point: [sum[0] / n, sum[1] / n, sum[2] / n],
-            normal: [normal.x, normal.y, normal.z],
+            normal,
             impulse,
-            relative_velocity: [va[0] - vb[0], va[1] - vb[1], va[2] - vb[2]],
+            relative_velocity,
         })
     }
 

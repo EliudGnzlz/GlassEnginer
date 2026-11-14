@@ -44,6 +44,8 @@ fn el_impacto_trae_punto_normal_e_impulso() {
     assert!(c.normal[0].abs() < 0.1 && c.normal[2].abs() < 0.1, "normal: {:?}", c.normal);
     assert!(c.point[1].abs() < 0.3, "punto.y: {}", c.point[1]);
     assert!(c.impulse >= 0.0, "impulso: {}", c.impulse);
+    // En este arnés par.0 es la caja: su velocidad relativa al
+    // suelo es su propia velocidad de caída.
     assert!(c.relative_velocity[1] < -1.0, "rv.y: {}", c.relative_velocity[1]);
 }
 
@@ -74,4 +76,32 @@ fn sin_contacto_en_el_stopped() {
     let ev = primer(&mut w, 10, |e| matches!(e.kind, ContactKind::Exit))
         .expect("no llegó Stopped");
     assert!(ev.contact.is_none());
+}
+
+#[test]
+fn la_normal_no_depende_del_orden_de_creacion() {
+    // La caja se crea ANTES que el suelo: la normal entregada a la
+    // caja (par b del evento) debe seguir siendo +Y tras el espejo.
+    let mut w = PhysicsWorld::new();
+    let caja = w.create_rigid_body(2, BodyType::Dynamic, [0.0, 3.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+    w.attach_box_collider(caja, [0.5, 0.5, 0.5], 0.0, 0.5);
+    let suelo = w.create_rigid_body(1, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
+    w.attach_box_collider(suelo, [10.0, 0.5, 10.0], 0.0, 0.5);
+    let mut contacto = None;
+    for _ in 0..240 {
+        w.step(DT);
+        for e in w.drain_contact_events() {
+            if e.contact.is_some() {
+                contacto = e.contact;
+            }
+        }
+        if contacto.is_some() {
+            break;
+        }
+    }
+    let c = contacto.expect("hubo contacto");
+    // El evento llega como (a=suelo, b=caja): la normal de `a` es la
+    // del suelo (-Y) y el espejo da a la caja +Y.
+    assert!(c.normal[1] < -0.9, "normal del suelo {c:?}");
+    assert!(c.impulse > 1.0, "impulso estimado del impacto: {c:?}");
 }

@@ -228,7 +228,7 @@ public struct CharacterHitFfi
 
 // Último Move del personaje: espejo de `glass_character_last_move`.
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-public delegate uint CharacterLastMoveDelegate(ulong entityId, out uint flags, float[] velocity, CharacterHitFfi[] hits, uint cap);
+public delegate uint CharacterLastMoveDelegate(ulong entityId, out uint flags, [In, Out] float[] velocity, [In, Out] CharacterHitFfi[] hits, uint cap);
 
 // Interpolación de render por entidad: espejo de `glass_physics_set_interpolation`.
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
