@@ -149,6 +149,24 @@ public sealed class RigidBody
         RuntimeBridge.MovePosition(Handle, position);
     }
 
+    private bool _interpolate;
+
+    /// <summary>Interpolación de render: el transform visible se
+    /// mezcla entre el paso físico previo y el actual. La clave en
+    /// el motor es la ENTIDAD, no el handle de cuerpo.</summary>
+    public bool Interpolate
+    {
+        get => _interpolate;
+        set
+        {
+            _interpolate = value;
+            if (EntityId != 0)
+            {
+                RuntimeBridge.SetInterpolation(EntityId, value);
+            }
+        }
+    }
+
     private RigidBodyConstraints _constraints;
 
     public RigidBodyConstraints Constraints

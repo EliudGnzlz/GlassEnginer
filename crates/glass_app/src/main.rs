@@ -96,6 +96,8 @@ struct SpawnedBodySpec {
     pub linear_damping: f32,
     pub use_gravity: bool,
     pub ccd: bool,
+    /// Interpolación de render (PhysicsData.interpolate).
+    pub interpolate: bool,
 }
 
 impl EngineSceneBridge {
@@ -141,6 +143,7 @@ impl EngineSceneBridge {
             linear_damping: body.linear_damping,
             use_gravity: body.use_gravity,
             ccd: body.ccd,
+            interpolate: body.interpolate,
         })
     }
 
@@ -175,6 +178,9 @@ impl EngineSceneBridge {
         }
         if spec.ccd {
             physics.set_ccd_enabled(handle, true);
+        }
+        if spec.interpolate {
+            physics.set_interpolation(spec.entity_id, true);
         }
         // La masa se aplica AL FINAL de esta función, con los
         // colliders ya adjuntos (set_mass rescales densidades).
@@ -1942,8 +1948,8 @@ type DescriptorCuerpo = (
     [f32; 3],
     Option<(glass_core::MeshColliderMode, String, [f32; 3], bool)>,
     // Superficie de Rigidbody (huecos beta): masa, damping lineal,
-    // usa gravedad, CCD.
-    (f32, f32, bool, bool),
+    // usa gravedad, CCD, interpola.
+    (f32, f32, bool, bool, bool),
 );
 
 /// Elemento de dibujo de un lote del Canvas: (rect destino, rect
@@ -3168,7 +3174,7 @@ let resueltos = colliders_resueltos(body, shape);
                     body.restitution,
                     body.linear_velocity,
                     mesh,
-                    (body.mass, body.linear_damping, body.use_gravity, body.ccd),
+                    (body.mass, body.linear_damping, body.use_gravity, body.ccd, body.interpolate),
                 ));
             }
         }
@@ -3197,7 +3203,10 @@ let resueltos = colliders_resueltos(body, shape);
         for (id, body_type, pos, rot, resueltos, friction, restitution, linvel, mesh, superficie) in descriptors
         {
             let handle = physics.create_rigid_body(id, body_type, pos, rot);
-            let (masa, damping, usa_gravedad, ccd) = superficie;
+            let (masa, damping, usa_gravedad, ccd, interpola) = superficie;
+            if interpola {
+                physics.set_interpolation(id, true);
+            }
             physics.set_linear_damping(handle, damping);
             if !usa_gravedad {
                 physics.set_gravity_scale(handle, 0.0);
@@ -3816,7 +3825,7 @@ let resueltos = colliders_resueltos(body, shape);
         if simulation_running {
             if let Ok(mut physics) = self.physics_world.lock() {
                 physics.step(0.016667);
-                let mut sync_transforms = physics.sync_all_transforms();
+                let mut sync_transforms = physics.sync_all_transforms_interpolated();
                 if let Ok(mut scene) = self.scene_state.lock() {
                     // --- Cruce de portales: un cuerpo dinámico cuyo
                     // segmento prev->curr atraviesa el rectángulo de

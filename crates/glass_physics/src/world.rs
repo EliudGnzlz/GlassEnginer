@@ -23,6 +23,10 @@ pub struct PhysicsWorld {
     pub query_pipeline: QueryPipeline,
     pub characters: HashMap<u64, crate::character::CharacterState>,
     pub ragdolls: std::collections::HashMap<u64, crate::ragdoll::RagdollState>,
+    /// Transform de cada entidad interpolada justo antes del último substep fijo.
+    prev_transforms: std::collections::HashMap<u64, TransformFfi>,
+    /// Entidades (no handles de cuerpo) con interpolación de render activada.
+    interp_bodies: std::collections::HashSet<u64>,
 
     /// Handler de eventos de colisión de Rapier: vuelca los CollisionEvent
     /// de cada substep en el canal que drena `step()`.
@@ -138,6 +142,8 @@ impl PhysicsWorld {
             query_pipeline: QueryPipeline::new(),
             characters: HashMap::new(),
             ragdolls: HashMap::new(),
+            prev_transforms: std::collections::HashMap::new(),
+            interp_bodies: std::collections::HashSet::new(),
             event_handler: ChannelEventCollector::new(event_sender, force_sender),
             event_receiver,
             force_event_receiver,
@@ -177,6 +183,10 @@ impl PhysicsWorld {
         // Prevent spiral of death by capping max substeps per frame
         let mut substeps = 0;
         while self.accumulator >= fixed_dt && substeps < 4 {
+            // Captura por substep: prev queda exactamente un paso fijo detrás
+            // de curr, coherente con alpha = acumulador / fixed_timestep. Si el
+            // frame no ejecuta substeps, prev se conserva y la mezcla avanza.
+            self.capture_prev_transforms();
             #[cfg(feature = "parallel")]
             {
                 // Préstamo disjunto explícito: el closure no captura `self` entero.
@@ -1220,6 +1230,98 @@ impl PhysicsWorld {
                     ));
                 }
             }
+        }
+        results
+    }
+
+    /// Fracción del paso fijo acumulada sin simular, en [0, 1].
+    pub fn interpolation_alpha(&self) -> f32 {
+        if !(self.fixed_timestep > 0.0) {
+            return 1.0;
+        }
+        (self.accumulator / self.fixed_timestep).clamp(0.0, 1.0)
+    }
+
+    /// Activa o desactiva la interpolación de render. La clave es la ENTIDAD.
+    pub fn set_interpolation(&mut self, entity_id: u64, enabled: bool) {
+        if enabled {
+            self.interp_bodies.insert(entity_id);
+        } else {
+            self.interp_bodies.remove(&entity_id);
+            self.prev_transforms.remove(&entity_id);
+        }
+    }
+
+    /// Guarda el transform actual de los cuerpos dinámicos interpolados.
+    /// Reconstruye el mapa entero: las entidades sin cuerpo dinámico vivo
+    /// pierden su entrada.
+    fn capture_prev_transforms(&mut self) {
+        self.prev_transforms.clear();
+        if self.interp_bodies.is_empty() {
+            return;
+        }
+        for &(rapier_handle, entity_id) in self.body_map.values() {
+            if !self.interp_bodies.contains(&entity_id) {
+                continue;
+            }
+            let Some(rb) = self.rigid_body_set.get(rapier_handle) else {
+                continue;
+            };
+            if !rb.is_dynamic() {
+                continue;
+            }
+            let translation = rb.translation();
+            let quat = rb.rotation().quaternion();
+            self.prev_transforms.insert(
+                entity_id,
+                TransformFfi {
+                    position: [translation.x, translation.y, translation.z],
+                    rotation: [quat.i, quat.j, quat.k, quat.w],
+                    scale: [1.0, 1.0, 1.0],
+                },
+            );
+        }
+    }
+
+    /// Como `sync_all_transforms`, pero mezcla prev→curr con `interpolation_alpha`
+    /// en las entidades interpoladas. Saltos de más de 2 m se devuelven sin mezclar.
+    pub fn sync_all_transforms_interpolated(&self) -> Vec<(u64, TransformFfi)> {
+        use rapier3d::na::{Quaternion, UnitQuaternion};
+        const SALTO_MAX: f32 = 2.0;
+
+        let mut results = self.sync_all_transforms();
+        if self.prev_transforms.is_empty() {
+            return results;
+        }
+        let alpha = self.interpolation_alpha();
+        let to_uq = |r: [f32; 4]| {
+            UnitQuaternion::from_quaternion(Quaternion::new(r[3], r[0], r[1], r[2]))
+        };
+
+        for (entity_id, curr) in results.iter_mut() {
+            if !self.interp_bodies.contains(entity_id) {
+                continue;
+            }
+            let Some(prev) = self.prev_transforms.get(entity_id) else {
+                continue;
+            };
+            let p = prev.position;
+            let c = curr.position;
+            let d = [c[0] - p[0], c[1] - p[1], c[2] - p[2]];
+            if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > SALTO_MAX * SALTO_MAX {
+                continue;
+            }
+            curr.position = [
+                p[0] + d[0] * alpha,
+                p[1] + d[1] * alpha,
+                p[2] + d[2] * alpha,
+            ];
+            let q0 = to_uq(prev.rotation);
+            let q1 = to_uq(curr.rotation);
+            // try_slerp: slerp hace panic con cuaterniones casi idénticos.
+            let q = q0.try_slerp(&q1, alpha, 1.0e-6).unwrap_or(q1);
+            let q = q.quaternion();
+            curr.rotation = [q.i, q.j, q.k, q.w];
         }
         results
     }

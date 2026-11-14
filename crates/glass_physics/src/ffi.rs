@@ -761,6 +761,20 @@ pub unsafe extern "C" fn glass_physics_set_gravity_scale(body_handle: u64, scale
 }
 
 /// # Safety
+/// Requiere el mundo global inicializado. `entity_id` es la ENTIDAD, no el
+/// handle de cuerpo. `enabled != 0` activa la interpolación.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_set_interpolation(entity_id: u64, enabled: i32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            world.set_interpolation(entity_id, enabled != 0);
+            return 1;
+        }
+    }
+    0
+}
+
+/// # Safety
 /// No recibe punteros; es segura de llamar con cualquier valor.
 /// Devuelve -1.0 si el cuerpo no existe.
 #[no_mangle]

@@ -96,6 +96,7 @@ struct PhysicsBridgeCallbacks {
     set_body_type: *const c_void,
     move_position: *const c_void,
     character_last_move: *const c_void,
+    set_interpolation: *const c_void,
 }
 
 type InitPhysicsBridgeFn = unsafe extern "system" fn(*const PhysicsBridgeCallbacks);
@@ -434,6 +435,7 @@ impl ScriptHost {
                 character_destroy: glass_physics::glass_character_destroy as *const c_void,
                 character_info: glass_physics::glass_character_info as *const c_void,
         character_last_move: glass_physics::glass_character_last_move as *const c_void,
+        set_interpolation: glass_physics::glass_physics_set_interpolation as *const c_void,
                 set_locked_axes: glass_physics::glass_physics_set_locked_axes as *const c_void,
                 get_locked_axes: glass_physics::glass_physics_get_locked_axes as *const c_void,
                 set_mass: glass_physics::glass_physics_set_mass as *const c_void,

@@ -202,6 +202,9 @@ pub struct PhysicsData {
     /// Detección continua de colisiones (CCD).
     #[serde(default)]
     pub ccd: bool,
+    /// Interpolación de render entre pasos fijos (estilo Unity).
+    #[serde(default)]
+    pub interpolate: bool,
 }
 
 fn default_linear_damping() -> f32 {
@@ -216,6 +219,7 @@ impl Default for PhysicsData {
     fn default() -> Self {
         Self {
             body_type: "Dynamic".into(),
+            interpolate: false,
             mass: 1.0,
             friction: 0.7,
             restitution: 0.05,
@@ -1285,6 +1289,7 @@ impl EntityData {
                 linear_damping: 1.5,
                 use_gravity: true,
                 ccd: false,
+                interpolate: false,
                 colliders: Vec::new(),
                 mesh_collider: MeshColliderMode::None,
             })

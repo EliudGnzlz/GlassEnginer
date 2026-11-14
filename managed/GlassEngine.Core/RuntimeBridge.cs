@@ -65,6 +65,7 @@ public static class RuntimeBridge
 
     private static CharacterInfoDelegate? _characterInfo;
     private static CharacterLastMoveDelegate? _characterLastMove;
+    private static SetInterpolationDelegate? _setInterpolation;
     private static SetLockedAxesDelegate? _setLockedAxes;
     private static GetLockedAxesDelegate? _getLockedAxes;
     private static AttachCapsuleColliderDelegate? _attachCapsuleCollider;
@@ -307,6 +308,7 @@ public static class RuntimeBridge
         public IntPtr SetBodyType;
         public IntPtr MovePosition;
         public IntPtr CharacterLastMove;
+        public IntPtr SetInterpolation;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitPhysicsBridge")]
@@ -363,6 +365,9 @@ public static class RuntimeBridge
 
         if (callbacks->CharacterLastMove != IntPtr.Zero)
             _characterLastMove = Marshal.GetDelegateForFunctionPointer<CharacterLastMoveDelegate>(callbacks->CharacterLastMove);
+
+        if (callbacks->SetInterpolation != IntPtr.Zero)
+            _setInterpolation = Marshal.GetDelegateForFunctionPointer<SetInterpolationDelegate>(callbacks->SetInterpolation);
             if (callbacks->SetLockedAxes != IntPtr.Zero)
             {
                 _setLockedAxes = Marshal.GetDelegateForFunctionPointer<SetLockedAxesDelegate>(callbacks->SetLockedAxes);
@@ -1552,6 +1557,15 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         velocity = new Vector3(vel[0], vel[1], vel[2]);
         totalHits = (int)total;
         return true;
+    }
+
+    /// <summary>Activa o desactiva la interpolación de render de
+    /// los cuerpos de una entidad. False si el host no trae el
+    /// callback (host viejo).</summary>
+    public static bool SetInterpolation(ulong entityId, bool enabled)
+    {
+        if (_setInterpolation is null) return false;
+        return _setInterpolation(entityId, enabled ? 1 : 0) != 0;
     }
 
     /// <summary>Entrega un impacto del CharacterController al
