@@ -121,6 +121,18 @@ registrados hoy:
   principal — será un **módulo aparte**, que el desarrollador usa
   solo si lo quiere. El runtime ya animaría esas articulaciones vía
   skinning; lo que falta es ese generador opcional.
+- **(c) Herramienta de AUTORÍA de ragdolls** (separación decidida
+  por D3m3tr10 el 2026-11-13): configurar cuerpos y articulaciones
+  por hueso y generar el ragdoll desde el esqueleto, en el editor.
+  Vive EN ESTE bloque — agrupada con el diseñador 3D y el
+  auto-rigging — porque comparte el requisito previo (a): la vista
+  de huesos. Del **sistema runtime** del ragdoll, el núcleo
+  (cuerpos por hueso + articulaciones esféricas) ya está commiteado
+  (`5c70427`); el resto (piel que sigue a los cuerpos, activación y
+  tool MCP) quedó aparcado en esta misma cadena por decisión del
+  2026-11-13: la demo FPS usa enemigo simple con animación de
+  muerte, sin ragdoll. La herramienta autora el sistema cuando
+  este se complete aquí.
 
 ## 6. Rendimiento multinúcleo — CANDIDATO PRE-BETA (evaluado el 2026-11-12)
 
