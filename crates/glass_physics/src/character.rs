@@ -33,6 +33,16 @@ pub struct CharacterState {
     pub ground_body: Option<RigidBodyHandle>,
     /// Translation de `ground_body` cuando se registró.
     pub ground_pos: [f32; 3],
+    /// Paquete C (paridad RB/CC): detección de colisiones activa (Unity: detectCollisions).
+    pub detect_collisions: bool,
+    /// Paquete C: despenetración automática contra solapes al mover.
+    pub overlap_recovery: bool,
+    /// Paquete C: límite de pendiente en grados, espejo de `controller.max_slope_climb_angle`.
+    pub slope_limit_deg: f32,
+    /// Paquete C: controlador habilitado (Unity: CharacterController.enabled).
+    pub enabled: bool,
+    /// Paquete C: máscara de capas que el CC puede ver en sus sondas.
+    pub include_mask: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -122,10 +132,96 @@ impl PhysicsWorld {
                 last_hits: Vec::new(),
                 last_flags: 0,
                 last_velocity: [0.0, 0.0, 0.0],
+                detect_collisions: true,
+                overlap_recovery: true,
+                slope_limit_deg: cfg.slope_limit_deg,
+                enabled: true,
+                include_mask: u32::MAX,
             },
         );
 
         true
+    }
+
+    /// Filtro de consulta de las sondas del CharacterController: excluye su
+    /// propia cápsula (invisible para todo lo demás) y aplica la máscara de
+    /// capas que puede ver (`include_mask`); la cápsula del CC lleva filter
+    /// NONE en su propio collider, así que sigue invisible a otras sondas
+    /// aunque esta máscara sea todo-unos. Función asociada sin `&self` para
+    /// que el filtro salga con vida `'static` y no arrastre préstamos de
+    /// `self.characters` a través de `move_character`.
+    fn cc_filter(rapier_collider: ColliderHandle, include_mask: u32) -> QueryFilter<'static> {
+        QueryFilter::new()
+            .exclude_collider(rapier_collider)
+            .groups(InteractionGroups::new(
+                Group::all(),
+                Group::from_bits_truncate(include_mask),
+            ))
+    }
+
+    /// Pasada de despenetración (paquete C, overlap_recovery): hasta 4
+    /// iteraciones de "detecta solapes y empuja fuera" con la cápsula del
+    /// personaje en `*pos`. Si `overlap_recovery` está desactivado, el
+    /// personaje puede quedar atascado en geometría, como en Unity.
+    fn recover_overlap(&mut self, entity_id: u64, pos: &mut [f32; 3]) {
+        let Some(state) = self.characters.get(&entity_id) else { return };
+        let half_height = state.half_height;
+        let radius = state.radius;
+        let skin = state.skin;
+        let filter = Self::cc_filter(state.rapier_collider, state.include_mask);
+        let capsula = Capsule::new_y(half_height, radius);
+
+        for _ in 0..4 {
+            let shape_pos = Isometry::translation(pos[0], pos[1], pos[2]);
+            let mut solapados: Vec<ColliderHandle> = Vec::new();
+            self.query_pipeline.intersections_with_shape(
+                &self.rigid_body_set,
+                &self.collider_set,
+                &shape_pos,
+                &capsula,
+                filter,
+                |h| {
+                    solapados.push(h);
+                    true
+                },
+            );
+            if solapados.is_empty() {
+                break;
+            }
+
+            let mut empuje = [0.0f32; 3];
+            for h in solapados {
+                let Some(otra) = self.collider_set.get(h) else { continue };
+                let otra_pose = *otra.position();
+                if let Ok(Some(contact)) = rapier3d::parry::query::contact(
+                    &shape_pos,
+                    &capsula,
+                    &otra_pose,
+                    otra.shape(),
+                    skin + 0.01,
+                ) {
+                    if contact.dist < 0.0 {
+                        // SIGNO VERIFICADO contra parry 0.18 (`Contact`):
+                        // `normal1` apunta hacia el exterior de la PRIMERA
+                        // forma (la cápsula) — en su punta inferior es -Y,
+                        // o sea HACIA el obstáculo. La dirección de
+                        // expulsión de la cápsula es `normal2` (exterior
+                        // de la SEGUNDA forma, el obstáculo): en la cara
+                        // superior de una caja es +Y. Con `normal1` el
+                        // ascensor se hundía en la plataforma (regresión
+                        // character_platforms 2026-11-14).
+                        let n = contact.normal2.into_inner();
+                        let mag = -contact.dist + 0.001;
+                        empuje[0] += n.x * mag;
+                        empuje[1] += n.y * mag;
+                        empuje[2] += n.z * mag;
+                    }
+                }
+            }
+            pos[0] += empuje[0];
+            pos[1] += empuje[1];
+            pos[2] += empuje[2];
+        }
     }
 
     pub fn move_character(
@@ -171,6 +267,51 @@ impl PhysicsWorld {
         let grounded_prev = state.grounded;
         let ground_body = state.ground_body;
         let ground_pos = state.ground_pos;
+        let enabled = state.enabled;
+        let detect_collisions = state.detect_collisions;
+        let overlap_recovery = state.overlap_recovery;
+        let step_offset = state.step_offset;
+        let include_mask = state.include_mask;
+        let pos_entrada = pos;
+
+        // Paquete C: un CharacterController deshabilitado no se mueve ni
+        // colisiona (Unity: CharacterController.enabled = false).
+        if !enabled {
+            if let Some(state) = self.characters.get_mut(&entity_id) {
+                state.last_velocity = [0.0, 0.0, 0.0];
+            }
+            return Some(([0.0, 0.0, 0.0], self.characters.get(&entity_id)?.grounded, false));
+        }
+
+        // Paquete C: modo fantasma (detectCollisions = false). La cápsula ya
+        // es invisible al solver; aquí el MOVIMIENTO también atraviesa todo,
+        // sin arrastre de suelo (sin suelo no hay carry).
+        if !detect_collisions {
+            let nueva_pos = [pos[0] + desired[0], pos[1] + desired[1], pos[2] + desired[2]];
+            let velocidad = if dt > 1e-6 {
+                [desired[0] / dt, desired[1] / dt, desired[2] / dt]
+            } else {
+                [0.0, 0.0, 0.0]
+            };
+            if let Some(state) = self.characters.get_mut(&entity_id) {
+                state.pos = nueva_pos;
+                state.grounded = false;
+                state.sliding = false;
+                state.ground_body = None;
+                state.ground_pos = [0.0, 0.0, 0.0];
+                state.last_hits = Vec::new();
+                state.last_flags = 0;
+                state.last_velocity = velocidad;
+            }
+            self.set_transform(body, nueva_pos, [0.0, 0.0, 0.0, 1.0]);
+            return Some((desired, false, false));
+        }
+
+        if overlap_recovery {
+            self.recover_overlap(entity_id, &mut pos);
+        }
+
+        let filtro_sondas = Self::cc_filter(rapier_collider, include_mask);
 
         // Una pasada de move_shape desde `desde` con el deseo dado.
         let hits: std::cell::RefCell<Vec<rapier3d::control::CharacterCollision>> =
@@ -184,7 +325,7 @@ impl PhysicsWorld {
                 &Capsule::new_y(half_height, radius),
                 &Isometry::translation(desde[0], desde[1], desde[2]),
                 vector![deseo[0], deseo[1], deseo[2]],
-                QueryFilter::new().exclude_collider(rapier_collider),
+                filtro_sondas,
                 |c| hits.borrow_mut().push(c),
             )
         };
@@ -219,7 +360,7 @@ impl PhysicsWorld {
             && desired[1] < 0.0
             && (desired[0] != 0.0 || desired[2] != 0.0);
         let movement = if separar {
-            let step = state.step_offset;
+            let step = step_offset;
             // Sobre suelo CINEMÁTICO, la pasada horizontal sale una
             // piel por encima: la fricción cinemática de Rapier
             // proyecta el movimiento restante sobre la normal del
@@ -274,7 +415,7 @@ impl PhysicsWorld {
                         max_time_of_impact: step + 0.1,
                         compute_impact_geometry_on_penetration: true,
                     },
-                    QueryFilter::new().exclude_collider(rapier_collider),
+                    filtro_sondas,
                 );
                 // Puerta de discontinuidad: un escalón de verdad
                 // tiene una cara casi vertical, así que el suelo a
@@ -284,7 +425,7 @@ impl PhysicsWorld {
                 // pequeña. Sin esta puerta, la muestra «sube» rampas
                 // que el slopeLimit debería bloquear.
                 let discontinuidad = {
-                    let filtro = QueryFilter::new().exclude_collider(rapier_collider);
+                    let filtro = filtro_sondas;
                     let origen_y = pos[1] + step + 0.5;
                     let suelo_en = |adelante: f32| -> Option<f32> {
                         let rayo = Ray::new(
@@ -378,24 +519,28 @@ impl PhysicsWorld {
             pasada(&controller, pos, desired)
         };
 
-        // `pos` ya incluye el carry: se suma una sola vez a new_pos.
+        // `pos` ya incluye el carry y el empuje de recover_overlap: se
+        // suma una sola vez a new_pos.
         let new_pos = [
             pos[0] + movement.translation.x,
             pos[1] + movement.translation.y,
             pos[2] + movement.translation.z,
         ];
-        // Desplazamiento real del frame: carry + movimiento propio.
+        // Desplazamiento real del frame: diferencia entre la posición
+        // final y la de entrada; incluye el empuje de recover_overlap
+        // (antes solo sumaba carry + movimiento y el llamante divergía
+        // de state.pos cuando había despenetración).
         let applied = [
-            carry[0] + movement.translation.x,
-            carry[1] + movement.translation.y,
-            carry[2] + movement.translation.z,
+            new_pos[0] - pos_entrada[0],
+            new_pos[1] - pos_entrada[1],
+            new_pos[2] - pos_entrada[2],
         ];
 
         // Sonda de suelo: resuelve (padre, translation) a valores propios antes
         // de mutar el estado.
         let (nuevo_suelo, nuevo_suelo_pos) = if movement.grounded {
             let shape_pos = Isometry::translation(new_pos[0], new_pos[1], new_pos[2]);
-            let filter = QueryFilter::default().exclude_collider(rapier_collider);
+            let filter = filtro_sondas;
             let options = ShapeCastOptions {
                 max_time_of_impact: skin + 0.06,
                 target_distance: skin,
@@ -517,5 +662,105 @@ impl PhysicsWorld {
         self.characters
             .get(&entity_id)
             .map(|s| (s.pos, s.grounded, s.sliding))
+    }
+
+    // ── Paquete C: setters/getters de paridad RB/CC ─────────────────
+
+    pub fn set_character_detect_collisions(&mut self, entity_id: u64, v: bool) -> bool {
+        if let Some(state) = self.characters.get_mut(&entity_id) {
+            state.detect_collisions = v;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn get_character_detect_collisions(&self, entity_id: u64) -> Option<bool> {
+        self.characters.get(&entity_id).map(|s| s.detect_collisions)
+    }
+
+    pub fn set_character_overlap_recovery(&mut self, entity_id: u64, v: bool) -> bool {
+        if let Some(state) = self.characters.get_mut(&entity_id) {
+            state.overlap_recovery = v;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn get_character_overlap_recovery(&self, entity_id: u64) -> Option<bool> {
+        self.characters.get(&entity_id).map(|s| s.overlap_recovery)
+    }
+
+    pub fn set_character_step_offset(&mut self, entity_id: u64, v: f32) -> bool {
+        if !v.is_finite() || v <= 0.0 {
+            return false;
+        }
+        if let Some(state) = self.characters.get_mut(&entity_id) {
+            state.step_offset = v;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn get_character_step_offset(&self, entity_id: u64) -> Option<f32> {
+        self.characters.get(&entity_id).map(|s| s.step_offset)
+    }
+
+    pub fn set_character_slope_limit(&mut self, entity_id: u64, deg: f32) -> bool {
+        if !deg.is_finite() {
+            return false;
+        }
+        let deg = deg.clamp(0.0, 89.0);
+        if let Some(state) = self.characters.get_mut(&entity_id) {
+            state.slope_limit_deg = deg;
+            state.controller.max_slope_climb_angle = deg.to_radians();
+            state.controller.min_slope_slide_angle =
+                (deg + 5.0).to_radians().min(89.0f32.to_radians());
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn get_character_slope_limit(&self, entity_id: u64) -> Option<f32> {
+        self.characters.get(&entity_id).map(|s| s.slope_limit_deg)
+    }
+
+    pub fn set_character_enabled(&mut self, entity_id: u64, v: bool) -> bool {
+        if let Some(state) = self.characters.get_mut(&entity_id) {
+            state.enabled = v;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn get_character_enabled(&self, entity_id: u64) -> Option<bool> {
+        self.characters.get(&entity_id).map(|s| s.enabled)
+    }
+
+    pub fn set_character_include_layers(&mut self, entity_id: u64, mask: u32) -> bool {
+        if let Some(state) = self.characters.get_mut(&entity_id) {
+            state.include_mask = mask;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn get_character_include_layers(&self, entity_id: u64) -> Option<u32> {
+        self.characters.get(&entity_id).map(|s| s.include_mask)
+    }
+
+    pub fn character_bounds(&self, entity_id: u64) -> Option<([f32; 3], [f32; 3])> {
+        let state = self.characters.get(&entity_id)?;
+        let pos = state.pos;
+        let radius = state.radius;
+        let half_height = state.half_height;
+        let min = [pos[0] - radius, pos[1] - (half_height + radius), pos[2] - radius];
+        let max = [pos[0] + radius, pos[1] + (half_height + radius), pos[2] + radius];
+        Some((min, max))
     }
 }

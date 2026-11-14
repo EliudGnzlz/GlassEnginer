@@ -1,0 +1,439 @@
+[
+ {
+  "id": 1,
+  "name": "Camara",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "transform": {
+   "position": [
+    0.0,
+    3.0,
+    16.0
+   ],
+   "rotation": [
+    -12.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "components": [
+   "Transform",
+   "Camera"
+  ],
+  "mesh": null,
+  "camera": {
+   "fov": 60,
+   "near_clip": 0.1,
+   "far_clip": 300,
+   "is_main": true
+  },
+  "light": null,
+  "physics": null,
+  "script": null,
+  "script_data": null,
+  "audio": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "portal": null,
+  "animator": null,
+  "fog": {
+   "color": [
+    0.62,
+    0.7,
+    0.82
+   ],
+   "near": 50.0,
+   "far": 180.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.98,
+    0.92
+   ],
+   "intensity": 0.45,
+   "light_type": "Directional",
+   "range": 10.0,
+   "cast_shadow": true
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": "GlassEngine.Core.Scripts.SolDiaNoche",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.SolDiaNoche"
+  },
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 2,
+  "name": "Sol",
+  "components": [
+   "Transform",
+   "Light",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    3.0,
+    0.0
+   ],
+   "rotation": [
+    -50,
+    30,
+    0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.45,
+    0.48,
+    0.52
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    35.0,
+    0.5,
+    20.0
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 3,
+  "name": "Suelo",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -0.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    70.0,
+    1.0,
+    40.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.55,
+    0.5,
+    0.45
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.5,
+    1.5,
+    2.0
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 20,
+  "name": "ParedCC",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    6.0,
+    1.5,
+    4.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.5,
+    1.5,
+    2.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.55,
+    0.5,
+    0.45
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    0.5,
+    1.0,
+    3.0
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 21,
+  "name": "ParedSweep",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    10.0,
+    1.0,
+    -6.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    0.5,
+    1.0,
+    3.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.55,
+    0.5,
+    0.45
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    2.0,
+    0.175,
+    1.0
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 22,
+  "name": "Peldano",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    -4.0,
+    0.175,
+    -2.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    2.0,
+    0.175,
+    1.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": "GlassEngine.Core.Scripts.ParidadTest",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.ParidadTest"
+  },
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 40,
+  "name": "ControlParidad",
+  "components": [
+   "Transform",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  }
+ }
+]

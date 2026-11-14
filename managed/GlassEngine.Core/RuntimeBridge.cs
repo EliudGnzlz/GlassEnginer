@@ -68,6 +68,21 @@ public static class RuntimeBridge
     private static SetInterpolationDelegate? _setInterpolation;
     private static SetLockedAxesDelegate? _setLockedAxes;
     private static GetLockedAxesDelegate? _getLockedAxes;
+
+    // Paquete C de paridad RB/CC: setters/getters de CharacterController.
+    private static CharacterSetDetectCollisionsDelegate? _characterSetDetectCollisions;
+    private static CharacterGetDetectCollisionsDelegate? _characterGetDetectCollisions;
+    private static CharacterSetOverlapRecoveryDelegate? _characterSetOverlapRecovery;
+    private static CharacterGetOverlapRecoveryDelegate? _characterGetOverlapRecovery;
+    private static CharacterSetStepOffsetDelegate? _characterSetStepOffset;
+    private static CharacterGetStepOffsetDelegate? _characterGetStepOffset;
+    private static CharacterSetSlopeLimitDelegate? _characterSetSlopeLimit;
+    private static CharacterGetSlopeLimitDelegate? _characterGetSlopeLimit;
+    private static CharacterSetEnabledDelegate? _characterSetEnabled;
+    private static CharacterGetEnabledDelegate? _characterGetEnabled;
+    private static CharacterSetIncludeLayersDelegate? _characterSetIncludeLayers;
+    private static CharacterGetIncludeLayersDelegate? _characterGetIncludeLayers;
+    private static CharacterBoundsDelegate? _characterBounds;
     private static AttachCapsuleColliderDelegate? _attachCapsuleCollider;
     private static AttachCylinderColliderDelegate? _attachCylinderCollider;
     private static SetMassDelegate? _setMass;
@@ -75,6 +90,33 @@ public static class RuntimeBridge
     private static SetLinearDampingDelegate? _setLinearDamping;
     private static GetLinearDampingDelegate? _getLinearDamping;
     private static SetGravityScaleDelegate? _setGravityScale;
+    private static GetAngularVelocityDelegate? _getAngularVelocity;
+    private static SetAngularVelocityDelegate? _setAngularVelocity;
+    private static AddTorqueDelegate? _addTorque;
+    private static ApplyTorqueImpulseDelegate? _applyTorqueImpulse;
+    private static AddForceAtPointDelegate? _addForceAtPoint;
+    private static ApplyImpulseAtPointDelegate? _applyImpulseAtPoint;
+    private static ExplosionImpulseDelegate? _explosionImpulse;
+    private static ExplosionForceDelegate? _explosionForce;
+    private static SetVelocityCapsDelegate? _setVelocityCaps;
+    private static SleepDelegate? _sleep;
+    private static WakeDelegate? _wake;
+    private static IsSleepingDelegate? _isSleeping;
+    private static SetSleepThresholdDelegate? _setSleepThreshold;
+    private static SetDetectCollisionsDelegate? _setDetectCollisions;
+    private static GetCenterOfMassDelegate? _getCenterOfMass;
+    private static GetWorldCenterOfMassDelegate? _getWorldCenterOfMass;
+    private static SetCenterOfMassDelegate? _setCenterOfMass;
+    private static ResetCenterOfMassDelegate? _resetCenterOfMass;
+    private static GetInertiaTensorDelegate? _getInertiaTensor;
+    private static SetInertiaTensorDelegate? _setInertiaTensor;
+    private static ResetInertiaTensorDelegate? _resetInertiaTensor;
+    private static GetPointVelocityDelegate? _getPointVelocity;
+    private static GetRelativePointVelocityDelegate? _getRelativePointVelocity;
+    private static MoveKinematicDelegate? _moveKinematic;
+    private static MoveKinematicRotationDelegate? _moveKinematicRotation;
+    private static SweepBodyDelegate? _sweepBody;
+    private static SweepBodyAllDelegate? _sweepBodyAll;
     private static GetGravityScaleDelegate? _getGravityScale;
     private static SetCcdEnabledDelegate? _setCcdEnabled;
     private static GetCcdEnabledDelegate? _getCcdEnabled;
@@ -309,6 +351,49 @@ public static class RuntimeBridge
         public IntPtr MovePosition;
         public IntPtr CharacterLastMove;
         public IntPtr SetInterpolation;
+
+        // Paquete C de paridad RB/CC: setters/getters de CharacterController
+        // y caja de la cápsula, AL FINAL, mismo orden que en host.rs.
+        public IntPtr CharacterSetDetectCollisions;
+        public IntPtr CharacterGetDetectCollisions;
+        public IntPtr CharacterSetOverlapRecovery;
+        public IntPtr CharacterGetOverlapRecovery;
+        public IntPtr CharacterSetStepOffset;
+        public IntPtr CharacterGetStepOffset;
+        public IntPtr CharacterSetSlopeLimit;
+        public IntPtr CharacterGetSlopeLimit;
+        public IntPtr CharacterSetEnabled;
+        public IntPtr CharacterGetEnabled;
+        public IntPtr CharacterSetIncludeLayers;
+        public IntPtr CharacterGetIncludeLayers;
+        public IntPtr CharacterBounds;
+        public IntPtr GetAngularVelocity;
+        public IntPtr SetAngularVelocity;
+        public IntPtr AddTorque;
+        public IntPtr ApplyTorqueImpulse;
+        public IntPtr AddForceAtPoint;
+        public IntPtr ApplyImpulseAtPoint;
+        public IntPtr ExplosionImpulse;
+        public IntPtr ExplosionForce;
+        public IntPtr SetVelocityCaps;
+        public IntPtr Sleep;
+        public IntPtr Wake;
+        public IntPtr IsSleeping;
+        public IntPtr SetSleepThreshold;
+        public IntPtr SetDetectCollisions;
+        public IntPtr GetCenterOfMass;
+        public IntPtr GetWorldCenterOfMass;
+        public IntPtr SetCenterOfMass;
+        public IntPtr ResetCenterOfMass;
+        public IntPtr GetInertiaTensor;
+        public IntPtr SetInertiaTensor;
+        public IntPtr ResetInertiaTensor;
+        public IntPtr GetPointVelocity;
+        public IntPtr GetRelativePointVelocity;
+        public IntPtr MoveKinematic;
+        public IntPtr MoveKinematicRotation;
+        public IntPtr SweepBody;
+        public IntPtr SweepBodyAll;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitPhysicsBridge")]
@@ -368,6 +453,88 @@ public static class RuntimeBridge
 
         if (callbacks->SetInterpolation != IntPtr.Zero)
             _setInterpolation = Marshal.GetDelegateForFunctionPointer<SetInterpolationDelegate>(callbacks->SetInterpolation);
+
+        if (callbacks->CharacterSetDetectCollisions != IntPtr.Zero)
+            _characterSetDetectCollisions = Marshal.GetDelegateForFunctionPointer<CharacterSetDetectCollisionsDelegate>(callbacks->CharacterSetDetectCollisions);
+        if (callbacks->CharacterGetDetectCollisions != IntPtr.Zero)
+            _characterGetDetectCollisions = Marshal.GetDelegateForFunctionPointer<CharacterGetDetectCollisionsDelegate>(callbacks->CharacterGetDetectCollisions);
+        if (callbacks->CharacterSetOverlapRecovery != IntPtr.Zero)
+            _characterSetOverlapRecovery = Marshal.GetDelegateForFunctionPointer<CharacterSetOverlapRecoveryDelegate>(callbacks->CharacterSetOverlapRecovery);
+        if (callbacks->CharacterGetOverlapRecovery != IntPtr.Zero)
+            _characterGetOverlapRecovery = Marshal.GetDelegateForFunctionPointer<CharacterGetOverlapRecoveryDelegate>(callbacks->CharacterGetOverlapRecovery);
+        if (callbacks->CharacterSetStepOffset != IntPtr.Zero)
+            _characterSetStepOffset = Marshal.GetDelegateForFunctionPointer<CharacterSetStepOffsetDelegate>(callbacks->CharacterSetStepOffset);
+        if (callbacks->CharacterGetStepOffset != IntPtr.Zero)
+            _characterGetStepOffset = Marshal.GetDelegateForFunctionPointer<CharacterGetStepOffsetDelegate>(callbacks->CharacterGetStepOffset);
+        if (callbacks->CharacterSetSlopeLimit != IntPtr.Zero)
+            _characterSetSlopeLimit = Marshal.GetDelegateForFunctionPointer<CharacterSetSlopeLimitDelegate>(callbacks->CharacterSetSlopeLimit);
+        if (callbacks->CharacterGetSlopeLimit != IntPtr.Zero)
+            _characterGetSlopeLimit = Marshal.GetDelegateForFunctionPointer<CharacterGetSlopeLimitDelegate>(callbacks->CharacterGetSlopeLimit);
+        if (callbacks->CharacterSetEnabled != IntPtr.Zero)
+            _characterSetEnabled = Marshal.GetDelegateForFunctionPointer<CharacterSetEnabledDelegate>(callbacks->CharacterSetEnabled);
+        if (callbacks->CharacterGetEnabled != IntPtr.Zero)
+            _characterGetEnabled = Marshal.GetDelegateForFunctionPointer<CharacterGetEnabledDelegate>(callbacks->CharacterGetEnabled);
+        if (callbacks->CharacterSetIncludeLayers != IntPtr.Zero)
+            _characterSetIncludeLayers = Marshal.GetDelegateForFunctionPointer<CharacterSetIncludeLayersDelegate>(callbacks->CharacterSetIncludeLayers);
+        if (callbacks->CharacterGetIncludeLayers != IntPtr.Zero)
+            _characterGetIncludeLayers = Marshal.GetDelegateForFunctionPointer<CharacterGetIncludeLayersDelegate>(callbacks->CharacterGetIncludeLayers);
+        if (callbacks->CharacterBounds != IntPtr.Zero)
+            _characterBounds = Marshal.GetDelegateForFunctionPointer<CharacterBoundsDelegate>(callbacks->CharacterBounds);
+        if (callbacks->GetAngularVelocity != IntPtr.Zero)
+            _getAngularVelocity = Marshal.GetDelegateForFunctionPointer<GetAngularVelocityDelegate>(callbacks->GetAngularVelocity);
+        if (callbacks->SetAngularVelocity != IntPtr.Zero)
+            _setAngularVelocity = Marshal.GetDelegateForFunctionPointer<SetAngularVelocityDelegate>(callbacks->SetAngularVelocity);
+        if (callbacks->AddTorque != IntPtr.Zero)
+            _addTorque = Marshal.GetDelegateForFunctionPointer<AddTorqueDelegate>(callbacks->AddTorque);
+        if (callbacks->ApplyTorqueImpulse != IntPtr.Zero)
+            _applyTorqueImpulse = Marshal.GetDelegateForFunctionPointer<ApplyTorqueImpulseDelegate>(callbacks->ApplyTorqueImpulse);
+        if (callbacks->AddForceAtPoint != IntPtr.Zero)
+            _addForceAtPoint = Marshal.GetDelegateForFunctionPointer<AddForceAtPointDelegate>(callbacks->AddForceAtPoint);
+        if (callbacks->ApplyImpulseAtPoint != IntPtr.Zero)
+            _applyImpulseAtPoint = Marshal.GetDelegateForFunctionPointer<ApplyImpulseAtPointDelegate>(callbacks->ApplyImpulseAtPoint);
+        if (callbacks->ExplosionImpulse != IntPtr.Zero)
+            _explosionImpulse = Marshal.GetDelegateForFunctionPointer<ExplosionImpulseDelegate>(callbacks->ExplosionImpulse);
+        if (callbacks->ExplosionForce != IntPtr.Zero)
+            _explosionForce = Marshal.GetDelegateForFunctionPointer<ExplosionForceDelegate>(callbacks->ExplosionForce);
+        if (callbacks->SetVelocityCaps != IntPtr.Zero)
+            _setVelocityCaps = Marshal.GetDelegateForFunctionPointer<SetVelocityCapsDelegate>(callbacks->SetVelocityCaps);
+        if (callbacks->Sleep != IntPtr.Zero)
+            _sleep = Marshal.GetDelegateForFunctionPointer<SleepDelegate>(callbacks->Sleep);
+        if (callbacks->Wake != IntPtr.Zero)
+            _wake = Marshal.GetDelegateForFunctionPointer<WakeDelegate>(callbacks->Wake);
+        if (callbacks->IsSleeping != IntPtr.Zero)
+            _isSleeping = Marshal.GetDelegateForFunctionPointer<IsSleepingDelegate>(callbacks->IsSleeping);
+        if (callbacks->SetSleepThreshold != IntPtr.Zero)
+            _setSleepThreshold = Marshal.GetDelegateForFunctionPointer<SetSleepThresholdDelegate>(callbacks->SetSleepThreshold);
+        if (callbacks->SetDetectCollisions != IntPtr.Zero)
+            _setDetectCollisions = Marshal.GetDelegateForFunctionPointer<SetDetectCollisionsDelegate>(callbacks->SetDetectCollisions);
+        if (callbacks->GetCenterOfMass != IntPtr.Zero)
+            _getCenterOfMass = Marshal.GetDelegateForFunctionPointer<GetCenterOfMassDelegate>(callbacks->GetCenterOfMass);
+        if (callbacks->GetWorldCenterOfMass != IntPtr.Zero)
+            _getWorldCenterOfMass = Marshal.GetDelegateForFunctionPointer<GetWorldCenterOfMassDelegate>(callbacks->GetWorldCenterOfMass);
+        if (callbacks->SetCenterOfMass != IntPtr.Zero)
+            _setCenterOfMass = Marshal.GetDelegateForFunctionPointer<SetCenterOfMassDelegate>(callbacks->SetCenterOfMass);
+        if (callbacks->ResetCenterOfMass != IntPtr.Zero)
+            _resetCenterOfMass = Marshal.GetDelegateForFunctionPointer<ResetCenterOfMassDelegate>(callbacks->ResetCenterOfMass);
+        if (callbacks->GetInertiaTensor != IntPtr.Zero)
+            _getInertiaTensor = Marshal.GetDelegateForFunctionPointer<GetInertiaTensorDelegate>(callbacks->GetInertiaTensor);
+        if (callbacks->SetInertiaTensor != IntPtr.Zero)
+            _setInertiaTensor = Marshal.GetDelegateForFunctionPointer<SetInertiaTensorDelegate>(callbacks->SetInertiaTensor);
+        if (callbacks->ResetInertiaTensor != IntPtr.Zero)
+            _resetInertiaTensor = Marshal.GetDelegateForFunctionPointer<ResetInertiaTensorDelegate>(callbacks->ResetInertiaTensor);
+        if (callbacks->GetPointVelocity != IntPtr.Zero)
+            _getPointVelocity = Marshal.GetDelegateForFunctionPointer<GetPointVelocityDelegate>(callbacks->GetPointVelocity);
+        if (callbacks->GetRelativePointVelocity != IntPtr.Zero)
+            _getRelativePointVelocity = Marshal.GetDelegateForFunctionPointer<GetRelativePointVelocityDelegate>(callbacks->GetRelativePointVelocity);
+        if (callbacks->MoveKinematic != IntPtr.Zero)
+            _moveKinematic = Marshal.GetDelegateForFunctionPointer<MoveKinematicDelegate>(callbacks->MoveKinematic);
+        if (callbacks->MoveKinematicRotation != IntPtr.Zero)
+            _moveKinematicRotation = Marshal.GetDelegateForFunctionPointer<MoveKinematicRotationDelegate>(callbacks->MoveKinematicRotation);
+        if (callbacks->SweepBody != IntPtr.Zero)
+            _sweepBody = Marshal.GetDelegateForFunctionPointer<SweepBodyDelegate>(callbacks->SweepBody);
+        if (callbacks->SweepBodyAll != IntPtr.Zero)
+            _sweepBodyAll = Marshal.GetDelegateForFunctionPointer<SweepBodyAllDelegate>(callbacks->SweepBodyAll);
+
             if (callbacks->SetLockedAxes != IntPtr.Zero)
             {
                 _setLockedAxes = Marshal.GetDelegateForFunctionPointer<SetLockedAxesDelegate>(callbacks->SetLockedAxes);
@@ -1541,6 +1708,319 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         grounded = groundedI32 != 0;
         sliding = slidingI32 != 0;
         return ok;
+    }
+
+    // Paquete C de paridad RB/CC: setters/getters de CharacterController.
+
+    public static bool CharacterSetDetectCollisions(ulong entityId, bool enabled)
+    {
+        if (_characterSetDetectCollisions is null) return false;
+        return _characterSetDetectCollisions(entityId, enabled ? 1 : 0) != 0;
+    }
+
+    public static bool CharacterGetDetectCollisions(ulong entityId, out bool enabled)
+    {
+        enabled = false;
+        if (_characterGetDetectCollisions is null) return false;
+        bool ok = _characterGetDetectCollisions(entityId, out int value) != 0;
+        enabled = value != 0;
+        return ok;
+    }
+
+    public static bool CharacterSetOverlapRecovery(ulong entityId, bool enabled)
+    {
+        if (_characterSetOverlapRecovery is null) return false;
+        return _characterSetOverlapRecovery(entityId, enabled ? 1 : 0) != 0;
+    }
+
+    public static bool CharacterGetOverlapRecovery(ulong entityId, out bool enabled)
+    {
+        enabled = false;
+        if (_characterGetOverlapRecovery is null) return false;
+        bool ok = _characterGetOverlapRecovery(entityId, out int value) != 0;
+        enabled = value != 0;
+        return ok;
+    }
+
+    public static bool CharacterSetStepOffset(ulong entityId, float value)
+    {
+        if (_characterSetStepOffset is null) return false;
+        return _characterSetStepOffset(entityId, value) != 0;
+    }
+
+    public static bool CharacterGetStepOffset(ulong entityId, out float value)
+    {
+        value = 0f;
+        if (_characterGetStepOffset is null) return false;
+        return _characterGetStepOffset(entityId, out value) != 0;
+    }
+
+    public static bool CharacterSetSlopeLimit(ulong entityId, float degrees)
+    {
+        if (_characterSetSlopeLimit is null) return false;
+        return _characterSetSlopeLimit(entityId, degrees) != 0;
+    }
+
+    public static bool CharacterGetSlopeLimit(ulong entityId, out float degrees)
+    {
+        degrees = 0f;
+        if (_characterGetSlopeLimit is null) return false;
+        return _characterGetSlopeLimit(entityId, out degrees) != 0;
+    }
+
+    public static bool CharacterSetEnabled(ulong entityId, bool enabled)
+    {
+        if (_characterSetEnabled is null) return false;
+        return _characterSetEnabled(entityId, enabled ? 1 : 0) != 0;
+    }
+
+    public static bool CharacterGetEnabled(ulong entityId, out bool enabled)
+    {
+        enabled = false;
+        if (_characterGetEnabled is null) return false;
+        bool ok = _characterGetEnabled(entityId, out int value) != 0;
+        enabled = value != 0;
+        return ok;
+    }
+
+    public static bool CharacterSetIncludeLayers(ulong entityId, uint mask)
+    {
+        if (_characterSetIncludeLayers is null) return false;
+        return _characterSetIncludeLayers(entityId, mask) != 0;
+    }
+
+    public static bool CharacterGetIncludeLayers(ulong entityId, out uint mask)
+    {
+        mask = 0;
+        if (_characterGetIncludeLayers is null) return false;
+        return _characterGetIncludeLayers(entityId, out mask) != 0;
+    }
+
+    public static bool CharacterBounds(ulong entityId, float[] min, float[] max)
+    {
+        if (_characterBounds is null) return false;
+        return _characterBounds(entityId, min, max) != 0;
+    }
+
+    public static bool GetAngularVelocity(ulong bodyHandle, out Vector3 velocity)
+    {
+        velocity = Vector3.Zero;
+        if (_getAngularVelocity is null) return false;
+        float[] buffer = new float[3];
+        if (_getAngularVelocity(bodyHandle, buffer) == 0) return false;
+        velocity = new Vector3(buffer[0], buffer[1], buffer[2]);
+        return true;
+    }
+
+    public static bool SetAngularVelocity(ulong bodyHandle, Vector3 velocity)
+    {
+        if (_setAngularVelocity is null) return false;
+        return _setAngularVelocity(bodyHandle, velocity.X, velocity.Y, velocity.Z) != 0;
+    }
+
+    public static bool AddTorque(ulong bodyHandle, Vector3 torque)
+    {
+        if (_addTorque is null) return false;
+        return _addTorque(bodyHandle, torque.X, torque.Y, torque.Z) != 0;
+    }
+
+    public static bool ApplyTorqueImpulse(ulong bodyHandle, Vector3 torque)
+    {
+        if (_applyTorqueImpulse is null) return false;
+        return _applyTorqueImpulse(bodyHandle, torque.X, torque.Y, torque.Z) != 0;
+    }
+
+    public static bool AddForceAtPoint(ulong bodyHandle, Vector3 force, Vector3 point)
+    {
+        if (_addForceAtPoint is null) return false;
+        return _addForceAtPoint(bodyHandle, force.X, force.Y, force.Z, point.X, point.Y, point.Z) != 0;
+    }
+
+    public static bool ApplyImpulseAtPoint(ulong bodyHandle, Vector3 impulse, Vector3 point)
+    {
+        if (_applyImpulseAtPoint is null) return false;
+        return _applyImpulseAtPoint(bodyHandle, impulse.X, impulse.Y, impulse.Z, point.X, point.Y, point.Z) != 0;
+    }
+
+    public static bool ExplosionImpulse(ulong bodyHandle, Vector3 center, float radius, float force, float upwards)
+    {
+        if (_explosionImpulse is null) return false;
+        return _explosionImpulse(bodyHandle, center.X, center.Y, center.Z, radius, force, upwards) != 0;
+    }
+
+    public static bool ExplosionForce(ulong bodyHandle, Vector3 center, float radius, float force, float upwards)
+    {
+        if (_explosionForce is null) return false;
+        return _explosionForce(bodyHandle, center.X, center.Y, center.Z, radius, force, upwards) != 0;
+    }
+
+    public static bool SetVelocityCaps(ulong bodyHandle, float maxLinear, float maxAngular)
+    {
+        if (_setVelocityCaps is null) return false;
+        return _setVelocityCaps(bodyHandle, maxLinear, maxAngular) != 0;
+    }
+
+    public static bool Sleep(ulong bodyHandle)
+    {
+        if (_sleep is null) return false;
+        return _sleep(bodyHandle) != 0;
+    }
+
+    public static bool Wake(ulong bodyHandle)
+    {
+        if (_wake is null) return false;
+        return _wake(bodyHandle) != 0;
+    }
+
+    public static bool IsSleeping(ulong bodyHandle)
+    {
+        if (_isSleeping is null) return false;
+        return _isSleeping(bodyHandle) != 0;
+    }
+
+    public static bool SetSleepThreshold(ulong bodyHandle, float value)
+    {
+        if (_setSleepThreshold is null) return false;
+        return _setSleepThreshold(bodyHandle, value) != 0;
+    }
+
+    public static bool SetDetectCollisions(ulong bodyHandle, bool enabled)
+    {
+        if (_setDetectCollisions is null) return false;
+        return _setDetectCollisions(bodyHandle, enabled ? 1 : 0) != 0;
+    }
+
+    public static bool GetCenterOfMass(ulong bodyHandle, out Vector3 center)
+    {
+        center = Vector3.Zero;
+        if (_getCenterOfMass is null) return false;
+        float[] buffer = new float[3];
+        if (_getCenterOfMass(bodyHandle, buffer) == 0) return false;
+        center = new Vector3(buffer[0], buffer[1], buffer[2]);
+        return true;
+    }
+
+    public static bool GetWorldCenterOfMass(ulong bodyHandle, out Vector3 center)
+    {
+        center = Vector3.Zero;
+        if (_getWorldCenterOfMass is null) return false;
+        float[] buffer = new float[3];
+        if (_getWorldCenterOfMass(bodyHandle, buffer) == 0) return false;
+        center = new Vector3(buffer[0], buffer[1], buffer[2]);
+        return true;
+    }
+
+    public static bool SetCenterOfMass(ulong bodyHandle, Vector3 center)
+    {
+        if (_setCenterOfMass is null) return false;
+        return _setCenterOfMass(bodyHandle, center.X, center.Y, center.Z) != 0;
+    }
+
+    public static bool ResetCenterOfMass(ulong bodyHandle)
+    {
+        if (_resetCenterOfMass is null) return false;
+        return _resetCenterOfMass(bodyHandle) != 0;
+    }
+
+    public static bool GetInertiaTensor(ulong bodyHandle, out Vector3 tensor, out Quaternion rotation)
+    {
+        tensor = Vector3.Zero;
+        rotation = Quaternion.Identity;
+        if (_getInertiaTensor is null) return false;
+        float[] tensorBuffer = new float[3];
+        float[] rotationBuffer = new float[4];
+        if (_getInertiaTensor(bodyHandle, tensorBuffer, rotationBuffer) == 0) return false;
+        tensor = new Vector3(tensorBuffer[0], tensorBuffer[1], tensorBuffer[2]);
+        rotation = new Quaternion(rotationBuffer[0], rotationBuffer[1], rotationBuffer[2], rotationBuffer[3]);
+        return true;
+    }
+
+    public static bool SetInertiaTensor(ulong bodyHandle, Vector3 tensor, Quaternion rotation)
+    {
+        if (_setInertiaTensor is null) return false;
+        return _setInertiaTensor(bodyHandle, tensor.X, tensor.Y, tensor.Z, rotation.X, rotation.Y, rotation.Z, rotation.W) != 0;
+    }
+
+    public static bool ResetInertiaTensor(ulong bodyHandle)
+    {
+        if (_resetInertiaTensor is null) return false;
+        return _resetInertiaTensor(bodyHandle) != 0;
+    }
+
+    public static bool GetPointVelocity(ulong bodyHandle, Vector3 point, out Vector3 velocity)
+    {
+        velocity = Vector3.Zero;
+        if (_getPointVelocity is null) return false;
+        float[] buffer = new float[3];
+        if (_getPointVelocity(bodyHandle, point.X, point.Y, point.Z, buffer) == 0) return false;
+        velocity = new Vector3(buffer[0], buffer[1], buffer[2]);
+        return true;
+    }
+
+    public static bool GetRelativePointVelocity(ulong bodyHandle, Vector3 point, out Vector3 velocity)
+    {
+        velocity = Vector3.Zero;
+        if (_getRelativePointVelocity is null) return false;
+        float[] buffer = new float[3];
+        if (_getRelativePointVelocity(bodyHandle, point.X, point.Y, point.Z, buffer) == 0) return false;
+        velocity = new Vector3(buffer[0], buffer[1], buffer[2]);
+        return true;
+    }
+
+    public static bool MoveKinematic(ulong bodyHandle, Vector3 position, Quaternion rotation)
+    {
+        if (_moveKinematic is null) return false;
+        return _moveKinematic(bodyHandle, position.X, position.Y, position.Z, rotation.X, rotation.Y, rotation.Z, rotation.W) != 0;
+    }
+
+    public static bool MoveKinematicRotation(ulong bodyHandle, Quaternion rotation)
+    {
+        if (_moveKinematicRotation is null) return false;
+        return _moveKinematicRotation(bodyHandle, rotation.X, rotation.Y, rotation.Z, rotation.W) != 0;
+    }
+
+    public static bool SweepBody(ulong bodyHandle, Vector3 direction, float maxDistance, out Physics.RaycastHit hit)
+    {
+        hit = default;
+        if (_sweepBody is null) return false;
+        float[] pointBuffer = new float[3];
+        float[] normalBuffer = new float[3];
+        if (_sweepBody(bodyHandle, direction.X, direction.Y, direction.Z, maxDistance,
+                out ulong entityId, pointBuffer, normalBuffer, out float distance) == 0)
+        {
+            return false;
+        }
+        hit = new Physics.RaycastHit
+        {
+            EntityId = entityId,
+            Point = new Vector3(pointBuffer[0], pointBuffer[1], pointBuffer[2]),
+            Normal = new Vector3(normalBuffer[0], normalBuffer[1], normalBuffer[2]),
+            Distance = distance,
+        };
+        return true;
+    }
+
+    /// <summary>Sweep de cuerpo contra todos los impactos en el trayecto.
+    /// El FFI solo transporta entidad y distancia por impacto; Point y
+    /// Normal quedan en Vector3.Zero porque `glass_physics_sweep_body_all`
+    /// no los calcula (a diferencia de SweepBody/CastRay).</summary>
+    public static uint SweepBodyAll(ulong bodyHandle, Vector3 direction, float maxDistance, Physics.RaycastHit[] hits)
+    {
+        if (_sweepBodyAll is null || hits.Length == 0) return 0;
+        ulong[] entities = new ulong[hits.Length];
+        float[] dists = new float[hits.Length];
+        uint count = _sweepBodyAll(bodyHandle, direction.X, direction.Y, direction.Z, maxDistance, entities, dists, (uint)hits.Length);
+        for (int i = 0; i < count && i < hits.Length; i++)
+        {
+            hits[i] = new Physics.RaycastHit
+            {
+                EntityId = entities[i],
+                Point = Vector3.Zero,
+                Normal = Vector3.Zero,
+                Distance = dists[i],
+            };
+        }
+        return count;
     }
 
     /// <summary>Lee los ojos del último Move del personaje: flags

@@ -16,13 +16,94 @@ namespace GlassEngine.Core.Physics
         public float SkinWidth { get; set; } = 0.02f;
 
         // Altura máxima de escalón.
-        public float StepOffset { get; set; } = 0.4f;
+        public float StepOffset
+        {
+            get => _stepOffset;
+            set
+            {
+                _stepOffset = value;
+                if (IsCreated) RuntimeBridge.CharacterSetStepOffset(EntityId, value);
+            }
+        }
+        private float _stepOffset = 0.4f;
 
         // Límite de pendiente en grados.
-        public float SlopeLimit { get; set; } = 45f;
+        public float SlopeLimit
+        {
+            get => _slopeLimit;
+            set
+            {
+                _slopeLimit = value;
+                if (IsCreated) RuntimeBridge.CharacterSetSlopeLimit(EntityId, value);
+            }
+        }
+        private float _slopeLimit = 45f;
 
         // Distancia de ajuste al suelo.
         public float SnapDistance { get; set; } = 0.3f;
+
+        // Detección de colisiones activa (Unity: CharacterController.detectCollisions).
+        public bool DetectCollisions
+        {
+            get => _detectCollisions;
+            set
+            {
+                _detectCollisions = value;
+                if (IsCreated) RuntimeBridge.CharacterSetDetectCollisions(EntityId, value);
+            }
+        }
+        private bool _detectCollisions = true;
+
+        // Despenetración automática contra solapes al mover.
+        public bool EnableOverlapRecovery
+        {
+            get => _enableOverlapRecovery;
+            set
+            {
+                _enableOverlapRecovery = value;
+                if (IsCreated) RuntimeBridge.CharacterSetOverlapRecovery(EntityId, value);
+            }
+        }
+        private bool _enableOverlapRecovery = true;
+
+        // Controlador habilitado (Unity: CharacterController.enabled).
+        public bool Enabled
+        {
+            get => _enabled;
+            set
+            {
+                _enabled = value;
+                if (IsCreated) RuntimeBridge.CharacterSetEnabled(EntityId, value);
+            }
+        }
+        private bool _enabled = true;
+
+        // Máscara de capas que el controlador puede ver en sus sondas.
+        // -1 (todos los bits) equivale a todas las capas.
+        public int IncludeLayers
+        {
+            get => _includeLayers;
+            set
+            {
+                _includeLayers = value;
+                if (IsCreated) RuntimeBridge.CharacterSetIncludeLayers(EntityId, unchecked((uint)value));
+            }
+        }
+        private int _includeLayers = -1;
+
+        // Caja de la cápsula del personaje en coordenadas de mundo.
+        public bool GetBounds(out Vector3 min, out Vector3 max)
+        {
+            min = Vector3.Zero;
+            max = Vector3.Zero;
+            if (!IsCreated) return false;
+            float[] minArr = new float[3];
+            float[] maxArr = new float[3];
+            if (!RuntimeBridge.CharacterBounds(EntityId, minArr, maxArr)) return false;
+            min = new Vector3(minArr[0], minArr[1], minArr[2]);
+            max = new Vector3(maxArr[0], maxArr[1], maxArr[2]);
+            return true;
+        }
 
         // Entidad asociada al personaje.
         public ulong EntityId { get; private set; }

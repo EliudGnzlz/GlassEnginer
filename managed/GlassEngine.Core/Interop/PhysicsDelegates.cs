@@ -233,3 +233,125 @@ public delegate uint CharacterLastMoveDelegate(ulong entityId, out uint flags, [
 // Interpolación de render por entidad: espejo de `glass_physics_set_interpolation`.
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate int SetInterpolationDelegate(ulong entityId, int enabled);
+
+// Paquete C de paridad RB/CC: setters/getters de CharacterController.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterSetDetectCollisionsDelegate(ulong entityId, int enabled);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterGetDetectCollisionsDelegate(ulong entityId, out int enabled);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterSetOverlapRecoveryDelegate(ulong entityId, int enabled);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterGetOverlapRecoveryDelegate(ulong entityId, out int enabled);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterSetStepOffsetDelegate(ulong entityId, float value);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterGetStepOffsetDelegate(ulong entityId, out float value);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterSetSlopeLimitDelegate(ulong entityId, float degrees);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterGetSlopeLimitDelegate(ulong entityId, out float degrees);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterSetEnabledDelegate(ulong entityId, int enabled);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterGetEnabledDelegate(ulong entityId, out int enabled);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterSetIncludeLayersDelegate(ulong entityId, uint mask);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterGetIncludeLayersDelegate(ulong entityId, out uint mask);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterBoundsDelegate(ulong entityId, [In, Out] float[] min, [In, Out] float[] max);
+
+// Paquete D de paridad RB/CC: espejo C# de los FFI de los paquetes A y B.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int GetAngularVelocityDelegate(ulong bodyHandle, [In, Out] float[] outVelocity);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetAngularVelocityDelegate(ulong bodyHandle, float x, float y, float z);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int AddTorqueDelegate(ulong bodyHandle, float x, float y, float z);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int ApplyTorqueImpulseDelegate(ulong bodyHandle, float x, float y, float z);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int AddForceAtPointDelegate(ulong bodyHandle, float fx, float fy, float fz, float px, float py, float pz);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int ApplyImpulseAtPointDelegate(ulong bodyHandle, float ix, float iy, float iz, float px, float py, float pz);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int ExplosionImpulseDelegate(ulong bodyHandle, float cx, float cy, float cz, float radius, float force, float upwards);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int ExplosionForceDelegate(ulong bodyHandle, float cx, float cy, float cz, float radius, float force, float upwards);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetVelocityCapsDelegate(ulong bodyHandle, float maxLinear, float maxAngular);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SleepDelegate(ulong bodyHandle);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int WakeDelegate(ulong bodyHandle);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int IsSleepingDelegate(ulong bodyHandle);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetSleepThresholdDelegate(ulong bodyHandle, float value);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetDetectCollisionsDelegate(ulong bodyHandle, int enabled);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int GetCenterOfMassDelegate(ulong bodyHandle, [In, Out] float[] outCenter);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int GetWorldCenterOfMassDelegate(ulong bodyHandle, [In, Out] float[] outCenter);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetCenterOfMassDelegate(ulong bodyHandle, float x, float y, float z);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int ResetCenterOfMassDelegate(ulong bodyHandle);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int GetInertiaTensorDelegate(ulong bodyHandle, [In, Out] float[] outTensor, [In, Out] float[] outRotation);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetInertiaTensorDelegate(ulong bodyHandle, float ix, float iy, float iz, float qx, float qy, float qz, float qw);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int ResetInertiaTensorDelegate(ulong bodyHandle);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int GetPointVelocityDelegate(ulong bodyHandle, float px, float py, float pz, [In, Out] float[] outVelocity);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int GetRelativePointVelocityDelegate(ulong bodyHandle, float px, float py, float pz, [In, Out] float[] outVelocity);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int MoveKinematicDelegate(ulong bodyHandle, float px, float py, float pz, float qx, float qy, float qz, float qw);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int MoveKinematicRotationDelegate(ulong bodyHandle, float qx, float qy, float qz, float qw);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SweepBodyDelegate(ulong bodyHandle, float dx, float dy, float dz, float maxDist, out ulong outEntity, [In, Out] float[] outPoint, [In, Out] float[] outNormal, out float outDist);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate uint SweepBodyAllDelegate(ulong bodyHandle, float dx, float dy, float dz, float maxDist, [In, Out] ulong[] entities, [In, Out] float[] dists, uint cap);

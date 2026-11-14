@@ -315,3 +315,121 @@ por personaje y bounds).
 contactos 4/4, hits del CC 3/3, interpolación 3/3, sin regresión
 en escalones/plataformas del CC — y **prueba en vivo
 `PruebaHuecosBeta` GLOBAL OK** (escena y scripts en el repo).
+
+---
+
+## Addenda 2026-11-14 — Bloque de PARIDAD (altas y medias) IMPLEMENTADO
+
+Orden del usuario (2026-11-13 22:56): las piezas ALTA y MEDIA
+que la addenda anterior dejó fuera. Las BAJAS quedan registradas
+en `LISTA_DE_DESPUES.md` §7, no descartadas.
+
+**Rigidbody — nuevo en la superficie (mundo + FFI + C#):**
+
+- `angularVelocity` legible y fijable (`RigidBody.AngularVelocity`).
+- `AddForceAtPosition` con los cuatro `ForceMode` (el torque sale
+  de r×F sobre el centro de masa real).
+- `AddTorque` y `AddRelativeTorque` (local→mundo con la rotación
+  actual; en Acceleration/VelocityChange escalan por masa —
+  aproximación documentada, sin tensor).
+- `AddExplosionForce(force, pos, radius, upwardsModifier, mode)`
+  como API: dirección desde el COM con el centro efectivo
+  desplazado −upwards en Y, factor lineal 1−dist/radio.
+- `detectCollisions` por cuerpo: conserva la membresía de capa y
+  pone el filtro a NONE; al reactivar restaura los grupos
+  originales.
+- `centerOfMass` / `worldCenterOfMass` / `ResetCenterOfMass` y
+  `inertiaTensor` / `inertiaTensorRotation` / `ResetInertiaTensor`.
+  Diseño del override: `MassProperties` de parry suma ponderando
+  por masa, así que «deseado − actual» con igual masa da una
+  adicional de masa cero que no mueve nada; la implementación
+  reduce las densidades a la mitad y compone la adicional contra
+  esa mitad (masa M/2 > 0), con componentes COM e inercia
+  separados (fijar solo el COM no congela la inercia: tras
+  `set_mass` la parte no fijada escala con la masa). Caveat:
+  añadir o quitar colliders tras un override exige volver a
+  fijar COM/inercia.
+- `GetPointVelocity` / `GetRelativePointVelocity` (v + ω×(p−COM)).
+- `Move(pos, rot)` y `MoveRotation(q)` cinemáticos (next position
+  completa de Rapier).
+- `SweepTest` / `SweepTestAll` del propio cuerpo: el barrido de
+  Rapier solo devuelve el primer impacto, así que el «All» itera
+  excluyendo el cuerpo impactado (tope 64) y ordena por
+  distancia. El FFI del «All» transporta entidad + distancia; el
+  punto y la normal quedan a cero (documentado en el envoltorio).
+- `maxLinearVelocity` / `maxAngularVelocity`: topes aplicados
+  DESPUÉS de cada substep (antes del step, la gravedad del propio
+  substep dejaba la velocidad en tope+0,16).
+- `Sleep()` / `WakeUp()` / `IsSleeping()` + `SleepThreshold`
+  (defecto Unity 0,005; mapeo a la energía de activación de
+  Rapier; umbral ≤ 0 = nunca duerme).
+
+**CharacterController — nuevo:**
+
+- `DetectCollisions`: con la cápsula ya invisible al solver
+  (arreglo de la demo), su semántica es el modo fantasma de las
+  sondas de movimiento: false = `Move` atraviesa todo.
+- `EnableOverlapRecovery` como superficie real: pasada de
+  expulsión por contactos de parry. Ojo verificado contra el
+  fuente de parry 0.18: `Contact.normal1` apunta al exterior de
+  la PRIMERA forma; la expulsión de la cápsula usa `normal2`.
+- `StepOffset` / `SlopeLimit` mutables tras crear (empujan al
+  motor en caliente), `Enabled` (Move no aplica nada), `Bounds`
+  (AABB de la cápsula) e `IncludeLayers` (máscara de capas de
+  todas las sondas; la semántica exacta de `excludeLayers` de
+  Unity sigue fuera, en las bajas).
+- Arreglo asociado: el `applied` de `Move` no incluía el empuje
+  de la recuperación de solape; ahora es posición final −
+  posición de entrada, siempre.
+
+**Recuento fresco sobre la tabla de ítems** (sustituye la
+aritmética de la addenda anterior, que mezclaba gradaciones):
+
+- **Rigidbody: TIENE 43 · PARCIAL 5 · NO TIENE 9 de 57 →
+  ponderado 45,5/57 ≈ 80 %.** PARCIAL: `automaticCenterOfMass`,
+  `automaticInertiaTensor` (equivalen a «siempre automático»),
+  `excludeLayers`, `includeLayers` (matriz de capas sin la
+  semántica aditiva exacta de Unity) y la carga `Collision`
+  (completa en datos; sin referencias `collider`/`rigidbody`).
+  NO TIENE: `angularDamping`, `maxDepenetrationVelocity`,
+  `solverIterations`, `solverVelocityIterations`,
+  `AddRelativeForce`, `PublishTransform`, `ClosestPointOnBounds`,
+  `GetAccumulatedForce`, `GetAccumulatedTorque` — las nueve
+  están en las BAJAS registradas (§7).
+- **CharacterController: TIENE 16 · PARCIAL 2 · NO TIENE 7 de
+  25 → ponderado 17/25 = 68 %.** PARCIAL: `Move` (sin
+  `CollisionFlags` como valor de retorno; los flags van por
+  `LastFlags`) y el `Raycast` heredado (sobre el mundo, no
+  contra la cápsula). NO TIENE: `center` y `SimpleMove` (por
+  decisión de diseño v1), `minMoveDistance`, `excludeLayers`,
+  `material`/`sharedMaterial`, `ClosestPoint`,
+  `ClosestPointOnBounds`.
+
+**Verificación:** tests Rust nuevos `paridad_a` 7/7, `paridad_b`
+8/8, `paridad_c` 10/10 sin regresión en la batería del CC
+(plataformas 4/4, escalones 4/4, hits 3/3, cápsula invisible
+2/2), y **prueba en vivo `PruebaParidad` GLOBAL OK: 20/20**
+chequeos contra la superficie C# (torque ω=3,00 exactos; fuerza
+en punto vz=4,00 y ωy=−12,00; explosión (4,93, 0,82); sweep a
+4,00 que pasa a 6,00 tras el `Move` cinemático; CC bloqueado a
+5,13 exactos = cara − radio − piel; subida del peldaño con pico
+0,35). Primera corrida: 19/20 — el fallo era del veredicto de
+mi test (medía la subida NETA y el personaje bajaba por el otro
+lado del peldaño dentro de la ventana: neto ≈ 0 habiendo subido
+bien); corregido a pico, 20/20. El motor no se tocó por ese
+fallo.
+
+**Consumo del bloque: Sonnet 224.271** (PAQ-A 23.654 + PAQ-B2
+85.759 + PAQ-C 58.344 + PAQ-D 47.807 productivos; + 8.707 del
+primer intento del PAQ-B, que llegó sin código por pedir los
+archivos completos — reenviado con ellos pegados). **Opus 0
+productivos:** la pasarela devolvía 200 con cuerpo vacío para
+`claude-opus-5-5` (sonda mínima incluida; Sonnet por la misma
+pasarela, normal) — caída externa diagnosticada el 2026-11-14,
+no arreglable desde aquí; ~3–6k tokens de prompt quemados en
+las sondas. Según la regla de fallos de API, el bloque se movió
+a Sonnet con la evidencia, y Opus se reintentará en el siguiente
+bloque. DeepSeek 0 · Kimi 0. Los tres defectos de integración
+(álgebra de masa cero del override, `sweep_all` de un solo
+impacto, signo de la normal de expulsión) los cazaron los tests
+antes de la prueba en vivo y se arreglaron a mano.

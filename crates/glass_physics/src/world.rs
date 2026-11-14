@@ -27,6 +27,17 @@ pub struct PhysicsWorld {
     prev_transforms: std::collections::HashMap<u64, TransformFfi>,
     /// Entidades (no handles de cuerpo) con interpolación de render activada.
     interp_bodies: std::collections::HashSet<u64>,
+    /// Topes de velocidad (lineal, angular) por cuerpo registrado. Solo
+    /// afecta a los cuerpos presentes en el mapa.
+    velocity_caps: std::collections::HashMap<u64, (f32, f32)>,
+    /// Grupos de colisión originales de los colliders de un cuerpo con
+    /// detectCollisions desactivado, guardados para poder restaurarlos.
+    detect_disabled: std::collections::HashMap<u64, Vec<(rapier3d::geometry::ColliderHandle, rapier3d::geometry::InteractionGroups)>>,
+    /// Override de centro de masa / inercia por cuerpo (paridad RB):
+    /// objetivos (com local, inercia) y los colliders cuyas densidades se
+    /// redujeron a la mitad para poder aplicar el override (ver
+    /// `apply_mprops_override`).
+    mprops_override: std::collections::HashMap<u64, MpropsOverride>,
 
     /// Handler de eventos de colisión de Rapier: vuelca los CollisionEvent
     /// de cada substep en el canal que drena `step()`.
@@ -111,6 +122,22 @@ impl Default for PhysicsWorld {
     }
 }
 
+/// Override de centro de masa / inercia de un cuerpo, por componentes
+/// separados (como en Unity: fijar solo el COM no congela la inercia,
+/// y fijar solo la inercia no congela el COM): `com`/`inertia` son
+/// `None` mientras ese componente siga siendo el natural de los
+/// colliders. `halved` guarda los colliders cuyas densidades se
+/// redujeron al aplicar el override (ver `apply_current_override`).
+struct MpropsOverride {
+    com: Option<[f32; 3]>,
+    inertia: Option<([f32; 3], [f32; 4])>,
+    halved: Vec<rapier3d::geometry::ColliderHandle>,
+}
+
+/// Factor por el que se reducen las densidades de los colliders al
+/// aplicar un override de masa/inercia (ver `apply_mprops_override`).
+const MPROPS_DENSITY_SCALE: f32 = 0.5;
+
 impl PhysicsWorld {
     pub fn new() -> Self {
         let (event_sender, event_receiver) = crossbeam::channel::unbounded();
@@ -144,6 +171,9 @@ impl PhysicsWorld {
             ragdolls: HashMap::new(),
             prev_transforms: std::collections::HashMap::new(),
             interp_bodies: std::collections::HashSet::new(),
+            velocity_caps: HashMap::new(),
+            detect_disabled: HashMap::new(),
+            mprops_override: HashMap::new(),
             event_handler: ChannelEventCollector::new(event_sender, force_sender),
             event_receiver,
             force_event_receiver,
@@ -241,6 +271,10 @@ impl PhysicsWorld {
                 &self.event_handler,
             );
             self.accumulator -= fixed_dt;
+            // Topes DESPUÉS del step: si se recorta antes, la gravedad
+            // del propio substep vuelve a superar el tope (medido:
+            // cap 1,0 → 1,12 tras un paso).
+            self.apply_velocity_caps();
             substeps += 1;
             self.step_count += 1;
             self.collect_contact_events();
@@ -1063,6 +1097,368 @@ impl PhysicsWorld {
         }
     }
 
+    /// Gets the angular velocity of a rigid body.
+    pub fn get_angular_velocity(&self, body_handle: BodyHandle) -> Option<[f32; 3]> {
+        let &(rapier_handle, _) = self.body_map.get(&body_handle)?;
+        let rb = self.rigid_body_set.get(rapier_handle)?;
+        let angvel = rb.angvel();
+        Some([angvel.x, angvel.y, angvel.z])
+    }
+
+    /// Sets the angular velocity of a rigid body directly.
+    pub fn set_angular_velocity(&mut self, body_handle: BodyHandle, angvel: [f32; 3]) -> bool {
+        let &(rapier_handle, _) = match self.body_map.get(&body_handle) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        if let Some(rb) = self.rigid_body_set.get_mut(rapier_handle) {
+            rb.set_angvel(vector![angvel[0], angvel[1], angvel[2]], true);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Applies a continuous torque to a rigid body.
+    pub fn add_torque(&mut self, body_handle: BodyHandle, torque: [f32; 3]) -> bool {
+        let &(rapier_handle, _) = match self.body_map.get(&body_handle) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        if let Some(rb) = self.rigid_body_set.get_mut(rapier_handle) {
+            rb.add_torque(vector![torque[0], torque[1], torque[2]], true);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Applies an instantaneous torque impulse to a rigid body.
+    pub fn apply_torque_impulse(&mut self, body_handle: BodyHandle, impulse: [f32; 3]) -> bool {
+        let &(rapier_handle, _) = match self.body_map.get(&body_handle) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        if let Some(rb) = self.rigid_body_set.get_mut(rapier_handle) {
+            rb.apply_torque_impulse(vector![impulse[0], impulse[1], impulse[2]], true);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Applies a continuous force at a specific world point of a rigid body.
+    pub fn add_force_at_point(
+        &mut self,
+        body_handle: BodyHandle,
+        force: [f32; 3],
+        point: [f32; 3],
+    ) -> bool {
+        let &(rapier_handle, _) = match self.body_map.get(&body_handle) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        if let Some(rb) = self.rigid_body_set.get_mut(rapier_handle) {
+            rb.add_force_at_point(
+                vector![force[0], force[1], force[2]],
+                point![point[0], point[1], point[2]],
+                true,
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Applies an instantaneous impulse at a specific world point of a rigid body.
+    pub fn apply_impulse_at_point(
+        &mut self,
+        body_handle: BodyHandle,
+        impulse: [f32; 3],
+        point: [f32; 3],
+    ) -> bool {
+        let &(rapier_handle, _) = match self.body_map.get(&body_handle) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        if let Some(rb) = self.rigid_body_set.get_mut(rapier_handle) {
+            rb.apply_impulse_at_point(
+                vector![impulse[0], impulse[1], impulse[2]],
+                point![point[0], point[1], point[2]],
+                true,
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Applies an instantaneous explosion impulse to a rigid body.
+    ///
+    /// `center` es el centro de la explosión; `upwards` desplaza el centro
+    /// efectivo hacia arriba antes de calcular la dirección (pero no afecta
+    /// a la distancia usada para la atenuación, que siempre usa `center`
+    /// sin desplazar). Si `distancia >= radius` o `radius <= 0` no hace nada
+    /// y devuelve `false`.
+    pub fn explosion_impulse(
+        &mut self,
+        body_handle: BodyHandle,
+        center: [f32; 3],
+        radius: f32,
+        force: f32,
+        upwards: f32,
+    ) -> bool {
+        let &(rapier_handle, _) = match self.body_map.get(&body_handle) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        if radius <= 0.0 {
+            return false;
+        }
+
+        let rb = match self.rigid_body_set.get_mut(rapier_handle) {
+            Some(rb) => rb,
+            None => return false,
+        };
+
+        let world_com = rb.position() * rb.mass_properties().local_mprops.local_com;
+        let center_point = point![center[0], center[1], center[2]];
+        let distance = (world_com - center_point).norm();
+        if distance >= radius {
+            return false;
+        }
+
+        let effective_center = point![center[0], center[1] - upwards, center[2]];
+        let mut dir = world_com - effective_center;
+        if distance < 1e-5 {
+            dir = vector![0.0, 1.0, 0.0];
+        } else {
+            dir = dir.normalize();
+        }
+
+        let factor = 1.0 - distance / radius;
+        let impulse = dir * (force * factor);
+        rb.apply_impulse_at_point(impulse, world_com, true);
+        true
+    }
+
+    /// Applies a continuous explosion force to a rigid body. Misma semántica
+    /// que [`PhysicsWorld::explosion_impulse`] pero usando `add_force_at_point`.
+    pub fn explosion_force(
+        &mut self,
+        body_handle: BodyHandle,
+        center: [f32; 3],
+        radius: f32,
+        force: f32,
+        upwards: f32,
+    ) -> bool {
+        let &(rapier_handle, _) = match self.body_map.get(&body_handle) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        if radius <= 0.0 {
+            return false;
+        }
+
+        let rb = match self.rigid_body_set.get_mut(rapier_handle) {
+            Some(rb) => rb,
+            None => return false,
+        };
+
+        let world_com = rb.position() * rb.mass_properties().local_mprops.local_com;
+        let center_point = point![center[0], center[1], center[2]];
+        let distance = (world_com - center_point).norm();
+        if distance >= radius {
+            return false;
+        }
+
+        let effective_center = point![center[0], center[1] - upwards, center[2]];
+        let mut dir = world_com - effective_center;
+        if distance < 1e-5 {
+            dir = vector![0.0, 1.0, 0.0];
+        } else {
+            dir = dir.normalize();
+        }
+
+        let factor = 1.0 - distance / radius;
+        let force_vec = dir * (force * factor);
+        rb.add_force_at_point(force_vec, world_com, true);
+        true
+    }
+
+    /// Sets the velocity caps (max linear, max angular) for a registered
+    /// rigid body. Los valores no finitos o negativos se guardan como
+    /// `f32::INFINITY` (sin tope).
+    pub fn set_velocity_caps(&mut self, body_handle: BodyHandle, max_linear: f32, max_angular: f32) {
+        let lin = if max_linear.is_finite() && max_linear >= 0.0 {
+            max_linear
+        } else {
+            f32::INFINITY
+        };
+        let ang = if max_angular.is_finite() && max_angular >= 0.0 {
+            max_angular
+        } else {
+            f32::INFINITY
+        };
+        self.velocity_caps.insert(body_handle, (lin, ang));
+    }
+
+    /// Clears the velocity caps for a rigid body.
+    pub fn clear_velocity_caps(&mut self, body_handle: BodyHandle) {
+        self.velocity_caps.remove(&body_handle);
+    }
+
+    /// Recorta la velocidad lineal y angular de todos los cuerpos con topes
+    /// configurados. Se invoca una vez por substep.
+    fn apply_velocity_caps(&mut self) {
+        for (&body_handle, &(max_linear, max_angular)) in self.velocity_caps.iter() {
+            let &(rapier_handle, _) = match self.body_map.get(&body_handle) {
+                Some(v) => v,
+                None => continue,
+            };
+            if let Some(rb) = self.rigid_body_set.get_mut(rapier_handle) {
+                if max_linear.is_finite() {
+                    let linvel = *rb.linvel();
+                    let speed = linvel.norm();
+                    if speed > max_linear && speed > 0.0 {
+                        rb.set_linvel(linvel * (max_linear / speed), true);
+                    }
+                }
+                if max_angular.is_finite() {
+                    let angvel = *rb.angvel();
+                    let speed = angvel.norm();
+                    if speed > max_angular && speed > 0.0 {
+                        rb.set_angvel(angvel * (max_angular / speed), true);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Pone a dormir un cuerpo rígido.
+    pub fn sleep_body(&mut self, body_handle: BodyHandle) -> bool {
+        let &(rapier_handle, _) = match self.body_map.get(&body_handle) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        if let Some(rb) = self.rigid_body_set.get_mut(rapier_handle) {
+            rb.sleep();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Despierta un cuerpo rígido.
+    pub fn wake_body(&mut self, body_handle: BodyHandle) -> bool {
+        let &(rapier_handle, _) = match self.body_map.get(&body_handle) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        if let Some(rb) = self.rigid_body_set.get_mut(rapier_handle) {
+            rb.wake_up(true);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Indica si un cuerpo rígido está durmiendo.
+    pub fn is_sleeping(&self, body_handle: BodyHandle) -> Option<bool> {
+        let &(rapier_handle, _) = self.body_map.get(&body_handle)?;
+        let rb = self.rigid_body_set.get(rapier_handle)?;
+        Some(rb.is_sleeping())
+    }
+
+    /// Fija el umbral de sueño de un cuerpo con la semántica de energía
+    /// específica al estilo Unity (por defecto `0.005`). Se traduce a los
+    /// umbrales de velocidad lineal/angular de Rapier con:
+    /// `lin = sqrt(2.0 * threshold)`, `ang = lin * 1.25` (la razón 1.25 viene
+    /// de los valores por defecto de Rapier, 0.5 lineal / 0.4 angular). Si
+    /// `threshold <= 0.0` se fija `lin = -1.0` y `ang = -1.0`, lo que en
+    /// Rapier significa que el cuerpo nunca duerme automáticamente.
+    pub fn set_sleep_threshold(&mut self, body_handle: BodyHandle, threshold: f32) -> bool {
+        let &(rapier_handle, _) = match self.body_map.get(&body_handle) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        if let Some(rb) = self.rigid_body_set.get_mut(rapier_handle) {
+            let (lin, ang) = if threshold > 0.0 {
+                let lin = (2.0 * threshold).sqrt();
+                (lin, lin * 1.25)
+            } else {
+                (-1.0, -1.0)
+            };
+            let act = rb.activation_mut();
+            act.normalized_linear_threshold = lin;
+            act.angular_threshold = ang;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Activa o desactiva la detección de colisiones de un cuerpo sin
+    /// eliminarlo de la simulación. Internamente fija el filtro de los
+    /// colliders del cuerpo a `Group::NONE` (conservando la membresía
+    /// original) para que no participen en el solver ni en consultas con
+    /// grupos, y restaura los grupos originales al reactivar.
+    ///
+    /// Si el cuerpo se elimina mientras tiene la detección desactivada, la
+    /// entrada de `detect_disabled` queda huérfana; esto es inofensivo
+    /// porque los handles de cuerpo no se reutilizan sin volver a registrar
+    /// una entrada nueva.
+    pub fn set_detect_collisions(&mut self, body_handle: BodyHandle, enabled: bool) -> bool {
+        let &(rapier_handle, _) = match self.body_map.get(&body_handle) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        let collider_handles: Vec<rapier3d::geometry::ColliderHandle> = match self
+            .rigid_body_set
+            .get(rapier_handle)
+        {
+            Some(rb) => rb.colliders().to_vec(),
+            None => return false,
+        };
+
+        if !enabled {
+            if self.detect_disabled.contains_key(&body_handle) {
+                return true;
+            }
+            let mut saved = Vec::with_capacity(collider_handles.len());
+            for handle in collider_handles {
+                if let Some(collider) = self.collider_set.get_mut(handle) {
+                    let original_groups = collider.collision_groups();
+                    saved.push((handle, original_groups));
+                    collider.set_collision_groups(rapier3d::geometry::InteractionGroups::new(
+                        original_groups.memberships,
+                        rapier3d::geometry::Group::NONE,
+                    ));
+                }
+            }
+            self.detect_disabled.insert(body_handle, saved);
+        } else if let Some(saved) = self.detect_disabled.remove(&body_handle) {
+            for (handle, original_groups) in saved {
+                if let Some(collider) = self.collider_set.get_mut(handle) {
+                    collider.set_collision_groups(original_groups);
+                }
+            }
+        }
+
+        true
+    }
+
     /// Removes a rigid body and its attached colliders.
     pub fn set_locked_axes(&mut self, body_handle: BodyHandle, bits: u8) -> bool {
         if let Some((handle, _)) = self.get_rapier_handle(body_handle) {
@@ -1100,6 +1496,11 @@ impl PhysicsWorld {
         let Some((rapier, _)) = self.get_rapier_handle(handle) else {
             return false;
         };
+        // Con un override de COM/inercia activo las densidades están a
+        // la mitad: restaurarlas primero para que `current` sea la masa
+        // natural y el factor salga bien (la reaplicación del override
+        // al final vuelve a reducirlas).
+        self.restore_mprops_densities(handle);
         let Some(rb) = self.rigid_body_set.get(rapier) else {
             return false;
         };
@@ -1120,12 +1521,549 @@ impl PhysicsWorld {
                 c.set_density(density * factor);
             }
         }
+        // Con un override de COM/inercia activo, el reescalado de
+        // densidades mueve S y el override quedaría obsoleto: se
+        // reaplica con los mismos componentes fijados (apply restaura
+        // las densidades a su natural —ahora la nueva masa— y vuelve a
+        // reducirlas a la mitad; lo no fijado toma el natural nuevo).
+        if self.mprops_override.contains_key(&handle) {
+            return self.apply_current_override(handle);
+        }
         true
     }
 
     pub fn get_mass(&self, handle: BodyHandle) -> Option<f32> {
         let (rapier, _) = self.get_rapier_handle(handle)?;
         self.rigid_body_set.get(rapier).map(|rb| rb.mass())
+    }
+
+    /// Centro de masa en el espacio LOCAL del cuerpo. Si hay un override
+    /// de COM activo se devuelve su objetivo (siempre fresco, aunque las
+    /// `local_mprops` cacheadas de Rapier aún no se hayan actualizado).
+    pub fn get_center_of_mass(&self, handle: BodyHandle) -> Option<[f32; 3]> {
+        if let Some(ov) = self.mprops_override.get(&handle) {
+            if let Some(com) = ov.com {
+                return Some(com);
+            }
+        }
+        let (rapier, _) = self.get_rapier_handle(handle)?;
+        let rb = self.rigid_body_set.get(rapier)?;
+        let com = rb.mass_properties().local_mprops.local_com;
+        Some(com.coords.into())
+    }
+
+    /// Centro de masa en espacio MUNDIAL (fresco, recalculado desde la
+    /// pose actual, no desde el campo `world_com` que puede desactualizarse).
+    pub fn get_world_center_of_mass(&self, handle: BodyHandle) -> Option<[f32; 3]> {
+        let (rapier, _) = self.get_rapier_handle(handle)?;
+        let rb = self.rigid_body_set.get(rapier)?;
+        let local_com = self.effective_local_com(handle, rb);
+        let world_com = rb.position() * local_com;
+        Some(world_com.coords.into())
+    }
+
+    /// COM local efectivo: el objetivo del override de COM si lo hay;
+    /// si no, el de las `local_mprops` de Rapier.
+    fn effective_local_com(&self, handle: BodyHandle, rb: &RigidBody) -> Point<f32> {
+        if let Some(ov) = self.mprops_override.get(&handle) {
+            if let Some(com) = ov.com {
+                return Point::new(com[0], com[1], com[2]);
+            }
+        }
+        rb.mass_properties().local_mprops.local_com
+    }
+
+    /// Suma de las propiedades de masa de SOLO los colliders del cuerpo
+    /// (sin la masa adicional establecida vía `set_additional_mass_properties`),
+    /// cada una transformada a la pose local del cuerpo.
+    fn colliders_mass_properties(&self, rb: &RigidBody) -> MassProperties {
+        let mut total = MassProperties::default();
+        let inv_pose = rb.position().inverse();
+        for &h in rb.colliders() {
+            if let Some(co) = self.collider_set.get(h) {
+                let local = inv_pose * co.position();
+                total += co.mass_properties().transform_by(&local);
+            }
+        }
+        total
+    }
+
+    /// Inercia principal saneada desde `inv_principal_inertia_sqrt`: si
+    /// alguna componente es 0 (eje sin inercia, p. ej. masa cero), se
+    /// sustituye por una inercia enorme (1e9) para evitar una división
+    /// por cero al invertir.
+    fn inercia_principal_saneada(inv_sqrt: Vector<f32>) -> [f32; 3] {
+        let mut out = [0.0f32; 3];
+        for i in 0..3 {
+            let s = inv_sqrt[i];
+            out[i] = if s > 0.0 { 1.0 / (s * s) } else { 1.0e9 };
+        }
+        out
+    }
+
+    /// Restaura las densidades de los colliders reducidos por un override
+    /// anterior a su valor natural (× 1/0.5) y vacía la lista de
+    /// reducidos, para que una reaplicación parta de densidades naturales.
+    /// Un collider añadido después del override no está en la lista y no
+    /// se toca.
+    fn restore_mprops_densities(&mut self, handle: BodyHandle) {
+        if let Some(ov) = self.mprops_override.get_mut(&handle) {
+            let halved = std::mem::take(&mut ov.halved);
+            for ch in halved {
+                if let Some(co) = self.collider_set.get_mut(ch) {
+                    let d = co.density();
+                    co.set_density(d / MPROPS_DENSITY_SCALE);
+                }
+            }
+        }
+    }
+
+    /// Aplica (o limpia) el override de COM/inercia guardado en
+    /// `mprops_override` para el cuerpo.
+    ///
+    /// POR QUÉ NO VALE `adicional = D - S` A SECAS: la suma/resta de
+    /// `MassProperties` de parry es ponderada por masa. Cuando el total
+    /// deseado D y la suma de colliders S tienen la MISMA masa (el caso
+    /// normal al fijar solo el centro de masa o solo la inercia), la
+    /// resta da una masa adicional de masa CERO, cuyo centro de masa es
+    /// degenerado (0) y al sumarla de vuelta no mueve el COM: el override
+    /// no se aplica y el getter lo lee sin cambiar (verificado en tests:
+    /// `set_center_of_mass([0.2, 0, 0])` se leía `[0, 0, 0]`). La
+    /// solución es reducir primero a la mitad la contribución de los
+    /// colliders (densidades × 0.5, sin tocar la geometría): la adicional
+    /// pasa a tener masa M/2 > 0 y el álgebra vuelve a estar bien
+    /// definida. La masa total sigue siendo M y el COM/inercia totales
+    /// quedan exactamente en el objetivo.
+    ///
+    /// Los componentes no fijados (`None`) toman su valor natural de los
+    /// colliders, así que un `set_mass` posterior (que reescala las
+    /// densidades) fluye a la inercia si solo se fijó el COM, como en
+    /// Unity. Si no queda ningún componente fijado, el override se
+    /// LIMPIA del todo (densidades restauradas, adicional a cero,
+    /// entrada borrada) en vez de dejar un override fantasma.
+    fn apply_current_override(&mut self, handle: BodyHandle) -> bool {
+        let Some((rapier, _)) = self.get_rapier_handle(handle) else {
+            return false;
+        };
+        // 1. Restaurar las densidades a su valor natural (deshacer el
+        // halve de un override anterior, solo en los colliders que se
+        // redujeron entonces; un collider añadido después no se toca).
+        self.restore_mprops_densities(handle);
+        let Some(rb) = self.rigid_body_set.get(rapier) else {
+            return false;
+        };
+        // 2. S natural (fresco, del ColliderSet) y masa total M: se suma
+        // de los colliders, NO se lee rb.mass() (desactualizado hasta el
+        // siguiente step tras un cambio de densidad, como en set_mass).
+        let natural = self.colliders_mass_properties(rb);
+        let masa_total = natural.mass();
+        if !masa_total.is_finite() || masa_total <= 1e-6 {
+            // Sin masa no se puede sostener un override: limpiar el
+            // estado para no dejar la entrada huérfana con densidades
+            // naturales y una adicional obsoleta.
+            if let Some(rb) = self.rigid_body_set.get_mut(rapier) {
+                rb.set_additional_mass_properties(MassProperties::default(), true);
+                rb.recompute_mass_properties_from_colliders(&self.collider_set);
+            }
+            self.mprops_override.remove(&handle);
+            return false;
+        }
+        let com_natural: [f32; 3] = natural.local_com.coords.into();
+        let inercia_natural =
+            Self::inercia_principal_saneada(natural.inv_principal_inertia_sqrt);
+        let qn = natural.principal_inertia_local_frame.quaternion();
+        let frame_natural = [qn.i, qn.j, qn.k, qn.w];
+        // 3. Resolver objetivos: lo fijado manda; lo demás, natural.
+        let (com_obj, inertia_obj) = match self.mprops_override.get(&handle) {
+            Some(ov) => (ov.com, ov.inertia),
+            None => (None, None),
+        };
+        // Sin componentes fijados no hay nada que aplicar: limpiar.
+        if com_obj.is_none() && inertia_obj.is_none() {
+            let Some(rb) = self.rigid_body_set.get_mut(rapier) else {
+                return false;
+            };
+            rb.set_additional_mass_properties(MassProperties::default(), true);
+            rb.recompute_mass_properties_from_colliders(&self.collider_set);
+            self.mprops_override.remove(&handle);
+            return true;
+        }
+        let com_objetivo = com_obj.unwrap_or(com_natural);
+        let (tensor, rot) = inertia_obj.unwrap_or((inercia_natural, frame_natural));
+        if !com_objetivo.iter().all(|v| v.is_finite())
+            || !tensor.iter().all(|v| v.is_finite())
+            || !rot.iter().all(|v| v.is_finite())
+            || tensor.iter().any(|v| *v <= 0.0)
+        {
+            return false;
+        }
+        let frame_objetivo_q = nalgebra::UnitQuaternion::from_quaternion(
+            nalgebra::Quaternion::new(rot[3], rot[0], rot[1], rot[2]),
+        );
+        // 4. Reducir los colliders a la mitad (densidades × 0.5).
+        let mut halved_nuevo = Vec::new();
+        for &ch in rb.colliders() {
+            if let Some(co) = self.collider_set.get_mut(ch) {
+                let d = co.density();
+                co.set_density(d * MPROPS_DENSITY_SCALE);
+                halved_nuevo.push(ch);
+            }
+        }
+        // S' = S/2: misma COM, mitad de masa e inercia. Se recalcula
+        // desde el ColliderSet para no depender de cachés.
+        let Some(rb) = self.rigid_body_set.get(rapier) else {
+            return false;
+        };
+        let mitad = self.colliders_mass_properties(rb);
+        // 5. D con masa M y objetivos; adicional = D - S' (masa M/2).
+        let total_deseado = MassProperties::with_principal_inertia_frame(
+            Point::new(com_objetivo[0], com_objetivo[1], com_objetivo[2]),
+            masa_total,
+            Vector::new(tensor[0], tensor[1], tensor[2]),
+            frame_objetivo_q,
+        );
+        let adicional = total_deseado - mitad;
+        let Some(rb) = self.rigid_body_set.get_mut(rapier) else {
+            return false;
+        };
+        rb.set_additional_mass_properties(adicional, true);
+        rb.recompute_mass_properties_from_colliders(&self.collider_set);
+        if let Some(ov) = self.mprops_override.get_mut(&handle) {
+            ov.halved = halved_nuevo;
+        }
+        true
+    }
+
+    /// Total actual (inercia principal + frame) del cuerpo: la fijada si
+    /// la hay; si no, la natural de los colliders (fresca). OJO: con un
+    /// override activo las densidades están a la mitad y la inercia de S
+    /// también; la natural es el doble (la escala uniforme de densidades
+    /// escala la inercia linealmente).
+    fn total_inertia(&self, handle: BodyHandle) -> Option<([f32; 3], [f32; 4])> {
+        let halved = self.mprops_override.contains_key(&handle);
+        if halved {
+            if let Some(ov) = self.mprops_override.get(&handle) {
+                if let Some(inertia) = ov.inertia {
+                    return Some(inertia);
+                }
+            }
+        }
+        let (rapier, _) = self.get_rapier_handle(handle)?;
+        let rb = self.rigid_body_set.get(rapier)?;
+        let s = self.colliders_mass_properties(rb);
+        let mut inercia = Self::inercia_principal_saneada(s.inv_principal_inertia_sqrt);
+        if halved {
+            for v in inercia.iter_mut() {
+                *v /= MPROPS_DENSITY_SCALE;
+            }
+        }
+        let q = s.principal_inertia_local_frame.quaternion();
+        Some((inercia, [q.i, q.j, q.k, q.w]))
+    }
+
+    /// Garantiza que existe una entrada de override para el cuerpo (con
+    /// ambos componentes en `None`) y la devuelve para fijar uno de ellos.
+    fn mprops_entry(&mut self, handle: BodyHandle) -> &mut MpropsOverride {
+        self.mprops_override.entry(handle).or_insert(MpropsOverride {
+            com: None,
+            inertia: None,
+            halved: Vec::new(),
+        })
+    }
+
+    /// Fija el centro de masa del cuerpo, conservando su inercia actual
+    /// (fijada o natural).
+    pub fn set_center_of_mass(&mut self, handle: BodyHandle, com: [f32; 3]) -> bool {
+        if !com.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        if self.get_rapier_handle(handle).is_none() {
+            return false;
+        }
+        self.mprops_entry(handle).com = Some(com);
+        self.apply_current_override(handle)
+    }
+
+    /// Restaura el centro de masa al que derivan únicamente los colliders,
+    /// conservando la inercia actual (fijada o natural).
+    pub fn reset_center_of_mass(&mut self, handle: BodyHandle) -> bool {
+        if self.get_rapier_handle(handle).is_none() {
+            return false;
+        }
+        if let Some(ov) = self.mprops_override.get_mut(&handle) {
+            ov.com = None;
+        } else {
+            return true; // Sin override no hay nada que restaurar.
+        }
+        self.apply_current_override(handle)
+    }
+
+    /// Tensor de inercia principal actual (diagonal, en el frame devuelto)
+    /// y el frame como cuaternión (x, y, z, w).
+    pub fn get_inertia_tensor(&self, handle: BodyHandle) -> Option<([f32; 3], [f32; 4])> {
+        self.total_inertia(handle)
+    }
+
+    /// Fija el tensor de inercia principal (diagonal) y su frame,
+    /// conservando el centro de masa actual (fijado o natural).
+    pub fn set_inertia_tensor(
+        &mut self,
+        handle: BodyHandle,
+        tensor: [f32; 3],
+        rotation: [f32; 4],
+    ) -> bool {
+        if !tensor.iter().all(|v| v.is_finite() && *v > 0.0)
+            || !rotation.iter().all(|v| v.is_finite())
+        {
+            return false;
+        }
+        if self.get_rapier_handle(handle).is_none() {
+            return false;
+        }
+        self.mprops_entry(handle).inertia = Some((tensor, rotation));
+        self.apply_current_override(handle)
+    }
+
+    /// Restaura la inercia principal y su frame a los que derivan
+    /// únicamente de los colliders, conservando el centro de masa actual
+    /// (fijado o natural).
+    pub fn reset_inertia_tensor(&mut self, handle: BodyHandle) -> bool {
+        if self.get_rapier_handle(handle).is_none() {
+            return false;
+        }
+        if let Some(ov) = self.mprops_override.get_mut(&handle) {
+            ov.inertia = None;
+        } else {
+            return true; // Sin override no hay nada que restaurar.
+        }
+        self.apply_current_override(handle)
+    }
+
+    /// Velocidad lineal de un punto del cuerpo, dado en coordenadas MUNDIALES.
+    pub fn get_point_velocity(&self, handle: BodyHandle, point: [f32; 3]) -> Option<[f32; 3]> {
+        let (rapier, _) = self.get_rapier_handle(handle)?;
+        let rb = self.rigid_body_set.get(rapier)?;
+        let world_com = rb.position() * self.effective_local_com(handle, rb);
+        let p = Point::new(point[0], point[1], point[2]);
+        let r = p - world_com;
+        let v = rb.linvel() + rb.angvel().cross(&r);
+        Some([v.x, v.y, v.z])
+    }
+
+    /// Velocidad lineal de un punto del cuerpo, dado en coordenadas LOCALES,
+    /// devuelta también en coordenadas LOCALES del cuerpo.
+    pub fn get_relative_point_velocity(
+        &self,
+        handle: BodyHandle,
+        local_point: [f32; 3],
+    ) -> Option<[f32; 3]> {
+        let (rapier, _) = self.get_rapier_handle(handle)?;
+        let rb = self.rigid_body_set.get(rapier)?;
+        let local_p = Point::new(local_point[0], local_point[1], local_point[2]);
+        let world_p = rb.position() * local_p;
+        let world_com = rb.position() * self.effective_local_com(handle, rb);
+        let r = world_p - world_com;
+        let v_world = rb.linvel() + rb.angvel().cross(&r);
+        let v_local = rb.rotation().inverse_transform_vector(&v_world);
+        Some([v_local.x, v_local.y, v_local.z])
+    }
+
+    /// Mueve un cuerpo CINEMÁTICO a la pose indicada (posición + rotación)
+    /// para el siguiente step. Devuelve false si el cuerpo no es cinemático.
+    pub fn move_kinematic(&mut self, handle: BodyHandle, pos: [f32; 3], quat: [f32; 4]) -> bool {
+        if !pos.iter().all(|v| v.is_finite()) || !quat.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let Some((rapier, _)) = self.get_rapier_handle(handle) else {
+            return false;
+        };
+        let Some(rb) = self.rigid_body_set.get_mut(rapier) else {
+            return false;
+        };
+        if rb.body_type() != RigidBodyType::KinematicPositionBased {
+            return false;
+        }
+        let rotation = nalgebra::UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+            quat[3], quat[0], quat[1], quat[2],
+        ));
+        let translation = Translation::from(vector![pos[0], pos[1], pos[2]]);
+        rb.set_next_kinematic_position(Isometry::from_parts(translation, rotation));
+        true
+    }
+
+    /// Mueve solo la rotación de un cuerpo CINEMÁTICO para el siguiente
+    /// step, conservando la traslación programada. Devuelve false si el
+    /// cuerpo no es cinemático.
+    pub fn move_kinematic_rotation(&mut self, handle: BodyHandle, quat: [f32; 4]) -> bool {
+        if !quat.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let Some((rapier, _)) = self.get_rapier_handle(handle) else {
+            return false;
+        };
+        let Some(rb) = self.rigid_body_set.get_mut(rapier) else {
+            return false;
+        };
+        if rb.body_type() != RigidBodyType::KinematicPositionBased {
+            return false;
+        }
+        let rotation = nalgebra::UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+            quat[3], quat[0], quat[1], quat[2],
+        ));
+        rb.set_next_kinematic_rotation(rotation);
+        true
+    }
+
+    /// Barre todos los colliders de un cuerpo en su pose actual, en la
+    /// dirección `dir`, hasta `max_dist`, excluyendo el propio cuerpo.
+    /// Devuelve el impacto más cercano entre todos sus colliders.
+    pub fn sweep_body(&mut self, handle: BodyHandle, dir: [f32; 3], max_dist: f32) -> Option<ShapeHit> {
+        if !dir.iter().all(|v| v.is_finite()) || !max_dist.is_finite() || max_dist <= 0.0 {
+            return None;
+        }
+        let dir_vec = Vector::new(dir[0], dir[1], dir[2]);
+        if dir_vec.norm_squared() < f32::EPSILON {
+            return None;
+        }
+        let dir_vec = dir_vec.normalize();
+
+        let (rapier, _) = self.get_rapier_handle(handle)?;
+        let collider_handles: Vec<rapier3d::geometry::ColliderHandle> =
+            self.rigid_body_set.get(rapier)?.colliders().to_vec();
+        if collider_handles.is_empty() {
+            return None;
+        }
+
+        self.query_pipeline.update(&self.collider_set);
+
+        let pred = move |_h: rapier3d::geometry::ColliderHandle, collider: &Collider| -> bool {
+            collider.parent() != Some(rapier)
+        };
+        let filter = QueryFilter::default().predicate(&pred).exclude_sensors();
+        let options = ShapeCastOptions::with_max_time_of_impact(max_dist);
+
+        let mut mejor: Option<ShapeHit> = None;
+        for ch in collider_handles {
+            let Some(co) = self.collider_set.get(ch) else { continue };
+            let shape = co.shape();
+            let pose = *co.position();
+            if let Some((hit_handle, hit)) = self.query_pipeline.cast_shape(
+                &self.rigid_body_set,
+                &self.collider_set,
+                &pose,
+                &dir_vec,
+                shape,
+                options,
+                filter,
+            ) {
+                if let Some(entity_id) = self.entity_of_collider(hit_handle) {
+                    let candidato = ShapeHit {
+                        entity_id,
+                        point: [hit.witness1.x, hit.witness1.y, hit.witness1.z],
+                        normal: [hit.normal1.x, hit.normal1.y, hit.normal1.z],
+                        distance: hit.time_of_impact,
+                    };
+                    if mejor.map(|m| candidato.distance < m.distance).unwrap_or(true) {
+                        mejor = Some(candidato);
+                    }
+                }
+            }
+        }
+        mejor
+    }
+
+    /// Como `sweep_body`, pero recoge el impacto más cercano POR ENTIDAD
+    /// golpeada entre todos los colliders del cuerpo, ordenado por
+    /// distancia ascendente.
+    ///
+    /// `cast_shape` devuelve solo el PRIMER impacto de cada barrido, así
+    /// que se itera: en cada vuelta se toma el impacto más cercano entre
+    /// todos los colliders del cuerpo, se anota su entidad y se repite el
+    /// barrido excluyendo el cuerpo de esa entidad (por su handle de
+    /// Rapier, sin tocar `self` dentro del predicado), hasta que no
+    /// quede nada o se llegue al tope de iteraciones.
+    pub fn sweep_body_all(&mut self, handle: BodyHandle, dir: [f32; 3], max_dist: f32) -> Vec<ShapeHit> {
+        if !dir.iter().all(|v| v.is_finite()) || !max_dist.is_finite() || max_dist <= 0.0 {
+            return Vec::new();
+        }
+        let dir_vec = Vector::new(dir[0], dir[1], dir[2]);
+        if dir_vec.norm_squared() < f32::EPSILON {
+            return Vec::new();
+        }
+        let dir_vec = dir_vec.normalize();
+
+        let Some((rapier, _)) = self.get_rapier_handle(handle) else {
+            return Vec::new();
+        };
+        let collider_handles: Vec<rapier3d::geometry::ColliderHandle> = match self
+            .rigid_body_set
+            .get(rapier)
+        {
+            Some(rb) => rb.colliders().to_vec(),
+            None => return Vec::new(),
+        };
+        if collider_handles.is_empty() {
+            return Vec::new();
+        }
+
+        self.query_pipeline.update(&self.collider_set);
+        let options = ShapeCastOptions::with_max_time_of_impact(max_dist);
+
+        let mut resultado: Vec<ShapeHit> = Vec::new();
+        let mut excluidos: std::collections::HashSet<rapier3d::dynamics::RigidBodyHandle> =
+            std::collections::HashSet::new();
+        for _ in 0..64 {
+            // Mejor impacto de esta vuelta entre todos los colliders.
+            let mut mejor: Option<ShapeHit> = None;
+            let mut mejor_cuerpo: Option<rapier3d::dynamics::RigidBodyHandle> = None;
+            for ch in &collider_handles {
+                let Some(co) = self.collider_set.get(*ch) else { continue };
+                let shape = co.shape();
+                let pose = *co.position();
+                let pred = |_h: rapier3d::geometry::ColliderHandle, collider: &Collider| -> bool {
+                    match collider.parent() {
+                        Some(p) => p != rapier && !excluidos.contains(&p),
+                        None => true,
+                    }
+                };
+                let filter = QueryFilter::default().predicate(&pred).exclude_sensors();
+                if let Some((hit_handle, hit)) = self.query_pipeline.cast_shape(
+                    &self.rigid_body_set,
+                    &self.collider_set,
+                    &pose,
+                    &dir_vec,
+                    shape,
+                    options,
+                    filter,
+                ) {
+                    if let Some(entity_id) = self.entity_of_collider(hit_handle) {
+                        let candidato = ShapeHit {
+                            entity_id,
+                            point: [hit.witness1.x, hit.witness1.y, hit.witness1.z],
+                            normal: [hit.normal1.x, hit.normal1.y, hit.normal1.z],
+                            distance: hit.time_of_impact,
+                        };
+                        if mejor.map(|m| candidato.distance < m.distance).unwrap_or(true) {
+                            mejor = Some(candidato);
+                            mejor_cuerpo = self
+                                .collider_set
+                                .get(hit_handle)
+                                .and_then(|c| c.parent());
+                        }
+                    }
+                }
+            }
+            match (mejor, mejor_cuerpo) {
+                (Some(h), Some(cuerpo)) => {
+                    excluidos.insert(cuerpo);
+                    resultado.push(h);
+                }
+                _ => break,
+            }
+        }
+
+        resultado.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal));
+        resultado
     }
 
     pub fn set_linear_damping(&mut self, handle: BodyHandle, damping: f32) -> bool {
@@ -1245,6 +2183,7 @@ impl PhysicsWorld {
     pub fn remove_rigid_body(&mut self, body_handle: BodyHandle) -> bool {
         if let Some((rapier_handle, _)) = self.body_map.remove(&body_handle) {
             self.handle_lookup.remove(&rapier_handle);
+            self.mprops_override.remove(&body_handle);
             self.rigid_body_set.remove(
                 rapier_handle,
                 &mut self.island_manager,
