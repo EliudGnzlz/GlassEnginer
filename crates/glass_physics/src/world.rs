@@ -1283,7 +1283,7 @@ impl PhysicsWorld {
 
     /// Fracción del paso fijo acumulada sin simular, en [0, 1].
     pub fn interpolation_alpha(&self) -> f32 {
-        if !(self.fixed_timestep > 0.0) {
+        if self.fixed_timestep <= 0.0 {
             return 1.0;
         }
         (self.accumulator / self.fixed_timestep).clamp(0.0, 1.0)

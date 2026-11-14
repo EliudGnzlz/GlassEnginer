@@ -664,6 +664,12 @@ pub unsafe extern "C" fn glass_character_last_move(
     hits.len() as u32
 }
 
+/// Posición y estado de apoyo del personaje de una entidad.
+///
+/// # Safety
+/// Los punteros de salida deben ser nulos o apuntar a memoria
+/// válida y escribible durante la llamada.
+#[no_mangle]
 pub unsafe extern "C" fn glass_character_info(
     entity_id: u64,
     out_x: *mut f32, out_y: *mut f32, out_z: *mut f32,
