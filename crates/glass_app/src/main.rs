@@ -7827,8 +7827,19 @@ fn despachar_eventos_contacto(
             ContactKind::Enter => 0,
             ContactKind::Exit => 2,
         };
-        script_host.dispatch_contact_event(event.a, event.b, kind, event.is_trigger, nombre(event.b));
-        script_host.dispatch_contact_event(event.b, event.a, kind, event.is_trigger, nombre(event.a));
+        script_host.dispatch_contact_event(event.a, event.b, kind, event.is_trigger, nombre(event.b), event.contact);
+        // El despacho espejo invierte la normal y la velocidad relativa:
+        // el impacto se cuenta desde la otra entidad.
+        let espejo = event.contact.map(|c| glass_physics::ContactInfo {
+            normal: [-c.normal[0], -c.normal[1], -c.normal[2]],
+            relative_velocity: [
+                -c.relative_velocity[0],
+                -c.relative_velocity[1],
+                -c.relative_velocity[2],
+            ],
+            ..c
+        });
+        script_host.dispatch_contact_event(event.b, event.a, kind, event.is_trigger, nombre(event.a), espejo);
         if event.kind == ContactKind::Enter {
             entered.insert((event.a, event.b));
         }
@@ -7837,8 +7848,8 @@ fn despachar_eventos_contacto(
     for (a, b, is_trigger) in &active_pairs {
         active_set.insert((*a, *b));
         if prev_contact_pairs.contains(&(*a, *b)) && !entered.contains(&(*a, *b)) {
-            script_host.dispatch_contact_event(*a, *b, 1, *is_trigger, nombre(*b));
-            script_host.dispatch_contact_event(*b, *a, 1, *is_trigger, nombre(*a));
+            script_host.dispatch_contact_event(*a, *b, 1, *is_trigger, nombre(*b), None);
+            script_host.dispatch_contact_event(*b, *a, 1, *is_trigger, nombre(*a), None);
         }
     }
     *prev_contact_pairs = active_set;

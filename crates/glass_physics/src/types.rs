@@ -250,6 +250,19 @@ pub enum ContactKind {
 /// Evento de contacto entre dos entidades, generado por el mundo físico
 /// desde los CollisionEvent de Rapier. El par va ordenado (a < b); Stay no
 /// es un evento: se deriva comparando `contact_pairs()` entre frames.
+/// Datos del impacto (solo en Started no-trigger).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct ContactInfo {
+    /// Punto de contacto medio, en coordenadas de mundo.
+    pub point: [f32; 3],
+    /// Normal del manifold, en coordenadas de mundo.
+    pub normal: [f32; 3],
+    /// Máximo impulso normal entre los puntos del manifold.
+    pub impulse: f32,
+    /// Velocidad lineal de `a` menos la de `b`.
+    pub relative_velocity: [f32; 3],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ContactEvent {
     /// Entidad menor del par.
@@ -261,4 +274,6 @@ pub struct ContactEvent {
     pub is_trigger: bool,
     /// Substep del mundo en el que ocurrió.
     pub step: u64,
+    /// Datos del impacto; None en Stopped, triggers o sin manifold con puntos.
+    pub contact: Option<ContactInfo>,
 }

@@ -1958,9 +1958,20 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "DispatchContactEvent")]
-    public static void DispatchContactEvent(ulong entityId, ulong otherEntityId, int kind, int isTrigger, IntPtr otherNamePtr)
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ContactInfoFfi
     {
+        public float PointX, PointY, PointZ;
+        public float NormalX, NormalY, NormalZ;
+        public float Impulse;
+        public float RelVelX, RelVelY, RelVelZ;
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "DispatchContactEvent")]
+    public static unsafe void DispatchContactEvent(ulong entityId, ulong otherEntityId, int kind, int isTrigger, IntPtr otherNamePtr,
+        IntPtr contactPtrRaw)
+    {
+        ContactInfoFfi* contactPtr = (ContactInfoFfi*)(void*)contactPtrRaw;
         GlassBehaviour? instance = null;
         lock (_sync)
         {
@@ -1979,7 +1990,18 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         }
         bool trigger = isTrigger != 0;
         string otherName = otherNamePtr == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(otherNamePtr);
-        var collision = new Collision(otherEntityId, trigger, otherName);
+        var punto = UnityEngine.Vector3.zero;
+        var normal = UnityEngine.Vector3.zero;
+        var relVel = UnityEngine.Vector3.zero;
+        float impulso = 0f;
+        if (contactPtr != null)
+        {
+            punto = new UnityEngine.Vector3(contactPtr->PointX, contactPtr->PointY, contactPtr->PointZ);
+            normal = new UnityEngine.Vector3(contactPtr->NormalX, contactPtr->NormalY, contactPtr->NormalZ);
+            relVel = new UnityEngine.Vector3(contactPtr->RelVelX, contactPtr->RelVelY, contactPtr->RelVelZ);
+            impulso = contactPtr->Impulse;
+        }
+        var collision = new Collision(otherEntityId, trigger, otherName, punto, normal, impulso, relVel);
         try
         {
             switch (kind)

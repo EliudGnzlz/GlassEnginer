@@ -236,8 +236,28 @@ type InvokeButtonClickFn = unsafe extern "system" fn(u64, *const c_char) -> i32;
 /// llamada por frame para todos los scripts; el gestionado itera
 /// sus instancias y trabaja sobre la caché de transforms del frame.
 type TickAllScriptsFn = unsafe extern "system" fn(f32);
-/// Export managed de la Fase 1: (entidad, otra entidad, kind, es_trigger).
-type DispatchContactEventFn = unsafe extern "system" fn(u64, u64, i32, i32, *const std::ffi::c_char);
+/// Copia C del impacto para el export managed (punto, normal, impulso,
+/// velocidad relativa). Se pasa por puntero: la firma con 10 floats
+/// sueltos supera la aridad que netcorehost resuelve como FnPtr.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct ContactInfoFfi {
+    point: [f32; 3],
+    normal: [f32; 3],
+    impulse: f32,
+    relative_velocity: [f32; 3],
+}
+
+/// Export managed de la Fase 1: (entidad, otra entidad, kind, es_trigger,
+/// nombre, puntero al impacto o nulo).
+type DispatchContactEventFn = unsafe extern "system" fn(
+    u64,
+    u64,
+    i32,
+    i32,
+    *const std::ffi::c_char,
+    *const ContactInfoFfi,
+);
 
 /// Evento de animación hacia un script C#: (entidad, nombre del evento,
 /// valor numérico, hay_valor, texto opcional).
@@ -951,11 +971,24 @@ impl ScriptHost {
         kind: i32,
         is_trigger: bool,
         other_name: &str,
+        contact: Option<glass_physics::ContactInfo>,
     ) -> bool {
         match self.contact_event_fn {
             Some(f) => {
                 let name_c = std::ffi::CString::new(other_name).unwrap_or_default();
-                unsafe { f(entity_id, other_entity_id, kind, is_trigger as i32, name_c.as_ptr()) };
+                let ffi = contact.map(|c| ContactInfoFfi {
+                    point: c.point,
+                    normal: c.normal,
+                    impulse: c.impulse,
+                    relative_velocity: c.relative_velocity,
+                });
+                let ptr = ffi
+                    .as_ref()
+                    .map(|c| c as *const ContactInfoFfi)
+                    .unwrap_or(std::ptr::null());
+                unsafe {
+                    f(entity_id, other_entity_id, kind, is_trigger as i32, name_c.as_ptr(), ptr)
+                };
                 true
             }
             None => false,

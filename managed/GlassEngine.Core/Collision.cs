@@ -16,9 +16,32 @@ public struct Collision
     /// <summary>true si el contacto viene de un collider sensor (trigger).</summary>
     public bool isTrigger;
 
-    public Collision(ulong otherEntityId, bool isTrigger, string otherName = null)
+    /// <summary>Punto de contacto medio en mundo (cero si no hay datos).</summary>
+    public Vector3 point;
+
+    /// <summary>Normal del contacto en mundo (cero si no hay datos).</summary>
+    public Vector3 normal;
+
+    /// <summary>Máximo impulso normal del manifold (0 si no hay datos).</summary>
+    public float impulse;
+
+    /// <summary>Velocidad lineal relativa del par (cero si no hay datos).</summary>
+    public Vector3 relativeVelocity;
+
+    public Collision(
+        ulong otherEntityId,
+        bool isTrigger,
+        string? otherName = null,
+        Vector3 point = default,
+        Vector3 normal = default,
+        float impulse = 0f,
+        Vector3 relativeVelocity = default)
     {
         gameObject = GameObject.GetOrCreate(otherEntityId, otherName ?? "Entity");
         this.isTrigger = isTrigger;
+        this.point = point;
+        this.normal = normal;
+        this.impulse = impulse;
+        this.relativeVelocity = relativeVelocity;
     }
 }

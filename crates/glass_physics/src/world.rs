@@ -3,7 +3,7 @@ use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::pipeline::ChannelEventCollector;
 use rapier3d::prelude::*;
 use glass_core::TransformFfi;
-use crate::types::{
+use crate::types::{ContactInfo, 
     BodyHandle, BodyType, ColliderConfig, ColliderHandle, ColliderShape, ContactEvent,
     ContactKind,
 };
@@ -295,7 +295,12 @@ impl PhysicsWorld {
                             self.collider_set.get(h1).map(|c| c.is_sensor()).unwrap_or(false)
                                 || self.collider_set.get(h2).map(|c| c.is_sensor()).unwrap_or(false);
                         self.pair_trigger.insert(pair, is_trigger);
-                        self.push_contact_event(pair, ContactKind::Enter, is_trigger);
+                        let contact = if is_trigger {
+                            None
+                        } else {
+                            self.contact_info(h1, h2, pair)
+                        };
+                        self.push_contact_event(pair, ContactKind::Enter, is_trigger, contact);
                     }
                 }
                 CollisionEvent::Stopped(h1, h2, _) => {
@@ -333,21 +338,71 @@ impl PhysicsWorld {
                                 || self.collider_set.get(h2).map(|c| c.is_sensor()).unwrap_or(false)
                         }
                     };
-                    self.push_contact_event(pair, ContactKind::Exit, is_trigger);
+                    self.push_contact_event(pair, ContactKind::Exit, is_trigger, None);
                 }
             }
         }
     }
 
+    /// Datos del impacto de un par sólido: normal del primer manifold con
+    /// puntos, punto medio en mundo, impulso máximo y velocidad relativa
+    /// (pair.0 - pair.1). `None` si no hay manifold con puntos.
+    fn contact_info(
+        &self,
+        h1: rapier3d::geometry::ColliderHandle,
+        h2: rapier3d::geometry::ColliderHandle,
+        pair: (u64, u64),
+    ) -> Option<ContactInfo> {
+        let pair_np = self.narrow_phase.contact_pair(h1, h2)?;
+        let manifold = pair_np.manifolds.iter().find(|m| !m.points.is_empty())?;
+        // local_p1 está en el espacio de collider1 del ContactPair, que puede
+        // ser h2 si Rapier guardó el par en orden inverso.
+        let c1 = self.collider_set.get(pair_np.collider1)?;
+        let (t, r) = (c1.translation(), c1.rotation());
+
+        let mut sum = [0.0f32; 3];
+        let mut impulse = 0.0f32;
+        for p in &manifold.points {
+            let w = t + r * p.local_p1.coords;
+            sum[0] += w.x;
+            sum[1] += w.y;
+            sum[2] += w.z;
+            impulse = impulse.max(p.data.impulse);
+        }
+        let n = manifold.points.len() as f32;
+        let normal = manifold.data.normal;
+
+        let vel = |e: u64| {
+            self.get_body_by_entity(e)
+                .and_then(|b| self.get_linear_velocity(b))
+                .unwrap_or([0.0; 3])
+        };
+        let (va, vb) = (vel(pair.0), vel(pair.1));
+
+        Some(ContactInfo {
+            point: [sum[0] / n, sum[1] / n, sum[2] / n],
+            normal: [normal.x, normal.y, normal.z],
+            impulse,
+            relative_velocity: [va[0] - vb[0], va[1] - vb[1], va[2] - vb[2]],
+        })
+    }
+
     /// Registra un evento agregado (por par de entidades) en `pending` y en
     /// el anillo de inspección.
-    fn push_contact_event(&mut self, pair: (u64, u64), kind: ContactKind, is_trigger: bool) {
+    fn push_contact_event(
+        &mut self,
+        pair: (u64, u64),
+        kind: ContactKind,
+        is_trigger: bool,
+        contact: Option<ContactInfo>,
+    ) {
         let ev = ContactEvent {
             a: pair.0,
             b: pair.1,
             kind,
             is_trigger,
             step: self.step_count,
+            contact,
         };
         self.pending_contact_events.push(ev);
         if self.contact_ring.len() >= 256 {

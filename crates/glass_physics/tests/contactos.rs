@@ -1,0 +1,77 @@
+// Supuestos de API a verificar: PhysicsWorld::new(), BodyType::{Dynamic, Fixed},
+// attach_box_collider -> ColliderHandle, set_collider_sensor, destroy_rigid_body.
+use glass_physics::types::{ContactEvent, ContactKind};
+use glass_physics::{BodyType, PhysicsWorld};
+
+const DT: f32 = 1.0 / 60.0;
+const CAJA: u64 = 1; // entidad menor => `a` del par
+const SUELO: u64 = 2;
+
+fn suelo(w: &mut PhysicsWorld) -> glass_physics::BodyHandle {
+    let h = w.create_rigid_body(SUELO, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
+    w.attach_box_collider(h, [10.0, 0.5, 10.0], 0.0, 0.5);
+    h
+}
+
+fn caja(w: &mut PhysicsWorld, y: f32) -> glass_physics::BodyHandle {
+    let h = w.create_rigid_body(CAJA, BodyType::Dynamic, [0.0, y, 0.0], [0.0, 0.0, 0.0, 1.0]);
+    w.attach_box_collider(h, [0.5, 0.5, 0.5], 0.0, 0.5);
+    h
+}
+
+fn primer(w: &mut PhysicsWorld, max_steps: usize, f: impl Fn(&ContactEvent) -> bool) -> Option<ContactEvent> {
+    for _ in 0..max_steps {
+        w.step(DT);
+        if let Some(e) = w.drain_contact_events().into_iter().find(|e| f(e)) {
+            return Some(e);
+        }
+    }
+    None
+}
+
+#[test]
+fn el_impacto_trae_punto_normal_e_impulso() {
+    let mut w = PhysicsWorld::new();
+    suelo(&mut w);
+    caja(&mut w, 3.0);
+
+    let ev = primer(&mut w, 240, |e| matches!(e.kind, ContactKind::Enter) && !e.is_trigger)
+        .expect("no llegó Started no-trigger");
+    assert_eq!((ev.a, ev.b), (CAJA, SUELO));
+    let c = ev.contact.expect("Started sin contact");
+
+    assert!(c.normal[1].abs() > 0.9, "normal no vertical: {:?}", c.normal);
+    assert!(c.normal[0].abs() < 0.1 && c.normal[2].abs() < 0.1, "normal: {:?}", c.normal);
+    assert!(c.point[1].abs() < 0.3, "punto.y: {}", c.point[1]);
+    assert!(c.impulse >= 0.0, "impulso: {}", c.impulse);
+    assert!(c.relative_velocity[1] < -1.0, "rv.y: {}", c.relative_velocity[1]);
+}
+
+#[test]
+fn el_trigger_no_trae_contacto() {
+    let mut w = PhysicsWorld::new();
+    let s = w.create_rigid_body(SUELO, BodyType::Static, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+    let sensor = glass_physics::types::ColliderConfig { is_trigger: true, ..Default::default() };
+    w.attach_box_collider_with_config(s, [2.0, 0.5, 2.0], 0.0, 0.5, sensor);
+    caja(&mut w, 3.0);
+
+    let ev = primer(&mut w, 240, |e| matches!(e.kind, ContactKind::Enter))
+        .expect("no llegó Started del sensor");
+    assert!(ev.is_trigger);
+    assert!(ev.contact.is_none());
+}
+
+#[test]
+fn sin_contacto_en_el_stopped() {
+    let mut w = PhysicsWorld::new();
+    let s = suelo(&mut w);
+    caja(&mut w, 3.0);
+
+    primer(&mut w, 240, |e| matches!(e.kind, ContactKind::Enter) && !e.is_trigger)
+        .expect("no llegó Started");
+    w.remove_rigid_body(s);
+
+    let ev = primer(&mut w, 10, |e| matches!(e.kind, ContactKind::Exit))
+        .expect("no llegó Stopped");
+    assert!(ev.contact.is_none());
+}
