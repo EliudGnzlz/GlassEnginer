@@ -167,3 +167,20 @@ referencia (P2P con anfitrión 4–8, replicación con el mínimo
 desync posible); no se implementa nada por ahora. El servidor
 dedicado 50+ de la sección 1 sigue siendo un escalón aparte y
 posterior.
+
+## 7. Paridad RB/CC — piezas de importancia BAJA (registradas, no descartadas)
+
+Decisión de D3m3tr10 (2026-11-13 22:56): tras la demo FPS se
+implementan las piezas ALTA y MEDIA de `AUDITORIA_RIGIDBODY_CC.md`
+(bloque de paridad). Las de importancia BAJA quedan para después,
+pero tenidas muy en cuenta — esta lista es su registro explícito:
+
+**Rigidbody:** `angularDamping` · `maxDepenetrationVelocity` ·
+`solverIterations` / `solverVelocityIterations` · `AddRelativeForce` ·
+semántica exacta de `excludeLayers` / `includeLayers` · toggles de
+`automaticCenterOfMass` / `automaticInertiaTensor` · `PublishTransform` ·
+`ClosestPointOnBounds` · `GetAccumulatedForce` / `GetAccumulatedTorque`.
+
+**CharacterController:** `minMoveDistance` · `center` desplazable ·
+`SimpleMove` · `material` / `sharedMaterial` · `Raycast` /
+`ClosestPoint` / `ClosestPointOnBounds` heredados de Collider.

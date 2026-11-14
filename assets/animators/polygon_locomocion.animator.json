@@ -1,1 +1,247 @@
-{"default_state":"Idle","parameters":[{"default":0.0,"kind":"float","name":"MoveX"},{"default":0.0,"kind":"float","name":"MoveZ"},{"default":0.0,"kind":"bool","name":"mover"},{"default":0.0,"kind":"bool","name":"agachado"}],"states":[{"clip":"Idle","loop":true,"name":"Idle","speed":1.0},{"blend2d":{"children":[{"clip":"Idle","position":[0.0,0.0],"speed":1.0},{"clip":"Walk","events":[{"name":"Paso","time":0.35,"value":1.0},{"name":"Paso","time":0.85,"value":1.0}],"position":[0.0,1.0],"speed":1.0},{"clip":"WalkBack","position":[0.0,-1.0],"speed":1.0},{"clip":"StrafeL","events":[{"name":"Paso","time":0.5,"value":0.7}],"position":[-1.0,0.0],"speed":1.0},{"clip":"StrafeR","events":[{"name":"Paso","time":0.5,"value":0.7}],"position":[1.0,0.0],"speed":1.0},{"clip":"Run","events":[{"name":"Paso","time":0.3,"value":1.3},{"name":"Paso","time":0.8,"value":1.3}],"position":[0.0,2.0],"speed":1.0}],"param_x":"MoveX","param_y":"MoveZ"},"clip":"","loop":true,"name":"Locomocion","speed":1.0},{"clip":"WalkRM","loop":true,"name":"AndaRM","root_motion":true,"speed":1.0},{"clip":"Jump","loop":false,"name":"Salto","speed":1.0},{"blend2d":{"children":[{"clip":"CrouchIdle","position":[0.0,0.0],"speed":1.0},{"clip":"CrouchWalk","events":[{"name":"PasoAgachado","time":0.5,"value":0.5}],"position":[0.0,1.0],"speed":1.0}],"param_x":"MoveX","param_y":"MoveZ"},"clip":"","loop":true,"name":"Agachado","speed":1.0}],"transitions":[{"conditions":[{"op":"eq","param":"mover","value":1.0}],"fade":0.25,"from":"Idle","to":"Locomocion"},{"conditions":[{"op":"eq","param":"mover","value":0.0}],"fade":0.25,"from":"Locomocion","to":"Idle"},{"conditions":[{"op":"eq","param":"agachado","value":1.0}],"fade":0.2,"from":"Idle","to":"Agachado"},{"conditions":[{"op":"eq","param":"agachado","value":1.0}],"fade":0.2,"from":"Locomocion","to":"Agachado"},{"conditions":[{"op":"eq","param":"agachado","value":0.0}],"fade":0.2,"from":"Agachado","to":"Idle"}]}
+{
+  "default_state": "Idle",
+  "parameters": [
+    {
+      "default": 0.0,
+      "kind": "float",
+      "name": "MoveX"
+    },
+    {
+      "default": 0.0,
+      "kind": "float",
+      "name": "MoveZ"
+    },
+    {
+      "default": 0.0,
+      "kind": "bool",
+      "name": "mover"
+    },
+    {
+      "default": 0.0,
+      "kind": "bool",
+      "name": "agachado"
+    }
+  ],
+  "states": [
+    {
+      "clip": "Idle",
+      "loop": true,
+      "name": "Idle",
+      "speed": 1.0
+    },
+    {
+      "blend2d": {
+        "children": [
+          {
+            "clip": "Idle",
+            "position": [
+              0.0,
+              0.0
+            ],
+            "speed": 1.0
+          },
+          {
+            "clip": "Walk",
+            "events": [
+              {
+                "name": "Paso",
+                "time": 0.35,
+                "value": 1.0
+              },
+              {
+                "name": "Paso",
+                "time": 0.85,
+                "value": 1.0
+              }
+            ],
+            "position": [
+              0.0,
+              1.0
+            ],
+            "speed": 1.0
+          },
+          {
+            "clip": "WalkBack",
+            "position": [
+              0.0,
+              -1.0
+            ],
+            "speed": 1.0
+          },
+          {
+            "clip": "StrafeL",
+            "events": [
+              {
+                "name": "Paso",
+                "time": 0.5,
+                "value": 0.7
+              }
+            ],
+            "position": [
+              -1.0,
+              0.0
+            ],
+            "speed": 1.0
+          },
+          {
+            "clip": "StrafeR",
+            "events": [
+              {
+                "name": "Paso",
+                "time": 0.5,
+                "value": 0.7
+              }
+            ],
+            "position": [
+              1.0,
+              0.0
+            ],
+            "speed": 1.0
+          },
+          {
+            "clip": "Run",
+            "events": [
+              {
+                "name": "Paso",
+                "time": 0.3,
+                "value": 1.3
+              },
+              {
+                "name": "Paso",
+                "time": 0.8,
+                "value": 1.3
+              }
+            ],
+            "position": [
+              0.0,
+              2.0
+            ],
+            "speed": 1.0
+          }
+        ],
+        "param_x": "MoveX",
+        "param_y": "MoveZ"
+      },
+      "clip": "",
+      "loop": true,
+      "name": "Locomocion",
+      "speed": 1.0
+    },
+    {
+      "clip": "WalkRM",
+      "loop": true,
+      "name": "AndaRM",
+      "root_motion": true,
+      "speed": 1.0
+    },
+    {
+      "clip": "Jump",
+      "loop": false,
+      "name": "Salto",
+      "speed": 1.0
+    },
+    {
+      "blend2d": {
+        "children": [
+          {
+            "clip": "CrouchIdle",
+            "position": [
+              0.0,
+              0.0
+            ],
+            "speed": 1.0
+          },
+          {
+            "clip": "CrouchWalk",
+            "events": [
+              {
+                "name": "PasoAgachado",
+                "time": 0.5,
+                "value": 0.5
+              }
+            ],
+            "position": [
+              0.0,
+              1.0
+            ],
+            "speed": 1.0
+          }
+        ],
+        "param_x": "MoveX",
+        "param_y": "MoveZ"
+      },
+      "clip": "",
+      "loop": true,
+      "name": "Agachado",
+      "speed": 1.0
+    },
+    {
+      "clip": "Death",
+      "loop": false,
+      "name": "Muerte",
+      "speed": 1.0
+    }
+  ],
+  "transitions": [
+    {
+      "conditions": [
+        {
+          "op": "eq",
+          "param": "mover",
+          "value": 1.0
+        }
+      ],
+      "fade": 0.25,
+      "from": "Idle",
+      "to": "Locomocion"
+    },
+    {
+      "conditions": [
+        {
+          "op": "eq",
+          "param": "mover",
+          "value": 0.0
+        }
+      ],
+      "fade": 0.25,
+      "from": "Locomocion",
+      "to": "Idle"
+    },
+    {
+      "conditions": [
+        {
+          "op": "eq",
+          "param": "agachado",
+          "value": 1.0
+        }
+      ],
+      "fade": 0.2,
+      "from": "Idle",
+      "to": "Agachado"
+    },
+    {
+      "conditions": [
+        {
+          "op": "eq",
+          "param": "agachado",
+          "value": 1.0
+        }
+      ],
+      "fade": 0.2,
+      "from": "Locomocion",
+      "to": "Agachado"
+    },
+    {
+      "conditions": [
+        {
+          "op": "eq",
+          "param": "agachado",
+          "value": 0.0
+        }
+      ],
+      "fade": 0.2,
+      "from": "Agachado",
+      "to": "Idle"
+    }
+  ]
+}

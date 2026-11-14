@@ -39,6 +39,7 @@ namespace GlassEngine.Core.Scripts
             cuerpo = new RigidBody();
             cuerpo.Initialize(EntityId, RigidBodyType.Dynamic, Position, Rotation);
             cuerpo.AttachSphereCollider(0.16f, 0.1f, 0.2f);
+            cuerpo.CollisionDetection = CollisionDetectionMode.Continuous;
 
             // inactivo anclado, escala minima, sin velocidad
             Scale = new Vector3(0.001f, 0.001f, 0.001f);

@@ -28,6 +28,7 @@ namespace GlassEngine.Core.Scripts
             _body = new RigidBody();
             _body.Initialize(EntityId, RigidBodyType.Dynamic, _ancla, Quaternion.Identity);
             _body.AttachSphereCollider(0.06f, 0.1f, 0.2f);
+            _body.CollisionDetection = CollisionDetectionMode.Continuous;
             _body.SetTransform(_ancla, Quaternion.Identity);
             _body.SetLinearVelocity(new Vector3(0f, 0f, 0f));
 

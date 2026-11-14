@@ -63,9 +63,18 @@ impl PhysicsWorld {
         };
 
         let half_height = (cfg.height * 0.5 - cfg.radius).max(0.01);
+        // La cápsula del personaje es INVISIBLE para el solver y para
+        // las consultas del mundo (membresía GROUP_32, filtro NONE):
+        // el CharacterController se resuelve a sí mismo con sus propias
+        // sondas (que excluyen su collider), así que nadie debe chocar
+        // con ella ni verla en un raycast. Sin esto, el jugador se
+        // disparaba a sí mismo: el ojo está DENTRO de la cápsula y todo
+        // raycast/proyectil desde la cámara impactaba en la propia
+        // cápsula a distancia 0 (cazado en la demo FPS, 2026-11-14).
         let builder = ColliderBuilder::capsule_y(half_height, cfg.radius)
             .friction(0.0)
-            .restitution(0.0);
+            .restitution(0.0)
+            .collision_groups(InteractionGroups::new(Group::GROUP_32, Group::NONE));
         let collider = builder.build();
         let rapier_collider = self
             .collider_set

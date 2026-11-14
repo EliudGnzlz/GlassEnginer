@@ -6283,11 +6283,20 @@ impl ApplicationHandler for GlassEngineApp {
         {
             let models_dir = Path::new("assets/models");
             let mut glb_paths: Vec<std::path::PathBuf> = Vec::new();
-            if let Ok(entries) = std::fs::read_dir(models_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("glb") {
-                        glb_paths.push(path);
+            // Recorrido recursivo (mismo patrón que el cargador de
+            // audio): los kits viven en subcarpetas (p. ej.
+            // assets/models/polygon/) y se registran por su stem,
+            // igual que los de la raíz.
+            let mut pending: Vec<std::path::PathBuf> = vec![models_dir.to_path_buf()];
+            while let Some(dir) = pending.pop() {
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            pending.push(path);
+                        } else if path.extension().and_then(|e| e.to_str()) == Some("glb") {
+                            glb_paths.push(path);
+                        }
                     }
                 }
             }
