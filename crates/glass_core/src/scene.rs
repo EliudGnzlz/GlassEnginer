@@ -1273,12 +1273,12 @@ impl EntityData {
         } else {
             None
         };
-        let physics = if components.iter().any(|c| c == "RigidBody" || c == "Collider" || c == "StaticCollider") {
-            // El cuerpo solo es dinámico si hay un RigidBody explícito.
-            // Un Collider o StaticCollider sin RigidBody produce un cuerpo
-            // estático (choca pero no se mueve), igual que en Unity.
-            let has_rigidbody = components.iter().any(|c| c == "RigidBody");
-            let body_type = if has_rigidbody { "Dynamic".into() } else { "Static".into() };
+        let physics = if components.iter().any(|c| c == "RigidBody") {
+            // Regla de D3m3tr10: sin RigidBody (y sin CharacterController,
+            // que se crea por script en tiempo de juego) un objeto NO
+            // tiene física: ni cuerpo ni collider. Un Collider suelto no
+            // crea nada; la física entra solo por el RigidBody o el CC.
+            let body_type = if is_static { "Static".into() } else { "Dynamic".into() };
             Some(PhysicsData {
                 body_type,
                 mass: 1.0,
@@ -2088,14 +2088,15 @@ mod regression_physics_tests {
     use super::*;
 
     #[test]
-    fn collider_sin_rigidbody_es_estatico() {
+    fn collider_sin_rigidbody_no_crea_fisica() {
+        // Regla de D3m3tr10: sin RigidBody no hay física, ni siquiera
+        // un cuerpo estático: un Collider suelto no crea nada.
         let entity = EntityData::new(
             1,
             "Cube".into(),
             vec!["Transform".into(), "MeshRenderer".into(), "Collider".into()],
         );
-        assert!(entity.physics.is_some());
-        assert_eq!(entity.physics.as_ref().unwrap().body_type, "Static");
+        assert!(entity.physics.is_none());
     }
 
     #[test]
@@ -2115,14 +2116,13 @@ mod regression_physics_tests {
     }
 
     #[test]
-    fn static_collider_es_estatico() {
+    fn static_collider_sin_rigidbody_no_crea_fisica() {
         let entity = EntityData::new(
             3,
             "Plane".into(),
             vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
         );
-        assert!(entity.physics.is_some());
-        assert_eq!(entity.physics.as_ref().unwrap().body_type, "Static");
+        assert!(entity.physics.is_none());
     }
 
     #[test]

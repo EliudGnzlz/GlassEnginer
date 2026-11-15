@@ -618,14 +618,14 @@ impl EditorDockingLayout {
                 ui.menu_button("⬡ 3D Object", |ui| {
                     if ui.button("■ Cube").clicked() {
                         if let Ok(mut sc) = scene_state.lock() {
-                            let id = sc.create_entity("Cube".into(), vec!["Transform".into(), "MeshRenderer".into(), "Collider".into()]);
+                            let id = sc.create_entity("Cube".into(), vec!["Transform".into(), "MeshRenderer".into()]);
                             self.hierarchy.selected_entity = Some(id);
                         }
                         ui.close();
                     }
                     if ui.button("● Sphere").clicked() {
                         if let Ok(mut sc) = scene_state.lock() {
-                            let id = sc.create_entity("Sphere".into(), vec!["Transform".into(), "MeshRenderer".into(), "Collider".into()]);
+                            let id = sc.create_entity("Sphere".into(), vec!["Transform".into(), "MeshRenderer".into()]);
                             // La primitiva integrada, como en el preset
                             // de la jerarquía (antes dibujaba el cubo).
                             if let Some(ent) = sc.get_entity_mut(id) {
@@ -653,7 +653,7 @@ impl EditorDockingLayout {
                     }
                     if ui.button("▮ Cylinder").clicked() {
                         if let Ok(mut sc) = scene_state.lock() {
-                            let id = sc.create_entity("Cylinder".into(), vec!["Transform".into(), "MeshRenderer".into(), "Collider".into()]);
+                            let id = sc.create_entity("Cylinder".into(), vec!["Transform".into(), "MeshRenderer".into()]);
                             // La primitiva integrada, como en el preset
                             // de la jerarquía (antes dibujaba el cubo).
                             if let Some(ent) = sc.get_entity_mut(id) {

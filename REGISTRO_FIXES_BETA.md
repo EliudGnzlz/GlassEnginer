@@ -11,21 +11,35 @@ sintético (capturas en `fase1/test-fixes/` fuera del repo).
 Causa raíz: los menús de creación del editor (Cube/Sphere/Cylinder en
 `docking.rs`) nacían con el componente «RigidBody» puesto, y
 `EntityData::new` (glass_core/scene.rs) daba cuerpo «Dynamic» a todo lo
-que llevara «Collider». Arreglo (solo defectos de autorado; la carga de
-escenas no se toca — las escenas autoradas usan el string `body_type`
-como verdad):
+que llevara «Collider».
 
-- Las tres primitivas nacen ahora con `["Transform", "MeshRenderer",
-  "Collider"]`, sin RigidBody.
-- En `EntityData::new`, el cuerpo solo es «Dynamic» si hay un RigidBody
-  explícito; «Collider»/«StaticCollider» sin RigidBody → «Static»
-  (choca pero no se mueve), la semántica de Unity.
-- Regresión: `regression_physics_tests` en scene.rs (4 tests).
+**Regla exacta de D3m3tr10 (aclaración 2026-11-14 20:53): objeto sin
+Rigidbody y sin CharacterController → SIN física.** La física, gravedad
+incluida, entra solo por el RB o por el CC. (La primera versión de este
+arreglo dejaba un cuerpo estático a los objetos con solo Collider;
+verificado contra la aclaración, eso NO cumplía la regla y se ajustó
+en el mismo bloque.) Arreglo, solo en la vía de autorado — la carga de
+escenas no se toca: el bloque `physics` explícito de una escena es la
+declaración de física de su autor y se respeta tal cual:
 
-En vivo: un Cube recién creado muestra en el Inspector «Tipo de Cuerpo:
-Static»; elevado a Y=6 se queda en Y=6,00 con velocidad (0,0,0) durante
-todo el Play; al añadirle el Rigidbody por Component → Physics pasa a
-«Dynamic».
+- Las tres primitivas nacen ahora solo con `["Transform",
+  "MeshRenderer"]`: sin bloque de física.
+- En `EntityData::new`, el bloque de física se crea SOLO si hay un
+  RigidBody explícito; «Collider» o «StaticCollider» sueltos no crean
+  nada (ni cuerpo ni collider).
+- Añadir el Rigidbody (Inspector o Component → Physics) crea el bloque
+  completo (`PhysicsData::default()`), como ya hacía el editor.
+- El spawn por código (`RuntimeBridge.SpawnEntity` con tipo STATIC)
+  materializa su bloque explícitamente en `spawn_entity`: pedir física
+  por código es la vía legítima, y sus tests (`spawn_bridge_tests`)
+  distinguen estático/dinámico/sin física como antes.
+- Regresión: `regression_physics_tests` en scene.rs (4 tests): con RB →
+  Dynamic; Collider solo → sin física; StaticCollider solo → sin
+  física; sin componentes → sin física.
+
+En vivo: un Cube recién creado no tiene sección de física en el
+Inspector (no hay bloque); al añadirle el Rigidbody por Component →
+Physics aparece «Tipo de Cuerpo: Dynamic».
 
 Nota observada (fuera del alcance de este bloque): los cuerpos de las
 entidades creadas en el editor se construyen al cargar/recargar la

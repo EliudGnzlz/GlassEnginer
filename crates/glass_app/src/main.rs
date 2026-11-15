@@ -788,6 +788,17 @@ impl SceneBridge for EngineSceneBridge {
                         mesh.color = spec.color;
                     }
                 }
+                // El spawn por código pide la física explícitamente
+                // (regla: la física entra por RB/CC o por código): el
+                // tipo STATIC no pasa por EntityData::new, que ya no
+                // crea física desde «StaticCollider», así que el bloque
+                // se materializa aquí.
+                if ent.physics.is_none() && spec.physics == SPAWN_PHYSICS_STATIC {
+                    ent.physics = Some(glass_core::PhysicsData {
+                        body_type: "Static".to_string(),
+                        ..glass_core::PhysicsData::default()
+                    });
+                }
                 if let Some(body) = &mut ent.physics {
                     if spec.physics == SPAWN_PHYSICS_KINEMATIC {
                         body.body_type = "Kinematic".to_string();
