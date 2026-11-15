@@ -1683,6 +1683,13 @@ struct GlassEngineApp {
     game_viewport_texture_id: Option<egui::TextureId>,
     #[cfg(feature = "editor")]
     editor_layout: EditorDockingLayout,
+    /// Foto de la escena autorada al entrar en Play: lo que se toca en
+    /// Play no se queda; al dar Stop se restaura entera.
+    #[cfg(feature = "editor")]
+    play_snapshot: Option<SceneState>,
+    /// play_state del frame anterior, para detectar transiciones.
+    #[cfg(feature = "editor")]
+    prev_play_state: glass_editor::PlayState,
     #[cfg(feature = "editor")]
     pub app_mode: AppMode,
     #[cfg(feature = "editor")]
@@ -2108,6 +2115,10 @@ impl GlassEngineApp {
             game_viewport_texture_id: None,
             #[cfg(feature = "editor")]
             editor_layout: EditorDockingLayout::new(),
+            #[cfg(feature = "editor")]
+            play_snapshot: None,
+            #[cfg(feature = "editor")]
+            prev_play_state: glass_editor::PlayState::Edit,
             #[cfg(feature = "editor")]
             app_mode,
             #[cfg(feature = "editor")]
@@ -3095,6 +3106,75 @@ impl GlassEngineApp {
     }
 
     /// Reconstruye el mundo de Rapier a partir de los componentes `Physics`.
+    /// Detecta las transiciones de play_state y actúa en un único punto
+    /// (las vías de UI solo cambian play_state). Se llama al FINAL del
+    /// frame, junto a `apply_pending_scene_load`: ahí el renderer ya no
+    /// está prestado y la escena no se está recorriendo. Entrar en Play
+    /// guarda la foto de la escena autorada y pasa la vista principal a
+    /// Game; Stop restaura la foto entera.
+    #[cfg(feature = "editor")]
+    fn handle_play_transitions(&mut self) {
+        if self.is_standalone {
+            return;
+        }
+        let now = self.editor_layout.viewport.play_state;
+        match play_transition(self.prev_play_state, now) {
+            PlayTransition::EnterPlay => {
+                if let Ok(scene) = self.scene_state.lock() {
+                    self.play_snapshot = Some((*scene).clone());
+                }
+                self.editor_layout.viewport.active_tab = glass_editor::ViewportTab::GameView;
+                self.editor_layout.focus_game_tab();
+            }
+            PlayTransition::StopPlay => {
+                if let Some(foto) = self.play_snapshot.take() {
+                    self.restore_play_snapshot(foto);
+                }
+            }
+            PlayTransition::None => {}
+        }
+        self.prev_play_state = now;
+    }
+
+    /// Restaura la escena autorada tal como estaba al entrar en Play y
+    /// reconstruye física y scripts (espejo del teardown de
+    /// `apply_pending_scene_load` y de la composición de
+    /// `bootstrap_scene_scripts_and_physics`).
+    #[cfg(feature = "editor")]
+    fn restore_play_snapshot(&mut self, snapshot: SceneState) {
+        // Un único bloqueo: se sustituye la escena y se compone `scripted`
+        // con el mismo guard, que se suelta al salir del bloque.
+        let (scripted, num_entidades): (Vec<(u64, String)>, usize) = {
+            let Ok(mut scene) = self.scene_state.lock() else {
+                log::error!("Stop: no se pudo bloquear la escena; la foto de Play se descarta.");
+                return;
+            };
+            *scene = snapshot;
+            let scripted = scene
+                .entities
+                .iter()
+                .filter_map(|e| {
+                    let class = e
+                        .script_data
+                        .as_ref()
+                        .map(|s| s.class_name.clone())
+                        .or_else(|| e.script.clone())?;
+                    Some((e.id, class))
+                })
+                .collect();
+            (scripted, scene.entities.len())
+        };
+        self.audio_system.stop_all();
+        self.player_script_handle = None;
+        self.player_body_handle = None;
+        self.script_host.destroy_all_instances();
+        glass_scripting::bindings::clear_interaction_point_state();
+        self.reset_skinning_runtime();
+        self.rebuild_physics_from_scene();
+        self.instantiate_scene_scripts(&scripted);
+        log::info!("Stop: escena restaurada a su estado previo a Play ({} entidades).", num_entidades);
+    }
+
     fn rebuild_physics_from_scene(&mut self) {
         // Mundo nuevo: las posiciones previas del pase de cruce
         // pertenecen a la escena anterior.
@@ -5805,6 +5885,8 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
             // (el menú no podía pasar al nivel 1). Se aplica en la misma
             // ventana temporal que en el editor: frame completo ya
             // presentado, nadie recorriendo las entidades.
+            #[cfg(feature = "editor")]
+            self.handle_play_transitions();
             self.apply_pending_scene_load();
 
             return Ok(());
@@ -6056,6 +6138,8 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
         // escena vieja, así que aquí nadie está recorriendo `entities` y la
         // sustitución no puede producir un frame a medio dibujar. Es la misma
         // ventana temporal que usa Unity para aplicar `SceneManager.LoadScene`.
+        #[cfg(feature = "editor")]
+        self.handle_play_transitions();
         self.apply_pending_scene_load();
 
         if request_build {
@@ -8720,5 +8804,49 @@ mod particle_fade_tests {
             rt.len(),
             ap.len()
         );
+    }
+}
+/// Transición de play_state entre dos frames consecutivos.
+#[cfg(feature = "editor")]
+#[derive(Debug, PartialEq, Eq)]
+enum PlayTransition {
+    None,
+    EnterPlay,
+    StopPlay,
+}
+
+/// EnterPlay solo en Edit→Playing (Paused→Playing es la misma sesión);
+/// StopPlay en Playing|Paused→Edit; el resto, None.
+#[cfg(feature = "editor")]
+fn play_transition(prev: glass_editor::PlayState, now: glass_editor::PlayState) -> PlayTransition {
+    use glass_editor::PlayState as P;
+    match (prev, now) {
+        (P::Edit, P::Playing) => PlayTransition::EnterPlay,
+        (P::Playing | P::Paused, P::Edit) => PlayTransition::StopPlay,
+        _ => PlayTransition::None,
+    }
+}
+
+#[cfg(all(test, feature = "editor"))]
+mod play_transition_tests {
+    use super::{play_transition, PlayTransition as T};
+    use glass_editor::PlayState as P;
+
+    #[test]
+    fn las_nueve_combinaciones() {
+        let casos = [
+            (P::Edit, P::Edit, T::None),
+            (P::Edit, P::Playing, T::EnterPlay),
+            (P::Edit, P::Paused, T::None),
+            (P::Playing, P::Edit, T::StopPlay),
+            (P::Playing, P::Playing, T::None),
+            (P::Playing, P::Paused, T::None),
+            (P::Paused, P::Edit, T::StopPlay),
+            (P::Paused, P::Playing, T::None),
+            (P::Paused, P::Paused, T::None),
+        ];
+        for (prev, now, esperado) in casos {
+            assert_eq!(play_transition(prev, now), esperado);
+        }
     }
 }

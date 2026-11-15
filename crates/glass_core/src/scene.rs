@@ -1274,7 +1274,11 @@ impl EntityData {
             None
         };
         let physics = if components.iter().any(|c| c == "RigidBody" || c == "Collider" || c == "StaticCollider") {
-            let body_type = if is_static { "Static".into() } else { "Dynamic".into() };
+            // El cuerpo solo es dinámico si hay un RigidBody explícito.
+            // Un Collider o StaticCollider sin RigidBody produce un cuerpo
+            // estático (choca pero no se mueve), igual que en Unity.
+            let has_rigidbody = components.iter().any(|c| c == "RigidBody");
+            let body_type = if has_rigidbody { "Dynamic".into() } else { "Static".into() };
             Some(PhysicsData {
                 body_type,
                 mass: 1.0,
@@ -2076,6 +2080,55 @@ impl SceneState {
         }
 
         new_root_id
+    }
+}
+
+#[cfg(test)]
+mod regression_physics_tests {
+    use super::*;
+
+    #[test]
+    fn collider_sin_rigidbody_es_estatico() {
+        let entity = EntityData::new(
+            1,
+            "Cube".into(),
+            vec!["Transform".into(), "MeshRenderer".into(), "Collider".into()],
+        );
+        assert!(entity.physics.is_some());
+        assert_eq!(entity.physics.as_ref().unwrap().body_type, "Static");
+    }
+
+    #[test]
+    fn rigidbody_con_collider_es_dinamico() {
+        let entity = EntityData::new(
+            2,
+            "Cube".into(),
+            vec![
+                "Transform".into(),
+                "MeshRenderer".into(),
+                "RigidBody".into(),
+                "Collider".into(),
+            ],
+        );
+        assert!(entity.physics.is_some());
+        assert_eq!(entity.physics.as_ref().unwrap().body_type, "Dynamic");
+    }
+
+    #[test]
+    fn static_collider_es_estatico() {
+        let entity = EntityData::new(
+            3,
+            "Plane".into(),
+            vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
+        );
+        assert!(entity.physics.is_some());
+        assert_eq!(entity.physics.as_ref().unwrap().body_type, "Static");
+    }
+
+    #[test]
+    fn sin_componentes_de_fisica_no_hay_physics() {
+        let entity = EntityData::new(4, "Vacio".into(), vec!["Transform".into()]);
+        assert!(entity.physics.is_none());
     }
 }
 

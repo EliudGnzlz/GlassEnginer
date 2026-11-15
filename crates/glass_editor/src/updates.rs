@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::Digest;
 
-pub const ENGINE_VERSION: &str = "0.10.0-beta";
+pub const ENGINE_VERSION: &str = "0.10.14.1-beta";
 pub const DEFAULT_REPO: &str = "EliudGnzlz/GlassEnginer";
 pub const DEFAULT_API: &str = "https://api.github.com";
 
@@ -121,9 +121,89 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-pub fn tag_version(tag: &str) -> Result<semver::Version, String> {
+/// Clave de versión del proyecto: 3 o 4 componentes numéricos más el
+/// prerelease opcional. El cuarto componente (revisión) participa en el
+/// orden: 0.10.14.1 > 0.10.14 > 0.10.0. El semver estricto no admite el
+/// cuarto componente, por eso el parser es propio.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionKey {
+    pub core: [u64; 4],
+    pub pre: String, // "" = sin prerelease (vale MÁS que cualquier prerelease)
+}
+
+impl PartialOrd for VersionKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for VersionKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let core_order = self.core.cmp(&other.core);
+        if core_order != std::cmp::Ordering::Equal {
+            return core_order;
+        }
+        match (self.pre.is_empty(), other.pre.is_empty()) {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            (false, false) => cmp_prerelease(&self.pre, &other.pre),
+        }
+    }
+}
+
+/// Compara dos cadenas de prerelease identificador por identificador,
+/// siguiendo la regla de semver: los identificadores numéricos comparan
+/// como números y valen menos que los alfanuméricos; si un prerelease es
+/// prefijo del otro, el más corto vale menos.
+fn cmp_prerelease(a: &str, b: &str) -> std::cmp::Ordering {
+    let mut ia = a.split('.');
+    let mut ib = b.split('.');
+    loop {
+        match (ia.next(), ib.next()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (Some(xa), Some(xb)) => {
+                let na = xa.parse::<u64>().ok();
+                let nb = xb.parse::<u64>().ok();
+                let order = match (na, nb) {
+                    (Some(va), Some(vb)) => va.cmp(&vb),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => xa.cmp(xb),
+                };
+                if order != std::cmp::Ordering::Equal {
+                    return order;
+                }
+            }
+        }
+    }
+}
+
+pub fn tag_version(tag: &str) -> Result<VersionKey, String> {
     let raw = tag.strip_prefix('v').unwrap_or(tag);
-    semver::Version::parse(raw).map_err(|e| e.to_string())
+    let (core_str, pre) = match raw.split_once('-') {
+        Some((c, p)) => (c, p.to_string()),
+        None => (raw, String::new()),
+    };
+    let parts: Vec<&str> = core_str.split('.').collect();
+    if parts.len() != 3 && parts.len() != 4 {
+        return Err(format!(
+            "versión inválida '{}': se esperaban 3 o 4 componentes numéricos",
+            tag
+        ));
+    }
+    let mut core = [0u64; 4];
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            return Err(format!("versión inválida '{}': componente vacío", tag));
+        }
+        core[i] = part
+            .parse::<u64>()
+            .map_err(|_| format!("versión inválida '{}': componente no numérico '{}'", tag, part))?;
+    }
+    Ok(VersionKey { core, pre })
 }
 
 pub fn is_newer(tag: &str, current: &str) -> bool {
@@ -131,8 +211,7 @@ pub fn is_newer(tag: &str, current: &str) -> bool {
         Ok(v) => v,
         Err(_) => return false,
     };
-    let current_raw = current.strip_prefix('v').unwrap_or(current);
-    let current_version = match semver::Version::parse(current_raw) {
+    let current_version = match tag_version(current) {
         Ok(v) => v,
         Err(_) => return false,
     };
@@ -394,6 +473,14 @@ mod tests {
         assert!(!is_newer("v0.1.0-alpha", "0.1.0-alpha"));
         assert!(is_newer("0.1.0", "0.1.0-alpha"));
         assert!(tag_version("v1.2.3").is_ok());
+        assert!(is_newer("v0.10.14.1-beta", "0.10.0-beta"));
+        assert!(is_newer("v0.10.14.1", "0.10.14"));
+        assert!(is_newer("v0.10.14", "0.10.0"));
+        assert!(!is_newer("v0.10.14.1-beta", "0.10.14.1-beta"));
+        assert!(is_newer("v0.10.14.1", "0.10.14.1-beta"));
+        assert!(tag_version("v0.10.14.1-beta").is_ok());
+        assert!(tag_version("v1.2").is_err());
+        assert!(tag_version("v1.2.3.4.5").is_err());
     }
 
     #[test]

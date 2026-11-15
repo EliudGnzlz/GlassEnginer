@@ -333,17 +333,42 @@ impl ViewportPanel {
                 }
             }
 
-            // Zoom con rueda del ratón
+            // Zoom con rueda del ratón: dolly hacia el punto bajo el
+            // cursor (estilo Unity): la cámara y su centro se desplazan a
+            // lo largo del rayo del cursor en la medida en que se reduce
+            // la distancia, así el punto señalado no se mueve en pantalla.
             if response.hovered() {
                 let scroll = ui.input(|i| i.smooth_scroll_delta.y);
                 if scroll.abs() > 0.0 {
-                    self.editor_cam_dist = (self.editor_cam_dist - scroll * 0.05).clamp(2.0, 50.0);
+                    let old_dist = self.editor_cam_dist;
+                    let new_dist = (old_dist * (1.0 - scroll * 0.001)).clamp(0.5, 200.0);
+                    if let Some(mp) = mouse_pos {
+                        let aspect = (self.scene_width / self.scene_height).max(0.1);
+                        let tan_half = 22.5_f32.to_radians().tan();
+                        let ndc_x = 2.0 * (mp.x - rect.min.x) / rect.width() - 1.0;
+                        let ndc_y = 1.0 - 2.0 * (mp.y - rect.min.y) / rect.height();
+                        let fwd = [-cy * cx, -sy, -cy * cz];
+                        let off_x = ndc_x * tan_half * aspect;
+                        let off_y = ndc_y * tan_half;
+                        let mut ray = [
+                            fwd[0] + cam_right[0] * off_x + cam_up[0] * off_y,
+                            fwd[1] + cam_right[1] * off_x + cam_up[1] * off_y,
+                            fwd[2] + cam_right[2] * off_x + cam_up[2] * off_y,
+                        ];
+                        let len = (ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2]).sqrt().max(1e-6);
+                        ray = [ray[0] / len, ray[1] / len, ray[2] / len];
+                        let paso = old_dist - new_dist;
+                        self.editor_cam_center[0] += ray[0] * paso;
+                        self.editor_cam_center[1] += ray[1] * paso;
+                        self.editor_cam_center[2] += ray[2] * paso;
+                    }
+                    self.editor_cam_dist = new_dist;
                     ui.ctx().request_repaint();
                 }
             }
 
             // Selección por Raycasting al hacer clic en Scene View (¡HABILITADO EN EDIT Y PLAY!)
-            if response.clicked() && hovered_gizmo_axis == GizmoAxis::None && self.gizmo_mode != GizmoMode::View {
+            if response.clicked() && hovered_gizmo_axis == GizmoAxis::None && self.gizmo_mode != GizmoMode::View && !ui.input(|i| i.modifiers.alt) {
                 if let Some(pos) = mouse_pos {
                     if let Ok(state) = scene_state.lock() {
                         let world_matrices = state.compute_world_matrices();
@@ -358,7 +383,8 @@ impl ViewportPanel {
 
             // Arrastre e interactividad
             if response.drag_started()
-                && self.gizmo_mode != GizmoMode::View && hovered_gizmo_axis != GizmoAxis::None {
+                && self.gizmo_mode != GizmoMode::View && hovered_gizmo_axis != GizmoAxis::None
+                && !ui.input(|i| i.modifiers.alt) {
                     self.active_drag_axis = hovered_gizmo_axis;
                 }
 
@@ -438,31 +464,74 @@ impl ViewportPanel {
                     }
                     ui.ctx().request_repaint();
                 } else {
-                    if self.gizmo_mode == GizmoMode::View {
-                        if primary_down {
-                            let pan_speed = self.editor_cam_dist * 0.0015;
-                            self.editor_cam_center[0] -= (cam_right[0] * delta.x - cam_up[0] * delta.y) * pan_speed;
-                            self.editor_cam_center[1] -= (cam_right[1] * delta.x - cam_up[1] * delta.y) * pan_speed;
-                            self.editor_cam_center[2] -= (cam_right[2] * delta.x - cam_up[2] * delta.y) * pan_speed;
-                            ui.ctx().request_repaint();
-                        } else if secondary_down {
-                            self.editor_cam_yaw += delta.x * 0.005;
-                            self.editor_cam_pitch = (self.editor_cam_pitch - delta.y * 0.005).clamp(-1.4, 1.4);
-                            ui.ctx().request_repaint();
-                        }
-                    } else {
-                        if (primary_down && !is_shift) || secondary_down {
-                            self.editor_cam_yaw += delta.x * 0.005;
-                            self.editor_cam_pitch = (self.editor_cam_pitch - delta.y * 0.005).clamp(-1.4, 1.4);
-                            ui.ctx().request_repaint();
-                        } else if (primary_down && is_shift) || middle_down {
-                            let pan_speed = self.editor_cam_dist * 0.0015;
-                            self.editor_cam_center[0] -= (cam_right[0] * delta.x - cam_up[0] * delta.y) * pan_speed;
-                            self.editor_cam_center[1] -= (cam_right[1] * delta.x - cam_up[1] * delta.y) * pan_speed;
-                            self.editor_cam_center[2] -= (cam_right[2] * delta.x - cam_up[2] * delta.y) * pan_speed;
-                            ui.ctx().request_repaint();
-                        }
+                    let is_alt = ui.input(|i| i.modifiers.alt);
+                    if is_alt && primary_down {
+                        // Alt + izquierdo: orbitar alrededor del centro
+                        self.editor_cam_yaw += delta.x * 0.005;
+                        self.editor_cam_pitch = (self.editor_cam_pitch - delta.y * 0.005).clamp(-1.4, 1.4);
+                        ui.ctx().request_repaint();
+                    } else if is_alt && secondary_down {
+                        // Alt + derecho: zoom cambiando la distancia (dolly)
+                        self.editor_cam_dist = (self.editor_cam_dist * (1.0 + delta.y * 0.01)).clamp(0.5, 200.0);
+                        ui.ctx().request_repaint();
+                    } else if middle_down || (primary_down && !is_alt && self.gizmo_mode == GizmoMode::View) {
+                        // Central en cualquier modo, o izquierdo sin Alt con la herramienta Mano: pan
+                        let pan_speed = self.editor_cam_dist * 0.0015;
+                        self.editor_cam_center[0] -= (cam_right[0] * delta.x - cam_up[0] * delta.y) * pan_speed;
+                        self.editor_cam_center[1] -= (cam_right[1] * delta.x - cam_up[1] * delta.y) * pan_speed;
+                        self.editor_cam_center[2] -= (cam_right[2] * delta.x - cam_up[2] * delta.y) * pan_speed;
+                        ui.ctx().request_repaint();
+                    } else if secondary_down && !is_alt {
+                        // Derecho sin Alt: mirar desde el ojo sin moverlo (free look)
+                        let old_yaw = self.editor_cam_yaw;
+                        let old_pitch = self.editor_cam_pitch;
+                        let dist = self.editor_cam_dist;
+                        let eye = [
+                            self.editor_cam_center[0] + dist * old_pitch.cos() * old_yaw.sin(),
+                            self.editor_cam_center[1] + dist * old_pitch.sin(),
+                            self.editor_cam_center[2] + dist * old_pitch.cos() * old_yaw.cos(),
+                        ];
+                        self.editor_cam_yaw += delta.x * 0.005;
+                        self.editor_cam_pitch = (self.editor_cam_pitch - delta.y * 0.005).clamp(-1.4, 1.4);
+                        let new_yaw = self.editor_cam_yaw;
+                        let new_pitch = self.editor_cam_pitch;
+                        self.editor_cam_center = [
+                            eye[0] - dist * new_pitch.cos() * new_yaw.sin(),
+                            eye[1] - dist * new_pitch.sin(),
+                            eye[2] - dist * new_pitch.cos() * new_yaw.cos(),
+                        ];
+                        ui.ctx().request_repaint();
                     }
+                }
+            }
+
+            // Vuelo estilo Unity: con el botón derecho mantenido, WASD/QE
+            // mueven la cámara (Shift = rápido). Vive fuera del bloque de
+            // arrastre: basta mantener el botón, sin mover el ratón.
+            if response.hovered() && ui.input(|i| i.pointer.secondary_down()) {
+                let is_fast = ui.input(|i| i.modifiers.shift);
+                let dt = ui.input(|i| i.stable_dt);
+                let speed = self.editor_cam_dist * 1.5 * if is_fast { 3.0 } else { 1.0 };
+                let fwd = [-cy * cx, -sy, -cy * cz];
+                let (w, s, a, d, e, q) = ui.input(|i| {
+                    (
+                        i.key_down(egui::Key::W) as i32 as f32,
+                        i.key_down(egui::Key::S) as i32 as f32,
+                        i.key_down(egui::Key::A) as i32 as f32,
+                        i.key_down(egui::Key::D) as i32 as f32,
+                        i.key_down(egui::Key::E) as i32 as f32,
+                        i.key_down(egui::Key::Q) as i32 as f32,
+                    )
+                });
+                let move_fwd = w - s;
+                let move_right = d - a;
+                let move_up = e - q;
+                if move_fwd != 0.0 || move_right != 0.0 || move_up != 0.0 {
+                    let step = speed * dt;
+                    self.editor_cam_center[0] += (fwd[0] * move_fwd + cam_right[0] * move_right) * step;
+                    self.editor_cam_center[1] += (fwd[1] * move_fwd + cam_right[1] * move_right + move_up) * step;
+                    self.editor_cam_center[2] += (fwd[2] * move_fwd + cam_right[2] * move_right) * step;
+                    ui.ctx().request_repaint();
                 }
             }
 
@@ -475,6 +544,13 @@ impl ViewportPanel {
             let mut spawn_point: Option<[f32; 3]> = None;
             let mut spawn_request: Option<super::hierarchy::EntityPreset> = None;
             let mut frame_selected_request = false;
+            // Tecla F: enfocar la entidad seleccionada (estilo Unity).
+            if response.hovered()
+                && selected_entity_id.is_some()
+                && ui.input(|i| i.key_pressed(egui::Key::F))
+            {
+                frame_selected_request = true;
+            }
 
             response.context_menu(|ui| {
                 if let Some(pos) = mouse_pos {
