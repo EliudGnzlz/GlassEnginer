@@ -9,6 +9,7 @@ members = [
     "crates/glass_physics",
     "crates/glass_particles",
     "crates/glass_app",
+    "crates/glass_mesh_edit",
 ]
 resolver = "2"
 

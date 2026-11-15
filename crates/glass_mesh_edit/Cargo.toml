@@ -1,0 +1,16 @@
+[package]
+name = "glass_mesh_edit"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+log.workspace = true
+thiserror.workspace = true
+# Las features son aditivas: si el workspace ya activa `derive`, esto no cambia nada.
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+# serde_json solo se usa en los tests (ida y vuelta JSON de MeshData).
+serde_json.workspace = true
