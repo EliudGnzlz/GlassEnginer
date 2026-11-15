@@ -468,6 +468,31 @@ mod tests {
     }
 
     #[test]
+    fn panel_cerrar_cierra_la_sesion() {
+        let dir = std::env::temp_dir().join(format!("glass_mesh_tool_close_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("cube.glb");
+        write_glb(&MeshData::cube(2.0), &src).unwrap();
+
+        let mut panel = MeshToolPanel::new();
+        panel.open(src.to_str().unwrap()).unwrap();
+        assert!(panel.session.is_some());
+
+        panel.close();
+        assert!(panel.session.is_none());
+        assert_eq!(panel.status, "Sesión cerrada.");
+        // Tras cerrar, aplicar y hornear fallan sin pánico y sin sesión.
+        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
+        assert_eq!(panel.status, "Sin sesión.");
+        assert!(panel.bake().is_err());
+        // Y se puede volver a abrir la misma ruta.
+        panel.open(src.to_str().unwrap()).unwrap();
+        assert!(panel.session.is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn panel_sin_sesion_no_panica() {
         let mut panel = MeshToolPanel::new();
         panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
