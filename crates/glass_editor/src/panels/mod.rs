@@ -2,9 +2,12 @@ pub mod console;
 pub mod gizmo_3d;
 pub mod hierarchy;
 pub mod inspector;
+pub mod mesh_tool;
 pub mod project;
 pub mod shader_graph;
 pub mod viewport;
+
+pub use mesh_tool::MeshToolPanel;
 
 pub use console::ConsolePanel;
 pub use shader_graph::ShaderGraphEditorPanel;

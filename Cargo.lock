@@ -1650,6 +1650,7 @@ dependencies = [
  "glass_audio",
  "glass_core",
  "glass_mcp",
+ "glass_mesh_edit",
  "glass_renderer",
  "glass_scripting",
  "gpu-allocator",

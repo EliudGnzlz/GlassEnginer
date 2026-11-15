@@ -41,6 +41,7 @@ pub mod edit_mesh;
 pub mod gltf_io;
 pub mod mesh_data;
 pub mod ops;
+pub mod preview;
 pub mod session;
 
 pub use gltf_io::{read_glb, write_glb};
@@ -50,3 +51,4 @@ pub use boolean::{boolean, boolean_with_report, BooleanOp};
 pub use commands::{apply_command, CommandHistory, MeshCommand, MirrorAxis, Recipe};
 pub use edit_mesh::{EditMesh, ManifoldReport, MeshStats, WeldReport};
 pub use mesh_data::{MeshData, MeshEditError};
+pub use preview::{project_edges, project_point, OrbitCamera};

@@ -1,6 +1,6 @@
 use crate::panels::{
-    ConsolePanel, CoordSpace, GizmoMode, HierarchyPanel, InspectorPanel, PivotMode, PlayState,
-    ProjectPanel, ShaderGraphEditorPanel, ViewportPanel,
+    ConsolePanel, CoordSpace, GizmoMode, HierarchyPanel, InspectorPanel, MeshToolPanel, PivotMode,
+    PlayState, ProjectPanel, ShaderGraphEditorPanel, ViewportPanel,
 };
 use egui_dock::{DockArea, DockState, NodeIndex, TabViewer};
 use glass_core::SceneManager;
@@ -16,6 +16,7 @@ pub enum EditorTab {
     Console,
     Project,
     ShaderGraph,
+    MeshTool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +37,7 @@ pub struct EditorDockingLayout {
     /// navegador plano y de sólo lectura que vivía en ConsolePanel.
     pub project: ProjectPanel,
     pub shader_graph: ShaderGraphEditorPanel,
+    pub mesh_tool: MeshToolPanel,
     pub dock_state: DockState<EditorTab>,
     pub current_preset: LayoutPreset,
     pub request_launcher: bool,
@@ -74,6 +76,7 @@ impl EditorDockingLayout {
             console: ConsolePanel::default(),
             project: ProjectPanel::new(),
             shader_graph: ShaderGraphEditorPanel::new(),
+            mesh_tool: MeshToolPanel::new(),
             dock_state: DockState::new(vec![EditorTab::SceneView, EditorTab::GameView]),
             current_preset: LayoutPreset::Default,
             request_launcher: false,
@@ -117,7 +120,12 @@ impl EditorDockingLayout {
                 surface.split_below(
                     NodeIndex::root(),
                     0.72,
-                    vec![EditorTab::Console, EditorTab::Project, EditorTab::ShaderGraph],
+                    vec![
+                        EditorTab::Console,
+                        EditorTab::Project,
+                        EditorTab::ShaderGraph,
+                        EditorTab::MeshTool,
+                    ],
                 );
                 surface.split_right(
                     NodeIndex::root(),
@@ -935,6 +943,7 @@ impl EditorDockingLayout {
             console: &mut self.console,
             project: &mut self.project,
             shader_graph: &mut self.shader_graph,
+            mesh_tool: &mut self.mesh_tool,
             scene_texture_id,
             game_texture_id,
             selected_entity_id: &mut selected_id,
@@ -1286,6 +1295,7 @@ struct EditorTabViewer<'a> {
     console: &'a mut ConsolePanel,
     project: &'a mut ProjectPanel,
     shader_graph: &'a mut ShaderGraphEditorPanel,
+    mesh_tool: &'a mut MeshToolPanel,
     scene_texture_id: Option<egui::TextureId>,
     game_texture_id: Option<egui::TextureId>,
     selected_entity_id: &'a mut Option<u64>,
@@ -1309,6 +1319,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             EditorTab::Console => "📟 Consola".into(),
             EditorTab::Project => "📁 Proyecto / Assets".into(),
             EditorTab::ShaderGraph => "🎨 Grafo de Shaders".into(),
+            EditorTab::MeshTool => "🧊 Herramienta 3D".into(),
         }
     }
 
@@ -1336,6 +1347,9 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             }
             EditorTab::ShaderGraph => {
                 self.shader_graph.render(ui);
+            }
+            EditorTab::MeshTool => {
+                self.mesh_tool.render(ui);
             }
         }
     }
