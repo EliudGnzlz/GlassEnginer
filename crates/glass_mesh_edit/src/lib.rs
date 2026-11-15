@@ -39,6 +39,7 @@ pub mod boolean;
 pub mod commands;
 pub mod edit_mesh;
 pub mod mesh_data;
+pub mod ops;
 
 pub use boolean::{boolean, boolean_with_report, BooleanOp};
 pub use commands::{apply_command, CommandHistory, MeshCommand, MirrorAxis, Recipe};

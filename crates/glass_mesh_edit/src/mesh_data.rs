@@ -27,6 +27,13 @@ pub enum MeshEditError {
     },
     #[error("comando no implementado todavía: {command}")]
     NotImplemented { command: &'static str },
+    /// Un parámetro supera el presupuesto de la operación.
+    #[error("{what} excede el límite: {asked} > {limit}")]
+    LimitExceeded {
+        what: &'static str,
+        limit: usize,
+        asked: usize,
+    },
 }
 
 /// Malla indexada en el formato del motor (la que viaja a GPU y a .glb).

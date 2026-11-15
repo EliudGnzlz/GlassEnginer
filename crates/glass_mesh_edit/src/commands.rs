@@ -73,9 +73,15 @@ pub fn apply_command(mesh: &mut EditMesh, cmd: &MeshCommand) -> Result<(), MeshE
         } => transform_verts(mesh, indices, |p| {
             std::array::from_fn(|k| center[k] + (p[k] - center[k]) * factor[k])
         }),
-        other => Err(MeshEditError::NotImplemented {
-            command: other.name(),
-        }),
+        MeshCommand::Mirror { axis } => {
+            crate::ops::mirror(mesh, *axis);
+            Ok(())
+        }
+        MeshCommand::Subdivide { levels } => crate::ops::subdivide(mesh, *levels),
+        MeshCommand::Array { count, offset } => crate::ops::array(mesh, *count, *offset),
+        MeshCommand::Weld { tolerance } => crate::ops::weld(mesh, *tolerance),
+        MeshCommand::DeleteVerts { indices } => crate::ops::delete_verts(mesh, indices),
+        MeshCommand::Boolean { op, other } => crate::ops::apply_boolean(mesh, *op, other),
     }
 }
 
