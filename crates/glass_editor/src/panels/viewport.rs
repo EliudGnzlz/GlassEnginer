@@ -101,6 +101,9 @@ pub struct ViewportPanel {
     pub selected_camera_id: Option<u64>,
     // Eje activo actualmente arrastrado en el Gizmo 3D
     pub active_drag_axis: GizmoAxis,
+    // Rect [x, y, ancho, alto] en puntos egui donde se pinta el juego en la
+    // pestaña Game; None si aún no se ha dibujado.
+    pub game_view_rect: Option<[f32; 4]>,
 }
 
 impl Default for ViewportPanel {
@@ -124,6 +127,7 @@ impl Default for ViewportPanel {
             editor_cam_center: [3.5, 1.5, 0.0],
             selected_camera_id: None,
             active_drag_axis: GizmoAxis::None,
+            game_view_rect: None,
         }
     }
 }
@@ -843,6 +847,12 @@ impl ViewportPanel {
 
             // Rectángulo centrado para el juego
             let game_rect = egui::Rect::from_min_size(rect.min + offset, draw_size);
+            self.game_view_rect = Some([
+                game_rect.min.x,
+                game_rect.min.y,
+                game_rect.width(),
+                game_rect.height(),
+            ]);
 
             if has_camera {
                 if let Some(id) = texture_id {
@@ -850,7 +860,7 @@ impl ViewportPanel {
                     Image::from_texture(sized_tex).paint_at(ui, game_rect);
                 }
                 // Renderizar Canvas UI sobre la pantalla de juego (Textos, Botones, etc.)
-                Self::render_in_game_canvas_ui(ui, game_rect, scene_state);
+                Self::render_in_game_canvas_ui(ui, game_rect, scene_state, self.play_state == PlayState::Playing);
             } else {
                 // Fondo oscuro cuando no hay cámara activa (Estilo Unity)
                 ui.painter().rect_filled(game_rect, 0.0, Color32::from_rgb(20, 20, 26));
@@ -919,7 +929,7 @@ impl ViewportPanel {
     }
 
     /// Renderiza elementos de Canvas UI superpuestos en la vista de juego (Screen Space Overlay)
-    fn render_in_game_canvas_ui(ui: &mut Ui, game_rect: egui::Rect, scene_state: &Arc<Mutex<SceneState>>) {
+    fn render_in_game_canvas_ui(ui: &mut Ui, game_rect: egui::Rect, scene_state: &Arc<Mutex<SceneState>>, playing: bool) {
         if let Ok(scene) = scene_state.lock() {
             // Auditoría C7: la vista previa usa el MISMO resolvedor
             // que el runtime (`resolve_scene_ui_rects` con el tamaño
@@ -946,9 +956,23 @@ impl ViewportPanel {
                             (btn.target_graphic_color[3] * 255.0) as u8,
                         );
                         let label = ent.ui_text.as_ref().map(|t| t.text.as_str()).unwrap_or("Button");
-                        let b = egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(col);
-                        if ui.put(elem_rect, b).clicked() {
-                            log::info!("[Canvas UI] Botón '{}' clickeado en GameView!", ent.name);
+                        if playing {
+                            // En Play el clic lo despacha la ruta runtime del Canvas;
+                            // aquí solo se pinta para no consumir el evento en egui.
+                            let painter = ui.painter();
+                            painter.rect_filled(elem_rect, 0.0, col);
+                            painter.text(
+                                elem_rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                label,
+                                egui::FontId::proportional(16.0),
+                                Color32::WHITE,
+                            );
+                        } else {
+                            let b = egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(col);
+                            if ui.put(elem_rect, b).clicked() {
+                                log::info!("[Canvas UI] Botón '{}' clickeado en GameView!", ent.name);
+                            }
                         }
                     } else if let Some(txt) = &ent.ui_text {
                         let col = Color32::from_rgba_unmultiplied(

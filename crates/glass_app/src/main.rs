@@ -3663,16 +3663,38 @@ let resueltos = colliders_resueltos(body, shape);
             renderer.offscreen.extent.width as f32,
             renderer.offscreen.extent.height as f32,
         );
-        let mouse_render_x = if win_size.width > 0 {
-            self.mouse.pos.0 as f32 * off_w / win_size.width as f32
+        // En el editor el juego ocupa solo el rect de la pestaña Game: se mapea
+        // desde ese rect (puntos egui). Sin clampar: fuera del rect el hit-test
+        // falla solo, igual que en el standalone.
+        #[cfg(feature = "editor")]
+        let mapped: Option<(f32, f32)> = if !self.is_standalone {
+            match self.editor_layout.viewport.game_view_rect {
+                Some([rx, ry, rw, rh]) if rw > 0.0 && rh > 0.0 => {
+                    let ppp = self.egui_ctx.pixels_per_point();
+                    let px = self.mouse.pos.0 as f32 / ppp;
+                    let py = self.mouse.pos.1 as f32 / ppp;
+                    Some(((px - rx) / rw * off_w, (py - ry) / rh * off_h))
+                }
+                _ => None,
+            }
         } else {
-            0.0
+            None
         };
-        let mouse_render_y = if win_size.height > 0 {
-            self.mouse.pos.1 as f32 * off_h / win_size.height as f32
-        } else {
-            0.0
-        };
+        #[cfg(not(feature = "editor"))]
+        let mapped: Option<(f32, f32)> = None;
+        let (mouse_render_x, mouse_render_y) = mapped.unwrap_or_else(|| {
+            let x = if win_size.width > 0 {
+                self.mouse.pos.0 as f32 * off_w / win_size.width as f32
+            } else {
+                0.0
+            };
+            let y = if win_size.height > 0 {
+                self.mouse.pos.1 as f32 * off_h / win_size.height as f32
+            } else {
+                0.0
+            };
+            (x, y)
+        });
 
         let mut axes_arr = [0.0f32; 32];
         let mut axes_raw_arr = [0.0f32; 32];
@@ -3711,11 +3733,14 @@ let resueltos = colliders_resueltos(body, shape);
             buttons_up: btn_up,
         });
 
-        // Clics sobre botones del Canvas: solo en el standalone, donde el
-        // Canvas lo pinta el pase 2D propio; en el editor la superposición
-        // de egui ya gestiona sus clics y esta ruta duplicaría el efecto.
+        // Clics sobre botones del Canvas: activos en el standalone y en el
+        // editor durante Play. En Play la superposición egui pinta los botones
+        // como pintura no interactiva, así que esta ruta es la única que
+        // despacha, igual que en el standalone. Fuera de Play no hay despacho
+        // porque la simulación no corre.
         #[cfg(feature = "editor")]
-        let ui_clicks_active = self.is_standalone;
+        let ui_clicks_active = self.is_standalone
+            || self.editor_layout.viewport.play_state == glass_editor::PlayState::Playing;
         #[cfg(not(feature = "editor"))]
         let ui_clicks_active = true;
         if ui_clicks_active && (mouse_down_edge || mouse_up_edge) {
