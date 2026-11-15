@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 glass_core.workspace = true
+glass_mesh_edit.workspace = true
 glass_audio.workspace = true
 glass_physics.workspace = true
 glass_particles.workspace = true

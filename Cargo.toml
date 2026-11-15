@@ -51,3 +51,4 @@ glass_mcp = { path = "crates/glass_mcp" }
 glass_audio = { path = "crates/glass_audio" }
 glass_physics = { path = "crates/glass_physics" }
 glass_particles = { path = "crates/glass_particles" }
+glass_mesh_edit = { path = "crates/glass_mesh_edit" }

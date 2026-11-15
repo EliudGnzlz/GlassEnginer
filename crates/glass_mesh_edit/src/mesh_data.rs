@@ -34,6 +34,9 @@ pub enum MeshEditError {
         limit: usize,
         asked: usize,
     },
+    /// Error de lectura/escritura de .glb.
+    #[error("glTF: {0}")]
+    Gltf(String),
 }
 
 /// Malla indexada en el formato del motor (la que viaja a GPU y a .glb).

@@ -1669,6 +1669,7 @@ dependencies = [
  "base64 0.22.1",
  "glass_audio",
  "glass_core",
+ "glass_mesh_edit",
  "glass_particles",
  "glass_physics",
  "glass_renderer",
@@ -1684,6 +1685,7 @@ dependencies = [
 name = "glass_mesh_edit"
 version = "0.1.0"
 dependencies = [
+ "gltf",
  "log",
  "manifold3d",
  "serde",

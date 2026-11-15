@@ -38,8 +38,13 @@
 pub mod boolean;
 pub mod commands;
 pub mod edit_mesh;
+pub mod gltf_io;
 pub mod mesh_data;
 pub mod ops;
+pub mod session;
+
+pub use gltf_io::{read_glb, write_glb};
+pub use session::MeshSession;
 
 pub use boolean::{boolean, boolean_with_report, BooleanOp};
 pub use commands::{apply_command, CommandHistory, MeshCommand, MirrorAxis, Recipe};

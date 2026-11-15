@@ -24,6 +24,8 @@ pub struct McpServer {
     pub player_body: Arc<Mutex<Option<BodyHandle>>>,
     local_physics: Arc<Mutex<Option<Arc<Mutex<PhysicsWorld>>>>>,
     local_audio: Arc<Mutex<Option<Arc<AudioSystem>>>>,
+    /// Sesión de edición de malla (herramienta 3D): vive en proceso, la conducen las tools glass_mesh_*.
+    mesh_session: Arc<Mutex<Option<glass_mesh_edit::MeshSession>>>,
     /// Command Queue (Fase 8): la ejecuta el bucle del motor.
     pub queue: Arc<crate::queue::CommandQueue>,
 }
@@ -51,6 +53,12 @@ pub fn is_mutating_tool(name: &str) -> bool {
             | "glass_bake_lightmap"
             | "glass_setup_platformer_scene"
             | "glass_asset_reload"
+            | "glass_mesh_enter_edit"
+            | "glass_mesh_apply_op"
+            | "glass_mesh_undo"
+            | "glass_mesh_redo"
+            | "glass_mesh_set_dimension"
+            | "glass_mesh_bake"
             | "glass_particle_emitter"
             | "glass_particle_emit"
     )
@@ -63,6 +71,7 @@ impl McpServer {
             player_body: Arc::new(Mutex::new(None)),
             local_physics: Arc::new(Mutex::new(None)),
             local_audio: Arc::new(Mutex::new(None)),
+            mesh_session: Arc::new(Mutex::new(None)),
             queue: Arc::new(crate::queue::CommandQueue::new()),
         }
     }
@@ -642,6 +651,75 @@ impl McpServer {
                                     "entity_id": {"type": "integer", "description": "Id de la entidad con CharacterController."}
                                 },
                                 "required": ["entity_id"]
+                            }
+                        },
+                        {
+                            "name": "glass_mesh_enter_edit",
+                            "description": "Entra en edición de malla (herramienta 3D): carga un .glb bajo assets/ en una sesión en proceso y la deja lista para aplicar operadores.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {"type": "string", "description": "Ruta bajo assets/, p. ej. assets/models/cubo.glb"}
+                                },
+                                "required": ["path"]
+                            }
+                        },
+                        {
+                            "name": "glass_mesh_apply_op",
+                            "description": "Aplica un operador a la sesión de malla activa: el comando va como JSON de MeshCommand (move_verts, set_vert, scale_selection, mirror, subdivide, array, weld, delete_verts, boolean).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "command": {"type": "object", "description": "MeshCommand serializado en JSON."}
+                                },
+                                "required": ["command"]
+                            }
+                        },
+                        {
+                            "name": "glass_mesh_undo",
+                            "description": "Deshace el último operador de la sesión de malla activa.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "glass_mesh_redo",
+                            "description": "Rehace el último operador deshecho de la sesión de malla activa.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "glass_mesh_set_dimension",
+                            "description": "Dimensionado numérico exacto: escala la malla de la sesión activa para que su caja envolvente sea exactamente `size` [x, y, z] (metros).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "size": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3, "description": "Tamaño final [x, y, z] en metros."}
+                                },
+                                "required": ["size"]
+                            }
+                        },
+                        {
+                            "name": "glass_mesh_get_stats",
+                            "description": "Estadísticas de la sesión de malla activa: conteos, bbox, área y validación manifold.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "glass_mesh_bake",
+                            "description": "Hornea la sesión de malla activa: escribe el .glb resultante y el sidecar de receta (.mesh.json) bajo assets/.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "glb_path": {"type": "string", "description": "Ruta del .glb de salida bajo assets/."},
+                                    "recipe_path": {"type": "string", "description": "Ruta del sidecar .mesh.json bajo assets/."}
+                                },
+                                "required": ["glb_path", "recipe_path"]
                             }
                         },
                         {
@@ -3511,6 +3589,28 @@ impl McpServer {
                 )
             }
 
+            tool @ ("glass_mesh_enter_edit"
+            | "glass_mesh_apply_op"
+            | "glass_mesh_undo"
+            | "glass_mesh_redo"
+            | "glass_mesh_set_dimension"
+            | "glass_mesh_get_stats"
+            | "glass_mesh_bake") => {
+                match mesh_tool(&self.mesh_session, tool, &|k: &str| args.get(k).cloned()) {
+                    Ok(out) => McpResponse::success(
+                        id,
+                        serde_json::json!({
+                            "content": [{
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&out).unwrap_or_default()
+                            }]
+                        }),
+                    ),
+                    Err(MeshToolError::InvalidParams(m)) => McpResponse::invalid_params(id, &m),
+                    Err(MeshToolError::Domain(m)) => McpResponse::error(id, -32005, &m),
+                    Err(MeshToolError::Internal(m)) => McpResponse::error(id, -32000, &m),
+                }
+            }
             _ => McpResponse::method_not_found(id, name),
         }
     }
@@ -3704,6 +3804,198 @@ fn validar_asset(path: &str) -> Result<serde_json::Value, String> {
         "lod_groups": lods,
         "sidecar": sidecar_info,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Tools glass_mesh_*: operan sobre la sesión de malla en proceso, no sobre la escena.
+// ---------------------------------------------------------------------------
+
+/// Error de una tool de malla antes de convertirlo en respuesta MCP.
+enum MeshToolError {
+    InvalidParams(String),
+    Domain(String),
+    Internal(String),
+}
+
+type MeshSessionSlot = std::sync::Mutex<Option<glass_mesh_edit::MeshSession>>;
+
+const NO_MESH_SESSION: &str = "No hay sesión de malla activa (usa glass_mesh_enter_edit)";
+
+fn lock_mesh_session(
+    slot: &MeshSessionSlot,
+) -> Result<std::sync::MutexGuard<'_, Option<glass_mesh_edit::MeshSession>>, MeshToolError> {
+    slot.lock()
+        .map_err(|_| MeshToolError::Internal("Mutex poison error".to_string()))
+}
+
+fn mesh_no_session() -> MeshToolError {
+    MeshToolError::Domain(NO_MESH_SESSION.to_string())
+}
+
+fn mesh_domain(e: impl std::fmt::Display) -> MeshToolError {
+    MeshToolError::Domain(e.to_string())
+}
+
+fn mesh_asset_path(arg: Option<serde_json::Value>, key: &str) -> Result<String, MeshToolError> {
+    let path = arg
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .ok_or_else(|| MeshToolError::InvalidParams(format!("Falta '{key}' (string)")))?;
+    if !path.starts_with("assets/") || path.contains("..") {
+        return Err(MeshToolError::InvalidParams(
+            "La ruta debe estar bajo assets/ y sin '..'".to_string(),
+        ));
+    }
+    Ok(path)
+}
+
+fn mesh_size_arg(arg: Option<serde_json::Value>) -> Result<[f32; 3], MeshToolError> {
+    let err = || MeshToolError::InvalidParams("Falta 'size' (array de 3 números)".to_string());
+    let arr = arg
+        .as_ref()
+        .and_then(serde_json::Value::as_array)
+        .filter(|a| a.len() == 3)
+        .ok_or_else(err)?;
+    let mut size = [0.0f32; 3];
+    for (out, v) in size.iter_mut().zip(arr) {
+        *out = v.as_f64().ok_or_else(err)? as f32;
+    }
+    Ok(size)
+}
+
+fn mesh_command_name(cmd: &glass_mesh_edit::commands::MeshCommand) -> &'static str {
+    use glass_mesh_edit::commands::MeshCommand;
+    match cmd {
+        MeshCommand::MoveVerts { .. } => "move_verts",
+        MeshCommand::SetVert { .. } => "set_vert",
+        MeshCommand::ScaleSelection { .. } => "scale_selection",
+        MeshCommand::Mirror { .. } => "mirror",
+        MeshCommand::Subdivide { .. } => "subdivide",
+        MeshCommand::Array { .. } => "array",
+        MeshCommand::Weld { .. } => "weld",
+        MeshCommand::DeleteVerts { .. } => "delete_verts",
+        MeshCommand::Boolean { .. } => "boolean",
+    }
+}
+
+/// Ejecuta una tool `glass_mesh_*`; `arg` extrae un argumento por nombre.
+fn mesh_tool(
+    slot: &MeshSessionSlot,
+    tool: &str,
+    arg: &dyn Fn(&str) -> Option<serde_json::Value>,
+) -> Result<serde_json::Value, MeshToolError> {
+    use glass_mesh_edit::commands::MeshCommand;
+    use glass_mesh_edit::MeshSession;
+    use serde_json::json;
+
+    match tool {
+        "glass_mesh_enter_edit" => {
+            let path = mesh_asset_path(arg("path"), "path")?;
+            let session =
+                MeshSession::enter_from_glb(std::path::Path::new(&path)).map_err(mesh_domain)?;
+            let out = json!({
+                "entered": true,
+                "name": session.name,
+                "verts": session.mesh.verts.len(),
+                "faces": session.mesh.faces.len(),
+            });
+            *lock_mesh_session(slot)? = Some(session);
+            Ok(out)
+        }
+        "glass_mesh_apply_op" => {
+            let raw = arg("command")
+                .filter(serde_json::Value::is_object)
+                .ok_or_else(|| {
+                    MeshToolError::InvalidParams(
+                        "Falta 'command' (objeto JSON de MeshCommand)".to_string(),
+                    )
+                })?;
+            let cmd: MeshCommand = serde_json::from_value(raw)
+                .map_err(|e| MeshToolError::InvalidParams(format!("command inválido: {e}")))?;
+            let applied = mesh_command_name(&cmd);
+            let mut guard = lock_mesh_session(slot)?;
+            let session = guard.as_mut().ok_or_else(mesh_no_session)?;
+            session.apply(cmd).map_err(mesh_domain)?;
+            Ok(json!({
+                "applied": applied,
+                "verts": session.mesh.verts.len(),
+                "faces": session.mesh.faces.len(),
+            }))
+        }
+        "glass_mesh_undo" => {
+            let mut guard = lock_mesh_session(slot)?;
+            let session = guard.as_mut().ok_or_else(mesh_no_session)?;
+            let undone = session.undo().map(|c| mesh_command_name(&c));
+            Ok(json!({
+                "undone": undone,
+                "can_undo": session.history.can_undo(),
+                "can_redo": session.history.can_redo(),
+            }))
+        }
+        "glass_mesh_redo" => {
+            let mut guard = lock_mesh_session(slot)?;
+            let session = guard.as_mut().ok_or_else(mesh_no_session)?;
+            let redone = session.redo().map(|c| mesh_command_name(&c));
+            Ok(json!({
+                "redone": redone,
+                "can_undo": session.history.can_undo(),
+                "can_redo": session.history.can_redo(),
+            }))
+        }
+        "glass_mesh_set_dimension" => {
+            let size = mesh_size_arg(arg("size"))?;
+            let mut guard = lock_mesh_session(slot)?;
+            let session = guard.as_mut().ok_or_else(mesh_no_session)?;
+            session.set_dimensions(size).map_err(mesh_domain)?;
+            let (stats, _) = session.stats();
+            Ok(json!({
+                "bbox_min": stats.bbox_min,
+                "bbox_max": stats.bbox_max,
+            }))
+        }
+        "glass_mesh_get_stats" => {
+            let mut guard = lock_mesh_session(slot)?;
+            let session = guard.as_mut().ok_or_else(mesh_no_session)?;
+            let (stats, manifold) = session.stats();
+            Ok(json!({
+                "verts": stats.verts,
+                "faces": stats.faces,
+                "edges": stats.edges,
+                "bbox_min": stats.bbox_min,
+                "bbox_max": stats.bbox_max,
+                "surface_area": stats.surface_area,
+                "boundary_edges": manifold.boundary_edges,
+                "non_manifold_edges": manifold.non_manifold_edges,
+                "degenerate_faces": manifold.degenerate_faces,
+                "is_closed_manifold": manifold.is_closed_manifold,
+                "history_len": session.history.len(),
+                "can_undo": session.history.can_undo(),
+                "can_redo": session.history.can_redo(),
+                "recipe_commands": session.recipe.commands.len(),
+            }))
+        }
+        "glass_mesh_bake" => {
+            let glb_path = mesh_asset_path(arg("glb_path"), "glb_path")?;
+            let recipe_path = mesh_asset_path(arg("recipe_path"), "recipe_path")?;
+            let guard = lock_mesh_session(slot)?;
+            let session = guard.as_ref().ok_or_else(mesh_no_session)?;
+            session
+                .save(
+                    std::path::Path::new(&glb_path),
+                    std::path::Path::new(&recipe_path),
+                )
+                .map_err(mesh_domain)?;
+            Ok(json!({
+                "baked": true,
+                "glb_path": glb_path,
+                "recipe_path": recipe_path,
+                "verts": session.mesh.verts.len(),
+                "faces": session.mesh.faces.len(),
+            }))
+        }
+        _ => Err(MeshToolError::Internal(format!(
+            "tool de malla desconocida: {tool}"
+        ))),
+    }
 }
 
 #[cfg(test)]
