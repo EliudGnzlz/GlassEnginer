@@ -6,6 +6,8 @@
 //! intenta reparar. Las normales y uvs de entrada se ignoran: el resultado sale con
 //! `normals: None, uvs: None` y el bake posterior las genera.
 
+use serde::{Deserialize, Serialize};
+
 use manifold3d::{Manifold, MeshGL};
 
 use crate::edit_mesh::{EditMesh, ManifoldReport};
@@ -15,7 +17,7 @@ use crate::mesh_data::{MeshData, MeshEditError};
 const WELD_EPSILON: f32 = 1e-4;
 
 /// Operación booleana entre dos mallas.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BooleanOp {
     Union,
     Difference,

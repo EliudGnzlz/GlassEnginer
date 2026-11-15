@@ -13,7 +13,5 @@ thiserror.workspace = true
 manifold3d = "0.4"
 # Las features son aditivas: si el workspace ya activa `derive`, esto no cambia nada.
 serde = { workspace = true, features = ["derive"] }
-
-[dev-dependencies]
-# serde_json solo se usa en los tests (ida y vuelta JSON de MeshData).
+# Lo usa Recipe (to_json/from_json) en código de producción, no solo en tests.
 serde_json.workspace = true

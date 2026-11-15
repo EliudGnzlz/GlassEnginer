@@ -25,6 +25,8 @@ pub enum MeshEditError {
         non_manifold: usize,
         degenerate: usize,
     },
+    #[error("comando no implementado todavía: {command}")]
+    NotImplemented { command: &'static str },
 }
 
 /// Malla indexada en el formato del motor (la que viaja a GPU y a .glb).

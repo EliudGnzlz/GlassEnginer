@@ -36,9 +36,11 @@
 //! sobre el eje dominante de la normal de cada cara.
 
 pub mod boolean;
+pub mod commands;
 pub mod edit_mesh;
 pub mod mesh_data;
 
 pub use boolean::{boolean, boolean_with_report, BooleanOp};
+pub use commands::{apply_command, CommandHistory, MeshCommand, MirrorAxis, Recipe};
 pub use edit_mesh::{EditMesh, ManifoldReport, MeshStats, WeldReport};
 pub use mesh_data::{MeshData, MeshEditError};
