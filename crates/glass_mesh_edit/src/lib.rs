@@ -35,8 +35,10 @@
 //! heredan del vértice lógico; si no existen, se generan por proyección
 //! sobre el eje dominante de la normal de cada cara.
 
+pub mod boolean;
 pub mod edit_mesh;
 pub mod mesh_data;
 
+pub use boolean::{boolean, boolean_with_report, BooleanOp};
 pub use edit_mesh::{EditMesh, ManifoldReport, MeshStats, WeldReport};
 pub use mesh_data::{MeshData, MeshEditError};

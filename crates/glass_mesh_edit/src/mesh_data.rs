@@ -18,6 +18,13 @@ pub enum MeshEditError {
         expected: usize,
         found: usize,
     },
+    /// La booleana produjo una malla que no es manifold cerrada.
+    #[error("resultado de booleana no manifold: {boundary} aristas borde, {non_manifold} no manifold, {degenerate} degeneradas")]
+    NonManifoldResult {
+        boundary: usize,
+        non_manifold: usize,
+        degenerate: usize,
+    },
 }
 
 /// Malla indexada en el formato del motor (la que viaja a GPU y a .glb).
