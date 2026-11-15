@@ -1646,7 +1646,6 @@ dependencies = [
  "gpu-allocator",
  "image",
  "log",
- "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",

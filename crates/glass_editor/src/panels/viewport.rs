@@ -92,7 +92,6 @@ pub struct ViewportPanel {
     pub pivot_mode: PivotMode,
     pub coord_space: CoordSpace,
     pub active_tab: ViewportTab,
-    pub request_reset_to_spawn: bool,
     // Cámara de editor
     pub editor_cam_yaw: f32,
     pub editor_cam_pitch: f32,
@@ -119,7 +118,6 @@ impl Default for ViewportPanel {
             pivot_mode: PivotMode::Pivot,
             coord_space: CoordSpace::Global,
             active_tab: ViewportTab::SceneView,
-            request_reset_to_spawn: false,
             editor_cam_yaw: 0.0,
             editor_cam_pitch: 0.25,
             editor_cam_dist: 10.0,

@@ -3865,25 +3865,6 @@ let resueltos = colliders_resueltos(body, shape);
         #[cfg(not(feature = "editor"))]
         let simulation_running = true;
 
-        // Comprobar si se solicitó STOP (reinicio a spawn)
-        #[cfg(feature = "editor")]
-        if self.editor_layout.viewport.request_reset_to_spawn {
-            self.editor_layout.viewport.request_reset_to_spawn = false;
-            if let Some(player_handle) = self.player_body_handle {
-                if let Ok(mut physics) = self.physics_world.lock() {
-                    physics.set_transform(player_handle, [0.0, 0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-                    physics.set_linear_velocity(player_handle, [0.0, 0.0, 0.0]);
-                }
-            }
-            if let Ok(mut scene) = self.scene_state.lock() {
-                if let Some(ent) = scene.entities.iter_mut().find(|e| e.name.contains("Player")) {
-                    ent.transform.position = [0.0, 0.5, 0.0];
-                }
-            }
-            self.audio_system.stop_all();
-            log::info!("Simulación detenida (Stop): Jugador y física restablecidos a posición de spawn.");
-        }
-
         // 2. Ejecutar paso de C# Scripting (.NET CoreCLR) — solo si simulación activa.
         // Antes del Update va la reconciliación de instanciación: crea los
         // scripts spawneados en el frame anterior (su primer Update es ESTE)

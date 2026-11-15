@@ -366,7 +366,6 @@ impl EditorDockingLayout {
             self.viewport.play_state = match self.viewport.play_state {
                 PlayState::Edit | PlayState::Paused => PlayState::Playing,
                 PlayState::Playing => {
-                    self.viewport.request_reset_to_spawn = true;
                     PlayState::Edit
                 }
             };
@@ -496,7 +495,6 @@ impl EditorDockingLayout {
                     self.viewport.play_state = match self.viewport.play_state {
                         PlayState::Edit | PlayState::Paused => PlayState::Playing,
                         PlayState::Playing => {
-                            self.viewport.request_reset_to_spawn = true;
                             PlayState::Edit
                         }
                     };
@@ -894,7 +892,6 @@ impl EditorDockingLayout {
             };
             if ui.button(stop_text).on_hover_text("Detener simulación y reiniciar jugador").clicked() {
                 self.viewport.play_state = PlayState::Edit;
-                self.viewport.request_reset_to_spawn = true;
             }
 
             // 4. Selector de Diseños (Layouts) y Resolución a la derecha

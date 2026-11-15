@@ -113,6 +113,77 @@ primera). El `semver` estricto rechazaba el cuarto componente
 Launcher 0.10.0 no la detecta); desde esta versión la auto-actualización
 ya acepta el formato de 4 componentes.
 
+## Análisis de causa raíz y auditoría de los arreglos
+
+Pedido por D3m3tr10 (2026-11-14 22:05): nada de parches básicos; cada
+arreglo debe eliminar el mecanismo que causa el fallo.
+
+### Desencadenantes (mecanismo, no síntoma)
+
+1. **Física sin Rigidbody.** Dos causas acopladas: (a) los menús de
+   creación inyectaban «RigidBody» en la lista de componentes de cada
+   primitiva; (b) `EntityData::new` trataba la lista de componentes
+   como declaración de física con opt-out: cualquiera de
+   RigidBody/Collider/StaticCollider creaba un `PhysicsData`, y el tipo
+   por defecto era Dynamic. La física se tenía «a menos que nada la
+   pidiera», al revés de Unity.
+2. **Play no llevaba a Game.** Existían DOS representaciones de «qué
+   pestaña se ve»: el `DockState` de egui_dock (la verdad visible) y
+   `ViewportPanel.active_tab` (un espejo legado que cada función de
+   render sobrescribe con su propio valor). Ningún camino de Play
+   tocaba el DockState.
+3. **Stop no restauraba.** Un único `SceneState` mutable compartido
+   entre edición y simulación: los scripts y la física lo mutan en el
+   sitio durante el Play, y el Stop histórico solo reseteaba al jugador
+   porque nunca existió una foto del estado previo.
+4. **Navegación distinta de Unity.** La capa de gestos del viewport se
+   escribió como esquema propio (órbita con cualquier arrastre) en vez
+   del mapa modal de Unity; varios gestos (vuelo WASD, F, dolly al
+   cursor) directamente no tenían camino de código.
+5. **Clippy durante el ajuste del defecto 1**
+   (`field_reassign_with_default`, 1 error real + 2 líneas resumen de
+   «could not compile»): mi materialización del bloque STATIC en
+   `spawn_entity` construía con `Default::default()` y reasignaba el
+   campo después. Y el error de compilación E0499 al integrar
+   Play/Stop: la detección de transiciones se insertó dentro del bucle
+   de frame, donde `self.renderer` está prestado todo el frame.
+
+### Auditoría arreglo a arreglo
+
+- **Defecto 1 — DE RAÍZ.** La física pasa a ser opt-in en el único
+  constructor (`EntityData::new`: bloque solo con RigidBody), los
+  menús ya no inyectan componentes de física, y las únicas
+  construcciones de `PhysicsData` del árbol son las cuatro vías
+  legítimas (constructor con RB, «Añadir Rigidbody» del Inspector y del
+  menú Component, y el spawn por código). Verificado por grep: no
+  queda ninguna creación implícita.
+- **Defecto 2 — DE RAÍZ.** El arreglo actúa sobre el `DockState`
+  (`focus_game_tab`), que es donde vive la verdad visible; el espejo
+  `active_tab` queda como lo que es (cada pestaña lo reafirma al
+  dibujarse) y ya no decide nada en este flujo.
+- **Defecto 3 — DE RAÍZ.** Foto al entrar y restauración completa al
+  salir reutilizando la MISMA secuencia de teardown/rebuild que la
+  carga de escenas (no una segunda implementación que pueda derivar),
+  con la detección centralizada al final del frame — lo que además
+  resolvió el E0499 sin préstamos parciales ni `unsafe`. **Retirado el
+  mecanismo legado** `request_reset_to_spawn` (bandera + 3 emisores +
+  bloque consumidor que teletransportaba al jugador a (0, 0,5, 0)):
+  quedó 100 % subsumido por la restauración y mantener dos mecanismos
+  de Stop era el verdadero riesgo.
+- **Defecto 4 — DE RAÍZ.** La capa de gestos se reescribió al mapa
+  modal de Unity, con guardas Alt en los otros dos consumidores del
+  puntero (selección y arrastre del gizmo) para que los modos no se
+  filtren entre sí.
+- **Comparador — DE RAÍZ.** El mecanismo era la gramática estricta de
+  3 componentes de `semver`; se sustituyó el parser por uno propio con
+  la gramática del proyecto y sus tests, y se retiró la dependencia
+  `semver` de `glass_editor` (quedaba muerta; el propio clippy la
+  señaló).
+- **Clippy — DE RAÍZ, sin silencios.** El `field_reassign_with_default`
+  se corrigió declarando el campo distinto en el propio inicializador
+  (`..Default::default()`). En todo el diff del bloque no hay ni un
+  solo `#[allow]` (verificado por grep sobre `1aac729..HEAD`).
+
 ## Consumo de APIs del bloque
 
 - Sonnet: fix1 5.829 + fix4 12.627 + fixver 7.834 = **26.290**
