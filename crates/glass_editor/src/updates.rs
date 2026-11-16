@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::Digest;
 
-pub const ENGINE_VERSION: &str = "0.10.14.1-beta";
+pub const ENGINE_VERSION: &str = "0.10.16.2-beta";
 pub const DEFAULT_REPO: &str = "EliudGnzlz/GlassEnginer";
 pub const DEFAULT_API: &str = "https://api.github.com";
 
@@ -30,6 +30,10 @@ pub struct AssetInfo {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ReleaseInfo {
     pub tag_name: String,
+    #[serde(default)]
+    pub draft: bool,
+    #[serde(default)]
+    pub prerelease: bool,
     #[serde(default)]
     pub name: String,
     #[serde(default)]
@@ -301,8 +305,16 @@ pub(crate) fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
     resp.body_mut().read_to_vec().map_err(|e| e.to_string())
 }
 
+/// Devuelve la release del motor más reciente publicada en `repo`.
+///
+/// No usa `GET /repos/{repo}/releases/latest`: GitHub reserva ese
+/// endpoint a la última release NO-prerelease, y las del motor se
+/// publican como prerelease. Además, en el repo conviven releases de
+/// complementos (p. ej. `herramienta-3d-v1.0.1`), que «latest» podría
+/// devolver. Por eso pide la lista (`/releases?per_page=100`) y elige
+/// con `select_latest_engine_release`.
 pub fn fetch_latest(api_base: &str, repo: &str) -> Result<ReleaseInfo, String> {
-    let url = format!("{api_base}/repos/{repo}/releases/latest");
+    let url = format!("{api_base}/repos/{repo}/releases?per_page=100");
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(300)))
         .build()
@@ -324,7 +336,33 @@ pub fn fetch_latest(api_base: &str, repo: &str) -> Result<ReleaseInfo, String> {
         .body_mut()
         .read_to_string()
         .map_err(|e| e.to_string())?;
-    serde_json::from_str(&body).map_err(|e| e.to_string())
+    let releases: Vec<ReleaseInfo> = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    select_latest_engine_release(&releases)
+        .ok_or_else(|| format!("No hay ninguna release del motor publicada en '{repo}'."))
+}
+
+/// ¿Es `tag` un tag de release DEL MOTOR? Los del motor son
+/// `v<versión>` ('v' seguida de dígito y parseable por tag_version);
+/// los de complementos llevan nombre (p. ej. `herramienta-3d-v1.0.1`)
+/// y quedan fuera.
+pub fn is_engine_tag(tag: &str) -> bool {
+    let mut chars = tag.chars();
+    chars.next() == Some('v')
+        && matches!(chars.next(), Some(c) if c.is_ascii_digit())
+        && tag_version(tag).is_ok()
+}
+
+/// Elige la release del motor más reciente de una lista (la de
+/// `GET /repos/{repo}/releases`): descarta borradores, se queda con
+/// los tags del motor (las prerelease SÍ cuentan: las del motor se
+/// publican como prerelease) y devuelve la mayor según VersionKey.
+pub fn select_latest_engine_release(releases: &[ReleaseInfo]) -> Option<ReleaseInfo> {
+    releases
+        .iter()
+        .filter(|r| !r.draft && is_engine_tag(&r.tag_name))
+        .filter_map(|r| tag_version(&r.tag_name).ok().map(|k| (k, r)))
+        .max_by(|(a, _), (b, _)| a.cmp(b))
+        .map(|(_, r)| r.clone())
 }
 
 pub fn expected_sha256(release: &ReleaseInfo, asset: &AssetInfo) -> Result<String, String> {
@@ -467,6 +505,115 @@ pub fn is_installed(store: &LauncherStore, tag: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn rel(tag: &str) -> ReleaseInfo {
+        ReleaseInfo {
+            tag_name: tag.to_string(),
+            draft: false,
+            prerelease: false,
+            name: String::new(),
+            html_url: String::new(),
+            assets: Vec::new(),
+        }
+    }
+
+    fn rel_pre(tag: &str) -> ReleaseInfo {
+        ReleaseInfo {
+            prerelease: true,
+            ..rel(tag)
+        }
+    }
+
+    fn rel_draft(tag: &str) -> ReleaseInfo {
+        ReleaseInfo {
+            draft: true,
+            ..rel(tag)
+        }
+    }
+
+    fn tag_elegido(releases: &[ReleaseInfo]) -> Option<String> {
+        select_latest_engine_release(releases).map(|r| r.tag_name)
+    }
+
+    #[test]
+    fn seleccion_ignora_complementos_y_orden_por_version() {
+        let lista = [
+            rel("herramienta-3d-v1.0.1"),
+            rel_pre("v0.10.14.1-beta"),
+            rel_pre("v0.10.16.1-beta"),
+            rel_pre("v0.10.15.1-beta"),
+        ];
+        assert_eq!(tag_elegido(&lista).as_deref(), Some("v0.10.16.1-beta"));
+    }
+
+    #[test]
+    fn seleccion_incluye_prereleases_y_excluye_borradores() {
+        let lista = [rel_pre("v0.10.16.1-beta"), rel_draft("v9.9.9")];
+        assert_eq!(tag_elegido(&lista).as_deref(), Some("v0.10.16.1-beta"));
+    }
+
+    #[test]
+    fn seleccion_solo_complementos_devuelve_none() {
+        let lista = [rel("herramienta-3d-v1.0.1"), rel("herramienta-3d-v1.0.0")];
+        assert_eq!(tag_elegido(&lista), None);
+        assert_eq!(tag_elegido(&[]), None);
+    }
+
+    #[test]
+    fn seleccion_respeta_el_orden_de_versionkey() {
+        let lista = [rel("v0.10.16.1"), rel_pre("v0.10.16.1-beta")];
+        assert_eq!(tag_elegido(&lista).as_deref(), Some("v0.10.16.1"));
+
+        let lista = [rel_pre("v0.10.16.2-beta"), rel("v0.10.16.1")];
+        assert_eq!(tag_elegido(&lista).as_deref(), Some("v0.10.16.2-beta"));
+    }
+
+    #[test]
+    fn lista_json_de_github_parsea_y_selecciona() {
+        let json = r#"[
+            {
+                "tag_name": "herramienta-3d-v1.0.1",
+                "name": "MeshForge 1.0.1",
+                "html_url": "https://github.com/x/y/releases/tag/herramienta-3d-v1.0.1",
+                "draft": false,
+                "prerelease": false,
+                "assets": []
+            },
+            {
+                "tag_name": "v0.10.15.1-beta",
+                "name": "GlassEnginer 0.10.15.1-beta",
+                "html_url": "https://github.com/x/y/releases/tag/v0.10.15.1-beta",
+                "draft": false,
+                "prerelease": true,
+                "assets": []
+            },
+            {
+                "tag_name": "v0.10.16.1-beta",
+                "name": "GlassEnginer 0.10.16.1-beta",
+                "html_url": "https://github.com/x/y/releases/tag/v0.10.16.1-beta",
+                "draft": false,
+                "prerelease": true,
+                "assets": []
+            }
+        ]"#;
+        let lista = serde_json::from_str::<Vec<ReleaseInfo>>(json).expect("JSON válido");
+        assert_eq!(lista.len(), 3);
+        assert!(!lista[0].prerelease);
+        assert!(lista[1].prerelease && lista[2].prerelease);
+        assert!(lista.iter().all(|r| !r.draft));
+
+        let elegida = select_latest_engine_release(&lista).expect("hay release del motor");
+        assert_eq!(elegida.tag_name, "v0.10.16.1-beta");
+        assert_eq!(elegida.name, "GlassEnginer 0.10.16.1-beta");
+    }
+
+    #[test]
+    fn tags_de_motor_y_de_complemento() {
+        assert!(is_engine_tag("v0.10.16.1-beta"));
+        assert!(!is_engine_tag("herramienta-3d-v1.0.1"));
+        assert!(!is_engine_tag("v1.2"));
+        assert!(!is_engine_tag(""));
+    }
+
     #[test]
     fn versiones_y_novedad() {
         assert!(is_newer("v0.2.0", "0.1.0-alpha"));
@@ -533,6 +680,8 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *glass.zip
 
         let release = ReleaseInfo {
             tag_name: "v0.2.0".to_string(),
+            draft: false,
+            prerelease: false,
             name: "Release".to_string(),
             html_url: "https://example.com".to_string(),
             assets: vec![
@@ -555,6 +704,8 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *glass.zip
 
         let unico = ReleaseInfo {
             tag_name: "v0.2.0".to_string(),
+            draft: false,
+            prerelease: false,
             name: "Release".to_string(),
             html_url: "https://example.com".to_string(),
             assets: vec![AssetInfo {
@@ -569,6 +720,8 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *glass.zip
 
         let vacio = ReleaseInfo {
             tag_name: "v0.2.0".to_string(),
+            draft: false,
+            prerelease: false,
             name: "Release".to_string(),
             html_url: "https://example.com".to_string(),
             assets: Vec::new(),

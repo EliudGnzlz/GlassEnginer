@@ -151,3 +151,42 @@ CloseRequested; no sirve para probar esto.)
 - Abierto por falta de datos: 6 (.blend — datos del probador).
 - Commits: `f69fd18` (1+2) · `ba94418` (3+5+7+CMD) · `283f372` (4).
   CIs: 43952822149 · 43957359424 · 43958813361, todos success.
+
+## 8. El Launcher no ve las actualizaciones del motor — ARREGLADO Y VERIFICADO (2026-11-16, hallado por D3m3tr10)
+
+Desde una instalación v0.10.14.1-beta, «Buscar actualizaciones» decía
+«Estás en la última versión publicada» existiendo v0.10.15.1-beta y
+v0.10.16.1-beta. Causa raíz en `updates.rs`: `check_update` pedía
+`GET /repos/{repo}/releases/latest`, y el «latest» de GitHub es la
+release NO-prerelease más reciente — en este repo, las del motor son
+todas prerelease y las del complemento no, así que el endpoint
+devolvía `herramienta-3d-v1.0.1`; su tag no parsea como versión del
+motor, `is_newer` daba falso y el Launcher se declaraba al día para
+siempre.
+
+Arreglo (publicado como **v0.10.16.2-beta**): `fetch_latest` pide la
+LISTA (`/releases?per_page=100`) y `select_latest_engine_release`
+elige: fuera borradores, solo tags del motor (`is_engine_tag`: 'v' +
+dígito + parseable por `tag_version` — los de complementos llevan
+nombre y quedan fuera), prereleases incluidas, y la mayor según el
+comparador `VersionKey` existente. `ReleaseInfo` gana `draft` y
+`prerelease` por serde. `ENGINE_VERSION` sube a 0.10.16.2-beta (la
+constante seguía en 0.10.14.1: también había que ponerla al día).
+Tests nuevos (6): selección con la mezcla real del repo, borradores
+fuera, solo complementos → None, orden VersionKey (sin-prerelease >
+prerelease; el core manda), parseo del JSON de la API y is_engine_tag.
+
+Verificación física por el camino real: binario con la identidad de
+una instalación vieja (v0.10.14.1-beta) y la selección nueva, contra
+la lista real de releases del repo (servida por el gancho
+GLASS_UPDATE_API porque el proxy TLS de esta VM corta el TLS directo
+de ureq; en máquinas reales la API responde directa, como demuestra
+el propio uso del probador): la pestaña Instalaciones ofreció
+«⬆ Hay una versión nueva: v0.10.16.1-beta (esta copia es
+v0.10.14.1-beta)» con su botón de descarga. Nota de arranque en frío:
+las instalaciones anteriores a la .2 tienen el buscador roto y no la
+verán — su paso a la .2 es por descarga manual; a partir de la .2
+las actualizaciones fluyen solas.
+
+Consumo del defecto 8: Opus 13.897. Acumulado del bloque de
+defectos (2ª ronda + defecto 8): **Opus 227.017**.
