@@ -114,7 +114,7 @@ impl LauncherStore {
     }
 }
 
-fn now_unix() -> u64 {
+pub(crate) fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -281,7 +281,7 @@ pub fn sha256_hex(data: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(300)))
         .build()

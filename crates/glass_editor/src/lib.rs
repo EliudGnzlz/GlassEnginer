@@ -3,6 +3,7 @@
 pub mod docking;
 pub mod launcher;
 pub mod panels;
+pub mod plugins;
 pub mod tool_prefs;
 pub mod undo;
 pub mod updates;

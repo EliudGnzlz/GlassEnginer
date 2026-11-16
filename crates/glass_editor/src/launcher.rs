@@ -85,6 +85,7 @@ pub enum LauncherTab {
     Learn,
     Community,
     Installs,
+    Plugins,
 }
 
 /// El Launcher, con el aspecto del Hub VIEJO de Unity (el de la captura de
@@ -129,6 +130,14 @@ pub struct LauncherPanel {
     pub update_state: UpdateUiState,
     /// Canal con el hilo que comprueba o instala (uno a la vez).
     update_rx: Option<std::sync::mpsc::Receiver<UpdateMsg>>,
+    /// Registro de complementos instalados (módulo `plugins`).
+    pub plugin_store: crate::plugins::PluginStore,
+    /// Catálogo oficial descargado en esta sesión, si se ha pedido.
+    pub plugin_catalog: Option<crate::plugins::PluginCatalog>,
+    /// Estado de la descarga/instalación de complementos en curso.
+    pub plugin_state: PluginUiState,
+    /// Canal con el hilo que descarga el catálogo o instala (uno a la vez).
+    plugin_rx: Option<std::sync::mpsc::Receiver<PluginMsg>>,
 }
 
 /// Estado visible de las actualizaciones en la pestaña Instalaciones.
@@ -145,6 +154,22 @@ pub enum UpdateUiState {
 pub enum UpdateMsg {
     Checked(Result<crate::updates::UpdateCheck, String>),
     Installed(Result<crate::updates::Installation, String>),
+}
+
+/// Estado visible de la pestaña Complementos.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginUiState {
+    Idle,
+    Checking,
+    Working(String),
+    Error(String),
+}
+
+/// Mensajes del hilo de red de complementos.
+#[derive(Debug)]
+pub enum PluginMsg {
+    Catalog(Result<crate::plugins::PluginCatalog, String>),
+    Installed(Result<crate::plugins::PluginInstall, String>),
 }
 
 fn default_projects_dir() -> PathBuf {
@@ -174,6 +199,10 @@ impl Default for LauncherPanel {
             update_repo_edit,
             update_state: UpdateUiState::Idle,
             update_rx: None,
+            plugin_store: crate::plugins::PluginStore::load(),
+            plugin_catalog: None,
+            plugin_state: PluginUiState::Idle,
+            plugin_rx: None,
         }
     }
 }
@@ -320,6 +349,7 @@ impl LauncherPanel {
                 ui.add_space(10.0);
                 self.menu_item(ui, LauncherTab::Community, "🌐", "Comunidad");
                 self.menu_item(ui, LauncherTab::Installs, "⬇", "Instalaciones");
+                self.menu_item(ui, LauncherTab::Plugins, "🧩", "Complementos");
 
                 // Pie anclado al fondo de la ventana.
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
@@ -355,6 +385,7 @@ impl LauncherPanel {
                                     LauncherTab::Learn => self.render_learn_tab(ui),
                                     LauncherTab::Community => self.render_community_tab(ui),
                                     LauncherTab::Installs => self.render_installs_tab(ui),
+                                    LauncherTab::Plugins => self.render_plugins_tab(ui),
                                 }
                             }
                         });
@@ -958,5 +989,222 @@ impl LauncherPanel {
         }
         ui.add_space(8.0);
         ui.label(RichText::new("Cada versión se instala en su propia carpeta y queda registrada: las anteriores no se borran y los proyectos no se tocan. Una descarga solo se instala si su SHA-256 coincide con el publicado.").size(12.0).color(TEXT_DIM));
+    }
+
+
+    fn render_plugins_tab(&mut self, ui: &mut egui::Ui) {
+        use crate::plugins::{self, PluginManifest, PluginStore};
+        use std::sync::mpsc::{self, TryRecvError};
+
+        // Respuestas del hilo de red.
+        let recibido = self.plugin_rx.as_ref().map(|rx| rx.try_recv());
+        match recibido {
+            Some(Ok(msg)) => {
+                self.plugin_rx = None;
+                match msg {
+                    PluginMsg::Catalog(Ok(catalogo)) => {
+                        self.plugin_catalog = Some(catalogo);
+                        self.plugin_state = PluginUiState::Idle;
+                    }
+                    PluginMsg::Catalog(Err(e)) => self.plugin_state = PluginUiState::Error(e),
+                    PluginMsg::Installed(Ok(inst)) => {
+                        self.plugin_store = PluginStore::load();
+                        self.plugin_state = PluginUiState::Idle;
+                        self.status_message =
+                            format!("✅ Complemento {} v{} instalado.", inst.id, inst.version).into();
+                    }
+                    PluginMsg::Installed(Err(e)) => self.plugin_state = PluginUiState::Error(e),
+                }
+            }
+            Some(Err(TryRecvError::Empty)) => ui.ctx().request_repaint(),
+            Some(Err(TryRecvError::Disconnected)) => {
+                self.plugin_rx = None;
+                if matches!(self.plugin_state, PluginUiState::Checking | PluginUiState::Working(_)) {
+                    self.plugin_state =
+                        PluginUiState::Error("El hilo de red terminó sin responder.".to_owned());
+                }
+            }
+            None => {}
+        }
+
+        // Instantáneas para dibujar sin pelear con el préstamo de self.
+        let ocupado = self.plugin_rx.is_some();
+        let estado = self.plugin_state.clone();
+        let catalogo = self.plugin_catalog.clone();
+        let store = self.plugin_store.clone();
+        let color_error = ui.visuals().error_fg_color;
+        let color_aviso = ui.visuals().warn_fg_color;
+
+        ui.label(egui::RichText::new("Complementos").size(22.0).strong().color(TEXT_MAIN));
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new("Amplía el editor con módulos oficiales. Se activan y desactivan sin reinstalar.")
+                .size(13.0)
+                .color(TEXT_DIM),
+        );
+        ui.add_space(8.0);
+
+        if ui
+            .add_enabled(!ocupado, egui::Button::new("🔄 Buscar complementos"))
+            .clicked()
+        {
+            let repo = self.update_store.repo.clone();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(PluginMsg::Catalog(plugins::fetch_catalog(&repo)));
+            });
+            self.plugin_rx = Some(rx);
+            self.plugin_state = PluginUiState::Checking;
+        }
+        ui.add_space(6.0);
+
+        match &estado {
+            PluginUiState::Idle => {}
+            PluginUiState::Checking => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(egui::RichText::new("Consultando el catálogo…").size(13.0).color(TEXT_DIM));
+                });
+            }
+            PluginUiState::Working(texto) => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(egui::RichText::new(texto).size(13.0).color(TEXT_DIM));
+                });
+            }
+            PluginUiState::Error(e) => {
+                ui.label(egui::RichText::new(format!("❌ {e}")).size(13.0).color(color_error));
+            }
+        }
+        ui.add_space(6.0);
+
+        // Acciones recogidas durante el dibujado; se aplican al final.
+        let mut instalar: Option<PluginManifest> = None;
+        let mut alternar: Option<(String, bool)> = None;
+
+        match &catalogo {
+            None => {
+                ui.label(
+                    egui::RichText::new(
+                        "Pulsa «Buscar complementos» para ver el catálogo oficial. Los complementos se descargan de GitHub Releases y solo se instalan si su SHA-256 coincide con el del catálogo.",
+                    )
+                    .size(13.0)
+                    .color(TEXT_DIM),
+                );
+            }
+            Some(cat) if cat.plugins.is_empty() => {
+                ui.label(
+                    egui::RichText::new("El catálogo oficial no contiene complementos todavía.")
+                        .size(13.0)
+                        .color(TEXT_DIM),
+                );
+            }
+            Some(cat) => {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, true])
+                    .max_height((ui.available_height() - 40.0).max(80.0))
+                    .show(ui, |ui| {
+                        for m in &cat.plugins {
+                            let instalado = store.find(&m.id);
+                            let requisito = plugins::engine_incompatibility(m);
+                            let compatible = requisito.is_none();
+
+                            ui.group(|ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(&m.name).size(15.0).strong().color(TEXT_MAIN));
+                                    ui.label(egui::RichText::new(format!("v{}", m.version)).size(13.0).color(TEXT_DIM));
+                                });
+                                if !m.description.is_empty() {
+                                    ui.label(egui::RichText::new(&m.description).size(13.0).color(TEXT_DIM));
+                                }
+                                ui.add_space(4.0);
+                                ui.horizontal(|ui| {
+                                    match instalado {
+                                        None => {
+                                            if ui
+                                                .add_enabled(!ocupado && compatible, egui::Button::new("⬇ Instalar"))
+                                                .clicked()
+                                            {
+                                                instalar = Some(m.clone());
+                                            }
+                                        }
+                                        Some(inst) => {
+                                            if plugins::update_available(m, &store) {
+                                                ui.label(
+                                                    egui::RichText::new(format!("Instalado: v{}", inst.version))
+                                                        .size(13.0)
+                                                        .color(TEXT_MAIN),
+                                                );
+                                                if ui
+                                                    .add_enabled(
+                                                        !ocupado && compatible,
+                                                        egui::Button::new(format!("⬆ Actualizar a v{}", m.version)),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    instalar = Some(m.clone());
+                                                }
+                                            } else {
+                                                ui.label(
+                                                    egui::RichText::new(format!("Instalado: v{} ✓", inst.version))
+                                                        .size(13.0)
+                                                        .color(OK_GREEN),
+                                                );
+                                            }
+                                            let texto = if inst.enabled { "Desactivar" } else { "Activar" };
+                                            if ui.add_enabled(!ocupado, egui::Button::new(texto)).clicked() {
+                                                alternar = Some((m.id.clone(), !inst.enabled));
+                                            }
+                                        }
+                                    }
+                                    if let Some(req) = &requisito {
+                                        ui.label(
+                                            egui::RichText::new(format!("⚠ Requiere motor {req}"))
+                                                .size(13.0)
+                                                .color(color_aviso),
+                                        );
+                                    }
+                                });
+                            });
+                            ui.add_space(6.0);
+                        }
+                    });
+            }
+        }
+
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(
+                "Activar o desactivar un complemento no lo desinstala: surte efecto la próxima vez que se abre el editor.",
+            )
+            .size(12.0)
+            .color(TEXT_DIM),
+        );
+
+        // Activar/desactivar: inmediato, sin hilo.
+        if let Some((id, enabled)) = alternar {
+            if self.plugin_store.set_enabled(&id, enabled) {
+                let msg = match self.plugin_store.save() {
+                    Ok(()) if enabled => format!("✅ Complemento {id} activado."),
+                    Ok(()) => format!("Complemento {id} desactivado."),
+                    Err(e) => format!("❌ No se pudo guardar el estado de {id}: {e}"),
+                };
+                self.status_message = msg.into();
+            }
+        }
+
+        // Instalar/actualizar: descarga y verificación en un hilo.
+        if let Some(m) = instalar {
+            self.plugin_state = PluginUiState::Working(format!(
+                "Descargando {}, verificando su SHA-256 e instalando…",
+                m.name
+            ));
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(PluginMsg::Installed(plugins::install_plugin(&m)));
+            });
+            self.plugin_rx = Some(rx);
+        }
     }
 }
