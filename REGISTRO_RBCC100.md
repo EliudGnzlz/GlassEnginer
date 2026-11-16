@@ -66,3 +66,36 @@ Consumo acumulado por proveedor al final de cada sub-bloque.
 - **CI real**: corrida **43902462391**, `completed` / `success` sobre `e9f34a6`.
 - **Consumo RB-2a**: Opus (claude-opus-5-5) **25.132** (19.268 + 5.864).
   Acumulado del bloque: Opus 62.717.
+
+## RB-2b — maxDepenetrationVelocity (CERRADO código + CI)
+
+- **Commit**: `4395707` — 8 archivos, 312 inserciones.
+- **Pila**: `set/get/clear_max_depenetration_velocity` + `apply_depenetration_caps`
+  en `PhysicsWorld`; FFI (set → i32, get → f32 con -1.0); 2 campos al
+  final del puente; delegates, RuntimeBridge; propiedad
+  `MaxDepenetrationVelocity` en `RigidBody.cs` (defecto sin límite;
+  0/negativo quita el límite); campo `max_depenetration_velocity` en
+  `PhysicsData`/`SpawnedBodySpec` (0.0 = sin límite), aplicado en
+  `create_body` y en `rebuild_physics_from_scene` (DescriptorCuerpo a 8).
+- **Hallazgo de raíz** (sonda con eprintln): la separación de Rapier es
+  POSICIONAL — el cuerpo sale de una penetración de 0,3 m en 0,5 s con
+  vy ≈ 0 en todo momento. Un clamp solo de velocidad NO frena nada (el
+  test de comportamiento lo demostró: y = 0,4988 con el clamp puesto).
+  El límite real se aplica sobre el DESPLAZAMIENTO de separación por
+  substep (snapshot de posición al inicio del substep + exceso devuelto
+  a lo largo de la normal del manifold penetrante), con una guarda
+  adicional sobre la velocidad lineal. La normal de Rapier apunta de
+  rigid_body1 a rigid_body2 (sonda: piso body1, caja body2, normal +Y).
+- **Correcciones de integración de Rayo**: el paquete reconstruía el FFI
+  de `get_angular_damping`, el delegate de `GetAngularVelocity` (bool en
+  vez de int), la clase `RigidBody` (no es `: Component`) y varios
+  anclajes de main.rs/scene.rs; el par de la tupla superficie no traía
+  la desestructuración ni la aplicación en rebuild (las escribí yo) y
+  el segundo constructor de `PhysicsData` (línea 1310) no se aplicaba
+  por multi-coincidencia (a mano). El setter del FFI se pasó a i32 para
+  seguir el patrón de RB-1 (los delegates bool necesitan MarshalAs.I1).
+- **Pipeline local exacto** (`pipeline_rb2b_run.log`): build 0, clippy 0,
+  no-default-features 0, dotnet 0, tests 36 suites ok (0 fallos).
+- **CI real**: corrida **43923997752**, `completed` / `success` sobre `4395707`.
+- **Consumo RB-2b**: Opus (claude-opus-5-5) **34.279** (26.033 + 8.246).
+  Acumulado del bloque: Opus 96.996.
