@@ -3244,12 +3244,12 @@ impl GlassRenderer {
                 if !skinned.is_empty() {
                     self.draw_skinned(cmd, skinned, legacy);
                 }
-            } else {
-                let tri = if legacy { &self.triangle_pipeline_legacy } else { &self.pipeline };
-                self.device
-                    .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, tri.pipeline);
-                self.device.cmd_draw(cmd, 3, 1, 0, 0);
             }
+            // Sin mallas no se dibuja nada: el triángulo de respaldo
+            // (el «hello triangle» de los primeros hitos) aparecía como
+            // un triángulo gigante en cualquier vista sin mallas
+            // (escena vacía, solo cámaras/luces) — defecto reportado
+            // por el probador y eliminado aquí de raíz.
 
             // Partículas (Fase 8P): al final del pase, tras las
             // mallas, con su pipeline transparente. La geometría

@@ -4237,7 +4237,7 @@ let resueltos = colliders_resueltos(body, shape);
             ];
             let view_scene = look_at(eye, ed.editor_cam_center, [0.0, 1.0, 0.0]);
             let aspect_scene = (ed.scene_width / ed.scene_height).max(0.1);
-            let proj_scene = perspective_matrix(45.0_f32.to_radians(), aspect_scene, 0.1, 100.0);
+            let proj_scene = perspective_matrix(45.0_f32.to_radians(), aspect_scene, 0.1, 1000.0);
             let vp_s = matmul(&proj_scene, &view_scene);
 
             let (vp_g, l_dir, l_col, eye_g) = if let Ok(scene) = self.scene_state.lock() {

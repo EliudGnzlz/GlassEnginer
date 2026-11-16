@@ -5,6 +5,26 @@ use std::sync::{Arc, Mutex};
 
 use super::gizmo_3d::{self, GizmoAxis};
 
+// Velocidad angular de órbita y mirada en rad por punto (la de Unity).
+const ROT_SPEED: f32 = 0.003;
+// Pitch casi cenital. El modelo esférico (look_at con up fijo [0,1,0])
+// degenera en el polo, así que no se cruza (limitación aceptada).
+const PITCH_LIMIT: f32 = 1.54;
+
+/// Pivote y distancia para encuadrar un AABB en mundo con el FOV del editor
+/// (45°). El radio es la mitad de la diagonal, así cabe sea cual sea su forma.
+fn frame_aabb(min: [f32; 3], max: [f32; 3]) -> ([f32; 3], f32) {
+    let center = [
+        (min[0] + max[0]) * 0.5,
+        (min[1] + max[1]) * 0.5,
+        (min[2] + max[2]) * 0.5,
+    ];
+    let d = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+    let radius = 0.5 * (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    let dist = (radius / 22.5_f32.to_radians().tan()).clamp(2.0, 100.0);
+    (center, dist)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GizmoMode {
     View,      // [Q] Mano (Pan / Órbita de cámara)
@@ -104,6 +124,12 @@ pub struct ViewportPanel {
     // Rect [x, y, ancho, alto] en puntos egui donde se pinta el juego en la
     // pestaña Game; None si aún no se ha dibujado.
     pub game_view_rect: Option<[f32; 4]>,
+    // Velocidad de vuelo (u/s), independiente de la distancia al pivote,
+    // como en Unity. Se ajusta con la rueda durante el vuelo.
+    pub fly_speed: f32,
+    // Vuelo en curso: derecho pulsado sobre el viewport y aún no soltado.
+    // Sobrevive a que el cursor salga del rect.
+    pub fly_active: bool,
 }
 
 impl Default for ViewportPanel {
@@ -128,6 +154,8 @@ impl Default for ViewportPanel {
             selected_camera_id: None,
             active_drag_axis: GizmoAxis::None,
             game_view_rect: None,
+            fly_speed: 10.0,
+            fly_active: false,
         }
     }
 }
@@ -148,8 +176,9 @@ impl ViewportPanel {
     ) {
         self.active_tab = ViewportTab::SceneView;
 
-        // Atajos Q, W, E, R, T, Y habilitados en SceneView tanto en Edit como en Play
-        if !ui.memory(|m| m.focused().is_some()) {
+        // Atajos Q, W, E, R, T, Y habilitados en SceneView tanto en Edit como en Play.
+        // Con el derecho pulsado W/E/Q son teclas de vuelo: no cambian la herramienta.
+        if !ui.memory(|m| m.focused().is_some()) && !ui.input(|i| i.pointer.secondary_down()) {
             ui.input(|i| {
                 if i.key_pressed(egui::Key::Q) { self.gizmo_mode = GizmoMode::View; }
                 if i.key_pressed(egui::Key::W) { self.gizmo_mode = GizmoMode::Translate; }
@@ -217,7 +246,8 @@ impl ViewportPanel {
         let cam_up = [-sy * cx, cy, -sy * cz];
 
         let view = gizmo_3d::look_at(eye, self.editor_cam_center, [0.0, 1.0, 0.0]);
-        let proj = gizmo_3d::perspective_matrix(45.0_f32.to_radians(), (self.scene_width / self.scene_height).max(0.1), 0.1, 100.0);
+        // Far 1000: con dist hasta 200 el pivote no debe quedar recortado.
+        let proj = gizmo_3d::perspective_matrix(45.0_f32.to_radians(), (self.scene_width / self.scene_height).max(0.1), 0.1, 1000.0);
         let view_proj = gizmo_3d::matmul(&proj, &view);
 
         Frame::canvas(ui.style()).show(ui, |ui| {
@@ -335,38 +365,56 @@ impl ViewportPanel {
                 }
             }
 
-            // Zoom con rueda del ratón: dolly hacia el punto bajo el
-            // cursor (estilo Unity): la cámara y su centro se desplazan a
-            // lo largo del rayo del cursor en la medida en que se reduce
-            // la distancia, así el punto señalado no se mueve en pantalla.
-            if response.hovered() {
-                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-                if scroll.abs() > 0.0 {
-                    let old_dist = self.editor_cam_dist;
-                    let new_dist = (old_dist * (1.0 - scroll * 0.001)).clamp(0.5, 200.0);
-                    if let Some(mp) = mouse_pos {
-                        let aspect = (self.scene_width / self.scene_height).max(0.1);
-                        let tan_half = 22.5_f32.to_radians().tan();
-                        let ndc_x = 2.0 * (mp.x - rect.min.x) / rect.width() - 1.0;
-                        let ndc_y = 1.0 - 2.0 * (mp.y - rect.min.y) / rect.height();
-                        let fwd = [-cy * cx, -sy, -cy * cz];
-                        let off_x = ndc_x * tan_half * aspect;
-                        let off_y = ndc_y * tan_half;
-                        let mut ray = [
-                            fwd[0] + cam_right[0] * off_x + cam_up[0] * off_y,
-                            fwd[1] + cam_right[1] * off_x + cam_up[1] * off_y,
-                            fwd[2] + cam_right[2] * off_x + cam_up[2] * off_y,
-                        ];
-                        let len = (ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2]).sqrt().max(1e-6);
-                        ray = [ray[0] / len, ray[1] / len, ray[2] / len];
-                        let paso = old_dist - new_dist;
-                        self.editor_cam_center[0] += ray[0] * paso;
-                        self.editor_cam_center[1] += ray[1] * paso;
-                        self.editor_cam_center[2] += ray[2] * paso;
-                    }
-                    self.editor_cam_dist = new_dist;
-                    ui.ctx().request_repaint();
+            // Estado de vuelo. Se activa al PULSAR el derecho sobre el viewport.
+            // drag_started no sirve porque espera el umbral de arrastre y no
+            // dejaría volar sin mover el ratón. Dura hasta soltar el botón,
+            // aunque el cursor salga del rect.
+            let (secondary_pressed, secondary_held) = ui.input(|i| {
+                (
+                    i.pointer.button_pressed(egui::PointerButton::Secondary),
+                    i.pointer.secondary_down(),
+                )
+            });
+            if secondary_pressed && response.hovered() {
+                self.fly_active = true;
+            }
+            if !secondary_held {
+                self.fly_active = false;
+            }
+
+            // Rueda. Durante el vuelo ajusta su velocidad (Unity). Sin Alt
+            // acerca hacia el pivote sin moverlo (Unity 3D). Con Alt acerca
+            // hacia el cursor desplazando el centro por su rayo (Alt+rueda de Unity).
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+            if scroll.abs() > 0.0 && self.fly_active {
+                self.fly_speed = (self.fly_speed * (1.0 + scroll * 0.002)).clamp(0.5, 200.0);
+                ui.ctx().request_repaint();
+            } else if scroll.abs() > 0.0 && response.hovered() {
+                let old_dist = self.editor_cam_dist;
+                let new_dist = (old_dist * (1.0 - scroll * 0.001)).clamp(0.5, 200.0);
+                let is_alt = ui.input(|i| i.modifiers.alt);
+                if let Some(mp) = mouse_pos.filter(|_| is_alt) {
+                    let aspect = (self.scene_width / self.scene_height).max(0.1);
+                    let tan_half = 22.5_f32.to_radians().tan();
+                    let ndc_x = 2.0 * (mp.x - rect.min.x) / rect.width() - 1.0;
+                    let ndc_y = 1.0 - 2.0 * (mp.y - rect.min.y) / rect.height();
+                    let fwd = [-cy * cx, -sy, -cy * cz];
+                    let off_x = ndc_x * tan_half * aspect;
+                    let off_y = ndc_y * tan_half;
+                    let mut ray = [
+                        fwd[0] + cam_right[0] * off_x + cam_up[0] * off_y,
+                        fwd[1] + cam_right[1] * off_x + cam_up[1] * off_y,
+                        fwd[2] + cam_right[2] * off_x + cam_up[2] * off_y,
+                    ];
+                    let len = (ray[0] * ray[0] + ray[1] * ray[1] + ray[2] * ray[2]).sqrt().max(1e-6);
+                    ray = [ray[0] / len, ray[1] / len, ray[2] / len];
+                    let paso = old_dist - new_dist;
+                    self.editor_cam_center[0] += ray[0] * paso;
+                    self.editor_cam_center[1] += ray[1] * paso;
+                    self.editor_cam_center[2] += ray[2] * paso;
                 }
+                self.editor_cam_dist = new_dist;
+                ui.ctx().request_repaint();
             }
 
             // Selección por Raycasting al hacer clic en Scene View (¡HABILITADO EN EDIT Y PLAY!)
@@ -378,13 +426,20 @@ impl ViewportPanel {
                             *selected_entity_id = Some(hit_id);
                             log::info!("Objeto seleccionado en Scene View por Raycasting: #{}", hit_id);
                             ui.ctx().request_repaint();
+                        } else {
+                            // Clic en vacío: deselecciona, como Unity.
+                            *selected_entity_id = None;
+                            ui.ctx().request_repaint();
                         }
                     }
                 }
             }
 
             // Arrastre e interactividad
+            // Solo el izquierdo captura el gizmo: un pan o look que empieza
+            // sobre él debe navegar, no manipular el objeto.
             if response.drag_started()
+                && ui.input(|i| i.pointer.primary_down())
                 && self.gizmo_mode != GizmoMode::View && hovered_gizmo_axis != GizmoAxis::None
                 && !ui.input(|i| i.modifiers.alt) {
                     self.active_drag_axis = hovered_gizmo_axis;
@@ -468,20 +523,28 @@ impl ViewportPanel {
                 } else {
                     let is_alt = ui.input(|i| i.modifiers.alt);
                     if is_alt && primary_down {
-                        // Alt + izquierdo: orbitar alrededor del centro
-                        self.editor_cam_yaw += delta.x * 0.005;
-                        self.editor_cam_pitch = (self.editor_cam_pitch - delta.y * 0.005).clamp(-1.4, 1.4);
+                        // Alt + izquierdo: orbitar alrededor del centro. Con
+                        // ∂eye/∂yaw = +right, yaw -= dx hace que el objeto siga
+                        // al cursor; pitch += dy sube el ojo con el ratón abajo.
+                        self.editor_cam_yaw -= delta.x * ROT_SPEED;
+                        self.editor_cam_pitch = (self.editor_cam_pitch + delta.y * ROT_SPEED).clamp(-PITCH_LIMIT, PITCH_LIMIT);
                         ui.ctx().request_repaint();
                     } else if is_alt && secondary_down {
-                        // Alt + derecho: zoom cambiando la distancia (dolly)
-                        self.editor_cam_dist = (self.editor_cam_dist * (1.0 + delta.y * 0.01)).clamp(0.5, 200.0);
+                        // Alt + derecho: dolly por el eje dominante (niceMouseDelta
+                        // de Unity). Derecha o abajo acercan. Shift ×3.
+                        let v = if delta.x.abs() >= delta.y.abs() { delta.x } else { delta.y };
+                        let boost = if is_shift { 3.0 } else { 1.0 };
+                        self.editor_cam_dist = (self.editor_cam_dist * (1.0 - v * 0.005 * boost)).clamp(0.5, 200.0);
                         ui.ctx().request_repaint();
                     } else if middle_down || (primary_down && !is_alt && self.gizmo_mode == GizmoMode::View) {
-                        // Central en cualquier modo, o izquierdo sin Alt con la herramienta Mano: pan
-                        let pan_speed = self.editor_cam_dist * 0.0015;
-                        self.editor_cam_center[0] -= (cam_right[0] * delta.x - cam_up[0] * delta.y) * pan_speed;
-                        self.editor_cam_center[1] -= (cam_right[1] * delta.x - cam_up[1] * delta.y) * pan_speed;
-                        self.editor_cam_center[2] -= (cam_right[2] * delta.x - cam_up[2] * delta.y) * pan_speed;
+                        // Central en cualquier modo, o izquierdo sin Alt con la herramienta Mano: pan.
+                        // Mundo por punto = 2·d·tan(fov/2)/alto, así el plano del
+                        // pivote sigue exactamente al cursor. Shift ×4.
+                        let wpp = 2.0 * self.editor_cam_dist * 22.5_f32.to_radians().tan() / rect.height();
+                        let pan = wpp * if is_shift { 4.0 } else { 1.0 };
+                        self.editor_cam_center[0] += (-cam_right[0] * delta.x + cam_up[0] * delta.y) * pan;
+                        self.editor_cam_center[1] += (-cam_right[1] * delta.x + cam_up[1] * delta.y) * pan;
+                        self.editor_cam_center[2] += (-cam_right[2] * delta.x + cam_up[2] * delta.y) * pan;
                         ui.ctx().request_repaint();
                     } else if secondary_down && !is_alt {
                         // Derecho sin Alt: mirar desde el ojo sin moverlo (free look)
@@ -493,8 +556,9 @@ impl ViewportPanel {
                             self.editor_cam_center[1] + dist * old_pitch.sin(),
                             self.editor_cam_center[2] + dist * old_pitch.cos() * old_yaw.cos(),
                         ];
-                        self.editor_cam_yaw += delta.x * 0.005;
-                        self.editor_cam_pitch = (self.editor_cam_pitch - delta.y * 0.005).clamp(-1.4, 1.4);
+                        // Con fwd = −o, yaw -= dx mira a la derecha y pitch += dy mira abajo.
+                        self.editor_cam_yaw -= delta.x * ROT_SPEED;
+                        self.editor_cam_pitch = (self.editor_cam_pitch + delta.y * ROT_SPEED).clamp(-PITCH_LIMIT, PITCH_LIMIT);
                         let new_yaw = self.editor_cam_yaw;
                         let new_pitch = self.editor_cam_pitch;
                         self.editor_cam_center = [
@@ -510,10 +574,11 @@ impl ViewportPanel {
             // Vuelo estilo Unity: con el botón derecho mantenido, WASD/QE
             // mueven la cámara (Shift = rápido). Vive fuera del bloque de
             // arrastre: basta mantener el botón, sin mover el ratón.
-            if response.hovered() && ui.input(|i| i.pointer.secondary_down()) {
+            // Velocidad propia (fly_speed), no ligada a la distancia al pivote.
+            if self.fly_active {
                 let is_fast = ui.input(|i| i.modifiers.shift);
                 let dt = ui.input(|i| i.stable_dt);
-                let speed = self.editor_cam_dist * 1.5 * if is_fast { 3.0 } else { 1.0 };
+                let speed = self.fly_speed * if is_fast { 3.0 } else { 1.0 };
                 let fwd = [-cy * cx, -sy, -cy * cz];
                 let (w, s, a, d, e, q) = ui.input(|i| {
                     (
@@ -528,11 +593,14 @@ impl ViewportPanel {
                 let move_fwd = w - s;
                 let move_right = d - a;
                 let move_up = e - q;
-                if move_fwd != 0.0 || move_right != 0.0 || move_up != 0.0 {
-                    let step = speed * dt;
-                    self.editor_cam_center[0] += (fwd[0] * move_fwd + cam_right[0] * move_right) * step;
-                    self.editor_cam_center[1] += (fwd[1] * move_fwd + cam_right[1] * move_right + move_up) * step;
-                    self.editor_cam_center[2] += (fwd[2] * move_fwd + cam_right[2] * move_right) * step;
+                // fwd/right/up son ortonormales: normalizar la entrada iguala
+                // la velocidad en diagonales. Q/E van por el up de la cámara.
+                let len = (move_fwd * move_fwd + move_right * move_right + move_up * move_up).sqrt();
+                if len > 0.0 {
+                    let step = speed * dt / len;
+                    self.editor_cam_center[0] += (fwd[0] * move_fwd + cam_right[0] * move_right + cam_up[0] * move_up) * step;
+                    self.editor_cam_center[1] += (fwd[1] * move_fwd + cam_right[1] * move_right + cam_up[1] * move_up) * step;
+                    self.editor_cam_center[2] += (fwd[2] * move_fwd + cam_right[2] * move_right + cam_up[2] * move_up) * step;
                     ui.ctx().request_repaint();
                 }
             }
@@ -655,9 +723,31 @@ impl ViewportPanel {
                     if let Some(id) = *selected_entity_id {
                         let world = state.compute_world_matrices();
                         if let Some(w) = world.get(&id) {
-                            let target = glass_core::mat4_translation(*w);
-                            self.editor_cam_center = target;
-                            self.editor_cam_dist = 8.0;
+                            // Pivote al centro de los bounds en mundo y distancia
+                            // según su tamaño. Los extents salen de la misma
+                            // cuenta que draw_selection_bounding_box: medias
+                            // extensiones = |escala de mundo| · 0.5 y las 8
+                            // esquinas locales transformadas por la matriz.
+                            let scale = glass_core::mat4_scale(*w);
+                            let hx = (scale[0].abs() * 0.5).max(0.05);
+                            let hy = (scale[1].abs() * 0.5).max(0.05);
+                            let hz = (scale[2].abs() * 0.5).max(0.05);
+                            let mut bmin = [f32::INFINITY; 3];
+                            let mut bmax = [f32::NEG_INFINITY; 3];
+                            for cx in [-hx, hx] {
+                                for cy in [-hy, hy] {
+                                    for cz in [-hz, hz] {
+                                        let pw = glass_core::mat4_transform_point(*w, [cx, cy, cz]);
+                                        for i in 0..3 {
+                                            bmin[i] = bmin[i].min(pw[i]);
+                                            bmax[i] = bmax[i].max(pw[i]);
+                                        }
+                                    }
+                                }
+                            }
+                            let (center, dist) = frame_aabb(bmin, bmax);
+                            self.editor_cam_center = center;
+                            self.editor_cam_dist = dist;
                             log::info!("Cámara de escena enfocada en #{}", id);
                         }
                     }
@@ -695,7 +785,7 @@ impl ViewportPanel {
                     Color32::from_rgb(200, 130, 255),
                 ),
                 GizmoMode::View => (
-                    "✋ [Q] Mano: Clic Izquierdo arrastra la vista libremente (Pan) | Clic Derecho para orbitar".to_string(),
+                    "✋ [Q] Mano: Clic Izquierdo arrastra la vista libremente (Pan) | Clic Derecho: mirar (arrastrar) y volar con WASD/QE".to_string(),
                     Color32::from_rgb(240, 220, 110),
                 ),
             };
