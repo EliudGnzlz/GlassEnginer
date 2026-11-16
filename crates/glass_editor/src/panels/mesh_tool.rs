@@ -3,7 +3,9 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
+use glass_core::scene::{EntityData, MeshColliderMode, SceneState};
 use glass_mesh_edit::{
     project_edges, project_point, read_glb, BooleanOp, MeshCommand, MeshEditError, MeshSession,
     MirrorAxis, OrbitCamera,
@@ -53,6 +55,12 @@ pub struct MeshToolPanel {
     grab: Option<GrabState>,
     grab_requested: bool,
     grab_commit_pending: bool,
+    /// Ids de entidades con Mesh Collider a la espera de respuesta.
+    collider_prompt: Option<Vec<u64>>,
+    /// Checkbox «No volver a preguntar» de la pregunta en curso.
+    collider_prompt_no_ask: bool,
+    /// Adaptación del collider que aplica la capa de docking al cerrar.
+    pub pending_collider_adapt: Option<ColliderAdapt>,
 }
 
 /// Estado del modo «agarrar»: plano de cámara fijo por el centroide.
@@ -86,6 +94,9 @@ impl Default for MeshToolPanel {
             grab: None,
             grab_requested: false,
             grab_commit_pending: false,
+            collider_prompt: None,
+            collider_prompt_no_ask: false,
+            pending_collider_adapt: None,
             path_input: String::new(),
             status: "Sin sesión: abre un .glb de assets/.".to_owned(),
             camera: OrbitCamera::new([0.0, 0.0, 0.0]),
@@ -107,11 +118,52 @@ enum Action {
     Open,
     Undo,
     Redo,
-    Close,
     Bake,
     SetDims,
     Cmd(MeshCommand),
     Boolean,
+}
+
+/// Adaptación del Mesh Collider pendiente de aplicar sobre la escena:
+/// la deja el panel al cerrar con «Sí, adaptar» y la aplica la capa de
+/// docking (las entidades pasan al modelo editado y el motor reconstruye
+/// el collider desde la nueva geometría por la vía de carga de modelos).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColliderAdapt {
+    pub entity_ids: Vec<u64>,
+    pub new_model: String,
+}
+
+/// Normaliza el nombre de modelo: "" equivale a la primitiva "cube".
+fn normalize_model(model: &str) -> &str {
+    if model.is_empty() {
+        "cube"
+    } else {
+        model
+    }
+}
+
+/// Entidades cuyo modelo es `model` y que tienen un Mesh Collider puesto
+/// por el desarrollador. Los colliders primitivos o compuestos NO cuentan:
+/// con ellos no se pregunta nada al salir.
+pub fn entities_with_mesh_collider(entities: &[EntityData], model: &str) -> Vec<u64> {
+    let target = normalize_model(model);
+    entities
+        .iter()
+        .filter(|e| e.mesh.as_ref().map(|m| normalize_model(&m.model)) == Some(target))
+        .filter(|e| {
+            e.physics
+                .as_ref()
+                .is_some_and(|p| p.mesh_collider != MeshColliderMode::None)
+        })
+        .map(|e| e.id)
+        .collect()
+}
+
+/// ¿Hay que preguntar por el collider al cerrar? Solo con Mesh Collider,
+/// cambios en vigor y sin el «no volver a preguntar».
+pub fn should_prompt_collider(has_mesh_collider: bool, history_len: usize, no_ask: bool) -> bool {
+    has_mesh_collider && history_len > 0 && !no_ask
 }
 
 fn quantize(p: [f32; 3]) -> [i64; 3] {
@@ -197,6 +249,74 @@ impl MeshToolPanel {
         self.clear_selection();
         self.session = None;
         self.status = "Sesión cerrada.".to_owned();
+    }
+
+    /// Cierre pedido desde «Cerrar»: si el modelo editado tenía un Mesh
+    /// Collider puesto y hay cambios en vigor, pregunta antes de cerrar;
+    /// en cualquier otro caso cierra directamente, sin decir nada.
+    fn request_close(&mut self, scene_state: &Arc<Mutex<SceneState>>) {
+        let Some((name, history_len)) = self
+            .session
+            .as_ref()
+            .map(|s| (s.name.clone(), s.history.len()))
+        else {
+            self.close();
+            return;
+        };
+        // Bloqueo mínimo: se copian los ids y se suelta el mutex.
+        let ids = {
+            let scene = scene_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            entities_with_mesh_collider(&scene.entities, &name)
+        };
+        if should_prompt_collider(!ids.is_empty(), history_len, self.prefs.collider_no_ask) {
+            self.collider_prompt = Some(ids);
+            self.collider_prompt_no_ask = false;
+            self.status = "El modelo tenía un Mesh Collider.".to_string();
+        } else {
+            self.close();
+        }
+    }
+
+    /// Aplica la respuesta a la pregunta del Mesh Collider.
+    fn answer_collider_prompt(&mut self, adapt: bool) {
+        let Some(ids) = self.collider_prompt.take() else {
+            return;
+        };
+        let mut prefs_error = None;
+        if self.collider_prompt_no_ask {
+            self.prefs.collider_no_ask = true;
+            if let Err(e) = self.prefs.save_to(&self.prefs_file) {
+                prefs_error = Some(e);
+            }
+        }
+        if adapt {
+            // El nombre se captura antes de cerrar; tras bake() la sesión
+            // sigue abierta.
+            let Some(name) = self.session.as_ref().map(|s| s.name.clone()) else {
+                self.close();
+                return;
+            };
+            if self.bake().is_err() {
+                // La pregunta se descarta y la sesión sigue abierta;
+                // bake() ya dejó el error en el status.
+                return;
+            }
+            self.close();
+            self.pending_collider_adapt = Some(ColliderAdapt {
+                entity_ids: ids,
+                new_model: format!("{name}_edited"),
+            });
+            self.status =
+                "Sesión cerrada: el mesh collider se adaptará al nuevo modelo.".to_string();
+        } else {
+            self.close();
+        }
+        if let Some(e) = prefs_error {
+            self.status
+                .push_str(&format!(" (No se pudo guardar la preferencia: {e})"));
+        }
     }
 
     pub fn apply_cmd(&mut self, cmd: MeshCommand) {
@@ -312,7 +432,6 @@ impl MeshToolPanel {
             }
             Action::Undo => self.undo(),
             Action::Redo => self.redo(),
-            Action::Close => self.close(),
             Action::Bake => {
                 let _ = self.bake();
             }
@@ -443,7 +562,7 @@ impl MeshToolPanel {
         })
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui) {
+    pub fn render(&mut self, ui: &mut egui::Ui, scene_state: &Arc<Mutex<SceneState>>) {
         // Hover determinista: rect del panel en el frame anterior.
         self.panel_hovered = ui
             .input(|i| i.pointer.hover_pos())
@@ -457,6 +576,8 @@ impl MeshToolPanel {
             key_action = None;
         }
         let mut action: Option<Action> = None;
+        let mut close_requested = false;
+        let mut collider_answer: Option<bool> = None;
 
         match self.session.as_mut() {
             None => {
@@ -480,7 +601,7 @@ impl MeshToolPanel {
                         action = Some(Action::Redo);
                     }
                     if ui.button("Cerrar").clicked() {
-                        action = Some(Action::Close);
+                        close_requested = true;
                     }
                     if ui.button("Hornear (.glb + receta)").clicked() {
                         action = Some(Action::Bake);
@@ -502,6 +623,27 @@ impl MeshToolPanel {
                     if report.is_closed_manifold { "sí" } else { "no" },
                     session.recipe.commands.len(),
                 ));
+
+                // Pregunta del Mesh Collider pendiente de respuesta.
+                if self.collider_prompt.is_some() {
+                    ui.group(|ui| {
+                        ui.label(
+                            egui::RichText::new(
+                                "¿Quieres adaptar el mesh collider al nuevo modelo?",
+                            )
+                            .strong(),
+                        );
+                        ui.checkbox(&mut self.collider_prompt_no_ask, "No volver a preguntar");
+                        ui.horizontal(|ui| {
+                            if ui.button("Sí, adaptar").clicked() {
+                                collider_answer = Some(true);
+                            }
+                            if ui.button("No").clicked() {
+                                collider_answer = Some(false);
+                            }
+                        });
+                    });
+                }
 
                 ui.separator();
                 ui.label("Dimensiones");
@@ -798,6 +940,12 @@ impl MeshToolPanel {
 
         if let Some(action) = action {
             self.run(action);
+        }
+        if close_requested {
+            self.request_close(scene_state);
+        }
+        if let Some(adapt) = collider_answer {
+            self.answer_collider_prompt(adapt);
         }
 
         ui.separator();
@@ -1606,5 +1754,155 @@ mod tests {
         panel.run_key_action(MeshKeyAction::Grab);
         assert!(!panel.grab_requested);
         assert_eq!(panel.status, "Selecciona vértices o caras antes de mover.");
+    }
+
+    // --- B-E2: pregunta del Mesh Collider al cerrar ---
+
+    fn entidad_escena(
+        id: u64,
+        model: &str,
+        physics: Option<glass_core::scene::PhysicsData>,
+    ) -> EntityData {
+        let mut e = EntityData::new(id, format!("E{id}"), vec!["Transform".to_string()]);
+        e.mesh = Some(glass_core::scene::MeshData {
+            model: model.to_string(),
+            ..Default::default()
+        });
+        e.physics = physics;
+        e
+    }
+
+    fn fisica(mode: MeshColliderMode) -> Option<glass_core::scene::PhysicsData> {
+        Some(glass_core::scene::PhysicsData {
+            mesh_collider: mode,
+            ..Default::default()
+        })
+    }
+
+    fn escena_con(entidad: EntityData) -> Arc<Mutex<SceneState>> {
+        let mut scene = SceneState::default();
+        scene.entities.push(entidad);
+        Arc::new(Mutex::new(scene))
+    }
+
+    fn panel_con_cubo(sufijo: &str) -> (MeshToolPanel, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("glass_mesh_tool_be2_{sufijo}_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("cube.glb");
+        write_glb(&MeshData::cube(2.0), &src).unwrap();
+        let mut panel = MeshToolPanel::new();
+        // Preferencias deterministas, sin tocar las del usuario.
+        panel.prefs_file = dir.join("tool_prefs.json");
+        panel.prefs = ToolPrefs::default();
+        panel.open(src.to_str().unwrap()).unwrap();
+        (panel, dir)
+    }
+
+    #[test]
+    fn collider_solo_mesh_collider() {
+        let primitivos = glass_core::scene::PhysicsData {
+            box_extents: [1.0, 1.0, 1.0],
+            mesh_collider: MeshColliderMode::None,
+            ..Default::default()
+        };
+        let entidades = vec![
+            entidad_escena(1, "cube", fisica(MeshColliderMode::TriMesh)),
+            entidad_escena(2, "cube", fisica(MeshColliderMode::Convex)),
+            entidad_escena(3, "cube", Some(primitivos)),
+            entidad_escena(4, "cube", None),
+            entidad_escena(5, "rock", fisica(MeshColliderMode::TriMesh)),
+            entidad_escena(6, "", fisica(MeshColliderMode::TriMesh)),
+        ];
+        assert_eq!(entities_with_mesh_collider(&entidades, "cube"), vec![1, 2, 6]);
+        assert_eq!(entities_with_mesh_collider(&entidades, ""), vec![1, 2, 6]);
+    }
+
+    #[test]
+    fn prompt_solo_con_todo() {
+        assert!(should_prompt_collider(true, 1, false));
+        assert!(!should_prompt_collider(true, 0, false));
+        assert!(!should_prompt_collider(true, 1, true));
+        assert!(!should_prompt_collider(false, 1, false));
+        assert!(!should_prompt_collider(false, 0, true));
+    }
+
+    #[test]
+    fn cerrar_con_mesh_collider_pregunta() {
+        let (mut panel, dir) = panel_con_cubo("pregunta");
+        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
+        let scene = escena_con(entidad_escena(99, "cube", fisica(MeshColliderMode::TriMesh)));
+        panel.request_close(&scene);
+        assert!(panel.session.is_some(), "no debía cerrar todavía");
+        assert_eq!(panel.collider_prompt, Some(vec![99]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn responder_no_cierra_sin_tocar_escena() {
+        let (mut panel, dir) = panel_con_cubo("responde_no");
+        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
+        let scene = escena_con(entidad_escena(99, "cube", fisica(MeshColliderMode::TriMesh)));
+        panel.request_close(&scene);
+        panel.answer_collider_prompt(false);
+        assert!(panel.session.is_none());
+        assert!(panel.pending_collider_adapt.is_none());
+        let sc = scene.lock().unwrap();
+        let e = sc.entities.iter().find(|e| e.id == 99).unwrap();
+        assert_eq!(e.mesh.as_ref().unwrap().model, "cube");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn responder_si_hornea_y_deja_pendiente() {
+        let (mut panel, dir) = panel_con_cubo("responde_si");
+        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
+        let scene = escena_con(entidad_escena(99, "cube", fisica(MeshColliderMode::TriMesh)));
+        panel.request_close(&scene);
+        panel.answer_collider_prompt(true);
+        assert!(panel.session.is_none());
+        assert!(dir.join("cube_edited.glb").exists());
+        assert_eq!(
+            panel.pending_collider_adapt,
+            Some(ColliderAdapt {
+                entity_ids: vec![99],
+                new_model: "cube_edited".to_string(),
+            })
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sin_mesh_collider_cierre_directo() {
+        let (mut panel, dir) = panel_con_cubo("sin_mesh");
+        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
+        let scene = escena_con(entidad_escena(99, "cube", fisica(MeshColliderMode::None)));
+        panel.request_close(&scene);
+        assert!(panel.session.is_none());
+        assert!(panel.collider_prompt.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sin_cambios_no_pregunta() {
+        let (mut panel, dir) = panel_con_cubo("sin_cambios");
+        let scene = escena_con(entidad_escena(99, "cube", fisica(MeshColliderMode::TriMesh)));
+        panel.request_close(&scene);
+        assert!(panel.session.is_none());
+        assert!(panel.collider_prompt.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_volver_a_preguntar_se_persiste() {
+        let (mut panel, dir) = panel_con_cubo("no_preguntar");
+        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
+        let scene = escena_con(entidad_escena(99, "cube", fisica(MeshColliderMode::TriMesh)));
+        panel.request_close(&scene);
+        assert!(panel.collider_prompt.is_some());
+        panel.collider_prompt_no_ask = true;
+        panel.answer_collider_prompt(false);
+        assert!(ToolPrefs::load_from(&panel.prefs_file).collider_no_ask);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

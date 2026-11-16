@@ -998,6 +998,32 @@ impl EditorDockingLayout {
             self.status_message = Some((mensaje, std::time::Instant::now()));
         }
 
+        // --- PENDIENTE DE LA HERRAMIENTA 3D: ADAPTAR EL MESH COLLIDER ---
+        // Al cerrar aceptando la pregunta, el panel deja las entidades y el
+        // modelo editado; aquí se aplica sobre la escena. El collider de
+        // malla se reconstruye desde la nueva geometría por la vía que el
+        // motor ya usa al cargar el modelo de la entidad.
+        if let Some(adapt) = self.mesh_tool.pending_collider_adapt.take() {
+            let mensaje = match scene_state.lock() {
+                Ok(mut sc) => {
+                    let mut tocadas = 0usize;
+                    for e in sc.entities.iter_mut() {
+                        if adapt.entity_ids.contains(&e.id) {
+                            if let Some(m) = e.mesh.as_mut() {
+                                m.model = adapt.new_model.clone();
+                                tocadas += 1;
+                            }
+                        }
+                    }
+                    format!(
+                        "Mesh collider adaptado al nuevo modelo en {tocadas} entidad(es)"
+                    )
+                }
+                Err(_) => "SceneState bloqueado; no se adaptó el mesh collider".to_string(),
+            };
+            self.status_message = Some((mensaje, std::time::Instant::now()));
+        }
+
         // Sincronizar la selección ÚNICA del editor: vale el
         // cambio hecho este frame, venga del panel Hierarchy
         // (que escribe en su propio campo) o de la vista 3D /
@@ -1355,7 +1381,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 self.shader_graph.render(ui);
             }
             EditorTab::MeshTool => {
-                self.mesh_tool.render(ui);
+                self.mesh_tool.render(ui, &self.scene_state);
             }
         }
     }
