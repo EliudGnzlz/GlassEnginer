@@ -34,3 +34,35 @@ Consumo acumulado por proveedor al final de cada sub-bloque.
 - **Consumo RB-1**: Opus (claude-opus-5-5) **37.585** (23.316 + 14.269).
 - **Verificación física**: pendiente (camino real: script C# con un cuerpo
   girando con AngularDamping alto vs 0, y SolverIterations 10 vs 4).
+
+## RB-2a — AddRelativeForce + GetAccumulatedForce/Torque (CERRADO código + CI)
+
+- **Commit**: `e9f34a6` — 6 archivos, 323 inserciones.
+- **Pila**: `world.add_relative_force` / `apply_relative_impulse` (rotan con
+  `rb.rotation()`), `get_accumulated_force` / `get_accumulated_torque`
+  (exponen `user_force`/`user_torque`); FFI con 3 floats por valor en
+  entrada y buffer `[In, Out]` en salida (patrones de `apply_force` y
+  `get_angular_velocity`); 4 campos al final de `PhysicsBridgeCallbacks` y
+  de la struct C#; delegates, registro y métodos; `AddRelativeForce` con
+  switch ForceMode espejo de `ApplyForce` y `GetAccumulatedForce/Torque`
+  en `RigidBody.cs`.
+- **Correcciones de integración de Rayo** (el paquete de Opus traía 3
+  errores): (1) los tests suponían `create_rigid_body(RigidBodyKind, …)` y
+  `add_box_collider(h, [0.5; 3])` — la firma real es
+  `create_rigid_body(id, BodyType, pos, rot)` + `attach_box_collider(h,
+  half, rest, fric)`; (2) el FFI usaba `with_world*` inexistentes — se
+  reescribió con `get_global_physics_world()` + lock; (3) los delegates
+  con `float*` + stackalloc se pasaron al patrón establecido del archivo
+  (3 floats por valor en entrada, `[In, Out] float[]` en salida); el
+  `VelocityChange` de `AddRelativeForce` usaba `Vector3.Transform` y
+  `Rotation` inexistentes — ahora `GetTransform` + `RotateVector` (patrón
+  de `AddRelativeTorque`).
+- **Trampa del integrador**: re-correr `integrar.py` sobre un archivo ya
+  integrado DUPLICA los pares cuyo NUEVO contiene al VIEJO (pasó en
+  world.rs y en host.rs: campos duplicados E0124). Nunca re-correr el
+  mismo archivo de pares; si un par falla, aplicarlo solo a mano.
+- **Pipeline local exacto** (`pipeline_rb2a_run.log`): build 0, clippy 0,
+  no-default-features 0, dotnet 0, tests 36 suites ok (0 fallos).
+- **CI real**: corrida **43902462391**, `completed` / `success` sobre `e9f34a6`.
+- **Consumo RB-2a**: Opus (claude-opus-5-5) **25.132** (19.268 + 5.864).
+  Acumulado del bloque: Opus 62.717.
