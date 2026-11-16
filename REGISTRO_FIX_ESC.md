@@ -35,8 +35,23 @@ Sin `#[allow]`, sin tocar el paso previo a egui ni ningún otro brazo.
 
 ## Verificación
 
-- Pipeline local exacto de `.github/workflows/ci.yml` (ver resultado abajo).
-- CI real de GitHub Actions del commit (ver resultado abajo).
-- Verificación física independiente (chat principal): editor con el
+- **Pipeline local exacto** de `.github/workflows/ci.yml` (log
+  `~/workspace/.tmp/pipeline_esc2.log`): build workspace 0, clippy exacto 0,
+  build `--no-default-features` 0, dotnet 0 warnings / 0 errores, tests
+  604/604. Nota: la primera pasada (`pipeline_esc.log`) marcó 4 errores de
+  clippy en `glass_editor` (2 lints reales: `needless_borrow` en
+  `docking.rs:1403` y `field_reassign_with_default` en el helper de test
+  `panel_con_prefs` de `mesh_tool.rs:1690`, preexistentes del trabajo de la
+  herramienta 3D, no del arreglo). Se arreglaron de raíz y la segunda pasada
+  quedó en 0.
+- **Commit**: `9fb37fe` — «Motor: Escape ya no cierra el editor (solo sale en
+  standalone)», 4 archivos, 52 inserciones / 6 borrados, pusheado a `main`.
+- **CI real**: corrida GitHub Actions **43817162465**, `completed` /
+  `success` sobre `9fb37fe`.
+- **Consumo**: Opus (claude-opus-5-5) **3.987 tokens** (3.609 prompt + 378
+  completion) por el paquete del par. Los arreglos de clippy fueron
+  integración directa de Rayo, sin gasto de APIs.
+- **Verificación física pendiente (chat principal)**: editor con el
   complemento activo → sesión → Grab con G → Esc → «Movimiento cancelado.» y
-  la app sigue viva; Esc ya no cierra el editor en general.
+  la app sigue viva; Esc ya no cierra el editor en general. Hasta ese
+  veredicto, el bloque no se da por cerrado del todo.
