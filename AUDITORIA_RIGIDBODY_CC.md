@@ -485,3 +485,28 @@ devolvía `bool` Rust (1 byte) leído como BOOL C# (4 bytes): un
 `Position` del CC no seguía el desplazamiento de `center` (CC-1).
 Sonda: escena `PruebaRbcc100` + script `Rbcc100Probe` — **29/29 OK**
 en standalone tras los arreglos.
+
+## Addenda CCX (2026-11-16, orden posterior al cierre): `excludeLayers` del CC — HECHO
+
+La única pieza que quedó fuera del alcance del §7 se implementó el
+mismo día por orden expresa de D3m3tr10, como espejo exacto de
+`includeLayers` del CC y de las capas del Rigidbody de RB-3:
+
+- `CharacterState.exclude_mask: u32` (defecto 0); `cc_filter` aplica
+  la máscara efectiva `include & !exclude` en las tres sondas del
+  controlador (despenetración, movimiento y consultas), con la
+  semántica de Unity (exclude manda sobre include).
+- FFI `glass_character_set/get_exclude_layers` (patrón i32), campos
+  al final de `PhysicsBridgeCallbacks` en ambos lados del puente, y
+  propiedad C# `CharacterController.ExcludeLayers` (int, defecto 0).
+- Tests nuevos `ccx_*` (4) con movimiento real: aterriza en el suelo
+  de una capa, lo atraviesa si la capa está excluida, y exclude manda
+  sobre include en las tres combinaciones. Sonda física
+  `PruebaRbcc100` extendida: **32/32 OK** (defecto, set/get y la
+  caída a través del suelo con su capa excluida: y = −4,9 sin suelo).
+
+**Recuento actualizado: CharacterController TIENE 25 · NO TIENE 0
+de 25 → 100 %.** La fila `excludeLayers` (heredada) de la tabla del
+CC pasa de NO TIENE a TIENE. El Rigidbody queda como estaba:
+56/57 con 1 parcial → 99,1 % ponderado. Commit `a4a1a24`,
+CI 43967247043 success. Consumo CCX: Opus 25.928.

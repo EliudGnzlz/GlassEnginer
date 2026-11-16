@@ -236,3 +236,25 @@ Consumo acumulado por proveedor al final de cada sub-bloque.
   RB-4 62.070 · CC-1 71.628 · CC-2 49.422). Los arreglos de la
   sonda y la re-auditoría fueron trabajo directo de Rayo (0 tokens
   de API).
+
+## CCX — excludeLayers del CC (2026-11-16, orden posterior al cierre)
+
+- **Orden de D3m3tr10 (17:58):** cerrar la única pieza fuera del §7
+  y publicar la Release v0.10.16.1-beta sobre el HEAD resultante.
+- **Commit `a4a1a24`** (8 archivos, 236 inserciones). **CI
+  43967247043 success.** Pipeline local exacto en verde (con los 4
+  tests nuevos `ccx_*`).
+- **Diseño:** espejo de `includeLayers` — campo `exclude_mask`
+  (defecto 0) en CharacterState; `cc_filter` aplica la efectiva
+  `include & !exclude` en las tres sondas; FFI i32
+  `glass_character_set/get_exclude_layers`; puente con los dos
+  campos AL FINAL de PhysicsBridgeCallbacks; C#
+  `CharacterController.ExcludeLayers` (int, defecto 0).
+- **Verificación física:** sonda `PruebaRbcc100` extendida con
+  defecto + set/get + fase 2 (la capa del suelo excluida ⇒ el
+  personaje lo atraviesa: grounded = false, y = −4,9): **32/32 OK**,
+  sin regresiones (diff de nombres contra la corrida de 29).
+- **Re-auditoría:** CC **25/25 → 100 %** (addenda en
+  `AUDITORIA_RIGIDBODY_CC.md`). RB sin cambios (56/57, 1 parcial).
+- **Consumo CCX: Opus 25.928.** Acumulado RB/CC + CCX: **Opus
+  379.421**.

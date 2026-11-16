@@ -190,4 +190,5 @@ sección están implementadas (RB-1..RB-4 + CC-1/CC-2; registro en
 `REGISTRO_RBCC100.md`, re-auditoría en `AUDITORIA_RIGIDBODY_CC.md`:
 RB 56/57 con 1 parcial — la carga Collision sin contacts[] — y
 CC 24/25; el único hueco restante, `excludeLayers` del CC, no
-formaba parte de esta lista).
+formaba parte de esta lista). **Ese hueco se cerró el mismo día por
+orden posterior (CCX, commit `a4a1a24`): CC 25/25.**
