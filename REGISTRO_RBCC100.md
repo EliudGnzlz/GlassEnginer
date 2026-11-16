@@ -150,3 +150,27 @@ Consumo acumulado por proveedor al final de cada sub-bloque.
   (los 2 bool al final). 5 tests `rb4_*` en verde.
 - **Consumo RB-4: Opus 62.070** (46.571 + 15.499).
   **Acumulado del bloque: Opus 232.443.**
+
+## CC-1 — CERRADO (2026-11-16)
+
+- **Commit `365e002`** (6 archivos, 412 inserciones) + este registro.
+  **CI 43938994898 success.** Pipeline local exacto en verde (tras dos
+  correcciones de integración de Rayo: una línea «ARCHIVO:» filtrada
+  por el troceado de pares y `Time` cualificado como UnityEngine.Time).
+- Contenido: **minMoveDistance** (la magnitud del movimiento pedido
+  menor que el umbral descarta la llamada a Move entera, incluido el
+  arrastre de plataforma de ese frame; defecto 0.0 = desactivado —
+  Unity usa 0.001, no se cambia el comportamiento de los juegos ya
+  hechos), **center** (desplaza la cápsula en nuevo − anterior
+  moviendo el cuerpo cinemático como teleport_character; Position
+  sigue siendo el centro de la cápsula) y **SimpleMove** (solo C#:
+  velocidad m/s, ignora la Y pedida, acumulador vertical propio con la
+  gravedad por defecto del mundo (0, −9.81, 0) — simplificación
+  documentada: no hay FFI de gravedad mundial — y devuelve
+  CollisionFlags). Las propiedades nuevas también se empujan desde
+  Create() si se fijaron antes de crear el personaje. Puente: 4 campos
+  tras character_bounds. 7 tests `cc1_*` en verde.
+- **Consumo CC-1: Opus 71.628** (30.897 de una primera generación
+  COMPLETA cuya respuesta se perdió con un reemplazo de la VM antes
+  de poder extraerla + 40.731 de la regeneración).
+  **Acumulado del bloque: Opus 304.071.**
