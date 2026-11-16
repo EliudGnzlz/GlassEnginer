@@ -40,6 +40,8 @@ pub struct EditorDockingLayout {
     pub mesh_tool: MeshToolPanel,
     pub dock_state: DockState<EditorTab>,
     pub current_preset: LayoutPreset,
+    /// Si es false (complemento «herramienta-3d» ausente o desactivado), no se ofrece la pestaña MeshTool.
+    pub mesh_tool_enabled: bool,
     pub request_launcher: bool,
     pub request_build_and_run: bool,
     pub request_build_settings: bool,
@@ -68,6 +70,16 @@ impl Default for EditorDockingLayout {
 }
 
 impl EditorDockingLayout {
+    /// Activa o desactiva la pestaña de la Herramienta 3D y reaplica el
+    /// preset actual para que aparezca o desaparezca al momento.
+    /// (Reaplicar el preset descarta la disposición que el usuario hubiera
+    /// movido a mano; se llama al arrancar, antes de que toque nada.)
+    pub fn set_mesh_tool_enabled(&mut self, on: bool) {
+        self.mesh_tool_enabled = on;
+        let p = self.current_preset;
+        self.apply_preset(p);
+    }
+
     pub fn new() -> Self {
         let mut slf = Self {
             hierarchy: HierarchyPanel::new(),
@@ -79,6 +91,7 @@ impl EditorDockingLayout {
             mesh_tool: MeshToolPanel::new(),
             dock_state: DockState::new(vec![EditorTab::SceneView, EditorTab::GameView]),
             current_preset: LayoutPreset::Default,
+            mesh_tool_enabled: true,
             request_launcher: false,
             request_build_and_run: false,
             request_build_settings: false,
@@ -117,16 +130,22 @@ impl EditorDockingLayout {
                     0.20,
                     vec![EditorTab::Hierarchy],
                 );
-                surface.split_below(
-                    NodeIndex::root(),
-                    0.72,
+                // Sin el complemento «herramienta-3d» no se ofrece su pestaña.
+                let pestanas_abajo: Vec<EditorTab> = if self.mesh_tool_enabled {
                     vec![
                         EditorTab::Console,
                         EditorTab::Project,
                         EditorTab::ShaderGraph,
                         EditorTab::MeshTool,
-                    ],
-                );
+                    ]
+                } else {
+                    vec![
+                        EditorTab::Console,
+                        EditorTab::Project,
+                        EditorTab::ShaderGraph,
+                    ]
+                };
+                surface.split_below(NodeIndex::root(), 0.72, pestanas_abajo);
                 surface.split_right(
                     NodeIndex::root(),
                     0.74,
@@ -1388,5 +1407,22 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
 
     fn is_closeable(&self, _tab: &Self::Tab) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests_puerta_herramienta_3d {
+    use super::*;
+
+    #[test]
+    fn puerta_herramienta_3d_controla_pestana() {
+        let mut layout = EditorDockingLayout::new();
+        assert!(layout.dock_state.find_tab(&EditorTab::MeshTool).is_some());
+
+        layout.set_mesh_tool_enabled(false);
+        assert!(layout.dock_state.find_tab(&EditorTab::MeshTool).is_none());
+
+        layout.set_mesh_tool_enabled(true);
+        assert!(layout.dock_state.find_tab(&EditorTab::MeshTool).is_some());
     }
 }

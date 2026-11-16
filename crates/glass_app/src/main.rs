@@ -2031,6 +2031,10 @@ impl GlassEngineApp {
         let scene_manager = Arc::new(Mutex::new(scene_manager));
         #[cfg(feature = "editor")]
         let mcp_server = Arc::new(McpServer::new(scene_state.clone()));
+        // Puerta del complemento «herramienta-3d» para las tools glass_mesh_*.
+        #[cfg(feature = "editor")]
+        mcp_server
+            .set_mesh_tools_enabled(glass_editor::plugins::plugin_enabled("herramienta-3d"));
         let asset_cache = AssetCache::new();
         let audio_system = Arc::new(AudioSystem::new());
         register_global_audio_system(audio_system.clone());
@@ -2125,7 +2129,14 @@ impl GlassEngineApp {
             #[cfg(feature = "editor")]
             game_viewport_texture_id: None,
             #[cfg(feature = "editor")]
-            editor_layout: EditorDockingLayout::new(),
+            editor_layout: {
+                let mut layout = EditorDockingLayout::new();
+                // Sin el complemento «herramienta-3d» no se ofrece su pestaña.
+                layout.set_mesh_tool_enabled(glass_editor::plugins::plugin_enabled(
+                    "herramienta-3d",
+                ));
+                layout
+            },
             #[cfg(feature = "editor")]
             play_snapshot: None,
             #[cfg(feature = "editor")]
@@ -8016,6 +8027,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.iter().any(|arg| arg == "--mcp" || arg == "--mcp-stdio") {
         let scene_state = Arc::new(Mutex::new(SceneState::new()));
         let mcp_server = McpServer::new(scene_state);
+        // Puerta del complemento «herramienta-3d» para las tools glass_mesh_*.
+        mcp_server
+            .set_mesh_tools_enabled(glass_editor::plugins::plugin_enabled("herramienta-3d"));
         mcp_server.run_stdio_loop();
         return Ok(());
     }

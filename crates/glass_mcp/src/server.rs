@@ -19,6 +19,17 @@ const MAX_LINE_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB por línea stdio
 // Tope de entidades admitidas en una sola llamada de glass_batch_spawn_entities.
 const MAX_BATCH_SPAWN: usize = 256;
 
+/// Tools MCP que pertenecen al complemento «herramienta-3d».
+pub const MESH_TOOL_NAMES: [&str; 7] = [
+    "glass_mesh_enter_edit",
+    "glass_mesh_apply_op",
+    "glass_mesh_undo",
+    "glass_mesh_redo",
+    "glass_mesh_set_dimension",
+    "glass_mesh_get_stats",
+    "glass_mesh_bake",
+];
+
 pub struct McpServer {
     pub scene: Arc<Mutex<SceneState>>,
     pub player_body: Arc<Mutex<Option<BodyHandle>>>,
@@ -26,6 +37,8 @@ pub struct McpServer {
     local_audio: Arc<Mutex<Option<Arc<AudioSystem>>>>,
     /// Sesión de edición de malla (herramienta 3D): vive en proceso, la conducen las tools glass_mesh_*.
     mesh_session: Arc<Mutex<Option<glass_mesh_edit::MeshSession>>>,
+    /// Puerta del complemento «herramienta-3d»: si es false, no se listan ni ejecutan las tools glass_mesh_*.
+    mesh_tools_enabled: std::sync::atomic::AtomicBool,
     /// Command Queue (Fase 8): la ejecuta el bucle del motor.
     pub queue: Arc<crate::queue::CommandQueue>,
 }
@@ -65,6 +78,18 @@ pub fn is_mutating_tool(name: &str) -> bool {
 }
 
 impl McpServer {
+    /// Abre o cierra la puerta de las tools de malla (complemento «herramienta-3d»).
+    pub fn set_mesh_tools_enabled(&self, on: bool) {
+        self.mesh_tools_enabled
+            .store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Indica si las tools de malla están disponibles.
+    pub fn mesh_tools_enabled(&self) -> bool {
+        self.mesh_tools_enabled
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     pub fn new(scene: Arc<Mutex<SceneState>>) -> Self {
         Self {
             scene,
@@ -72,6 +97,8 @@ impl McpServer {
             local_physics: Arc::new(Mutex::new(None)),
             local_audio: Arc::new(Mutex::new(None)),
             mesh_session: Arc::new(Mutex::new(None)),
+            // Abierta por defecto: los usos sin puerta (tests incluidos) no cambian.
+            mesh_tools_enabled: std::sync::atomic::AtomicBool::new(true),
             queue: Arc::new(crate::queue::CommandQueue::new()),
         }
     }
@@ -139,9 +166,8 @@ impl McpServer {
 
             "ping" => McpResponse::success(req.id, json!({})),
 
-            "tools/list" => McpResponse::success(
-                req.id,
-                json!({
+            "tools/list" => {
+                let mut result = json!({
                     "tools": [
                         {
                             "name": "glass_get_scene_hierarchy",
@@ -869,8 +895,20 @@ impl McpServer {
                             }
                         }
                     ]
-                }),
-            ),
+                });
+                // Puerta del complemento: sin la herramienta 3D no se anuncian sus tools.
+                if !self.mesh_tools_enabled() {
+                    if let Some(tools) = result.get_mut("tools").and_then(|t| t.as_array_mut()) {
+                        tools.retain(|t| {
+                            !matches!(
+                                t.get("name").and_then(|n| n.as_str()),
+                                Some(n) if MESH_TOOL_NAMES.contains(&n)
+                            )
+                        });
+                    }
+                }
+                McpResponse::success(req.id, result)
+            }
 
             "tools/call" => {
                 let params = match req.params {
@@ -3596,6 +3634,14 @@ impl McpServer {
             | "glass_mesh_set_dimension"
             | "glass_mesh_get_stats"
             | "glass_mesh_bake") => {
+                // Puerta del complemento: sin él, las tools de malla no se ejecutan.
+                if !self.mesh_tools_enabled() {
+                    McpResponse::error(
+                        id,
+                        -32005,
+                        "La herramienta 3D está desactivada: instala o activa el complemento «herramienta-3d» en el Launcher.",
+                    )
+                } else {
                 match mesh_tool(&self.mesh_session, tool, &|k: &str| args.get(k).cloned()) {
                     Ok(out) => McpResponse::success(
                         id,
@@ -3609,6 +3655,7 @@ impl McpServer {
                     Err(MeshToolError::InvalidParams(m)) => McpResponse::invalid_params(id, &m),
                     Err(MeshToolError::Domain(m)) => McpResponse::error(id, -32005, &m),
                     Err(MeshToolError::Internal(m)) => McpResponse::error(id, -32000, &m),
+                }
                 }
             }
             _ => McpResponse::method_not_found(id, name),
@@ -4079,5 +4126,48 @@ mod tests_catchup {
         assert!(resp.contains("0 entidades"), "resp: {resp}");
         let _ = std::fs::remove_file("assets/lightmaps/TestMcp.lm.png");
         let _ = std::fs::remove_file("assets/lightmaps/TestMcp.lm.json");
+    }
+
+    /// Nombres de las tools que anuncia tools/list.
+    fn nombres_tools_listadas(server: &McpServer) -> Vec<String> {
+        let resp = server
+            .handle_json(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+            .unwrap_or_default();
+        let v: serde_json::Value = serde_json::from_str(&resp).expect("respuesta JSON válida");
+        v["result"]["tools"]
+            .as_array()
+            .expect("array tools")
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(str::to_owned))
+            .collect()
+    }
+
+    #[test]
+    fn sin_puerta_lista_incluye_mesh() {
+        let server = servidor();
+        let nombres = nombres_tools_listadas(&server);
+        assert!(nombres.iter().any(|n| n == "glass_mesh_enter_edit"));
+        // La constante debe coincidir con lo que realmente se anuncia.
+        for n in MESH_TOOL_NAMES {
+            assert!(nombres.iter().any(|x| x == n), "falta {n} en tools/list");
+        }
+    }
+
+    #[test]
+    fn con_puerta_cerrada_lista_omite_mesh() {
+        let server = servidor();
+        server.set_mesh_tools_enabled(false);
+
+        let nombres = nombres_tools_listadas(&server);
+        assert!(!nombres.iter().any(|n| n.starts_with("glass_mesh_")));
+        assert!(nombres.iter().any(|n| n == "glass_get_scene_hierarchy"));
+
+        let resp = server
+            .handle_json(
+                r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"glass_mesh_enter_edit","arguments":{}}}"#,
+            )
+            .unwrap_or_default();
+        let v: serde_json::Value = serde_json::from_str(&resp).expect("respuesta JSON válida");
+        assert!(v.get("error").is_some(), "se esperaba error: {resp}");
     }
 }
