@@ -190,3 +190,24 @@ las actualizaciones fluyen solas.
 
 Consumo del defecto 8: Opus 13.897. Acumulado del bloque de
 defectos (2ª ronda + defecto 8): **Opus 227.017**.
+
+**Addenda del defecto 8 (precisión de D3m3tr10, 19:23): actualizar
+POR EL LAUNCHER, sin descarga manual.** Leído el updater tal como
+está instalado en la v0.10.14.1 (su `updates.rs` es el del tag,
+idéntico en lógica al de main antes del arreglo): pide
+`/releases/latest`, parsea la release única y la acepta si
+`is_newer` con su comparador de 4 componentes; la instalación
+descarga el .zip de su plataforma y verifica el SHA-256 contra el
+digest que publica la API. El camino existía: solo faltaba que ese
+endpoint devolviera una release del motor. La v0.10.16.2-beta se
+pasó a **release COMPLETA y «Latest»** en GitHub (editada la release
+ya publicada; el workflow la crea siempre con `--prerelease`, por
+eso el cambio fue sobre la release, no republicando), y la API lo
+confirma: `GET /releases/latest` devuelve ahora v0.10.16.2-beta
+(prerelease: false). Verificación física con el binario ORIGINAL
+compilado del tag v0.10.14.1-beta (updater sin tocar, identidad
+v0.10.14.1-beta) contra la respuesta real de ese endpoint: la
+pestaña Instalaciones ofreció «⬆ Hay una versión nueva:
+v0.10.16.2-beta (esta copia es v0.10.14.1-beta)» con su botón
+«Descargar e instalar». Las instalaciones viejas actualizan por el
+Launcher; no hace falta descarga manual.
