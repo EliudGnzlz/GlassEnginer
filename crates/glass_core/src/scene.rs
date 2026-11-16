@@ -205,6 +205,17 @@ pub struct PhysicsData {
     /// Velocidad máxima de despenetración (m/s). 0.0 = sin límite.
     #[serde(default = "default_max_depenetration_velocity")]
     pub max_depenetration_velocity: f32,
+    /// solverVelocityIterations del cuerpo. Comparte contador con solver_iterations
+    /// en Rapier: manda el máximo. Defecto 4.
+    #[serde(default = "default_solver_velocity_iterations")]
+    pub solver_velocity_iterations: u32,
+    /// includeLayers por cuerpo (Unity): capas con las que SÍ colisiona. Distinto
+    /// de collision_mask (máscara del collider). Defecto u32::MAX.
+    #[serde(default = "default_include_layers")]
+    pub include_layers: u32,
+    /// excludeLayers por cuerpo (Unity): capas con las que NO colisiona. Defecto 0.
+    #[serde(default)]
+    pub exclude_layers: u32,
     /// Si el cuerpo responde a la gravedad del mundo.
     #[serde(default = "default_true")]
     pub use_gravity: bool,
@@ -232,6 +243,14 @@ fn default_solver_iterations() -> u32 {
     4
 }
 
+fn default_solver_velocity_iterations() -> u32 {
+    4
+}
+
+fn default_include_layers() -> u32 {
+    u32::MAX
+}
+
 fn default_true() -> bool {
     true
 }
@@ -251,6 +270,9 @@ impl Default for PhysicsData {
             is_trigger: false,
             constraints: 0,
             colliders: Vec::new(),
+            solver_velocity_iterations: 4,
+            include_layers: u32::MAX,
+            exclude_layers: 0,
             mesh_collider: MeshColliderMode::None,
             linear_damping: 1.5,
             angular_damping: 0.0,
@@ -1315,6 +1337,9 @@ impl EntityData {
                 is_trigger: false,
                 constraints: 0,
                 linear_damping: 1.5,
+                solver_velocity_iterations: 4,
+                include_layers: u32::MAX,
+                exclude_layers: 0,
                 angular_damping: 0.0,
                 solver_iterations: 4,
                 max_depenetration_velocity: 0.0,

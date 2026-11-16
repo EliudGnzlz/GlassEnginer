@@ -101,6 +101,12 @@ public static class RuntimeBridge
     private static GetAccumulatedTorqueDelegate? _getAccumulatedTorque;
     private static SetMaxDepenetrationVelocityDelegate? _setMaxDepenetrationVelocity;
     private static GetMaxDepenetrationVelocityDelegate? _getMaxDepenetrationVelocity;
+    private static SetIncludeLayersDelegate? _setIncludeLayers;
+    private static GetIncludeLayersDelegate? _getIncludeLayers;
+    private static SetExcludeLayersDelegate? _setExcludeLayers;
+    private static GetExcludeLayersDelegate? _getExcludeLayers;
+    private static SetSolverVelocityIterationsDelegate? _setSolverVelocityIterations;
+    private static GetSolverVelocityIterationsDelegate? _getSolverVelocityIterations;
     private static SetAngularVelocityDelegate? _setAngularVelocity;
     private static AddTorqueDelegate? _addTorque;
     private static ApplyTorqueImpulseDelegate? _applyTorqueImpulse;
@@ -412,6 +418,12 @@ public static class RuntimeBridge
         // Añadidos AL FINAL (RB/CC 100% RB-2b): velocidad máxima de despenetración.
         public IntPtr SetMaxDepenetrationVelocity;
         public IntPtr GetMaxDepenetrationVelocity;
+    public IntPtr SetIncludeLayers;
+    public IntPtr GetIncludeLayers;
+    public IntPtr SetExcludeLayers;
+    public IntPtr GetExcludeLayers;
+    public IntPtr SetSolverVelocityIterations;
+    public IntPtr GetSolverVelocityIterations;
 
         // Añadidos AL FINAL (RB/CC 100% RB-1): damping angular e
         // iteraciones del solver por cuerpo.
@@ -567,6 +579,18 @@ public static class RuntimeBridge
             _getAccumulatedForce = Marshal.GetDelegateForFunctionPointer<GetAccumulatedForceDelegate>(callbacks->GetAccumulatedForce);
         if (callbacks->SetMaxDepenetrationVelocity != IntPtr.Zero)
             _setMaxDepenetrationVelocity = Marshal.GetDelegateForFunctionPointer<SetMaxDepenetrationVelocityDelegate>(callbacks->SetMaxDepenetrationVelocity);
+        if (callbacks->SetIncludeLayers != IntPtr.Zero)
+            _setIncludeLayers = Marshal.GetDelegateForFunctionPointer<SetIncludeLayersDelegate>(callbacks->SetIncludeLayers);
+        if (callbacks->GetIncludeLayers != IntPtr.Zero)
+            _getIncludeLayers = Marshal.GetDelegateForFunctionPointer<GetIncludeLayersDelegate>(callbacks->GetIncludeLayers);
+        if (callbacks->SetExcludeLayers != IntPtr.Zero)
+            _setExcludeLayers = Marshal.GetDelegateForFunctionPointer<SetExcludeLayersDelegate>(callbacks->SetExcludeLayers);
+        if (callbacks->GetExcludeLayers != IntPtr.Zero)
+            _getExcludeLayers = Marshal.GetDelegateForFunctionPointer<GetExcludeLayersDelegate>(callbacks->GetExcludeLayers);
+        if (callbacks->SetSolverVelocityIterations != IntPtr.Zero)
+            _setSolverVelocityIterations = Marshal.GetDelegateForFunctionPointer<SetSolverVelocityIterationsDelegate>(callbacks->SetSolverVelocityIterations);
+        if (callbacks->GetSolverVelocityIterations != IntPtr.Zero)
+            _getSolverVelocityIterations = Marshal.GetDelegateForFunctionPointer<GetSolverVelocityIterationsDelegate>(callbacks->GetSolverVelocityIterations);
         if (callbacks->GetMaxDepenetrationVelocity != IntPtr.Zero)
             _getMaxDepenetrationVelocity = Marshal.GetDelegateForFunctionPointer<GetMaxDepenetrationVelocityDelegate>(callbacks->GetMaxDepenetrationVelocity);
         if (callbacks->GetAccumulatedTorque != IntPtr.Zero)
@@ -1918,6 +1942,45 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
     {
         if (_setMaxDepenetrationVelocity is null) return false;
         return _setMaxDepenetrationVelocity(bodyHandle, max) != 0;
+    }
+
+    public static bool SetIncludeLayers(ulong bodyHandle, uint mask)
+    {
+        if (_setIncludeLayers is null) return false;
+        return _setIncludeLayers(bodyHandle, mask) != 0;
+    }
+
+    /// <summary>Máscara includeLayers (0..uint.MaxValue). -1 si no hay puente o el cuerpo no existe.</summary>
+    public static long GetIncludeLayers(ulong bodyHandle)
+    {
+        if (_getIncludeLayers is null) return -1;
+        return _getIncludeLayers(bodyHandle);
+    }
+
+    public static bool SetExcludeLayers(ulong bodyHandle, uint mask)
+    {
+        if (_setExcludeLayers is null) return false;
+        return _setExcludeLayers(bodyHandle, mask) != 0;
+    }
+
+    /// <summary>Máscara excludeLayers (0..uint.MaxValue). -1 si no hay puente o el cuerpo no existe.</summary>
+    public static long GetExcludeLayers(ulong bodyHandle)
+    {
+        if (_getExcludeLayers is null) return -1;
+        return _getExcludeLayers(bodyHandle);
+    }
+
+    public static bool SetSolverVelocityIterations(ulong bodyHandle, int iterations)
+    {
+        if (_setSolverVelocityIterations is null) return false;
+        return _setSolverVelocityIterations(bodyHandle, iterations) != 0;
+    }
+
+    /// <summary>Valor guardado de solverVelocityIterations. -1 si no hay puente o el cuerpo no existe.</summary>
+    public static int GetSolverVelocityIterations(ulong bodyHandle)
+    {
+        if (_getSolverVelocityIterations is null) return -1;
+        return _getSolverVelocityIterations(bodyHandle);
     }
 
     /// <summary>Velocidad máxima de despenetración (infinito = sin límite); -1 si no hay puente o el cuerpo no existe.</summary>

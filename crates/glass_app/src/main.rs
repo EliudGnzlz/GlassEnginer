@@ -97,6 +97,9 @@ struct SpawnedBodySpec {
     pub angular_damping: f32,
     pub solver_iterations: u32,
     pub max_depenetration_velocity: f32,
+    pub solver_velocity_iterations: u32,
+    pub include_layers: u32,
+    pub exclude_layers: u32,
     pub use_gravity: bool,
     pub ccd: bool,
     /// Interpolación de render (PhysicsData.interpolate).
@@ -147,6 +150,9 @@ impl EngineSceneBridge {
         angular_damping: body.angular_damping,
         solver_iterations: body.solver_iterations,
         max_depenetration_velocity: body.max_depenetration_velocity,
+        solver_velocity_iterations: body.solver_velocity_iterations,
+        include_layers: body.include_layers,
+        exclude_layers: body.exclude_layers,
             use_gravity: body.use_gravity,
             ccd: body.ccd,
             interpolate: body.interpolate,
@@ -184,8 +190,18 @@ impl EngineSceneBridge {
             handle,
             i32::try_from(spec.solver_iterations).unwrap_or(i32::MAX),
         );
+        physics.set_solver_velocity_iterations(
+            handle,
+            i32::try_from(spec.solver_velocity_iterations).unwrap_or(i32::MAX),
+        );
         if spec.max_depenetration_velocity > 0.0 {
             physics.set_max_depenetration_velocity(handle, spec.max_depenetration_velocity);
+        }
+        if spec.include_layers != u32::MAX {
+            physics.set_include_layers(handle, spec.include_layers);
+        }
+        if spec.exclude_layers != 0 {
+            physics.set_exclude_layers(handle, spec.exclude_layers);
         }
         if !spec.use_gravity {
             physics.set_gravity_scale(handle, 0.0);
@@ -1981,7 +1997,7 @@ type DescriptorCuerpo = (
     Option<(glass_core::MeshColliderMode, String, [f32; 3], bool)>,
     // Superficie de Rigidbody (huecos beta + RB-1): masa, damping lineal,
     // usa gravedad, CCD, interpola, damping angular, iteraciones del solver.
-    (f32, f32, bool, bool, bool, f32, u32, f32),
+    (f32, f32, bool, bool, bool, f32, u32, f32, u32, u32, u32),
 );
 
 /// Elemento de dibujo de un lote del Canvas: (rect destino, rect
@@ -3299,6 +3315,9 @@ let resueltos = colliders_resueltos(body, shape);
     body.angular_damping,
     body.solver_iterations,
     body.max_depenetration_velocity,
+    body.include_layers,
+    body.exclude_layers,
+    body.solver_velocity_iterations,
 ),
                 ));
             }
@@ -3328,8 +3347,19 @@ let resueltos = colliders_resueltos(body, shape);
         for (id, body_type, pos, rot, resueltos, friction, restitution, linvel, mesh, superficie) in descriptors
         {
             let handle = physics.create_rigid_body(id, body_type, pos, rot);
-            let (masa, damping, usa_gravedad, ccd, interpola, angular_damping, solver_iterations, max_depenetration_velocity) =
-                superficie;
+            let (
+                masa,
+                damping,
+                usa_gravedad,
+                ccd,
+                interpola,
+                angular_damping,
+                solver_iterations,
+                max_depenetration_velocity,
+                include_layers,
+                exclude_layers,
+                solver_velocity_iterations,
+            ) = superficie;
             if interpola {
                 physics.set_interpolation(id, true);
             }
@@ -3339,8 +3369,18 @@ let resueltos = colliders_resueltos(body, shape);
                 handle,
                 i32::try_from(solver_iterations).unwrap_or(i32::MAX),
             );
+            physics.set_solver_velocity_iterations(
+                handle,
+                i32::try_from(solver_velocity_iterations).unwrap_or(i32::MAX),
+            );
             if max_depenetration_velocity > 0.0 {
                 physics.set_max_depenetration_velocity(handle, max_depenetration_velocity);
+            }
+            if include_layers != u32::MAX {
+                physics.set_include_layers(handle, include_layers);
+            }
+            if exclude_layers != 0 {
+                physics.set_exclude_layers(handle, exclude_layers);
             }
             if !usa_gravedad {
                 physics.set_gravity_scale(handle, 0.0);

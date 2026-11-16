@@ -115,6 +115,26 @@ public sealed class RigidBody
     }
 
     /// <summary>
+    /// Iteraciones de velocidad del solver (solverVelocityIterations de Unity). Defecto 4.
+    /// Rapier tiene un único contador de iteraciones adicionales por cuerpo, compartido con
+    /// <see cref="SolverIterations"/>: el efectivo es el máximo de ambas propiedades.
+    /// El getter devuelve el valor guardado; el efectivo lo da SolverIterations.
+    /// </summary>
+    public int SolverVelocityIterations
+    {
+        get
+        {
+            if (!IsValid) return 4;
+            int v = RuntimeBridge.GetSolverVelocityIterations(Handle);
+            return v < 0 ? 4 : v;
+        }
+        set
+        {
+            if (IsValid) RuntimeBridge.SetSolverVelocityIterations(Handle, value);
+        }
+    }
+
+    /// <summary>
     /// Velocidad máxima (m/s) con la que un contacto penetrante puede separar este cuerpo.
     /// Solo afecta a la velocidad lineal y solo mientras hay penetración (clamp post-paso).
     /// Por defecto no hay límite (<see cref="float.PositiveInfinity"/>).
@@ -133,6 +153,46 @@ public sealed class RigidBody
             {
                 RuntimeBridge.SetMaxDepenetrationVelocity(Handle, value > 0f ? value : float.PositiveInfinity);
             }
+        }
+    }
+
+    /// <summary>
+    /// Capas con las que este cuerpo SÍ colisiona (includeLayers de Unity). Defecto: todas (uint.MaxValue).
+    /// Se aplica a TODOS los colliders del cuerpo, también a los añadidos después:
+    /// filtro efectivo = máscara del collider &amp; IncludeLayers &amp; ~ExcludeLayers. La capa del collider no cambia.
+    /// Rapier prueba el par en ambas direcciones: basta con que uno de los dos cuerpos filtre al otro.
+    /// </summary>
+    public uint IncludeLayers
+    {
+        get
+        {
+            if (!IsValid) return uint.MaxValue;
+            long v = RuntimeBridge.GetIncludeLayers(Handle);
+            return v < 0 ? uint.MaxValue : (uint)v;
+        }
+        set
+        {
+            if (IsValid) RuntimeBridge.SetIncludeLayers(Handle, value);
+        }
+    }
+
+    /// <summary>
+    /// Capas con las que este cuerpo NO colisiona (excludeLayers de Unity). Defecto: ninguna (0).
+    /// Se aplica a TODOS los colliders del cuerpo, también a los añadidos después:
+    /// filtro efectivo = máscara del collider &amp; IncludeLayers &amp; ~ExcludeLayers. La capa del collider no cambia.
+    /// Rapier prueba el par en ambas direcciones: basta con que uno de los dos cuerpos filtre al otro.
+    /// </summary>
+    public uint ExcludeLayers
+    {
+        get
+        {
+            if (!IsValid) return 0;
+            long v = RuntimeBridge.GetExcludeLayers(Handle);
+            return v < 0 ? 0 : (uint)v;
+        }
+        set
+        {
+            if (IsValid) RuntimeBridge.SetExcludeLayers(Handle, value);
         }
     }
 

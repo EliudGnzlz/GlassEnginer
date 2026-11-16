@@ -300,6 +300,30 @@ public delegate int SetMaxDepenetrationVelocityDelegate(ulong bodyHandle, float 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate float GetMaxDepenetrationVelocityDelegate(ulong bodyHandle);
 
+// espejo de glass_physics_set_include_layers(u64, u32) -> i32 (RB/CC 100% RB-3)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetIncludeLayersDelegate(ulong bodyHandle, uint mask);
+
+// espejo de glass_physics_get_include_layers(u64) -> i64 (RB/CC 100% RB-3)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate long GetIncludeLayersDelegate(ulong bodyHandle);
+
+// espejo de glass_physics_set_exclude_layers(u64, u32) -> i32 (RB/CC 100% RB-3)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetExcludeLayersDelegate(ulong bodyHandle, uint mask);
+
+// espejo de glass_physics_get_exclude_layers(u64) -> i64 (RB/CC 100% RB-3)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate long GetExcludeLayersDelegate(ulong bodyHandle);
+
+// espejo de glass_physics_set_solver_velocity_iterations(u64, i32) -> i32 (RB/CC 100% RB-3)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetSolverVelocityIterationsDelegate(ulong bodyHandle, int iterations);
+
+// espejo de glass_physics_get_solver_velocity_iterations(u64) -> i32 (RB/CC 100% RB-3)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int GetSolverVelocityIterationsDelegate(ulong bodyHandle);
+
 // espejo de glass_physics_add_relative_force(u64, f32, f32, f32) -> bool (RB/CC 100% RB-2a)
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate bool AddRelativeForceDelegate(

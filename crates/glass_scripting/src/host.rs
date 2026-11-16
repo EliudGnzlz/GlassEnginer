@@ -151,6 +151,12 @@ struct PhysicsBridgeCallbacks {
     // Añadidos AL FINAL (RB/CC 100% RB-2b): velocidad máxima de despenetración.
     set_max_depenetration_velocity: *const c_void,
     get_max_depenetration_velocity: *const c_void,
+    set_include_layers: *const c_void,
+    get_include_layers: *const c_void,
+    set_exclude_layers: *const c_void,
+    get_exclude_layers: *const c_void,
+    set_solver_velocity_iterations: *const c_void,
+    get_solver_velocity_iterations: *const c_void,
     // Añadidos AL FINAL (RB/CC 100% RB-1): damping angular e iteraciones del solver por cuerpo.
     set_angular_damping: *const c_void,
     get_angular_damping: *const c_void,
@@ -554,6 +560,12 @@ impl ScriptHost {
     get_accumulated_torque: glass_physics::glass_physics_get_accumulated_torque as *const c_void,
     set_max_depenetration_velocity: glass_physics::glass_physics_set_max_depenetration_velocity as *const c_void,
     get_max_depenetration_velocity: glass_physics::glass_physics_get_max_depenetration_velocity as *const c_void,
+        set_include_layers: glass_physics::glass_physics_set_include_layers as *const c_void,
+        get_include_layers: glass_physics::glass_physics_get_include_layers as *const c_void,
+        set_exclude_layers: glass_physics::glass_physics_set_exclude_layers as *const c_void,
+        get_exclude_layers: glass_physics::glass_physics_get_exclude_layers as *const c_void,
+        set_solver_velocity_iterations: glass_physics::glass_physics_set_solver_velocity_iterations as *const c_void,
+        get_solver_velocity_iterations: glass_physics::glass_physics_get_solver_velocity_iterations as *const c_void,
                 // Añadidos AL FINAL (RB/CC 100% RB-1): damping angular e iteraciones del solver por cuerpo.
                 set_angular_damping: glass_physics::glass_physics_set_angular_damping as *const c_void,
                 get_angular_damping: glass_physics::glass_physics_get_angular_damping as *const c_void,

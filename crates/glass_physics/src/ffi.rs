@@ -1378,6 +1378,72 @@ pub unsafe extern "C" fn glass_physics_set_max_depenetration_velocity(body_handl
     0
 }
 
+/// Fija includeLayers del cuerpo. 1 si existe, 0 si no.
+#[no_mangle]
+pub extern "C" fn glass_physics_set_include_layers(body_handle: u64, mask: u32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_include_layers(body_handle, mask) as i32;
+        }
+    }
+    0
+}
+
+/// includeLayers del cuerpo extendido a i64 (conserva el bit 31). -1 si no existe.
+#[no_mangle]
+pub extern "C" fn glass_physics_get_include_layers(body_handle: u64) -> i64 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            return world.get_include_layers(body_handle).map_or(-1, i64::from);
+        }
+    }
+    -1
+}
+
+/// Fija excludeLayers del cuerpo. 1 si existe, 0 si no.
+#[no_mangle]
+pub extern "C" fn glass_physics_set_exclude_layers(body_handle: u64, mask: u32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_exclude_layers(body_handle, mask) as i32;
+        }
+    }
+    0
+}
+
+/// excludeLayers del cuerpo extendido a i64 (conserva el bit 31). -1 si no existe.
+#[no_mangle]
+pub extern "C" fn glass_physics_get_exclude_layers(body_handle: u64) -> i64 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            return world.get_exclude_layers(body_handle).map_or(-1, i64::from);
+        }
+    }
+    -1
+}
+
+/// Fija solverVelocityIterations (comparte contador con solverIterations; manda el máximo).
+#[no_mangle]
+pub extern "C" fn glass_physics_set_solver_velocity_iterations(body_handle: u64, iterations: i32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_solver_velocity_iterations(body_handle, iterations) as i32;
+        }
+    }
+    0
+}
+
+/// solverVelocityIterations guardado del cuerpo. -1 si no existe.
+#[no_mangle]
+pub extern "C" fn glass_physics_get_solver_velocity_iterations(body_handle: u64) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            return world.get_solver_velocity_iterations(body_handle).unwrap_or(-1);
+        }
+    }
+    -1
+}
+
 /// # Safety
 /// No recibe punteros; es segura de llamar con cualquier valor.
 /// Devuelve la velocidad máxima de despenetración (INFINITY = sin límite) o -1.0 si no existe el cuerpo.

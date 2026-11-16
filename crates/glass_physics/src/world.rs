@@ -37,6 +37,17 @@ pub struct PhysicsWorld {
     /// cuerpo sale de la penetración con vy ≈ 0), así que el límite se
     /// aplica sobre el desplazamiento por substep, no sobre la velocidad.
     depenetration_prev: std::collections::HashMap<u64, [f32; 3]>,
+    /// includeLayers por cuerpo (estilo Unity). Sin entrada = u32::MAX (todas).
+    rb_include_layers: std::collections::HashMap<u64, u32>,
+    /// excludeLayers por cuerpo (estilo Unity). Sin entrada = 0 (ninguna).
+    rb_exclude_layers: std::collections::HashMap<u64, u32>,
+    /// Máscara base de cada collider (su cfg.mask), clave = índice raw del
+    /// ColliderHandle. Filter efectivo = base & include & !exclude del cuerpo.
+    layer_base_masks: std::collections::HashMap<u64, u32>,
+    /// solverIterations TOTALES guardadas por cuerpo. Sin entrada = 4.
+    solver_iterations: std::collections::HashMap<u64, i32>,
+    /// solverVelocityIterations TOTALES guardadas por cuerpo. Sin entrada = 4.
+    solver_velocity_iterations: std::collections::HashMap<u64, i32>,
     /// Grupos de colisión originales de los colliders de un cuerpo con
     /// detectCollisions desactivado, guardados para poder restaurarlos.
     detect_disabled: std::collections::HashMap<u64, Vec<(rapier3d::geometry::ColliderHandle, rapier3d::geometry::InteractionGroups)>>,
@@ -181,6 +192,11 @@ impl PhysicsWorld {
             velocity_caps: HashMap::new(),
             depenetration_caps: HashMap::new(),
             depenetration_prev: HashMap::new(),
+            rb_include_layers: HashMap::new(),
+            rb_exclude_layers: HashMap::new(),
+            layer_base_masks: HashMap::new(),
+            solver_iterations: HashMap::new(),
+            solver_velocity_iterations: HashMap::new(),
             detect_disabled: HashMap::new(),
             mprops_override: HashMap::new(),
             event_handler: ChannelEventCollector::new(event_sender, force_sender),
@@ -669,7 +685,7 @@ impl PhysicsWorld {
             &mut self.rigid_body_set,
         );
 
-        Some(collider_handle.into_raw_parts().0 as u64)
+        Some(self.register_collider_layers(collider_handle))
     }
 
     /// Sin configuración (capa 0, máscara completa, no trigger): la firma
@@ -706,7 +722,7 @@ impl PhysicsWorld {
             &mut self.rigid_body_set,
         );
 
-        Some(collider_handle.into_raw_parts().0 as u64)
+        Some(self.register_collider_layers(collider_handle))
     }
 
     /// Sin configuración (capa 0, máscara completa, no trigger): la firma
@@ -745,7 +761,7 @@ impl PhysicsWorld {
             &mut self.rigid_body_set,
         );
 
-        Some(collider_handle.into_raw_parts().0 as u64)
+        Some(self.register_collider_layers(collider_handle))
     }
 
     /// Sin configuración (capa 0, máscara completa, no trigger): la firma
@@ -785,7 +801,7 @@ impl PhysicsWorld {
             &mut self.rigid_body_set,
         );
 
-        Some(collider_handle.into_raw_parts().0 as u64)
+        Some(self.register_collider_layers(collider_handle))
     }
 
     /// Sin configuración (capa 0, máscara completa, no trigger): la firma
@@ -893,7 +909,7 @@ impl PhysicsWorld {
             rapier_handle,
             &mut self.rigid_body_set,
         );
-        Some(collider_handle.into_raw_parts().0 as u64)
+        Some(self.register_collider_layers(collider_handle))
     }
 
     /// Igual que `attach_collider_with_config`, pero con un desplazamiento local
@@ -935,7 +951,7 @@ impl PhysicsWorld {
         let collider_handle =
             self.collider_set
                 .insert_with_parent(collider, rapier_handle, &mut self.rigid_body_set);
-        Some(collider_handle.into_raw_parts().0 as u64)
+        Some(self.register_collider_layers(collider_handle))
     }
 
     /// Añade un collider de malla triangular (trimesh) al cuerpo indicado.
@@ -1021,7 +1037,7 @@ impl PhysicsWorld {
         let collider_handle =
             self.collider_set
                 .insert_with_parent(collider, rapier_handle, &mut self.rigid_body_set);
-        Some(collider_handle.into_raw_parts().0 as u64)
+        Some(self.register_collider_layers(collider_handle))
     }
 
     /// Gets the current transform of a rigid body.
@@ -2303,12 +2319,62 @@ impl PhysicsWorld {
     /// Fija las iteraciones TOTALES del solver para el cuerpo. Rapier solo admite
     /// iteraciones adicionales sobre la base global, así que se guarda
     /// `n - base` saturado a 0. Los valores negativos cuentan como 0.
+    /// Defecto de solverIterations y solverVelocityIterations: la base de Rapier en este motor.
+    const DEFAULT_SOLVER_ITERATIONS: i32 = 4;
+
+    /// Guarda solverIterations (TOTAL) del cuerpo y aplica el contador de Rapier.
+    /// Rapier 0.23 tiene un único contador adicional por cuerpo, compartido con
+    /// solverVelocityIterations: manda el máximo de ambas (ver apply_solver_iterations).
     pub fn set_solver_iterations(&mut self, handle: BodyHandle, iterations: i32) -> bool {
+        if self.get_rapier_handle(handle).is_none() {
+            return false;
+        }
+        self.solver_iterations.insert(handle, iterations);
+        self.apply_solver_iterations(handle)
+    }
+
+    /// Guarda solverVelocityIterations (TOTAL) del cuerpo. Rapier 0.23 solo tiene
+    /// un contador adicional por cuerpo (set_additional_solver_iterations), compartido
+    /// con solverIterations: se aplica
+    /// additional = max(solver_iterations, solver_velocity_iterations) - base global,
+    /// saturado a 0.
+    pub fn set_solver_velocity_iterations(&mut self, handle: BodyHandle, iterations: i32) -> bool {
+        if self.get_rapier_handle(handle).is_none() {
+            return false;
+        }
+        self.solver_velocity_iterations.insert(handle, iterations);
+        self.apply_solver_iterations(handle)
+    }
+
+    /// Devuelve el valor GUARDADO de solverVelocityIterations (4 si nunca se fijó),
+    /// no el efectivo. El efectivo lo da get_solver_iterations.
+    pub fn get_solver_velocity_iterations(&self, handle: BodyHandle) -> Option<i32> {
+        self.get_rapier_handle(handle)?;
+        Some(
+            self.solver_velocity_iterations
+                .get(&handle)
+                .copied()
+                .unwrap_or(Self::DEFAULT_SOLVER_ITERATIONS),
+        )
+    }
+
+    /// additional = max(solver, velocity) - base global, saturado a 0.
+    fn apply_solver_iterations(&mut self, handle: BodyHandle) -> bool {
         let Some((rapier, _)) = self.get_rapier_handle(handle) else {
             return false;
         };
+        let solver = self
+            .solver_iterations
+            .get(&handle)
+            .copied()
+            .unwrap_or(Self::DEFAULT_SOLVER_ITERATIONS);
+        let velocity = self
+            .solver_velocity_iterations
+            .get(&handle)
+            .copied()
+            .unwrap_or(Self::DEFAULT_SOLVER_ITERATIONS);
         let base = self.integration_parameters.num_solver_iterations.get();
-        let additional = (iterations.max(0) as usize).saturating_sub(base);
+        let additional = (solver.max(velocity).max(0) as usize).saturating_sub(base);
         match self.rigid_body_set.get_mut(rapier) {
             Some(rb) => {
                 rb.set_additional_solver_iterations(additional);
@@ -2326,6 +2392,108 @@ impl PhysicsWorld {
             i32::try_from(base.saturating_add(rb.additional_solver_iterations()))
                 .unwrap_or(i32::MAX)
         })
+    }
+
+    /// includeLayers (Unity): capas con las que el cuerpo SÍ colisiona.
+    /// Reescribe al momento el filter de TODOS sus colliders
+    /// (base & include & !exclude); el membership no cambia.
+    pub fn set_include_layers(&mut self, handle: BodyHandle, mask: u32) -> bool {
+        if self.get_rapier_handle(handle).is_none() {
+            return false;
+        }
+        self.rb_include_layers.insert(handle, mask);
+        self.apply_layer_filter(handle)
+    }
+
+    /// None si el cuerpo no existe; Some(u32::MAX) por defecto.
+    pub fn get_include_layers(&self, handle: BodyHandle) -> Option<u32> {
+        self.get_rapier_handle(handle)?;
+        Some(self.rb_include_layers.get(&handle).copied().unwrap_or(u32::MAX))
+    }
+
+    /// excludeLayers (Unity): capas con las que el cuerpo NO colisiona.
+    /// Misma reescritura de filter que set_include_layers.
+    pub fn set_exclude_layers(&mut self, handle: BodyHandle, mask: u32) -> bool {
+        if self.get_rapier_handle(handle).is_none() {
+            return false;
+        }
+        self.rb_exclude_layers.insert(handle, mask);
+        self.apply_layer_filter(handle)
+    }
+
+    /// None si el cuerpo no existe; Some(0) por defecto.
+    pub fn get_exclude_layers(&self, handle: BodyHandle) -> Option<u32> {
+        self.get_rapier_handle(handle)?;
+        Some(self.rb_exclude_layers.get(&handle).copied().unwrap_or(0))
+    }
+
+    /// include & !exclude vigente del cuerpo.
+    fn body_layer_filter(&self, handle: BodyHandle) -> u32 {
+        let include = self.rb_include_layers.get(&handle).copied().unwrap_or(u32::MAX);
+        let exclude = self.rb_exclude_layers.get(&handle).copied().unwrap_or(0);
+        include & !exclude
+    }
+
+    /// Reescribe el filter de todos los colliders del cuerpo. Si un collider no
+    /// tiene base registrada (cápsula del CC, ragdoll), su filter actual pasa a
+    /// ser su base y se registra, para no estrechar sobre lo ya estrechado.
+    fn apply_layer_filter(&mut self, handle: BodyHandle) -> bool {
+        let Some((rapier, _)) = self.get_rapier_handle(handle) else {
+            return false;
+        };
+        let Some(rb) = self.rigid_body_set.get(rapier) else {
+            return false;
+        };
+        let colliders = rb.colliders().to_vec();
+        let filter = self.body_layer_filter(handle);
+        for ch in colliders {
+            let Some(collider) = self.collider_set.get_mut(ch) else {
+                continue;
+            };
+            let groups = collider.collision_groups();
+            let key = ch.into_raw_parts().0 as u64;
+            let base = *self
+                .layer_base_masks
+                .entry(key)
+                .or_insert(groups.filter.bits());
+            collider.set_collision_groups(InteractionGroups::new(
+                groups.memberships,
+                Group::from_bits_truncate(base & filter),
+            ));
+        }
+        true
+    }
+
+    /// Registra la base de un collider recién insertado (su filter actual, que
+    /// es el cfg.mask aplicado) y le aplica el filtro include/exclude vigente
+    /// de su cuerpo padre. Devuelve el raw u64 del handle.
+    fn register_collider_layers(&mut self, collider_handle: rapier3d::prelude::ColliderHandle) -> u64 {
+        let key = collider_handle.into_raw_parts().0 as u64;
+        let Some((groups, parent)) = self
+            .collider_set
+            .get(collider_handle)
+            .map(|c| (c.collision_groups(), c.parent()))
+        else {
+            return key;
+        };
+        let base = groups.filter.bits();
+        self.layer_base_masks.insert(key, base);
+        let body_filter = self
+            .rb_include_layers
+            .keys()
+            .chain(self.rb_exclude_layers.keys())
+            .find(|&&h| parent.is_some() && self.get_rapier_handle(h).map(|(r, _)| r) == parent)
+            .map_or(u32::MAX, |&h| self.body_layer_filter(h));
+        if body_filter == u32::MAX {
+            return key;
+        }
+        if let Some(c) = self.collider_set.get_mut(collider_handle) {
+            c.set_collision_groups(InteractionGroups::new(
+                groups.memberships,
+                Group::from_bits_truncate(base & body_filter),
+            ));
+        }
+        key
     }
 
     pub fn set_gravity_scale(&mut self, handle: BodyHandle, scale: f32) -> bool {
@@ -3147,6 +3315,123 @@ mod tests {
 
         assert!(!world.set_max_depenetration_velocity(9999, 1.0));
         assert_eq!(world.get_max_depenetration_velocity(9999), None);
+    }
+
+    fn grupos_rb3(world: &PhysicsWorld, h: BodyHandle, i: usize) -> InteractionGroups {
+        let (rapier, _) = world.get_rapier_handle(h).expect("cuerpo");
+        let ch = world.rigid_body_set[rapier].colliders()[i];
+        world.collider_set[ch].collision_groups()
+    }
+
+    /// Añade una caja al cuerpo y pone su membership en `capa` (filter intacto).
+    fn caja_en_capa_rb3(world: &mut PhysicsWorld, h: BodyHandle, capa: u32) {
+        world
+            .attach_box_collider(h, [0.5, 0.5, 0.5], 0.0, 0.5)
+            .expect("collider");
+        let (rapier, _) = world.get_rapier_handle(h).expect("cuerpo");
+        let ch = world.rigid_body_set[rapier].colliders()[0];
+        let collider = world.collider_set.get_mut(ch).expect("collider");
+        let g = collider.collision_groups();
+        collider.set_collision_groups(InteractionGroups::new(
+            Group::from_bits_truncate(1u32 << capa),
+            g.filter,
+        ));
+    }
+
+    fn colisionan_rb3(world: &PhysicsWorld, a: BodyHandle, b: BodyHandle) -> bool {
+        grupos_rb3(world, a, 0).test(grupos_rb3(world, b, 0))
+    }
+
+    #[test]
+    fn rb3_include_layers_solo_colisiona_con_capas_incluidas() {
+        let (mut world, _) = mundo_con_suelo();
+        let a = world.create_rigid_body(9101, BodyType::Dynamic, [0.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        let b = world.create_rigid_body(9102, BodyType::Dynamic, [2.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        let c = world.create_rigid_body(9103, BodyType::Dynamic, [4.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        caja_en_capa_rb3(&mut world, a, 1);
+        caja_en_capa_rb3(&mut world, b, 2);
+        caja_en_capa_rb3(&mut world, c, 3);
+        assert!(colisionan_rb3(&world, a, c));
+        assert!(world.set_include_layers(a, 1u32 << 2));
+        assert!(colisionan_rb3(&world, a, b));
+        assert!(!colisionan_rb3(&world, a, c));
+        assert_eq!(grupos_rb3(&world, a, 0).memberships.bits(), 1u32 << 1);
+        assert_eq!(world.get_include_layers(a), Some(1u32 << 2));
+    }
+
+    #[test]
+    fn rb3_exclude_layers_no_colisiona_con_capa_excluida() {
+        let (mut world, _) = mundo_con_suelo();
+        let a = world.create_rigid_body(9111, BodyType::Dynamic, [0.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        let b = world.create_rigid_body(9112, BodyType::Dynamic, [2.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        caja_en_capa_rb3(&mut world, a, 1);
+        caja_en_capa_rb3(&mut world, b, 2);
+        assert!(colisionan_rb3(&world, a, b));
+        assert!(world.set_exclude_layers(a, 1u32 << 2));
+        assert!(!colisionan_rb3(&world, a, b));
+        assert_eq!(world.get_exclude_layers(a), Some(1u32 << 2));
+    }
+
+    #[test]
+    fn rb3_quitar_exclude_restaura_la_colision_y_la_base() {
+        let (mut world, _) = mundo_con_suelo();
+        let a = world.create_rigid_body(9121, BodyType::Dynamic, [0.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        let b = world.create_rigid_body(9122, BodyType::Dynamic, [2.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        caja_en_capa_rb3(&mut world, a, 1);
+        caja_en_capa_rb3(&mut world, b, 2);
+        assert!(world.set_exclude_layers(a, 1u32 << 2));
+        assert!(world.set_exclude_layers(a, 1u32 << 2));
+        assert!(!colisionan_rb3(&world, a, b));
+        // Un collider añadido después nace ya filtrado.
+        world
+            .attach_box_collider(a, [0.25, 0.25, 0.25], 0.0, 0.5)
+            .expect("collider");
+        assert_eq!(grupos_rb3(&world, a, 1).filter.bits(), !(1u32 << 2));
+        assert!(world.set_exclude_layers(a, 0));
+        assert!(colisionan_rb3(&world, a, b));
+        assert_eq!(grupos_rb3(&world, a, 0).filter.bits(), u32::MAX);
+        assert_eq!(grupos_rb3(&world, a, 1).filter.bits(), u32::MAX);
+    }
+
+    #[test]
+    fn rb3_layers_handle_invalido_y_defectos() {
+        let (mut world, _) = mundo_con_suelo();
+        assert!(!world.set_include_layers(u64::MAX, 1));
+        assert!(!world.set_exclude_layers(u64::MAX, 1));
+        assert_eq!(world.get_include_layers(u64::MAX), None);
+        assert_eq!(world.get_exclude_layers(u64::MAX), None);
+        let a = world.create_rigid_body(9131, BodyType::Dynamic, [0.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(world.get_include_layers(a), Some(u32::MAX));
+        assert_eq!(world.get_exclude_layers(a), Some(0));
+    }
+
+    #[test]
+    fn rb3_solver_velocity_manda_el_maximo() {
+        let (mut world, _) = mundo_con_suelo();
+        let a = world.create_rigid_body(9141, BodyType::Dynamic, [0.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        assert!(world.set_solver_iterations(a, 6));
+        assert!(world.set_solver_velocity_iterations(a, 10));
+        assert_eq!(world.get_solver_iterations(a), Some(10));
+        assert_eq!(world.get_solver_velocity_iterations(a), Some(10));
+    }
+
+    #[test]
+    fn rb3_solver_velocity_menor_no_baja_solver() {
+        let (mut world, _) = mundo_con_suelo();
+        let a = world.create_rigid_body(9151, BodyType::Dynamic, [0.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        assert!(world.set_solver_iterations(a, 6));
+        assert!(world.set_solver_velocity_iterations(a, 3));
+        assert_eq!(world.get_solver_iterations(a), Some(6));
+        assert_eq!(world.get_solver_velocity_iterations(a), Some(3));
+    }
+
+    #[test]
+    fn rb3_solver_velocity_handle_invalido_y_defecto() {
+        let (mut world, _) = mundo_con_suelo();
+        assert!(!world.set_solver_velocity_iterations(u64::MAX, 8));
+        assert_eq!(world.get_solver_velocity_iterations(u64::MAX), None);
+        let a = world.create_rigid_body(9161, BodyType::Dynamic, [0.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(world.get_solver_velocity_iterations(a), Some(4));
     }
 
     fn mundo_con_suelo() -> (PhysicsWorld, u64) {
