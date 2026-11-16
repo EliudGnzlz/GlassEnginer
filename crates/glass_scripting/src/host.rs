@@ -143,6 +143,11 @@ struct PhysicsBridgeCallbacks {
     move_kinematic_rotation: *const c_void,
     sweep_body: *const c_void,
     sweep_body_all: *const c_void,
+    // Añadidos AL FINAL (RB/CC 100% RB-2a): fuerza relativa y fuerzas acumuladas.
+    add_relative_force: *const c_void,
+    apply_relative_impulse: *const c_void,
+    get_accumulated_force: *const c_void,
+    get_accumulated_torque: *const c_void,
     // Añadidos AL FINAL (RB/CC 100% RB-1): damping angular e iteraciones del solver por cuerpo.
     set_angular_damping: *const c_void,
     get_angular_damping: *const c_void,
@@ -539,6 +544,11 @@ impl ScriptHost {
                 move_kinematic_rotation: glass_physics::glass_physics_move_kinematic_rotation as *const c_void,
                 sweep_body: glass_physics::glass_physics_sweep_body as *const c_void,
                 sweep_body_all: glass_physics::glass_physics_sweep_body_all as *const c_void,
+    // Añadidos AL FINAL (RB/CC 100% RB-2a): fuerza relativa y fuerzas acumuladas.
+    add_relative_force: glass_physics::glass_physics_add_relative_force as *const c_void,
+    apply_relative_impulse: glass_physics::glass_physics_apply_relative_impulse as *const c_void,
+    get_accumulated_force: glass_physics::glass_physics_get_accumulated_force as *const c_void,
+    get_accumulated_torque: glass_physics::glass_physics_get_accumulated_torque as *const c_void,
                 // Añadidos AL FINAL (RB/CC 100% RB-1): damping angular e iteraciones del solver por cuerpo.
                 set_angular_damping: glass_physics::glass_physics_set_angular_damping as *const c_void,
                 get_angular_damping: glass_physics::glass_physics_get_angular_damping as *const c_void,

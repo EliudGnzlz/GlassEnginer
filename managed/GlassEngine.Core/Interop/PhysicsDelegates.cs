@@ -292,6 +292,30 @@ public delegate int CharacterBoundsDelegate(ulong entityId, [In, Out] float[] mi
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate int GetAngularVelocityDelegate(ulong bodyHandle, [In, Out] float[] outVelocity);
 
+// espejo de glass_physics_add_relative_force(u64, f32, f32, f32) -> bool (RB/CC 100% RB-2a)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate bool AddRelativeForceDelegate(
+    ulong bodyHandle,
+    float forceX,
+    float forceY,
+    float forceZ);
+
+// espejo de glass_physics_apply_relative_impulse(u64, f32, f32, f32) -> bool (RB/CC 100% RB-2a)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate bool ApplyRelativeImpulseDelegate(
+    ulong bodyHandle,
+    float impulseX,
+    float impulseY,
+    float impulseZ);
+
+// espejo de glass_physics_get_accumulated_force(u64, *mut f32) -> i32 (RB/CC 100% RB-2a)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int GetAccumulatedForceDelegate(ulong bodyHandle, [In, Out] float[] outForce);
+
+// espejo de glass_physics_get_accumulated_torque(u64, *mut f32) -> i32 (RB/CC 100% RB-2a)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int GetAccumulatedTorqueDelegate(ulong bodyHandle, [In, Out] float[] outTorque);
+
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate int SetAngularVelocityDelegate(ulong bodyHandle, float x, float y, float z);
 

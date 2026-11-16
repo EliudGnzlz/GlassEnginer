@@ -282,6 +282,49 @@ public sealed class RigidBody
         }
     }
 
+    /// <summary>
+    /// Aplica una fuerza en coordenadas locales del cuerpo. El runtime la rota a mundo con la rotación actual del cuerpo.
+    /// </summary>
+    public bool AddRelativeForce(Vector3 force, ForceMode mode = ForceMode.Force)
+    {
+        if (!IsValid) return false;
+        switch (mode)
+        {
+            case ForceMode.Acceleration:
+                return RuntimeBridge.AddRelativeForce(Handle, force * Mass);
+            case ForceMode.Impulse:
+                return RuntimeBridge.ApplyRelativeImpulse(Handle, force);
+            case ForceMode.VelocityChange:
+                if (!GetTransform(out _, out Quaternion rotation)) return false;
+                if (!RuntimeBridge.GetLinearVelocity(Handle, out var velocity)) return false;
+                return RuntimeBridge.SetLinearVelocity(Handle, velocity + RotateVector(rotation, force));
+            default:
+                return RuntimeBridge.AddRelativeForce(Handle, force);
+        }
+    }
+
+    /// <summary>
+    /// Suma viva de las fuerzas de usuario (mundo) desde el último reset. Rapier no la resetea en cada paso,
+    /// así que no es la fuerza del último paso fijo (diferencia conocida con Unity).
+    /// </summary>
+    public bool GetAccumulatedForce(out Vector3 force)
+    {
+        force = Vector3.Zero;
+        if (!IsValid) return false;
+        return RuntimeBridge.GetAccumulatedForce(Handle, out force);
+    }
+
+    /// <summary>
+    /// Suma viva de los torques de usuario (mundo) desde el último reset. Rapier no la resetea en cada paso,
+    /// así que no es el torque del último paso fijo (diferencia conocida con Unity).
+    /// </summary>
+    public bool GetAccumulatedTorque(out Vector3 torque)
+    {
+        torque = Vector3.Zero;
+        if (!IsValid) return false;
+        return RuntimeBridge.GetAccumulatedTorque(Handle, out torque);
+    }
+
     public bool GetTransform(out Vector3 position, out Quaternion rotation)
     {
         if (!IsValid)

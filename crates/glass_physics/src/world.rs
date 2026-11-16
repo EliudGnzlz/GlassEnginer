@@ -1074,6 +1074,52 @@ impl PhysicsWorld {
         }
     }
 
+    /// Fuerza en coordenadas locales del cuerpo, rotada a mundo con la rotación actual.
+    pub fn add_relative_force(&mut self, body_handle: BodyHandle, force: [f32; 3]) -> bool {
+        let &(rapier_handle, _) = match self.body_map.get(&body_handle) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        if let Some(rb) = self.rigid_body_set.get_mut(rapier_handle) {
+            let world_force = *rb.rotation() * vector![force[0], force[1], force[2]];
+            rb.add_force(world_force, true);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Impulso en coordenadas locales del cuerpo, rotado a mundo con la rotación actual.
+    pub fn apply_relative_impulse(&mut self, body_handle: BodyHandle, impulse: [f32; 3]) -> bool {
+        let &(rapier_handle, _) = match self.body_map.get(&body_handle) {
+            Some(v) => v,
+            None => return false,
+        };
+
+        if let Some(rb) = self.rigid_body_set.get_mut(rapier_handle) {
+            let world_impulse = *rb.rotation() * vector![impulse[0], impulse[1], impulse[2]];
+            rb.apply_impulse(world_impulse, true);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Suma viva de fuerzas de usuario desde el último `reset_forces` (Rapier no resetea por paso).
+    pub fn get_accumulated_force(&self, body_handle: BodyHandle) -> Option<[f32; 3]> {
+        let &(rapier_handle, _) = self.body_map.get(&body_handle)?;
+        let f = self.rigid_body_set.get(rapier_handle)?.user_force();
+        Some([f.x, f.y, f.z])
+    }
+
+    /// Suma viva de torques de usuario desde el último `reset_torques` (Rapier no resetea por paso).
+    pub fn get_accumulated_torque(&self, body_handle: BodyHandle) -> Option<[f32; 3]> {
+        let &(rapier_handle, _) = self.body_map.get(&body_handle)?;
+        let t = self.rigid_body_set.get(rapier_handle)?.user_torque();
+        Some([t.x, t.y, t.z])
+    }
+
     /// Gets the linear velocity of a rigid body.
     pub fn get_linear_velocity(&self, body_handle: BodyHandle) -> Option<[f32; 3]> {
         let &(rapier_handle, _) = self.body_map.get(&body_handle)?;
@@ -2843,6 +2889,57 @@ mod tests {
         let n2 = (v2[0] * v2[0] + v2[1] * v2[1] + v2[2] * v2[2]).sqrt();
 
         assert!(n1 < n2, "con damping 5.0 ({n1}) debe girar menos que con 0.0 ({n2})");
+    }
+
+    fn cuerpo_dinamico_box(world: &mut PhysicsWorld, id: u64) -> u64 {
+        let h = world.create_rigid_body(id, BodyType::Dynamic, [0.0, 5.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        world
+            .attach_box_collider(h, [0.5, 0.5, 0.5], 0.0, 0.0)
+            .expect("collider box");
+        h
+    }
+
+    fn aprox(a: [f32; 3], b: [f32; 3]) -> bool {
+        (0..3).all(|i| (a[i] - b[i]).abs() < 1e-4)
+    }
+
+    #[test]
+    fn add_relative_force_rota_con_el_cuerpo() {
+        let (mut world, _suelo) = mundo_con_suelo();
+
+        let rotado = cuerpo_dinamico_box(&mut world, 40);
+        let s = std::f32::consts::FRAC_1_SQRT_2;
+        assert!(world.set_transform(rotado, [0.0, 5.0, 0.0], [0.0, s, 0.0, s]));
+        assert!(world.add_relative_force(rotado, [0.0, 0.0, 10.0]));
+        let f = world.get_accumulated_force(rotado).unwrap();
+        assert!(aprox(f, [10.0, 0.0, 0.0]), "rotado: {f:?}");
+
+        let sin_rotar = cuerpo_dinamico_box(&mut world, 41);
+        assert!(world.add_relative_force(sin_rotar, [0.0, 0.0, 10.0]));
+        let f = world.get_accumulated_force(sin_rotar).unwrap();
+        assert!(aprox(f, [0.0, 0.0, 10.0]), "sin rotar: {f:?}");
+    }
+
+    #[test]
+    fn accumulated_force_y_torque() {
+        let (mut world, _suelo) = mundo_con_suelo();
+        let h = cuerpo_dinamico_box(&mut world, 42);
+
+        assert!(world.apply_force(h, [1.0, 2.0, 3.0]));
+        assert!(world.add_torque(h, [0.0, 5.0, 0.0]));
+
+        assert!(aprox(world.get_accumulated_force(h).unwrap(), [1.0, 2.0, 3.0]));
+        assert!(aprox(world.get_accumulated_torque(h).unwrap(), [0.0, 5.0, 0.0]));
+
+        assert!(world.get_accumulated_force(9999).is_none());
+        assert!(world.get_accumulated_torque(9999).is_none());
+    }
+
+    #[test]
+    fn add_relative_force_handle_invalido() {
+        let (mut world, _suelo) = mundo_con_suelo();
+        assert!(!world.add_relative_force(9999, [0.0, 0.0, 10.0]));
+        assert!(!world.apply_relative_impulse(9999, [0.0, 0.0, 10.0]));
     }
 
     fn mundo_con_suelo() -> (PhysicsWorld, u64) {

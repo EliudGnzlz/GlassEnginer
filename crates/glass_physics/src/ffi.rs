@@ -969,12 +969,107 @@ pub unsafe extern "C" fn glass_physics_get_angular_velocity(body_handle: u64, ou
     if let Some(sys) = get_global_physics_world() {
         if let Ok(world) = sys.lock() {
             if let Some(angvel) = world.get_angular_velocity(body_handle) {
-                unsafe {
-                    *out.add(0) = angvel[0];
-                    *out.add(1) = angvel[1];
-                    *out.add(2) = angvel[2];
-                }
+                let out = std::slice::from_raw_parts_mut(out, 3);
+                out.copy_from_slice(&angvel);
                 return 1;
+            }
+        }
+    }
+    0
+}
+
+/// Fuerza en coordenadas locales del cuerpo, rotada a mundo con su rotación actual.
+/// Devuelve true si el cuerpo existe.
+/// # Safety
+/// (Sin punteros: las tres componentes van por valor, como `glass_physics_apply_force`.)
+#[no_mangle]
+pub extern "C" fn glass_physics_add_relative_force(
+    body_handle: u64,
+    force_x: f32,
+    force_y: f32,
+    force_z: f32,
+) -> bool {
+    if !all_finite(&[force_x, force_y, force_z]) {
+        log::error!("glass_physics_add_relative_force: fuerza no finita; ignorada");
+        return false;
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.add_relative_force(body_handle, [force_x, force_y, force_z]);
+        }
+    }
+    false
+}
+
+/// Impulso en coordenadas locales del cuerpo, rotado a mundo con su rotación actual.
+/// Devuelve true si el cuerpo existe.
+/// # Safety
+/// (Sin punteros: las tres componentes van por valor.)
+#[no_mangle]
+pub extern "C" fn glass_physics_apply_relative_impulse(
+    body_handle: u64,
+    impulse_x: f32,
+    impulse_y: f32,
+    impulse_z: f32,
+) -> bool {
+    if !all_finite(&[impulse_x, impulse_y, impulse_z]) {
+        log::error!("glass_physics_apply_relative_impulse: impulso no finito; ignorado");
+        return false;
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.apply_relative_impulse(body_handle, [impulse_x, impulse_y, impulse_z]);
+        }
+    }
+    false
+}
+
+/// Fuerza de usuario acumulada (mundo). Escribe [0,0,0] y devuelve 0 si no existe el cuerpo.
+/// # Safety
+/// `out` debe ser null o apuntar a 3 `f32` escribibles.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_get_accumulated_force(body_handle: u64, out: *mut f32) -> i32 {
+    if out.is_null() {
+        return 0;
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            let out = std::slice::from_raw_parts_mut(out, 3);
+            match world.get_accumulated_force(body_handle) {
+                Some(v) => {
+                    out.copy_from_slice(&v);
+                    return 1;
+                }
+                None => {
+                    out.copy_from_slice(&[0.0; 3]);
+                    return 0;
+                }
+            }
+        }
+    }
+    0
+}
+
+/// Torque de usuario acumulado (mundo). Escribe [0,0,0] y devuelve 0 si no existe el cuerpo.
+/// # Safety
+/// `out` debe ser null o apuntar a 3 `f32` escribibles.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_get_accumulated_torque(body_handle: u64, out: *mut f32) -> i32 {
+    if out.is_null() {
+        return 0;
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            let out = std::slice::from_raw_parts_mut(out, 3);
+            match world.get_accumulated_torque(body_handle) {
+                Some(v) => {
+                    out.copy_from_slice(&v);
+                    return 1;
+                }
+                None => {
+                    out.copy_from_slice(&[0.0; 3]);
+                    return 0;
+                }
             }
         }
     }

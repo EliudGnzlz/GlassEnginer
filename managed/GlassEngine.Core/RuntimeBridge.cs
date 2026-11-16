@@ -95,6 +95,10 @@ public static class RuntimeBridge
     private static GetSolverIterationsDelegate? _getSolverIterations;
     private static SetGravityScaleDelegate? _setGravityScale;
     private static GetAngularVelocityDelegate? _getAngularVelocity;
+    private static AddRelativeForceDelegate? _addRelativeForce;
+    private static ApplyRelativeImpulseDelegate? _applyRelativeImpulse;
+    private static GetAccumulatedForceDelegate? _getAccumulatedForce;
+    private static GetAccumulatedTorqueDelegate? _getAccumulatedTorque;
     private static SetAngularVelocityDelegate? _setAngularVelocity;
     private static AddTorqueDelegate? _addTorque;
     private static ApplyTorqueImpulseDelegate? _applyTorqueImpulse;
@@ -398,6 +402,11 @@ public static class RuntimeBridge
         public IntPtr MoveKinematicRotation;
         public IntPtr SweepBody;
         public IntPtr SweepBodyAll;
+        // Añadidos AL FINAL (RB/CC 100% RB-2a): fuerza relativa y fuerzas acumuladas.
+        public IntPtr AddRelativeForce;
+        public IntPtr ApplyRelativeImpulse;
+        public IntPtr GetAccumulatedForce;
+        public IntPtr GetAccumulatedTorque;
 
         // Añadidos AL FINAL (RB/CC 100% RB-1): damping angular e
         // iteraciones del solver por cuerpo.
@@ -545,6 +554,14 @@ public static class RuntimeBridge
             _sweepBody = Marshal.GetDelegateForFunctionPointer<SweepBodyDelegate>(callbacks->SweepBody);
         if (callbacks->SweepBodyAll != IntPtr.Zero)
             _sweepBodyAll = Marshal.GetDelegateForFunctionPointer<SweepBodyAllDelegate>(callbacks->SweepBodyAll);
+        if (callbacks->AddRelativeForce != IntPtr.Zero)
+            _addRelativeForce = Marshal.GetDelegateForFunctionPointer<AddRelativeForceDelegate>(callbacks->AddRelativeForce);
+        if (callbacks->ApplyRelativeImpulse != IntPtr.Zero)
+            _applyRelativeImpulse = Marshal.GetDelegateForFunctionPointer<ApplyRelativeImpulseDelegate>(callbacks->ApplyRelativeImpulse);
+        if (callbacks->GetAccumulatedForce != IntPtr.Zero)
+            _getAccumulatedForce = Marshal.GetDelegateForFunctionPointer<GetAccumulatedForceDelegate>(callbacks->GetAccumulatedForce);
+        if (callbacks->GetAccumulatedTorque != IntPtr.Zero)
+            _getAccumulatedTorque = Marshal.GetDelegateForFunctionPointer<GetAccumulatedTorqueDelegate>(callbacks->GetAccumulatedTorque);
 
             if (callbacks->SetLockedAxes != IntPtr.Zero)
             {
@@ -1852,6 +1869,38 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         float[] buffer = new float[3];
         if (_getAngularVelocity(bodyHandle, buffer) == 0) return false;
         velocity = new Vector3(buffer[0], buffer[1], buffer[2]);
+        return true;
+    }
+
+    public static bool AddRelativeForce(ulong bodyHandle, Vector3 force)
+    {
+        if (_addRelativeForce is null) return false;
+        return _addRelativeForce(bodyHandle, force.X, force.Y, force.Z);
+    }
+
+    public static bool ApplyRelativeImpulse(ulong bodyHandle, Vector3 impulse)
+    {
+        if (_applyRelativeImpulse is null) return false;
+        return _applyRelativeImpulse(bodyHandle, impulse.X, impulse.Y, impulse.Z);
+    }
+
+    public static bool GetAccumulatedForce(ulong bodyHandle, out Vector3 force)
+    {
+        force = Vector3.Zero;
+        if (_getAccumulatedForce is null) return false;
+        float[] buffer = new float[3];
+        if (_getAccumulatedForce(bodyHandle, buffer) == 0) return false;
+        force = new Vector3(buffer[0], buffer[1], buffer[2]);
+        return true;
+    }
+
+    public static bool GetAccumulatedTorque(ulong bodyHandle, out Vector3 torque)
+    {
+        torque = Vector3.Zero;
+        if (_getAccumulatedTorque is null) return false;
+        float[] buffer = new float[3];
+        if (_getAccumulatedTorque(bodyHandle, buffer) == 0) return false;
+        torque = new Vector3(buffer[0], buffer[1], buffer[2]);
         return true;
     }
 
