@@ -1400,7 +1400,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 self.shader_graph.render(ui);
             }
             EditorTab::MeshTool => {
-                self.mesh_tool.render(ui, &self.scene_state);
+                self.mesh_tool.render(ui, self.scene_state);
             }
         }
     }

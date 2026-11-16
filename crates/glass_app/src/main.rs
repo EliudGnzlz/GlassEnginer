@@ -7482,6 +7482,9 @@ impl ApplicationHandler for GlassEngineApp {
                 log::info!("Cierre de ventana solicitado.");
                 event_loop.exit();
             }
+            // Escape solo cierra la app en modo standalone/juego. En modo editor es una
+            // tecla de trabajo (cancela el Grab de la herramienta 3D y operaciones
+            // equivalentes, que ya la recibieron vía egui); allí se sale por CloseRequested/menú.
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -7490,7 +7493,7 @@ impl ApplicationHandler for GlassEngineApp {
                         ..
                     },
                 ..
-            } => {
+            } if self.is_standalone => {
                 log::info!("Tecla Escape presionada. Saliendo.");
                 event_loop.exit();
             }

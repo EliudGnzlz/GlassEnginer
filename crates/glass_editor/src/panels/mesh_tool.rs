@@ -1686,10 +1686,11 @@ mod tests {
     }
 
     fn panel_con_prefs(ruta: &std::path::Path) -> MeshToolPanel {
-        let mut panel = MeshToolPanel::default();
-        panel.prefs_file = ruta.to_path_buf();
-        panel.prefs = ToolPrefs::load_from(ruta);
-        panel
+        MeshToolPanel {
+            prefs_file: ruta.to_path_buf(),
+            prefs: ToolPrefs::load_from(ruta),
+            ..Default::default()
+        }
     }
 
     #[test]
