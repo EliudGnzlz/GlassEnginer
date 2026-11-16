@@ -99,6 +99,8 @@ public static class RuntimeBridge
     private static ApplyRelativeImpulseDelegate? _applyRelativeImpulse;
     private static GetAccumulatedForceDelegate? _getAccumulatedForce;
     private static GetAccumulatedTorqueDelegate? _getAccumulatedTorque;
+    private static SetMaxDepenetrationVelocityDelegate? _setMaxDepenetrationVelocity;
+    private static GetMaxDepenetrationVelocityDelegate? _getMaxDepenetrationVelocity;
     private static SetAngularVelocityDelegate? _setAngularVelocity;
     private static AddTorqueDelegate? _addTorque;
     private static ApplyTorqueImpulseDelegate? _applyTorqueImpulse;
@@ -407,6 +409,9 @@ public static class RuntimeBridge
         public IntPtr ApplyRelativeImpulse;
         public IntPtr GetAccumulatedForce;
         public IntPtr GetAccumulatedTorque;
+        // Añadidos AL FINAL (RB/CC 100% RB-2b): velocidad máxima de despenetración.
+        public IntPtr SetMaxDepenetrationVelocity;
+        public IntPtr GetMaxDepenetrationVelocity;
 
         // Añadidos AL FINAL (RB/CC 100% RB-1): damping angular e
         // iteraciones del solver por cuerpo.
@@ -560,6 +565,10 @@ public static class RuntimeBridge
             _applyRelativeImpulse = Marshal.GetDelegateForFunctionPointer<ApplyRelativeImpulseDelegate>(callbacks->ApplyRelativeImpulse);
         if (callbacks->GetAccumulatedForce != IntPtr.Zero)
             _getAccumulatedForce = Marshal.GetDelegateForFunctionPointer<GetAccumulatedForceDelegate>(callbacks->GetAccumulatedForce);
+        if (callbacks->SetMaxDepenetrationVelocity != IntPtr.Zero)
+            _setMaxDepenetrationVelocity = Marshal.GetDelegateForFunctionPointer<SetMaxDepenetrationVelocityDelegate>(callbacks->SetMaxDepenetrationVelocity);
+        if (callbacks->GetMaxDepenetrationVelocity != IntPtr.Zero)
+            _getMaxDepenetrationVelocity = Marshal.GetDelegateForFunctionPointer<GetMaxDepenetrationVelocityDelegate>(callbacks->GetMaxDepenetrationVelocity);
         if (callbacks->GetAccumulatedTorque != IntPtr.Zero)
             _getAccumulatedTorque = Marshal.GetDelegateForFunctionPointer<GetAccumulatedTorqueDelegate>(callbacks->GetAccumulatedTorque);
 
@@ -1902,6 +1911,20 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         if (_getAccumulatedTorque(bodyHandle, buffer) == 0) return false;
         torque = new Vector3(buffer[0], buffer[1], buffer[2]);
         return true;
+    }
+
+    /// <summary>Fija la velocidad máxima de despenetración. False si no hay puente o el cuerpo no existe.</summary>
+    public static bool SetMaxDepenetrationVelocity(ulong bodyHandle, float max)
+    {
+        if (_setMaxDepenetrationVelocity is null) return false;
+        return _setMaxDepenetrationVelocity(bodyHandle, max) != 0;
+    }
+
+    /// <summary>Velocidad máxima de despenetración (infinito = sin límite); -1 si no hay puente o el cuerpo no existe.</summary>
+    public static float GetMaxDepenetrationVelocity(ulong bodyHandle)
+    {
+        if (_getMaxDepenetrationVelocity is null) return -1.0f;
+        return _getMaxDepenetrationVelocity(bodyHandle);
     }
 
     public static bool SetAngularVelocity(ulong bodyHandle, Vector3 velocity)

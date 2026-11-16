@@ -202,6 +202,9 @@ pub struct PhysicsData {
     /// Iteraciones TOTALES del solver para el cuerpo. Defecto 4, la base de Rapier.
     #[serde(default = "default_solver_iterations")]
     pub solver_iterations: u32,
+    /// Velocidad máxima de despenetración (m/s). 0.0 = sin límite.
+    #[serde(default = "default_max_depenetration_velocity")]
+    pub max_depenetration_velocity: f32,
     /// Si el cuerpo responde a la gravedad del mundo.
     #[serde(default = "default_true")]
     pub use_gravity: bool,
@@ -218,6 +221,10 @@ fn default_linear_damping() -> f32 {
 }
 
 fn default_angular_damping() -> f32 {
+    0.0
+}
+
+fn default_max_depenetration_velocity() -> f32 {
     0.0
 }
 
@@ -248,6 +255,7 @@ impl Default for PhysicsData {
             linear_damping: 1.5,
             angular_damping: 0.0,
             solver_iterations: 4,
+            max_depenetration_velocity: 0.0,
             use_gravity: true,
             ccd: false,
         }
@@ -1309,6 +1317,7 @@ impl EntityData {
                 linear_damping: 1.5,
                 angular_damping: 0.0,
                 solver_iterations: 4,
+                max_depenetration_velocity: 0.0,
                 use_gravity: true,
                 ccd: false,
                 interpolate: false,

@@ -292,6 +292,14 @@ public delegate int CharacterBoundsDelegate(ulong entityId, [In, Out] float[] mi
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate int GetAngularVelocityDelegate(ulong bodyHandle, [In, Out] float[] outVelocity);
 
+// espejo de glass_physics_set_max_depenetration_velocity(u64, f32) -> i32 (RB/CC 100% RB-2b)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetMaxDepenetrationVelocityDelegate(ulong bodyHandle, float max);
+
+// espejo de glass_physics_get_max_depenetration_velocity(u64) -> f32 (RB/CC 100% RB-2b)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate float GetMaxDepenetrationVelocityDelegate(ulong bodyHandle);
+
 // espejo de glass_physics_add_relative_force(u64, f32, f32, f32) -> bool (RB/CC 100% RB-2a)
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate bool AddRelativeForceDelegate(

@@ -114,6 +114,28 @@ public sealed class RigidBody
         }
     }
 
+    /// <summary>
+    /// Velocidad máxima (m/s) con la que un contacto penetrante puede separar este cuerpo.
+    /// Solo afecta a la velocidad lineal y solo mientras hay penetración (clamp post-paso).
+    /// Por defecto no hay límite (<see cref="float.PositiveInfinity"/>).
+    /// Asignar 0, un valor negativo o no finito quita el límite.
+    /// </summary>
+    public float MaxDepenetrationVelocity
+    {
+        get
+        {
+            float v = RuntimeBridge.GetMaxDepenetrationVelocity(Handle);
+            return v < 0f ? float.PositiveInfinity : v;
+        }
+        set
+        {
+            if (IsValid)
+            {
+                RuntimeBridge.SetMaxDepenetrationVelocity(Handle, value > 0f ? value : float.PositiveInfinity);
+            }
+        }
+    }
+
     private bool _useGravity = true;
 
     public bool UseGravity

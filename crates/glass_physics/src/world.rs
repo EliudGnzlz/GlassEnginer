@@ -30,6 +30,13 @@ pub struct PhysicsWorld {
     /// Topes de velocidad (lineal, angular) por cuerpo registrado. Solo
     /// afecta a los cuerpos presentes en el mapa.
     velocity_caps: std::collections::HashMap<u64, (f32, f32)>,
+    /// Límite de velocidad de despenetración por cuerpo (m/s). Sin entrada = sin límite.
+    depenetration_caps: std::collections::HashMap<u64, f32>,
+    /// Posiciones al inicio del substep de los cuerpos con límite de
+    /// despenetración: la separación de Rapier es POSICIONAL (medido: el
+    /// cuerpo sale de la penetración con vy ≈ 0), así que el límite se
+    /// aplica sobre el desplazamiento por substep, no sobre la velocidad.
+    depenetration_prev: std::collections::HashMap<u64, [f32; 3]>,
     /// Grupos de colisión originales de los colliders de un cuerpo con
     /// detectCollisions desactivado, guardados para poder restaurarlos.
     detect_disabled: std::collections::HashMap<u64, Vec<(rapier3d::geometry::ColliderHandle, rapier3d::geometry::InteractionGroups)>>,
@@ -172,6 +179,8 @@ impl PhysicsWorld {
             prev_transforms: std::collections::HashMap::new(),
             interp_bodies: std::collections::HashSet::new(),
             velocity_caps: HashMap::new(),
+            depenetration_caps: HashMap::new(),
+            depenetration_prev: HashMap::new(),
             detect_disabled: HashMap::new(),
             mprops_override: HashMap::new(),
             event_handler: ChannelEventCollector::new(event_sender, force_sender),
@@ -217,6 +226,7 @@ impl PhysicsWorld {
             // de curr, coherente con alpha = acumulador / fixed_timestep. Si el
             // frame no ejecuta substeps, prev se conserva y la mezcla avanza.
             self.capture_prev_transforms();
+            self.capture_depenetration_prev();
             #[cfg(feature = "parallel")]
             {
                 // Préstamo disjunto explícito: el closure no captura `self` entero.
@@ -275,6 +285,9 @@ impl PhysicsWorld {
             // del propio substep vuelve a superar el tope (medido:
             // cap 1,0 → 1,12 tras un paso).
             self.apply_velocity_caps();
+            // Despenetración también DESPUÉS: el solver del propio
+            // substep volvería a superar el límite.
+            self.apply_depenetration_caps(fixed_dt);
             substeps += 1;
             self.step_count += 1;
             self.collect_contact_events();
@@ -1354,6 +1367,145 @@ impl PhysicsWorld {
             f32::INFINITY
         };
         self.velocity_caps.insert(body_handle, (lin, ang));
+    }
+
+    /// Fija la velocidad máxima (m/s) con la que un contacto penetrante puede
+    /// separar el cuerpo. No finito o negativo = sin límite. `false` si el cuerpo no existe.
+    pub fn set_max_depenetration_velocity(&mut self, body_handle: BodyHandle, max: f32) -> bool {
+        if !self.body_map.contains_key(&body_handle) {
+            return false;
+        }
+        let v = if max.is_finite() && max >= 0.0 {
+            max
+        } else {
+            f32::INFINITY
+        };
+        self.depenetration_caps.insert(body_handle, v);
+        true
+    }
+
+    /// `None` si el cuerpo no existe; `Some(INFINITY)` si no tiene límite.
+    pub fn get_max_depenetration_velocity(&self, body_handle: BodyHandle) -> Option<f32> {
+        if !self.body_map.contains_key(&body_handle) {
+            return None;
+        }
+        Some(
+            self.depenetration_caps
+                .get(&body_handle)
+                .copied()
+                .unwrap_or(f32::INFINITY),
+        )
+    }
+
+    pub fn clear_max_depenetration_velocity(&mut self, body_handle: BodyHandle) {
+        self.depenetration_caps.remove(&body_handle);
+    }
+
+    /// Guarda la posición de los cuerpos con límite finito al inicio del
+    /// substep (antes de que corra el pipeline).
+    fn capture_depenetration_prev(&mut self) {
+        self.depenetration_prev.clear();
+        if self.depenetration_caps.is_empty() {
+            return;
+        }
+        for (&bh, &limite) in self.depenetration_caps.iter() {
+            if !limite.is_finite() {
+                continue;
+            }
+            let Some(&(rh, _)) = self.body_map.get(&bh) else {
+                continue;
+            };
+            let Some(rb) = self.rigid_body_set.get(rh) else {
+                continue;
+            };
+            let tr = rb.translation();
+            self.depenetration_prev.insert(bh, [tr.x, tr.y, tr.z]);
+        }
+    }
+
+    /// Aplica el límite de velocidad de despenetración tras cada substep.
+    /// La separación de Rapier es posicional (el solver corrige la posición
+    /// sin dejar velocidad medible: verificado con sonda, vy ≈ 0 mientras
+    /// el cuerpo sale), así que el límite se hace cumplir sobre el
+    /// DESPLAZAMIENTO de separación del substep: si el cuerpo se separó
+    /// más de `limite * dt` a lo largo de la normal de un contacto
+    /// penetrante, se devuelve el exceso. Como guarda adicional se recorta
+    /// también la componente de velocidad lineal en esa dirección.
+    fn apply_depenetration_caps(&mut self, dt: f32) {
+        if self.depenetration_caps.is_empty() {
+            return;
+        }
+        let limitados: Vec<(u64, RigidBodyHandle, f32)> = self
+            .depenetration_caps
+            .iter()
+            .filter(|(_, limite)| limite.is_finite())
+            .filter_map(|(bh, limite)| self.body_map.get(bh).map(|&(rh, _)| (*bh, rh, *limite)))
+            .collect();
+
+        for (bh, rh, limite) in limitados {
+            let Some(prev) = self.depenetration_prev.get(&bh).copied() else {
+                continue;
+            };
+            let Some(rb) = self.rigid_body_set.get(rh) else {
+                continue;
+            };
+            if rb.is_sleeping() {
+                continue;
+            }
+            let tr = rb.translation();
+            let mut pos = [tr.x, tr.y, tr.z];
+            let mut linvel = *rb.linvel();
+            let mut movido = false;
+            let mut velocidad_tocada = false;
+
+            for pair in self.narrow_phase.contact_pairs() {
+                if !pair.has_any_active_contact {
+                    continue;
+                }
+                for manifold in &pair.manifolds {
+                    let signo = if manifold.data.rigid_body2 == Some(rh) {
+                        1.0
+                    } else if manifold.data.rigid_body1 == Some(rh) {
+                        -1.0
+                    } else {
+                        continue;
+                    };
+                    if !manifold.points.iter().any(|pt| pt.dist < 0.0) {
+                        continue;
+                    }
+                    let dir = manifold.data.normal * signo;
+                    // Desplazamiento de separación de este substep.
+                    let disp = (pos[0] - prev[0]) * dir.x
+                        + (pos[1] - prev[1]) * dir.y
+                        + (pos[2] - prev[2]) * dir.z;
+                    let max_disp = limite * dt;
+                    if disp > max_disp {
+                        let exceso = disp - max_disp;
+                        pos[0] -= dir.x * exceso;
+                        pos[1] -= dir.y * exceso;
+                        pos[2] -= dir.z * exceso;
+                        movido = true;
+                    }
+                    // Guarda de velocidad: misma cota sobre la velocidad viva.
+                    let v_sep = linvel.dot(&dir);
+                    if v_sep > limite {
+                        linvel -= dir * (v_sep - limite);
+                        velocidad_tocada = true;
+                    }
+                }
+            }
+
+            if movido || velocidad_tocada {
+                if let Some(rb) = self.rigid_body_set.get_mut(rh) {
+                    if movido {
+                        rb.set_translation(vector![pos[0], pos[1], pos[2]], true);
+                    }
+                    if velocidad_tocada {
+                        rb.set_linvel(linvel, true);
+                    }
+                }
+            }
+        }
     }
 
     /// Clears the velocity caps for a rigid body.
@@ -2940,6 +3092,61 @@ mod tests {
         let (mut world, _suelo) = mundo_con_suelo();
         assert!(!world.add_relative_force(9999, [0.0, 0.0, 10.0]));
         assert!(!world.apply_relative_impulse(9999, [0.0, 0.0, 10.0]));
+    }
+
+    #[test]
+    fn max_depenetration_velocity_frena_salida() {
+        let (mut world, _suelo) = mundo_con_suelo();
+        let limitada =
+            world.create_rigid_body(100, BodyType::Dynamic, [-3.0, 0.2, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        world
+            .attach_box_collider(limitada, [0.5; 3], 0.0, 0.5)
+            .expect("collider limitada");
+        let libre =
+            world.create_rigid_body(101, BodyType::Dynamic, [3.0, 0.2, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        world
+            .attach_box_collider(libre, [0.5; 3], 0.0, 0.5)
+            .expect("collider libre");
+        assert!(world.set_max_depenetration_velocity(limitada, 0.2));
+
+        for _ in 0..30 {
+            world.step(1.0 / 60.0);
+        }
+
+        let y_limitada = world.get_transform(limitada).expect("transform limitada").position[1];
+        let y_libre = world.get_transform(libre).expect("transform libre").position[1];
+        assert!(y_limitada < 0.4, "limitada salio demasiado: y = {y_limitada}");
+        assert!(y_libre > 0.45, "libre no salio: y = {y_libre}");
+    }
+
+    #[test]
+    fn max_depenetration_velocity_no_frena_caida_libre() {
+        let (mut world, _suelo) = mundo_con_suelo();
+        let h = world.create_rigid_body(102, BodyType::Dynamic, [0.0, 5.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        world.attach_box_collider(h, [0.5; 3], 0.0, 0.5).expect("collider");
+        assert!(world.set_max_depenetration_velocity(h, 0.2));
+
+        for _ in 0..30 {
+            world.step(1.0 / 60.0);
+        }
+
+        let vy = world.get_linear_velocity(h).expect("velocidad")[1];
+        assert!(vy < -3.0, "la caida libre se freno: vy = {vy}");
+    }
+
+    #[test]
+    fn max_depenetration_velocity_set_get() {
+        let (mut world, _suelo) = mundo_con_suelo();
+        let h = world.create_rigid_body(103, BodyType::Dynamic, [0.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+
+        assert!(world.set_max_depenetration_velocity(h, 1.5));
+        assert_eq!(world.get_max_depenetration_velocity(h), Some(1.5));
+
+        assert!(world.set_max_depenetration_velocity(h, -1.0));
+        assert_eq!(world.get_max_depenetration_velocity(h), Some(f32::INFINITY));
+
+        assert!(!world.set_max_depenetration_velocity(9999, 1.0));
+        assert_eq!(world.get_max_depenetration_velocity(9999), None);
     }
 
     fn mundo_con_suelo() -> (PhysicsWorld, u64) {
