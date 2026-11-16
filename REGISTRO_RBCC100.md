@@ -99,3 +99,26 @@ Consumo acumulado por proveedor al final de cada sub-bloque.
 - **CI real**: corrida **43923997752**, `completed` / `success` sobre `4395707`.
 - **Consumo RB-2b**: Opus (claude-opus-5-5) **34.279** (26.033 + 8.246).
   Acumulado del bloque: Opus 96.996.
+
+## RB-3 — excludeLayers/includeLayers + solverVelocityIterations (CERRADO código + CI)
+
+- **Commit**: `6c384ff` — 8 archivos, 586 inserciones.
+- **Capas**: include (defecto u32::MAX) y exclude (defecto 0) por cuerpo;
+  al fijarlos se reescribe el filter de todos los colliders del cuerpo
+  como base & include & ~exclude (membership intacto). La máscara base
+  se registra al insertar el collider (los 7 sitios insert_with_parent);
+  los colliders sin registro (cápsula CC, ragdoll) toman su filter
+  actual como base la primera vez → fijar/quitar es idempotente. Los
+  colliders añadidos después nacen ya filtrados. FFI con i64 para las
+  máscaras (el bit 31 no cabe en i32); C# uint.
+- **solverVelocityIterations**: guardado por cuerpo (defecto 4);
+  additional = max(solver, velocity) − base al fijar cualquiera de las
+  dos (decisión suya: manda el máximo; Rapier solo tiene un contador).
+- **Pipeline local exacto** (`pipeline_rb3_run.log`): build 0, clippy 0,
+  no-default-features 0, dotnet 0, tests 36 suites ok (7 tests rb3_*).
+- **CI real**: corrida **43929328138**, `completed` / `success` sobre `6c384ff`.
+- **Consumo RB-3**: Opus (claude-opus-5-5) **73.377** (55.342 + 18.035).
+  Acumulado del bloque: Opus 170.373.
+- Nota de integración: el integrador SOLO aplica pares con VIEJO de
+  coincidencia única (los 7 pares idénticos de sitios de inserción se
+  saltaron; los apliqué yo con replace exacto, 7/7).
