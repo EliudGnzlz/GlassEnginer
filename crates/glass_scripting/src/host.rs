@@ -176,6 +176,9 @@ struct PhysicsBridgeCallbacks {
     set_automatic_inertia_tensor: *const c_void,
     get_automatic_inertia_tensor: *const c_void,
     closest_point_on_bounds: *const c_void,
+    // CCX (excludeLayers del CharacterController), AL FINAL.
+    character_set_exclude_layers: *const c_void,
+    character_get_exclude_layers: *const c_void,
 }
 
 type InitPhysicsBridgeFn = unsafe extern "system" fn(*const PhysicsBridgeCallbacks);
@@ -599,6 +602,8 @@ impl ScriptHost {
     set_automatic_inertia_tensor: glass_physics::glass_physics_set_automatic_inertia_tensor as *const c_void,
     get_automatic_inertia_tensor: glass_physics::glass_physics_get_automatic_inertia_tensor as *const c_void,
     closest_point_on_bounds: glass_physics::glass_physics_closest_point_on_bounds as *const c_void,
+    character_set_exclude_layers: glass_physics::glass_character_set_exclude_layers as *const c_void,
+    character_get_exclude_layers: glass_physics::glass_character_get_exclude_layers as *const c_void,
             };
             unsafe {
                 init_physics_fn(&callbacks as *const PhysicsBridgeCallbacks);

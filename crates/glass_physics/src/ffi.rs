@@ -1155,6 +1155,44 @@ pub unsafe extern "C" fn glass_character_get_include_layers(entity_id: u64, out:
     0
 }
 
+/// CCX: fija la máscara de capas excluidas (excludeLayers) del
+/// CharacterController `entity_id`. Devuelve 1 si el personaje existe.
+///
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+#[no_mangle]
+pub unsafe extern "C" fn glass_character_set_exclude_layers(entity_id: u64, mask: u32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_character_exclude_layers(entity_id, mask) as i32;
+        }
+    }
+    0
+}
+
+/// CCX: lee la máscara de capas excluidas (excludeLayers) del
+/// CharacterController `entity_id` en `out`.
+///
+/// # Safety
+/// `out` debe ser null o apuntar a memoria válida y escribible durante la llamada.
+#[no_mangle]
+pub unsafe extern "C" fn glass_character_get_exclude_layers(entity_id: u64, out: *mut u32) -> i32 {
+    if !out.is_null() {
+        unsafe { *out = 0; }
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            if let Some(v) = world.get_character_exclude_layers(entity_id) {
+                unsafe {
+                    if !out.is_null() { *out = v; }
+                }
+                return 1;
+            }
+        }
+    }
+    0
+}
+
 /// Caja de la cápsula del personaje: escribe 3 floats en `out_min` y 3 en `out_max`.
 ///
 /// # Safety

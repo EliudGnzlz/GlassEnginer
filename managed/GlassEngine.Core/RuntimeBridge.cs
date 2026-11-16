@@ -91,6 +91,8 @@ public static class RuntimeBridge
     private static CharacterGetEnabledDelegate? _characterGetEnabled;
     private static CharacterSetIncludeLayersDelegate? _characterSetIncludeLayers;
     private static CharacterGetIncludeLayersDelegate? _characterGetIncludeLayers;
+    private static CharacterSetExcludeLayersDelegate? _characterSetExcludeLayers;
+    private static CharacterGetExcludeLayersDelegate? _characterGetExcludeLayers;
     private static CharacterBoundsDelegate? _characterBounds;
     private static AttachCapsuleColliderDelegate? _attachCapsuleCollider;
     private static AttachCylinderColliderDelegate? _attachCylinderCollider;
@@ -459,6 +461,9 @@ public static class RuntimeBridge
         public IntPtr SetAutomaticInertiaTensor;
         public IntPtr GetAutomaticInertiaTensor;
         public IntPtr ClosestPointOnBounds;
+        // CCX: excludeLayers del CharacterController, AL FINAL.
+        public IntPtr CharacterSetExcludeLayers;
+        public IntPtr CharacterGetExcludeLayers;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitPhysicsBridge")]
@@ -543,6 +548,10 @@ public static class RuntimeBridge
             _characterSetIncludeLayers = Marshal.GetDelegateForFunctionPointer<CharacterSetIncludeLayersDelegate>(callbacks->CharacterSetIncludeLayers);
         if (callbacks->CharacterGetIncludeLayers != IntPtr.Zero)
             _characterGetIncludeLayers = Marshal.GetDelegateForFunctionPointer<CharacterGetIncludeLayersDelegate>(callbacks->CharacterGetIncludeLayers);
+        if (callbacks->CharacterSetExcludeLayers != IntPtr.Zero)
+            _characterSetExcludeLayers = Marshal.GetDelegateForFunctionPointer<CharacterSetExcludeLayersDelegate>(callbacks->CharacterSetExcludeLayers);
+        if (callbacks->CharacterGetExcludeLayers != IntPtr.Zero)
+            _characterGetExcludeLayers = Marshal.GetDelegateForFunctionPointer<CharacterGetExcludeLayersDelegate>(callbacks->CharacterGetExcludeLayers);
         if (callbacks->CharacterBounds != IntPtr.Zero)
             _characterBounds = Marshal.GetDelegateForFunctionPointer<CharacterBoundsDelegate>(callbacks->CharacterBounds);
         if (callbacks->CharacterSetMinMoveDistance != IntPtr.Zero)
@@ -2018,6 +2027,19 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         mask = 0;
         if (_characterGetIncludeLayers is null) return false;
         return _characterGetIncludeLayers(entityId, out mask) != 0;
+    }
+
+    public static bool CharacterSetExcludeLayers(ulong entityId, uint mask)
+    {
+        if (_characterSetExcludeLayers is null) return false;
+        return _characterSetExcludeLayers(entityId, mask) != 0;
+    }
+
+    public static bool CharacterGetExcludeLayers(ulong entityId, out uint mask)
+    {
+        mask = 0;
+        if (_characterGetExcludeLayers is null) return false;
+        return _characterGetExcludeLayers(entityId, out mask) != 0;
     }
 
     public static bool CharacterBounds(ulong entityId, float[] min, float[] max)

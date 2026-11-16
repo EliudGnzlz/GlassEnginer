@@ -43,6 +43,9 @@ pub struct CharacterState {
     pub enabled: bool,
     /// Paquete C: máscara de capas que el CC puede ver en sus sondas.
     pub include_mask: u32,
+    /// CCX (excludeLayers): máscara de capas que el CC NO puede ver en
+    /// sus sondas; la efectiva es `include_mask & !exclude_mask`.
+    pub exclude_mask: u32,
     /// CC-1: distancia mínima de Move (Unity: minMoveDistance). Un movimiento
     /// pedido más corto se descarta. 0.0 = desactivado (Unity usa 0.001).
     pub min_move_distance: f32,
@@ -147,6 +150,7 @@ impl PhysicsWorld {
                 slope_limit_deg: cfg.slope_limit_deg,
                 enabled: true,
                 include_mask: u32::MAX,
+                exclude_mask: 0,
                 min_move_distance: 0.0,
                 center: [0.0, 0.0, 0.0],
                 friction: 0.0,
@@ -158,18 +162,24 @@ impl PhysicsWorld {
     }
 
     /// Filtro de consulta de las sondas del CharacterController: excluye su
-    /// propia cápsula (invisible para todo lo demás) y aplica la máscara de
-    /// capas que puede ver (`include_mask`); la cápsula del CC lleva filter
-    /// NONE en su propio collider, así que sigue invisible a otras sondas
-    /// aunque esta máscara sea todo-unos. Función asociada sin `&self` para
-    /// que el filtro salga con vida `'static` y no arrastre préstamos de
-    /// `self.characters` a través de `move_character`.
-    fn cc_filter(rapier_collider: ColliderHandle, include_mask: u32) -> QueryFilter<'static> {
+    /// propia cápsula (invisible para todo lo demás) y aplica la máscara
+    /// efectiva de capas que puede ver, `include_mask & !exclude_mask`
+    /// (semántica Unity: `exclude_mask` manda sobre `include_mask`); la
+    /// cápsula del CC lleva filter NONE en su propio collider, así que sigue
+    /// invisible a otras sondas aunque la máscara efectiva sea todo-unos.
+    /// Función asociada sin `&self` para que el filtro salga con vida
+    /// `'static` y no arrastre préstamos de `self.characters` a través de
+    /// `move_character`.
+    fn cc_filter(
+        rapier_collider: ColliderHandle,
+        include_mask: u32,
+        exclude_mask: u32,
+    ) -> QueryFilter<'static> {
         QueryFilter::new()
             .exclude_collider(rapier_collider)
             .groups(InteractionGroups::new(
                 Group::all(),
-                Group::from_bits_truncate(include_mask),
+                Group::from_bits_truncate(include_mask & !exclude_mask),
             ))
     }
 
@@ -182,7 +192,8 @@ impl PhysicsWorld {
         let half_height = state.half_height;
         let radius = state.radius;
         let skin = state.skin;
-        let filter = Self::cc_filter(state.rapier_collider, state.include_mask);
+        let filter =
+            Self::cc_filter(state.rapier_collider, state.include_mask, state.exclude_mask);
         let capsula = Capsule::new_y(half_height, radius);
 
         for _ in 0..4 {
@@ -286,6 +297,7 @@ impl PhysicsWorld {
         let overlap_recovery = state.overlap_recovery;
         let step_offset = state.step_offset;
         let include_mask = state.include_mask;
+        let exclude_mask = state.exclude_mask;
         let min_move_distance = state.min_move_distance;
         let pos_entrada = pos;
 
@@ -339,7 +351,7 @@ impl PhysicsWorld {
             self.recover_overlap(entity_id, &mut pos);
         }
 
-        let filtro_sondas = Self::cc_filter(rapier_collider, include_mask);
+        let filtro_sondas = Self::cc_filter(rapier_collider, include_mask, exclude_mask);
 
         // Una pasada de move_shape desde `desde` con el deseo dado.
         let hits: std::cell::RefCell<Vec<rapier3d::control::CharacterCollision>> =
@@ -780,6 +792,23 @@ impl PhysicsWorld {
 
     pub fn get_character_include_layers(&self, entity_id: u64) -> Option<u32> {
         self.characters.get(&entity_id).map(|s| s.include_mask)
+    }
+
+    /// CCX (excludeLayers): fija la máscara de capas que el CC NO ve en sus
+    /// sondas. Devuelve `false` si el personaje no existe.
+    pub fn set_character_exclude_layers(&mut self, entity_id: u64, mask: u32) -> bool {
+        if let Some(state) = self.characters.get_mut(&entity_id) {
+            state.exclude_mask = mask;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// CCX (excludeLayers): máscara de capas excluidas de las sondas del CC,
+    /// o `None` si el personaje no existe.
+    pub fn get_character_exclude_layers(&self, entity_id: u64) -> Option<u32> {
+        self.characters.get(&entity_id).map(|s| s.exclude_mask)
     }
 
     /// CC-1: minMoveDistance. Rechaza no finitos y negativos; 0.0 = desactivado.

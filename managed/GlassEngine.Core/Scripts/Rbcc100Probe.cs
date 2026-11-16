@@ -108,6 +108,18 @@ public class Rbcc100Probe : GlassBehaviour
                 Check("CC simpleMove cae y aterriza", _cc.IsGrounded && _cc.Position.Y > 0.8f && _cc.Position.Y < 1.05f,
                     $"grounded={_cc.IsGrounded} y={F(_cc.Position.Y)}");
                 FaseConsultas();
+                // Fase 2: con la capa del suelo (Default = bit 0) excluida,
+                // el CC debe atravesarlo y seguir cayendo.
+                _cc.ExcludeLayers = 1;
+            }
+        }
+        else if (_frame <= 150)
+        {
+            _cc.SimpleMove(Vector3.Zero);
+            if (_frame == 150)
+            {
+                Check("CC excludeLayers atraviesa suelo", !_cc.IsGrounded && _cc.Position.Y < 0.5f,
+                    $"grounded={_cc.IsGrounded} y={F(_cc.Position.Y)}");
                 _fin = true;
                 Debug.Log("[RBCC100] FIN");
             }
@@ -133,6 +145,12 @@ public class Rbcc100Probe : GlassBehaviour
         Check("CC center desplaza", Math.Abs(_cc.Position.X - (x1 + 0.5f)) < 0.01f, $"x={F(_cc.Position.X)}");
         _cc.Center = Vector3.Zero;
         Check("CC center vuelve", Math.Abs(_cc.Position.X - x1) < 0.01f, $"x={F(_cc.Position.X)}");
+
+        // excludeLayers: defecto 0 y set/get por la propiedad.
+        Check("CC excludeLayers defecto", _cc.ExcludeLayers == 0, $"exc={_cc.ExcludeLayers}");
+        _cc.ExcludeLayers = 0x4;
+        Check("CC excludeLayers set/get", _cc.ExcludeLayers == 0x4, $"exc={_cc.ExcludeLayers}");
+        _cc.ExcludeLayers = 0;
 
         // material / sharedMaterial.
         _cc.SharedMaterial = new PhysicMaterial(0.8f, 0.3f);

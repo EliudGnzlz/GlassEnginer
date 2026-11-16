@@ -313,6 +313,12 @@ public delegate int CharacterSetIncludeLayersDelegate(ulong entityId, uint mask)
 public delegate int CharacterGetIncludeLayersDelegate(ulong entityId, out uint mask);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterSetExcludeLayersDelegate(ulong entityId, uint mask);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterGetExcludeLayersDelegate(ulong entityId, out uint mask);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate int CharacterBoundsDelegate(ulong entityId, [In, Out] float[] min, [In, Out] float[] max);
 
 // Paquete D de paridad RB/CC: espejo C# de los FFI de los paquetes A y B.

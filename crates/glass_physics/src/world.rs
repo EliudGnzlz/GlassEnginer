@@ -3584,6 +3584,100 @@ mod tests {
         assert_eq!(world.get_solver_velocity_iterations(a), Some(4));
     }
 
+    // ---- CCX: excludeLayers del CharacterController ----
+
+    /// Suelo estático (caja de semiextensiones 30x0.5x10, cara superior en
+    /// y = 0) con el membership de su collider en `1 << capa`, filter intacto.
+    fn suelo_en_capa_ccx(world: &mut PhysicsWorld, capa: u32) {
+        let suelo = world.create_rigid_body(9201, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        world
+            .attach_box_collider(suelo, [30.0, 0.5, 10.0], 0.0, 0.5)
+            .expect("collider ccx");
+        let (rapier, _) = world.get_rapier_handle(suelo).expect("handle ccx");
+        let ch = world.rigid_body_set[rapier].colliders()[0];
+        let collider = world.collider_set.get_mut(ch).expect("collider ccx");
+        let g = collider.collision_groups();
+        collider.set_collision_groups(InteractionGroups::new(
+            Group::from_bits_truncate(1u32 << capa),
+            g.filter,
+        ));
+    }
+
+    fn cfg_ccx() -> crate::character::CharacterConfig {
+        crate::character::CharacterConfig {
+            radius: 0.35,
+            height: 1.8,
+            skin: 0.02,
+            step_offset: 0.4,
+            slope_limit_deg: 45.0,
+            snap: 0.3,
+        }
+    }
+
+    /// Crea el personaje en y = 2.5, aplica (include, exclude) si vienen y lo
+    /// deja caer 240 pasos a 1 m/s; devuelve la y final.
+    fn cae_ccx(world: &mut PhysicsWorld, id: u64, mascara: Option<(u32, u32)>) -> f32 {
+        assert!(world.create_character(id, [0.0, 2.5, 0.0], cfg_ccx()));
+        if let Some((include, exclude)) = mascara {
+            assert!(world.set_character_include_layers(id, include));
+            assert!(world.set_character_exclude_layers(id, exclude));
+        }
+        let dt = 1.0 / 60.0;
+        let mut y = 2.5_f32;
+        for _ in 0..240 {
+            let (aplicado, ..) = world
+                .move_character(id, [0.0, -dt, 0.0], dt)
+                .expect("el personaje existe");
+            y += aplicado[1];
+        }
+        y
+    }
+
+    #[test]
+    fn ccx_exclude_defecto_y_get_set() {
+        let mut world = PhysicsWorld::new();
+        assert!(world.create_character(9210, [0.0, 2.5, 0.0], cfg_ccx()));
+        assert_eq!(world.get_character_exclude_layers(9210), Some(0));
+        assert!(world.set_character_exclude_layers(9210, 0x4));
+        assert_eq!(world.get_character_exclude_layers(9210), Some(0x4));
+        assert!(!world.set_character_exclude_layers(u64::MAX, 0x4));
+        assert_eq!(world.get_character_exclude_layers(u64::MAX), None);
+    }
+
+    #[test]
+    fn ccx_sin_exclude_aterriza_en_suelo_de_capa() {
+        let mut world = PhysicsWorld::new();
+        suelo_en_capa_ccx(&mut world, 3);
+        let y = cae_ccx(&mut world, 9211, None);
+        assert!((y - 0.91).abs() < 0.06, "debería aterrizar en ≈0.91, y = {y}");
+    }
+
+    #[test]
+    fn ccx_exclude_atraviesa_el_suelo_excluido() {
+        let mut world = PhysicsWorld::new();
+        suelo_en_capa_ccx(&mut world, 3);
+        let y = cae_ccx(&mut world, 9212, Some((u32::MAX, 1 << 3)));
+        assert!(y < 0.0, "debería atravesar el suelo excluido, y = {y}");
+    }
+
+    #[test]
+    fn ccx_exclude_manda_sobre_include() {
+        let mut w1 = PhysicsWorld::new();
+        suelo_en_capa_ccx(&mut w1, 3);
+        let y1 = cae_ccx(&mut w1, 9213, Some((1 << 3, 1 << 3)));
+        assert!(y1 < 0.0, "include & !exclude = 0: debería atravesar, y = {y1}");
+
+        let mut w2 = PhysicsWorld::new();
+        suelo_en_capa_ccx(&mut w2, 3);
+        let y2 = cae_ccx(&mut w2, 9214, Some((1 << 3, 0)));
+        assert!((y2 - 0.91).abs() < 0.06, "solo include: debería aterrizar en ≈0.91, y = {y2}");
+
+        let mut w3 = PhysicsWorld::new();
+        suelo_en_capa_ccx(&mut w3, 3);
+        let y3 = cae_ccx(&mut w3, 9215, Some((u32::MAX, 1 << 3)));
+        assert!(y3 < 0.0, "exclude sobre include todo-unos: debería atravesar, y = {y3}");
+    }
+
     fn rb4_cerca(a: [f32; 3], b: [f32; 3]) -> bool {
         a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 1e-4)
     }

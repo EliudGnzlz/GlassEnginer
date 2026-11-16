@@ -219,6 +219,20 @@ namespace GlassEngine.Core.Physics
         }
         private int _includeLayers = -1;
 
+        // Máscara de capas que el controlador NO puede ver en sus sondas
+        // (Unity: excludeLayers). La efectiva es IncludeLayers & ~ExcludeLayers.
+        // 0 = ninguna excluida.
+        public int ExcludeLayers
+        {
+            get => _excludeLayers;
+            set
+            {
+                _excludeLayers = value;
+                if (IsCreated) RuntimeBridge.CharacterSetExcludeLayers(EntityId, unchecked((uint)value));
+            }
+        }
+        private int _excludeLayers = 0;
+
         // Caja de la cápsula del personaje en coordenadas de mundo.
         public bool GetBounds(out Vector3 min, out Vector3 max)
         {
