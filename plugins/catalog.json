@@ -2,14 +2,14 @@
   "plugins": [
     {
       "id": "herramienta-3d",
-      "name": "Herramienta 3D",
-      "version": "1.0.0",
-      "description": "Mini modelador del editor: edición de mallas .glb con operadores, booleanas Manifold, selección sub-objeto y horneado con receta. Panel «Herramienta 3D» y tools MCP glass_mesh_*.",
+      "name": "MeshForge",
+      "version": "1.0.1",
+      "description": "Mini modelador del editor: edición de mallas .glb con operadores, booleanas Manifold, selección sub-objeto y horneado con receta. Panel «MeshForge» y tools MCP glass_mesh_*.",
       "min_engine": "0.10.14",
       "max_engine": null,
-      "sha256": "f83a5f97fd49d264a08d5499217909b88ae57491e2a26db9eb2f9477926ec219",
-      "url": "https://github.com/EliudGnzlz/GlassEnginer/releases/download/herramienta-3d-v1.0.0/herramienta-3d-1.0.0.zip",
-      "file_name": "herramienta-3d-1.0.0.zip"
+      "sha256": "1a640a448a86d7427d3fee96e4879b0b9e99fdf1778c93745d26b5f021c102e0",
+      "url": "https://github.com/EliudGnzlz/GlassEnginer/releases/download/herramienta-3d-v1.0.1/herramienta-3d-1.0.1.zip",
+      "file_name": "herramienta-3d-1.0.1.zip"
     }
   ]
 }

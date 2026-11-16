@@ -1370,7 +1370,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             EditorTab::Console => "📟 Consola".into(),
             EditorTab::Project => "📁 Proyecto / Assets".into(),
             EditorTab::ShaderGraph => "🎨 Grafo de Shaders".into(),
-            EditorTab::MeshTool => "🧊 Herramienta 3D".into(),
+            EditorTab::MeshTool => "🧊 MeshForge".into(),
         }
     }
 

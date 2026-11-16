@@ -492,7 +492,7 @@ impl MeshToolPanel {
         let mut elegido: Option<ShortcutScheme> = None;
         match self.prefs.scheme {
             None => {
-                ui.label(egui::RichText::new("Primera vez en la Herramienta 3D").strong());
+                ui.label(egui::RichText::new("Primera vez en MeshForge").strong());
                 ui.label("¿Qué atajos quieres usar mientras editas la malla? En el resto del editor mandan los de Unity, como siempre.");
                 ui.horizontal(|ui| {
                     if ui.button("Esquema Blender").clicked() {

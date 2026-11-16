@@ -681,7 +681,7 @@ impl McpServer {
                         },
                         {
                             "name": "glass_mesh_enter_edit",
-                            "description": "Entra en edición de malla (herramienta 3D): carga un .glb bajo assets/ en una sesión en proceso y la deja lista para aplicar operadores.",
+                            "description": "Entra en edición de malla (MeshForge): carga un .glb bajo assets/ en una sesión en proceso y la deja lista para aplicar operadores.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -3639,7 +3639,7 @@ impl McpServer {
                     McpResponse::error(
                         id,
                         -32005,
-                        "La herramienta 3D está desactivada: instala o activa el complemento «herramienta-3d» en el Launcher.",
+                        "MeshForge está desactivada: instala o activa el complemento «MeshForge» en el Launcher.",
                     )
                 } else {
                 match mesh_tool(&self.mesh_session, tool, &|k: &str| args.get(k).cloned()) {

@@ -493,7 +493,7 @@ mod tests {
         let json = r#"{
             "plugins": [{
                 "id": "herramienta-3d",
-                "name": "Herramienta 3D",
+                "name": "MeshForge",
                 "version": "1.0.0",
                 "min_engine": "0.10.14",
                 "sha256": "abc123",
