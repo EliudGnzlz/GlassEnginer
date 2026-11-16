@@ -116,6 +116,11 @@ struct PhysicsBridgeCallbacks {
     character_get_min_move_distance: *const c_void,
     character_set_center: *const c_void,
     character_get_center: *const c_void,
+    character_set_material: *const c_void,
+    character_get_material: *const c_void,
+    character_raycast: *const c_void,
+    character_closest_point: *const c_void,
+    character_closest_point_on_bounds: *const c_void,
     // Añadidos AL FINAL (paquete D de paridad RB/CC): espejo C# de los
     // FFI de los paquetes A (torque, impulsos, sueño, topes de
     // velocidad) y B (centro de masa, tensor de inercia, velocidad en
@@ -534,6 +539,11 @@ impl ScriptHost {
                 character_get_min_move_distance: glass_physics::glass_character_get_min_move_distance as *const c_void,
                 character_set_center: glass_physics::glass_character_set_center as *const c_void,
                 character_get_center: glass_physics::glass_character_get_center as *const c_void,
+                character_set_material: glass_physics::glass_character_set_material as *const c_void,
+                character_get_material: glass_physics::glass_character_get_material as *const c_void,
+                character_raycast: glass_physics::glass_character_raycast as *const c_void,
+                character_closest_point: glass_physics::glass_character_closest_point as *const c_void,
+                character_closest_point_on_bounds: glass_physics::glass_character_closest_point_on_bounds as *const c_void,
                 get_gravity_scale: glass_physics::glass_physics_get_gravity_scale as *const c_void,
                 set_ccd_enabled: glass_physics::glass_physics_set_ccd_enabled as *const c_void,
                 get_ccd_enabled: glass_physics::glass_physics_get_ccd_enabled as *const c_void,

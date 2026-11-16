@@ -80,6 +80,11 @@ public static class RuntimeBridge
     private static CharacterGetMinMoveDistanceDelegate? _characterGetMinMoveDistance;
     private static CharacterSetCenterDelegate? _characterSetCenter;
     private static CharacterGetCenterDelegate? _characterGetCenter;
+    private static CharacterSetMaterialDelegate? _characterSetMaterial;
+    private static CharacterGetMaterialDelegate? _characterGetMaterial;
+    private static CharacterRaycastDelegate? _characterRaycast;
+    private static CharacterClosestPointDelegate? _characterClosestPoint;
+    private static CharacterClosestPointOnBoundsDelegate? _characterClosestPointOnBounds;
     private static CharacterSetSlopeLimitDelegate? _characterSetSlopeLimit;
     private static CharacterGetSlopeLimitDelegate? _characterGetSlopeLimit;
     private static CharacterSetEnabledDelegate? _characterSetEnabled;
@@ -396,6 +401,11 @@ public static class RuntimeBridge
         public IntPtr CharacterGetMinMoveDistance;
         public IntPtr CharacterSetCenter;
         public IntPtr CharacterGetCenter;
+        public IntPtr CharacterSetMaterial;
+        public IntPtr CharacterGetMaterial;
+        public IntPtr CharacterRaycast;
+        public IntPtr CharacterClosestPoint;
+        public IntPtr CharacterClosestPointOnBounds;
         public IntPtr GetAngularVelocity;
         public IntPtr SetAngularVelocity;
         public IntPtr AddTorque;
@@ -543,6 +553,16 @@ public static class RuntimeBridge
             _characterSetCenter = Marshal.GetDelegateForFunctionPointer<CharacterSetCenterDelegate>(callbacks->CharacterSetCenter);
         if (callbacks->CharacterGetCenter != IntPtr.Zero)
             _characterGetCenter = Marshal.GetDelegateForFunctionPointer<CharacterGetCenterDelegate>(callbacks->CharacterGetCenter);
+        if (callbacks->CharacterSetMaterial != IntPtr.Zero)
+            _characterSetMaterial = Marshal.GetDelegateForFunctionPointer<CharacterSetMaterialDelegate>(callbacks->CharacterSetMaterial);
+        if (callbacks->CharacterGetMaterial != IntPtr.Zero)
+            _characterGetMaterial = Marshal.GetDelegateForFunctionPointer<CharacterGetMaterialDelegate>(callbacks->CharacterGetMaterial);
+        if (callbacks->CharacterRaycast != IntPtr.Zero)
+            _characterRaycast = Marshal.GetDelegateForFunctionPointer<CharacterRaycastDelegate>(callbacks->CharacterRaycast);
+        if (callbacks->CharacterClosestPoint != IntPtr.Zero)
+            _characterClosestPoint = Marshal.GetDelegateForFunctionPointer<CharacterClosestPointDelegate>(callbacks->CharacterClosestPoint);
+        if (callbacks->CharacterClosestPointOnBounds != IntPtr.Zero)
+            _characterClosestPointOnBounds = Marshal.GetDelegateForFunctionPointer<CharacterClosestPointOnBoundsDelegate>(callbacks->CharacterClosestPointOnBounds);
         if (callbacks->GetAngularVelocity != IntPtr.Zero)
             _getAngularVelocity = Marshal.GetDelegateForFunctionPointer<GetAngularVelocityDelegate>(callbacks->GetAngularVelocity);
         if (callbacks->SetAngularVelocity != IntPtr.Zero)
@@ -1906,6 +1926,58 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         center = new Vector3(x, y, z);
         return true;
     }
+
+        public static bool CharacterSetMaterial(ulong entityId, float friction, float restitution)
+        {
+            if (_characterSetMaterial == null) return false;
+            return _characterSetMaterial(entityId, friction, restitution) != 0;
+        }
+
+        public static bool CharacterGetMaterial(ulong entityId, out float friction, out float restitution)
+        {
+            friction = 0f;
+            restitution = 0f;
+            if (_characterGetMaterial == null) return false;
+            return _characterGetMaterial(entityId, out friction, out restitution) != 0;
+        }
+
+        public static bool CharacterRaycast(ulong entityId, Vector3 origin, Vector3 direction, float maxDistance, out float distance, out Vector3 point, out Vector3 normal)
+        {
+            distance = 0f;
+            point = Vector3.Zero;
+            normal = Vector3.Zero;
+            if (_characterRaycast == null) return false;
+            var p = new float[3];
+            var n = new float[3];
+            if (_characterRaycast(entityId, origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z, maxDistance, out distance, p, n) == 0)
+            {
+                distance = 0f;
+                return false;
+            }
+            point = new Vector3(p[0], p[1], p[2]);
+            normal = new Vector3(n[0], n[1], n[2]);
+            return true;
+        }
+
+        public static bool CharacterClosestPoint(ulong entityId, Vector3 position, out Vector3 result)
+        {
+            result = Vector3.Zero;
+            if (_characterClosestPoint == null) return false;
+            var r = new float[3];
+            if (_characterClosestPoint(entityId, position.X, position.Y, position.Z, r) == 0) return false;
+            result = new Vector3(r[0], r[1], r[2]);
+            return true;
+        }
+
+        public static bool CharacterClosestPointOnBounds(ulong entityId, Vector3 position, out Vector3 result)
+        {
+            result = Vector3.Zero;
+            if (_characterClosestPointOnBounds == null) return false;
+            var r = new float[3];
+            if (_characterClosestPointOnBounds(entityId, position.X, position.Y, position.Z, r) == 0) return false;
+            result = new Vector3(r[0], r[1], r[2]);
+            return true;
+        }
 
     public static bool CharacterSetSlopeLimit(ulong entityId, float degrees)
     {

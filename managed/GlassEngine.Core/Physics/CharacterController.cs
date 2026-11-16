@@ -44,6 +44,96 @@ namespace GlassEngine.Core.Physics
         private float _minMoveDistance = 0.0f;
 
         /// <summary>
+        /// Material compartido (Unity: Collider.sharedMaterial). Guarda la referencia viva
+        /// y, al asignarlo, aplica Friction/Restitution al collider de la cápsula.
+        /// Nunca es null: asignar null restaura un material 0/0. Cambiar los campos del
+        /// objeto después de asignarlo no se reaplica solo; hay que volver a asignarlo.
+        /// La cápsula del CharacterController está en un grupo de colisión aislado y no
+        /// participa en el solver de contactos, así que hoy estos valores quedan guardados
+        /// y aplicados al collider pero no cambian la interacción con otros cuerpos.
+        /// </summary>
+        public PhysicMaterial SharedMaterial
+        {
+            get => _sharedMaterial;
+            set
+            {
+                _sharedMaterial = value ?? new PhysicMaterial();
+                _materialInstanced = false;
+                ApplyMaterial();
+            }
+        }
+
+        /// <summary>
+        /// Material instancia (Unity: Collider.material). La primera lectura crea una copia
+        /// del material compartido y la deja como material de este controlador, de modo que
+        /// las lecturas siguientes devuelven esa misma copia y el material compartido
+        /// original no se modifica. Asignar sustituye el material compartido y lo aplica a
+        /// la cápsula. Mismas limitaciones que <see cref="SharedMaterial"/>.
+        /// </summary>
+        public PhysicMaterial Material
+        {
+            get
+            {
+                if (!_materialInstanced)
+                {
+                    _sharedMaterial = _sharedMaterial.Clone();
+                    _materialInstanced = true;
+                }
+                return _sharedMaterial;
+            }
+            set
+            {
+                _sharedMaterial = value ?? new PhysicMaterial();
+                _materialInstanced = true;
+                ApplyMaterial();
+            }
+        }
+        private PhysicMaterial _sharedMaterial = new PhysicMaterial();
+        private bool _materialInstanced;
+
+        private void ApplyMaterial()
+        {
+            if (IsCreated) RuntimeBridge.CharacterSetMaterial(EntityId, _sharedMaterial.Friction, _sharedMaterial.Restitution);
+        }
+
+        /// <summary>
+        /// Raycast contra la propia cápsula del personaje (Unity: Collider.Raycast; el motor no
+        /// tiene tipo Ray, así que la firma usa origin/direction como Physics.Raycast). No es una
+        /// consulta de mundo. Rellena Point, Normal y Distance; si no hay impacto, hit = default.
+        /// maxDistance infinito se trata como float.MaxValue.
+        /// </summary>
+        public bool Raycast(Vector3 origin, Vector3 direction, out RaycastHit hit, float maxDistance)
+        {
+            hit = default;
+            if (!IsCreated) return false;
+            float max = float.IsPositiveInfinity(maxDistance) ? float.MaxValue : maxDistance;
+            if (!RuntimeBridge.CharacterRaycast(EntityId, origin, direction, max, out float distance, out Vector3 point, out Vector3 normal))
+                return false;
+            hit = new RaycastHit { EntityId = EntityId, Point = point, Normal = normal, Distance = distance };
+            return true;
+        }
+
+        /// <summary>
+        /// Punto más cercano sobre la cápsula (Unity: Collider.ClosestPoint). Si el punto está
+        /// dentro, se devuelve tal cual. Sin personaje o si el puente falla, devuelve position.
+        /// </summary>
+        public Vector3 ClosestPoint(Vector3 position)
+        {
+            if (IsCreated && RuntimeBridge.CharacterClosestPoint(EntityId, position, out Vector3 result)) return result;
+            return position;
+        }
+
+        /// <summary>
+        /// Punto más cercano sobre el AABB de la cápsula (Unity: Collider.ClosestPointOnBounds).
+        /// Sin personaje o si el puente falla, devuelve position.
+        /// </summary>
+        public Vector3 ClosestPointOnBounds(Vector3 position)
+        {
+            if (IsCreated && RuntimeBridge.CharacterClosestPointOnBounds(EntityId, position, out Vector3 result)) return result;
+            return position;
+        }
+
+        /// <summary>
         /// Unity: center. Desplaza la cápsula respecto a la entidad; al
         /// cambiarlo la cápsula se mueve en (nuevo − anterior). Position sigue
         /// siendo el centro de la cápsula en mundo.
@@ -169,6 +259,7 @@ namespace GlassEngine.Core.Physics
             {
                 if (_minMoveDistance != 0f) RuntimeBridge.CharacterSetMinMoveDistance(EntityId, _minMoveDistance);
                 if (_center.X != 0f || _center.Y != 0f || _center.Z != 0f) RuntimeBridge.CharacterSetCenter(EntityId, _center);
+                if (_sharedMaterial.Friction != 0f || _sharedMaterial.Restitution != 0f) ApplyMaterial();
             }
             return IsCreated;
         }

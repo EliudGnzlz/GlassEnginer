@@ -49,6 +49,10 @@ pub struct CharacterState {
     /// CC-1: desplazamiento de la cápsula respecto a la entidad (Unity: center).
     /// `pos` sigue siendo el centro de la cápsula en mundo.
     pub center: [f32; 3],
+    /// CC-2: fricción del collider de la cápsula (Unity: material del CC).
+    pub friction: f32,
+    /// CC-2: restitución del collider de la cápsula.
+    pub restitution: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -145,6 +149,8 @@ impl PhysicsWorld {
                 include_mask: u32::MAX,
                 min_move_distance: 0.0,
                 center: [0.0, 0.0, 0.0],
+                friction: 0.0,
+                restitution: 0.0,
             },
         );
 
@@ -793,6 +799,90 @@ impl PhysicsWorld {
         self.characters.get(&entity_id).map(|s| s.min_move_distance)
     }
 
+    pub fn set_character_material(&mut self, entity_id: u64, friction: f32, restitution: f32) -> bool {
+        if !friction.is_finite() || friction < 0.0 || !restitution.is_finite() || restitution < 0.0 {
+            return false;
+        }
+        let Some(state) = self.characters.get_mut(&entity_id) else {
+            return false;
+        };
+        state.friction = friction;
+        state.restitution = restitution;
+        let handle = state.rapier_collider;
+        if let Some(collider) = self.collider_set.get_mut(handle) {
+            collider.set_friction(friction);
+            collider.set_restitution(restitution);
+        }
+        true
+    }
+
+    pub fn get_character_material(&self, entity_id: u64) -> Option<(f32, f32)> {
+        self.characters.get(&entity_id).map(|s| (s.friction, s.restitution))
+    }
+
+    /// Raycast analítico contra la cápsula del personaje (Y-arriba, centrada en `pos`).
+    /// Devuelve (distancia, punto, normal). `dir` se normaliza aquí.
+    pub fn character_raycast(
+        &self,
+        entity_id: u64,
+        origin: [f32; 3],
+        dir: [f32; 3],
+        max_dist: f32,
+    ) -> Option<(f32, [f32; 3], [f32; 3])> {
+        use rapier3d::parry::query::RayCast;
+
+        if !max_dist.is_finite() || max_dist < 0.0 {
+            return None;
+        }
+        if origin.iter().chain(dir.iter()).any(|v| !v.is_finite()) {
+            return None;
+        }
+        let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+        if !len.is_finite() || len <= f32::EPSILON {
+            return None;
+        }
+        let d = [dir[0] / len, dir[1] / len, dir[2] / len];
+
+        let state = self.characters.get(&entity_id)?;
+        let capsule = Capsule::new_y(state.half_height, state.radius);
+        let iso = Isometry::translation(state.pos[0], state.pos[1], state.pos[2]);
+        let ray = rapier3d::parry::query::Ray::new(
+            Point::new(origin[0], origin[1], origin[2]),
+            Vector::new(d[0], d[1], d[2]),
+        );
+        let hit = capsule.cast_ray_and_get_normal(&iso, &ray, max_dist, true)?;
+        let t = hit.time_of_impact;
+        let point = [origin[0] + d[0] * t, origin[1] + d[1] * t, origin[2] + d[2] * t];
+        Some((t, point, [hit.normal.x, hit.normal.y, hit.normal.z]))
+    }
+
+    /// Punto más cercano sobre la cápsula. Con solid=true, un punto interior se devuelve tal cual.
+    pub fn character_closest_point(&self, entity_id: u64, point: [f32; 3]) -> Option<[f32; 3]> {
+        use rapier3d::parry::query::PointQuery;
+
+        if point.iter().any(|v| !v.is_finite()) {
+            return None;
+        }
+        let state = self.characters.get(&entity_id)?;
+        let capsule = Capsule::new_y(state.half_height, state.radius);
+        let iso = Isometry::translation(state.pos[0], state.pos[1], state.pos[2]);
+        let proj = capsule.project_point(&iso, &Point::new(point[0], point[1], point[2]), true);
+        Some([proj.point.x, proj.point.y, proj.point.z])
+    }
+
+    /// Punto más cercano sobre el AABB de `character_bounds` (clamp por componente).
+    pub fn character_closest_point_on_bounds(&self, entity_id: u64, point: [f32; 3]) -> Option<[f32; 3]> {
+        if point.iter().any(|v| !v.is_finite()) {
+            return None;
+        }
+        let (min, max) = self.character_bounds(entity_id)?;
+        Some([
+            point[0].clamp(min[0], max[0]),
+            point[1].clamp(min[1], max[1]),
+            point[2].clamp(min[2], max[2]),
+        ])
+    }
+
     /// CC-1: center. Desplaza la cápsula en (nuevo − anterior) y mueve el
     /// cuerpo cinemático (patrón teleport_character). No se tocan grounded ni
     /// ground_body: la cápsula se mueve con su entidad y el siguiente Move
@@ -951,5 +1041,114 @@ mod cc1_tests {
             world.get_character_center(ID).expect("personaje existente"),
             [0.0, 0.0, 0.0]
         ));
+    }
+}
+
+#[cfg(test)]
+mod cc2_tests {
+    use super::*;
+
+    const ID: u64 = 4242;
+
+    fn world_at(pos: [f32; 3]) -> PhysicsWorld {
+        let mut w = PhysicsWorld::new();
+        assert!(w.create_character(
+            ID,
+            pos,
+            CharacterConfig {
+                radius: 0.5,
+                height: 2.0,
+                skin: 0.02,
+                step_offset: 0.4,
+                slope_limit_deg: 45.0,
+                snap: 0.2,
+            },
+        ));
+        w
+    }
+
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    fn approx3(a: [f32; 3], b: [f32; 3]) -> bool {
+        approx(a[0], b[0]) && approx(a[1], b[1]) && approx(a[2], b[2])
+    }
+
+    #[test]
+    fn material_set_get_and_applied_to_collider() {
+        let mut w = world_at([0.0, 1.0, 0.0]);
+        assert_eq!(w.get_character_material(ID), Some((0.0, 0.0)));
+
+        assert!(w.set_character_material(ID, 0.8, 0.3));
+        let (f, r) = w.get_character_material(ID).unwrap();
+        assert!(approx(f, 0.8));
+        assert!(approx(r, 0.3));
+
+        let handle = w.characters.get(&ID).map(|s| s.rapier_collider).unwrap();
+        let collider = w.collider_set.get(handle).unwrap();
+        assert!(approx(collider.friction(), 0.8));
+        assert!(approx(collider.restitution(), 0.3));
+
+        assert!(!w.set_character_material(ID, -0.1, 0.0));
+        assert!(!w.set_character_material(ID, 0.0, -0.1));
+        assert!(!w.set_character_material(ID, f32::NAN, 0.0));
+        let (f, r) = w.get_character_material(ID).unwrap();
+        assert!(approx(f, 0.8));
+        assert!(approx(r, 0.3));
+
+        assert!(!w.set_character_material(9999, 0.5, 0.5));
+        assert_eq!(w.get_character_material(9999), None);
+    }
+
+    #[test]
+    fn raycast_front_hit() {
+        let w = world_at([0.0, 1.0, 0.0]);
+        let (dist, point, normal) = w
+            .character_raycast(ID, [-5.0, 1.0, 0.0], [1.0, 0.0, 0.0], 100.0)
+            .unwrap();
+        assert!(approx(dist, 4.5));
+        assert!(approx3(point, [-0.5, 1.0, 0.0]));
+        assert!(approx3(normal, [-1.0, 0.0, 0.0]));
+
+        // Dirección no unitaria: se normaliza y da el mismo impacto.
+        let (dist2, point2, _) = w
+            .character_raycast(ID, [-5.0, 1.0, 0.0], [3.0, 0.0, 0.0], 100.0)
+            .unwrap();
+        assert!(approx(dist2, 4.5));
+        assert!(approx3(point2, [-0.5, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn raycast_miss_and_invalid() {
+        let w = world_at([0.0, 1.0, 0.0]);
+        assert!(w.character_raycast(ID, [-5.0, 5.0, 0.0], [1.0, 0.0, 0.0], 100.0).is_none());
+        assert!(w.character_raycast(ID, [-5.0, 1.0, 0.0], [0.0, 0.0, 0.0], 100.0).is_none());
+        assert!(w.character_raycast(ID, [-5.0, 1.0, 0.0], [1.0, 0.0, 0.0], -1.0).is_none());
+        assert!(w.character_raycast(ID, [-5.0, 1.0, 0.0], [1.0, 0.0, 0.0], f32::INFINITY).is_none());
+        assert!(w.character_raycast(ID, [-5.0, 1.0, 0.0], [1.0, 0.0, 0.0], 3.0).is_none());
+        assert!(w.character_raycast(9999, [-5.0, 1.0, 0.0], [1.0, 0.0, 0.0], 100.0).is_none());
+    }
+
+    #[test]
+    fn closest_point_on_capsule() {
+        let w = world_at([0.0, 1.0, 0.0]);
+        let p = w.character_closest_point(ID, [3.0, 1.0, 0.0]).unwrap();
+        assert!(approx3(p, [0.5, 1.0, 0.0]));
+        let inside = w.character_closest_point(ID, [0.0, 1.0, 0.0]).unwrap();
+        assert!(approx3(inside, [0.0, 1.0, 0.0]));
+        assert!(w.character_closest_point(9999, [3.0, 1.0, 0.0]).is_none());
+    }
+
+    #[test]
+    fn closest_point_on_bounds_clamps() {
+        let w = world_at([0.0, 1.0, 0.0]);
+        let p = w.character_closest_point_on_bounds(ID, [3.0, 1.0, 0.0]).unwrap();
+        assert!(approx3(p, [0.5, 1.0, 0.0]));
+        let inside = w.character_closest_point_on_bounds(ID, [0.0, 1.0, 0.0]).unwrap();
+        assert!(approx3(inside, [0.0, 1.0, 0.0]));
+        let corner = w.character_closest_point_on_bounds(ID, [3.0, 5.0, 0.0]).unwrap();
+        assert!(approx3(corner, [0.5, 2.0, 0.0]));
+        assert!(w.character_closest_point_on_bounds(9999, [3.0, 1.0, 0.0]).is_none());
     }
 }

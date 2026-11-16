@@ -871,6 +871,171 @@ pub unsafe extern "C" fn glass_character_get_center(
     0
 }
 
+/// Fija fricción y restitución del collider del personaje.
+///
+/// # Safety
+/// No recibe punteros; es `unsafe` por coherencia con el resto de la API de personaje.
+#[no_mangle]
+pub unsafe extern "C" fn glass_character_set_material(entity_id: u64, friction: f32, restitution: f32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return i32::from(world.set_character_material(entity_id, friction, restitution));
+        }
+    }
+    0
+}
+
+/// Lee fricción y restitución del personaje.
+///
+/// # Safety
+/// `out_friction` y `out_restitution` deben ser punteros válidos y escribibles a `f32`.
+#[no_mangle]
+pub unsafe extern "C" fn glass_character_get_material(
+    entity_id: u64,
+    out_friction: *mut f32,
+    out_restitution: *mut f32,
+) -> i32 {
+    if out_friction.is_null() || out_restitution.is_null() {
+        return 0;
+    }
+    // SAFETY: punteros no nulos y escribibles según el contrato.
+    unsafe {
+        *out_friction = 0.0;
+        *out_restitution = 0.0;
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            if let Some((f, r)) = world.get_character_material(entity_id) {
+                // SAFETY: ver arriba.
+                unsafe {
+                    *out_friction = f;
+                    *out_restitution = r;
+                }
+                return 1;
+            }
+        }
+    }
+    0
+}
+
+/// Raycast contra la cápsula del personaje.
+///
+/// # Safety
+/// `out_dist` debe apuntar a un `f32` escribible; `out_point` y `out_normal` a buffers
+/// escribibles de 3 `f32` cada uno.
+#[no_mangle]
+pub unsafe extern "C" fn glass_character_raycast(
+    entity_id: u64,
+    ox: f32,
+    oy: f32,
+    oz: f32,
+    dx: f32,
+    dy: f32,
+    dz: f32,
+    max_dist: f32,
+    out_dist: *mut f32,
+    out_point: *mut f32,
+    out_normal: *mut f32,
+) -> i32 {
+    if out_dist.is_null() || out_point.is_null() || out_normal.is_null() {
+        return 0;
+    }
+    // SAFETY: punteros no nulos; out_point/out_normal con capacidad 3 según el contrato.
+    unsafe {
+        out_dist.write(0.0);
+        for i in 0..3 {
+            out_point.add(i).write(0.0);
+            out_normal.add(i).write(0.0);
+        }
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            if let Some((dist, point, normal)) =
+                world.character_raycast(entity_id, [ox, oy, oz], [dx, dy, dz], max_dist)
+            {
+                // SAFETY: ver arriba.
+                unsafe {
+                    out_dist.write(dist);
+                    for i in 0..3 {
+                        out_point.add(i).write(point[i]);
+                        out_normal.add(i).write(normal[i]);
+                    }
+                }
+                return 1;
+            }
+        }
+    }
+    0
+}
+
+/// Punto más cercano sobre la cápsula del personaje.
+///
+/// # Safety
+/// `out` debe apuntar a un buffer escribible de 3 `f32`.
+#[no_mangle]
+pub unsafe extern "C" fn glass_character_closest_point(entity_id: u64, x: f32, y: f32, z: f32, out: *mut f32) -> i32 {
+    if out.is_null() {
+        return 0;
+    }
+    // SAFETY: puntero no nulo con capacidad 3 según el contrato.
+    unsafe {
+        for i in 0..3 {
+            out.add(i).write(0.0);
+        }
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            if let Some(p) = world.character_closest_point(entity_id, [x, y, z]) {
+                // SAFETY: ver arriba.
+                unsafe {
+                    for (i, v) in p.iter().enumerate() {
+                        out.add(i).write(*v);
+                    }
+                }
+                return 1;
+            }
+        }
+    }
+    0
+}
+
+/// Punto más cercano sobre el AABB del personaje.
+///
+/// # Safety
+/// `out` debe apuntar a un buffer escribible de 3 `f32`.
+#[no_mangle]
+pub unsafe extern "C" fn glass_character_closest_point_on_bounds(
+    entity_id: u64,
+    x: f32,
+    y: f32,
+    z: f32,
+    out: *mut f32,
+) -> i32 {
+    if out.is_null() {
+        return 0;
+    }
+    // SAFETY: puntero no nulo con capacidad 3 según el contrato.
+    unsafe {
+        for i in 0..3 {
+            out.add(i).write(0.0);
+        }
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            if let Some(p) = world.character_closest_point_on_bounds(entity_id, [x, y, z]) {
+                // SAFETY: ver arriba.
+                unsafe {
+                    for (i, v) in p.iter().enumerate() {
+                        out.add(i).write(*v);
+                    }
+                }
+                return 1;
+            }
+        }
+    }
+    0
+}
+
 /// # Safety
 /// `out` debe ser null o apuntar a memoria válida y escribible durante la llamada.
 #[no_mangle]

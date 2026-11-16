@@ -280,6 +280,21 @@ public delegate int CharacterSetCenterDelegate(ulong entityId, float x, float y,
 public delegate int CharacterGetCenterDelegate(ulong entityId, out float x, out float y, out float z);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterSetMaterialDelegate(ulong entityId, float friction, float restitution);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterGetMaterialDelegate(ulong entityId, out float friction, out float restitution);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterRaycastDelegate(ulong entityId, float ox, float oy, float oz, float dx, float dy, float dz, float maxDist, out float dist, [In, Out] float[] point, [In, Out] float[] normal);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterClosestPointDelegate(ulong entityId, float x, float y, float z, [In, Out] float[] result);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterClosestPointOnBoundsDelegate(ulong entityId, float x, float y, float z, [In, Out] float[] result);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate int CharacterSetSlopeLimitDelegate(ulong entityId, float degrees);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
