@@ -643,8 +643,15 @@ impl PhysicsWorld {
         };
 
         // Note: nalgebra Quaternion takes (w, i, j, k) where i=x, j=y, k=z
-        let quat = nalgebra::Quaternion::new(rot[3], rot[0], rot[1], rot[2]);
-        let unit_quat = nalgebra::UnitQuaternion::from_quaternion(quat);
+        // Cuaternión inválido (norma ~0 o no finita) al crear: identidad,
+        // nunca NaN (normalizar un cuaternión cero envenena el cuerpo).
+        let norma2 = rot[0] * rot[0] + rot[1] * rot[1] + rot[2] * rot[2] + rot[3] * rot[3];
+        let unit_quat = if norma2.is_finite() && norma2 >= 1e-12 {
+            let quat = nalgebra::Quaternion::new(rot[3], rot[0], rot[1], rot[2]);
+            nalgebra::UnitQuaternion::from_quaternion(quat)
+        } else {
+            nalgebra::UnitQuaternion::identity()
+        };
 
         let mut builder = RigidBodyBuilder::new(rapier_type)
             .translation(vector![pos[0], pos[1], pos[2]])
@@ -1067,6 +1074,15 @@ impl PhysicsWorld {
             Some(v) => v,
             None => return false,
         };
+
+        // Un cuaternión de norma ~0 o no finita no es una rotación válida:
+        // normalizarlo produciría NaN y envenenaría el cuerpo (hallado por
+        // la sonda física RBCC100: PublishTransform con el transform por
+        // defecto (0,0,0,0) dejaba el cuerpo con rotación NaN).
+        let norma2 = rot[0] * rot[0] + rot[1] * rot[1] + rot[2] * rot[2] + rot[3] * rot[3];
+        if !norma2.is_finite() || norma2 < 1e-12 {
+            return false;
+        }
 
         if let Some(rb) = self.rigid_body_set.get_mut(rapier_handle) {
             let quat = nalgebra::Quaternion::new(rot[3], rot[0], rot[1], rot[2]);
@@ -3341,6 +3357,20 @@ mod tests {
 
     fn aprox(a: [f32; 3], b: [f32; 3]) -> bool {
         (0..3).all(|i| (a[i] - b[i]).abs() < 1e-4)
+    }
+
+    #[test]
+    fn set_transform_rechaza_cuaternion_cero() {
+        // Regresión sonda RBCC100: un cuaternión (0,0,0,0) normalizado
+        // produce NaN y envenena el cuerpo; set_transform debe rechazarlo.
+        let (mut world, _suelo) = mundo_con_suelo();
+        let h = world.create_rigid_body(77, BodyType::Dynamic, [0.0, 8.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        assert!(!world.set_transform(h, [0.0, 8.0, 0.0], [0.0, 0.0, 0.0, 0.0]));
+        assert!(world.set_transform(h, [0.0, 9.0, 0.0], [0.0, 0.0, 0.0, 1.0]));
+        // Crear con cuaternión cero cae a identidad, nunca a NaN.
+        let h2 = world.create_rigid_body(78, BodyType::Dynamic, [0.0, 8.0, 0.0], [0.0, 0.0, 0.0, 0.0]);
+        let t2 = world.get_transform(h2).expect("transform h2");
+        assert!(t2.rotation.iter().all(|v| v.is_finite()));
     }
 
     #[test]

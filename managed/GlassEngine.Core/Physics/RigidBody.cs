@@ -433,7 +433,7 @@ public sealed class RigidBody
     public bool PublishTransform()
     {
         if (!IsValid) return false;
-        if (RuntimeBridge.GetTransform(EntityId, out TransformData data) == 0) return false;
+        if (RuntimeBridge.GetTransform(EntityId, out TransformData data) != 0) return false;
         return RuntimeBridge.SetPhysicsTransform(Handle, data.Position, data.Rotation);
     }
 

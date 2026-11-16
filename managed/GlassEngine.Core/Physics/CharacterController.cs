@@ -143,8 +143,14 @@ namespace GlassEngine.Core.Physics
             get => _center;
             set
             {
+                Vector3 anterior = _center;
                 _center = value;
-                if (IsCreated) RuntimeBridge.CharacterSetCenter(EntityId, value);
+                if (IsCreated && RuntimeBridge.CharacterSetCenter(EntityId, value))
+                {
+                    // La cápsula se movió en (nuevo − anterior): la Position
+                    // cacheada (centro de la cápsula en mundo) se mueve igual.
+                    Position = Position + (value + anterior * -1f);
+                }
             }
         }
         private Vector3 _center = Vector3.Zero;
@@ -258,7 +264,11 @@ namespace GlassEngine.Core.Physics
             if (IsCreated)
             {
                 if (_minMoveDistance != 0f) RuntimeBridge.CharacterSetMinMoveDistance(EntityId, _minMoveDistance);
-                if (_center.X != 0f || _center.Y != 0f || _center.Z != 0f) RuntimeBridge.CharacterSetCenter(EntityId, _center);
+                if (_center.X != 0f || _center.Y != 0f || _center.Z != 0f)
+                {
+                    if (RuntimeBridge.CharacterSetCenter(EntityId, _center))
+                        Position = Position + _center;
+                }
                 if (_sharedMaterial.Friction != 0f || _sharedMaterial.Restitution != 0f) ApplyMaterial();
             }
             return IsCreated;

@@ -272,21 +272,21 @@ pub extern "C" fn glass_physics_set_transform(
     rot_y: f32,
     rot_z: f32,
     rot_w: f32,
-) -> bool {
+) -> i32 {
     if !all_finite(&[pos_x, pos_y, pos_z, rot_x, rot_y, rot_z, rot_w]) {
         log::error!("glass_physics_set_transform: posición/rotación no finitas; ignorado");
-        return false;
+        return 0;
     }
     if let Some(sys) = get_global_physics_world() {
         if let Ok(mut world) = sys.lock() {
-            return world.set_transform(
+            return i32::from(world.set_transform(
                 body_handle,
                 [pos_x, pos_y, pos_z],
                 [rot_x, rot_y, rot_z, rot_w],
-            );
+            ));
         }
     }
-    false
+    0
 }
 
 #[no_mangle]

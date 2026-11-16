@@ -184,3 +184,10 @@ semántica exacta de `excludeLayers` / `includeLayers` · toggles de
 **CharacterController:** `minMoveDistance` · `center` desplazable ·
 `SimpleMove` · `material` / `sharedMaterial` · `Raycast` /
 `ClosestPoint` / `ClosestPointOnBounds` heredados de Collider.
+
+**HECHO (2026-11-16, bloque RB/CC 100%):** todas las piezas de esta
+sección están implementadas (RB-1..RB-4 + CC-1/CC-2; registro en
+`REGISTRO_RBCC100.md`, re-auditoría en `AUDITORIA_RIGIDBODY_CC.md`:
+RB 56/57 con 1 parcial — la carga Collision sin contacts[] — y
+CC 24/25; el único hueco restante, `excludeLayers` del CC, no
+formaba parte de esta lista).

@@ -1624,7 +1624,7 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
     public static bool SetPhysicsTransform(ulong bodyHandle, Vector3 position, Quaternion rotation)
     {
         if (_setPhysicsTransform is null) return false;
-        return _setPhysicsTransform(bodyHandle, position.X, position.Y, position.Z, rotation.X, rotation.Y, rotation.Z, rotation.W);
+        return _setPhysicsTransform(bodyHandle, position.X, position.Y, position.Z, rotation.X, rotation.Y, rotation.Z, rotation.W) != 0;
     }
 
     public static bool RemoveRigidBody(ulong bodyHandle)

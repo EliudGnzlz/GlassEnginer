@@ -73,7 +73,7 @@ public delegate bool GetPhysicsTransformDelegate(
     out Quaternion rotation);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-public delegate bool SetPhysicsTransformDelegate(
+public delegate int SetPhysicsTransformDelegate(
     ulong bodyHandle,
     float posX,
     float posY,

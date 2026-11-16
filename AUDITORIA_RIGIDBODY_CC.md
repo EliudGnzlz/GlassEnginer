@@ -433,3 +433,55 @@ bloque. DeepSeek 0 · Kimi 0. Los tres defectos de integración
 (álgebra de masa cero del override, `sweep_all` de un solo
 impacto, signo de la normal de expulsión) los cazaron los tests
 antes de la prueba en vivo y se arreglaron a mano.
+
+## Addenda 2026-11-16 — Bloque RB/CC 100% (§7) IMPLEMENTADO + re-auditoría
+
+Implementadas TODAS las piezas BAJA del §7 de `LISTA_DE_DESPUES.md`
+(registro completo en `REGISTRO_RBCC100.md`): RB-1 `angularDamping` +
+`solverIterations`; RB-2a `AddRelativeForce` +
+`GetAccumulatedForce`/`GetAccumulatedTorque`; RB-2b
+`maxDepenetrationVelocity` (límite real sobre el desplazamiento de
+separación por substep: la separación de Rapier es posicional, no por
+velocidad); RB-3 semántica Unity de `includeLayers`/`excludeLayers` +
+`solverVelocityIterations` (valor guardado, manda el máximo de ambas);
+RB-4 toggles `automaticCenterOfMass`/`automaticInertiaTensor` +
+`PublishTransform` + `ClosestPointOnBounds`; CC-1 `minMoveDistance` +
+`center` + `SimpleMove`; CC-2 `material`/`sharedMaterial` (clase
+`PhysicMaterial` mínima creada: no existía en ninguna capa) +
+`Raycast`/`ClosestPoint`/`ClosestPointOnBounds` contra la propia
+cápsula (analíticos con parry).
+
+**Re-auditoría contra las tablas originales (82 ítems):**
+
+- **Rigidbody: TIENE 56 · PARCIAL 1 · NO TIENE 0 de 57 → 99,1 %
+  ponderado.** El único PARCIAL es la carga `Collision`/`ContactPoint`:
+  lleva `point`, `normal`, `impulse` y `relativeVelocity`, pero no
+  `contacts[]` ni referencias `collider`/`rigidbody`.
+- **CharacterController: TIENE 24 · NO TIENE 1 de 25 → 96 %.** El
+  único hueco es `excludeLayers` heredado de Collider (el CC sí tiene
+  `includeLayers`); quedó FUERA del alcance ordenado en el §7.
+- **Alcance ordenado (§7): 13/13 RB + 8/8 CC = 100 %.**
+
+Adaptaciones documentadas (capacidad presente, forma distinta a
+Unity): `AddForce` → `ApplyForce`/`ApplyImpulse` con `ForceMode`
+(los 4 modos); `linearVelocity` → `Get/SetLinearVelocity`;
+`Move` del CC devuelve el desplazamiento aplicado y expone
+`LastFlags` (`CollisionFlags`); `Raycast` del CC usa
+origin/direction (el motor no tiene tipo `Ray`);
+`GetAccumulatedForce` es la suma viva (Rapier no la resetea por
+paso); el material del CC queda aplicado a su collider, pero la
+cápsula es invisible al solver (GROUP_32/NONE), así que hoy no
+cambia interacciones con otros cuerpos.
+
+**La sonda física destapó 3 defectos reales en código ya entregado**
+(verificados y arreglados de raíz; detalle en `REGISTRO_RBCC100.md`):
+(1) `PublishTransform` (RB-4) tenía la condición de éxito invertida
+— nunca publicaba en cuerpos de escena y escribía el transform por
+defecto (cuaternión cero) en cuerpos de script; (2) normalizar un
+cuaternión cero producía NaN y envenenaba el cuerpo — guardas en
+`set_transform` y `create_rigid_body`; (3) `glass_physics_set_transform`
+devolvía `bool` Rust (1 byte) leído como BOOL C# (4 bytes): un
+`false` se leía como `true` — convertido al patrón i32. Y la caché
+`Position` del CC no seguía el desplazamiento de `center` (CC-1).
+Sonda: escena `PruebaRbcc100` + script `Rbcc100Probe` — **29/29 OK**
+en standalone tras los arreglos.
