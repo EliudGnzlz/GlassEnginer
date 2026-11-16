@@ -174,3 +174,65 @@ Consumo acumulado por proveedor al final de cada sub-bloque.
   COMPLETA cuya respuesta se perdió con un reemplazo de la VM antes
   de poder extraerla + 40.731 de la regeneración).
   **Acumulado del bloque: Opus 304.071.**
+
+## CC-2 — CERRADO (2026-11-16)
+
+- **Commit `f60bd6d`** (7 archivos, 576 inserciones).
+  **CI 43942101487 success.** Pipeline local exacto en verde.
+- Contenido: **material/sharedMaterial** — el motor no tenía
+  PhysicMaterial en ninguna capa; se crea la clase C# mínima
+  (`Friction`/`Restitution`), `Material` instancia al primer acceso
+  como Unity y `SharedMaterial` guarda la referencia viva; asignar
+  cualquiera aplica los valores al collider de la cápsula
+  (`set_friction`/`set_restitution` de Rapier) y los guarda en el
+  CharacterState. Honestidad registrada en el XML: la cápsula es
+  invisible al solver (GROUP_32/NONE), así que hoy los valores quedan
+  aplicados al collider sin cambiar interacciones con otros cuerpos.
+  **Raycast/ClosestPoint/ClosestPointOnBounds** heredados de
+  Collider, contra la PROPIA cápsula (analíticos con parry:
+  `cast_ray_and_get_normal` y `project_point` sobre
+  `Capsule::new_y`; el de bounds es clamp sobre `character_bounds`).
+  La firma de Raycast se adapta a la convención del motor
+  (origin/direction como `Physics.Raycast`; no existe tipo `Ray`) y
+  rellena `EntityId` en el RaycastHit. Puente: 5 campos tras
+  `character_get_center`. 5 tests `cc2_*` en verde.
+- **Consumo CC-2: Opus 49.422** (37.094 + 12.328).
+  **Acumulado del bloque RB/CC 100%: Opus 353.493.**
+
+## Re-auditoría y CIERRE DEL BLOQUE (2026-11-16)
+
+- **Commit de arreglos + sonda `1adf72a`** (10 archivos, 488
+  inserciones). **CI 43947376675 success.** Pipeline local exacto
+  en verde.
+- **Re-auditoría** (addenda en `AUDITORIA_RIGIDBODY_CC.md`):
+  alcance ordenado del §7 de `LISTA_DE_DESPUES.md` al **100 %**
+  (13/13 RB + 8/8 CC). Sobre las tablas completas de la auditoría
+  (82 ítems): **RB 56/57 con 1 PARCIAL** (la carga `Collision`
+  lleva point/normal/impulse/relativeVelocity, sin `contacts[]` ni
+  referencias collider/rigidbody) → 99,1 % ponderado; **CC 24/25**
+  → 96 % (único hueco: `excludeLayers` heredado, fuera del alcance
+  del §7; el CC sí tiene `includeLayers`).
+- **Sonda física** (escena `PruebaRbcc100` + script `Rbcc100Probe`,
+  standalone por el camino real): **29/29 OK** tras los arreglos.
+  La primera corrida destapó 3 defectos reales en código ya
+  entregado, arreglados de raíz en `1adf72a`:
+  (1) `PublishTransform` (RB-4) con la condición de éxito invertida
+  (el puente usa 0 = OK): nunca publicaba en cuerpos de escena y en
+  cuerpos de script escribía el TransformData por defecto;
+  (2) ese defecto llevaba el cuaternión (0,0,0,0), que al
+  normalizarse producía NaN y envenenaba el cuerpo — guardas de
+  norma en `set_transform` y `create_rigid_body` de world.rs, con
+  test de regresión `set_transform_rechaza_cuaternion_cero`;
+  (3) `glass_physics_set_transform` devolvía `bool` Rust (1 byte)
+  leído por el delegado C# como BOOL (4 bytes): un `false` se leía
+  como `true` — convertido al patrón i32 (delegado `int`,
+  RuntimeBridge compara != 0), demostrado con sonda nativa
+  (norma2=0 recibido y C# seguía viendo true antes del cambio).
+  Además, la `Position` cacheada del CC no seguía el desplazamiento
+  de `center` (CC-1): el setter y el push de `Create()` ahora
+  mueven la caché en el mismo delta.
+- **Consumo total del bloque RB/CC 100%: Opus 353.493 tokens**
+  (RB-1 37.585 · RB-2a 25.132 · RB-2b 34.279 · RB-3 73.377 ·
+  RB-4 62.070 · CC-1 71.628 · CC-2 49.422). Los arreglos de la
+  sonda y la re-auditoría fueron trabajo directo de Rayo (0 tokens
+  de API).
