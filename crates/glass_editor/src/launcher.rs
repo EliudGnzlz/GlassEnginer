@@ -76,6 +76,8 @@ pub enum LauncherAction {
     },
     LoadSampleScene(SampleScenePreset),
     OpenDefaultScene,
+    /// Abre una escena desde su archivo .scene.json (demos de archivo).
+    OpenSceneFile(PathBuf),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -582,6 +584,17 @@ impl LauncherPanel {
             "Juego completo: jugador físico, cámara orbital, plataformas, gemas recolectables con audio 3D, HUD Canvas (Score & Timer) y meta.",
             "▶ Abrir", Color32::from_rgb(90, 180, 60),
             || *action = Some(LauncherAction::LoadSampleScene(SampleScenePreset::FullSampleGame)));
+        // Demos de archivo: vienen en el paquete publicado como .scene.json.
+        ui.add_space(8.0);
+        Self::render_row(ui, "🎯 Demo FPS — POLYGON",
+            "La demo final: escenario POLYGON de Synty, jugador con armas por datos y enemigo con barra de vida. Se carga desde su archivo de escena.",
+            "▶ Abrir", Color32::from_rgb(200, 60, 60),
+            || *action = Some(LauncherAction::OpenSceneFile(PathBuf::from("assets/scenes/DemoFpsPolygon.scene.json"))));
+        ui.add_space(8.0);
+        Self::render_row(ui, "🌆 Escaparate — Shaders y clima",
+            "Escena escaparate: shaders, materiales, lluvia, tormenta de arena y portal. Se carga desde su archivo de escena.",
+            "▶ Abrir", Color32::from_rgb(60, 120, 200),
+            || *action = Some(LauncherAction::OpenSceneFile(PathBuf::from("assets/scenes/Fase9Escaparate.scene.json"))));
     }
 
     fn render_projects_tab(&mut self, ui: &mut Ui, action: &mut Option<LauncherAction>) {
@@ -610,15 +623,40 @@ impl LauncherPanel {
         ui.add_space(12.0);
 
         // Cuadrícula de proyectos: cada uno en su cuadro, con la imagen de
-        // su escena y el nombre debajo (hoy: el proyecto de trabajo del
-        // motor; su carpeta es el directorio desde el que se lanza el Hub).
+        // su escena y el nombre debajo. Primero el proyecto de trabajo del
+        // motor (el directorio desde el que se lanza el Hub); después, los
+        // proyectos encontrados en la carpeta de proyectos por defecto.
         let filter = self.search_filter.to_lowercase();
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let projects: [(&str, &str, PathBuf); 1] = [(
-            "GlassEnginer",
-            "Proyecto del motor • En este equipo",
-            cwd,
+        let mut projects: Vec<(String, String, PathBuf)> = vec![(
+            "GlassEnginer".to_string(),
+            "Proyecto del motor • En este equipo".to_string(),
+            cwd.clone(),
         )];
+        // Escaneo: cada subcarpeta con project.glass es un proyecto. Se usa el
+        // nombre de la carpeta como nombre visible para no depender de serde_json.
+        let cwd_canon = std::fs::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone());
+        let mut scanned: Vec<(String, String, PathBuf)> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(default_projects_dir()) {
+            for entry in entries.flatten() {
+                let dir = entry.path();
+                if !dir.is_dir() || !dir.join("project.glass").is_file() {
+                    continue;
+                }
+                // Evitar duplicar el proyecto del CWD.
+                let dir_canon = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+                if dir_canon == cwd_canon {
+                    continue;
+                }
+                let name = dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                scanned.push((name, "Proyecto • En este equipo".to_string(), dir));
+            }
+        }
+        scanned.sort_by(|a, b| a.0.cmp(&b.0));
+        projects.extend(scanned);
         let mut shown = 0;
         ui.spacing_mut().item_spacing = egui::vec2(14.0, 14.0);
         ui.horizontal_wrapped(|ui| {

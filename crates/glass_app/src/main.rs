@@ -1,3 +1,8 @@
+// En Windows, la app es una aplicación de ventana: sin consola (la CMD
+// que el probador veía al arrancar). Los logs siguen en la Consola del
+// editor y en el log de la app.
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 use ash::vk;
 #[cfg(feature = "editor")]
 use egui_ash_renderer::Renderer as EguiVulkanRenderer;
@@ -2891,13 +2896,34 @@ impl GlassEngineApp {
 
     #[cfg(feature = "editor")]
     pub fn create_project_and_open(&mut self, name: &str, path: &Path, template: ProjectTemplate) {
-        let project_dir = path.join(name);
-        let _ = std::fs::create_dir_all(project_dir.join("Assets/Scenes"));
-        let _ = std::fs::create_dir_all(project_dir.join("Assets/Scripts"));
-        let _ = std::fs::create_dir_all(project_dir.join("Assets/Materials"));
+        // La Ubicación del Hub ya es la carpeta del proyecto (su texto lo
+        // dice: «la carpeta del proyecto se crea en esa ubicación» y el
+        // valor por defecto es GlassProjects/<nombre>). Unir el nombre
+        // otra vez creaba GlassProjects/<nombre>/<nombre> y el proyecto
+        // nunca aparecía en la lista del Hub, que busca project.glass en
+        // GlassProjects/*. Se acepta también la ruta padre por robustez.
+        let project_dir = if path.file_name().map(|n| n == name).unwrap_or(false) {
+            path.to_path_buf()
+        } else {
+            path.join(name)
+        };
+        // Estructura de carpetas tipo Unity.
+        for sub in [
+            "Assets/Scenes",
+            "Assets/Scripts",
+            "Assets/Materials",
+            "Assets/Models",
+            "Assets/Textures",
+            "ProjectSettings",
+            "Packages",
+        ] {
+            if let Err(e) = std::fs::create_dir_all(project_dir.join(sub)) {
+                log::error!("No se pudo crear {:?}: {}", project_dir.join(sub), e);
+            }
+        }
 
         let meta = format!(
-            "{{\n  \"name\": \"{}\",\n  \"version\": \"1.0.0\",\n  \"engine\": \"GlassEngine 0.1.0\",\n  \"template\": \"{:?}\"\n}}\n",
+            "{{\n  \"name\": \"{}\",\n  \"version\": \"1.0.0\",\n  \"engine\": \"GlassEngine 0.1.0\",\n  \"template\": \"{:?}\",\n  \"scene\": \"Assets/Scenes/SampleScene.scene.json\"\n}}\n",
             name, template
         );
         let _ = std::fs::write(project_dir.join("project.glass"), meta);
@@ -2910,10 +2936,61 @@ impl GlassEngineApp {
                 self.setup_physics_playground_scene();
             }
             ProjectTemplate::EmptyScene => {
-                self.setup_physics_playground_scene();
+                self.setup_empty_scene();
             }
         }
+
+        // Guardar la escena de la plantilla en disco para poder reabrir el
+        // proyecto (Assets/Scenes ya existe: save_to_json no crea carpetas).
+        let scene_path = project_dir.join("Assets/Scenes/SampleScene.scene.json");
+        let scene_str = scene_path.to_string_lossy().into_owned();
+        match self.scene_state.lock() {
+            Ok(sc) => {
+                if let Err(e) = sc.save_to_json(&scene_str) {
+                    log::error!("No se pudo guardar la escena del proyecto ({}): {}", scene_str, e);
+                }
+            }
+            Err(_) => log::error!("No se pudo bloquear la escena para guardarla ({})", scene_str),
+        }
         log::info!("Proyecto '{}' creado y cargado en el editor: {:?}", name, project_dir);
+    }
+
+    /// Abre una escena desde un archivo .scene.json por la misma vía
+    /// probada del arranque con --scene: load_from_json + bootstrap
+    /// de scripts y física.
+    #[cfg(feature = "editor")]
+    pub fn open_scene_file(&mut self, scene_path: &str) -> bool {
+        let cargada = match self.scene_state.lock() {
+            Ok(mut sc) => match sc.load_from_json(scene_path) {
+                Ok(()) => true,
+                Err(e) => {
+                    log::error!("La escena solicitada no cargó ({}): {}", scene_path, e);
+                    false
+                }
+            },
+            Err(_) => false,
+        };
+        if cargada {
+            self.bootstrap_scene_scripts_and_physics(scene_path);
+        }
+        cargada
+    }
+
+    /// Escena vacía: solo cámara principal y luz solar. Sin suelo, física ni scripts.
+    #[cfg(feature = "editor")]
+    pub fn setup_empty_scene(&mut self) {
+        let mut state = self.scene_state.lock().unwrap();
+        state.entities.clear();
+        let cam_id = state.create_entity(
+            "Main Camera".into(),
+            vec!["Transform".into(), "Camera".into()],
+        );
+        state.modify_transform(cam_id, Some([0.0, 3.5, 9.0]), Some([14.0, 0.0, 0.0]), Some([1.0, 1.0, 1.0]));
+        let sun_id = state.create_entity(
+            "Sun (Directional Light)".into(),
+            vec!["Transform".into(), "Light".into()],
+        );
+        state.modify_transform(sun_id, Some([0.0, 8.0, 0.0]), Some([55.0, -40.0, 0.0]), Some([1.0, 1.0, 1.0]));
     }
 
     /// Si el modelo importado trae piel, sube también su malla gemela con
@@ -3666,8 +3743,43 @@ let resueltos = colliders_resueltos(body, shape);
                     self.create_project_and_open(&name, &path, template);
                     self.app_mode = AppMode::Editor;
                 }
-                LauncherAction::OpenProject(_path) => {
-                    self.setup_interactive_platformer_scene();
+                LauncherAction::OpenProject(path) => {
+                    // 1) Campo "scene" de project.glass, relativo al proyecto.
+                    let desde_meta = std::fs::read_to_string(path.join("project.glass"))
+                        .ok()
+                        .and_then(|txt| serde_json::from_str::<serde_json::Value>(&txt).ok())
+                        .and_then(|v| v.get("scene").and_then(|s| s.as_str()).map(|s| path.join(s)))
+                        .filter(|p| p.is_file());
+                    // 2) Si no, el primer *.scene.json (por nombre) de Assets/Scenes.
+                    let escena = desde_meta.or_else(|| {
+                        let mut candidatas: Vec<std::path::PathBuf> =
+                            std::fs::read_dir(path.join("Assets/Scenes"))
+                                .ok()?
+                                .flatten()
+                                .map(|e| e.path())
+                                .filter(|p| {
+                                    p.is_file()
+                                        && p.file_name()
+                                            .and_then(|n| n.to_str())
+                                            .is_some_and(|n| n.ends_with(".scene.json"))
+                                })
+                                .collect();
+                        candidatas.sort();
+                        candidatas.into_iter().next()
+                    });
+                    // 3) Cargar la escena; si no hay o falla, escena vacía.
+                    let cargada = match &escena {
+                        Some(ruta) => self.open_scene_file(&ruta.to_string_lossy()),
+                        None => false,
+                    };
+                    if !cargada {
+                        self.setup_empty_scene();
+                    }
+                    log::info!("Proyecto abierto: {:?} (escena: {:?}, cargada: {})", path, escena, cargada);
+                    self.app_mode = AppMode::Editor;
+                }
+                LauncherAction::OpenSceneFile(ruta) => {
+                    self.open_scene_file(&ruta.to_string_lossy());
                     self.app_mode = AppMode::Editor;
                 }
             }
@@ -7589,6 +7701,19 @@ impl ApplicationHandler for GlassEngineApp {
 
         match event {
             WindowEvent::CloseRequested => {
+                // Defecto del probador: al cerrar la ventana del EDITOR se
+                // cerraba también el Launcher, porque ambos son el mismo
+                // proceso y esto salía sin más. Ahora, cerrar en modo
+                // editor vuelve al Launcher (que queda vivo en segundo
+                // plano, igual que con el botón «Hub» del editor); solo
+                // se sale del todo cerrando desde el propio Launcher o
+                // en modo standalone/juego.
+                #[cfg(feature = "editor")]
+                if self.app_mode == AppMode::Editor && !self.is_standalone {
+                    log::info!("Cierre de ventana en el editor: volviendo al Launcher.");
+                    self.app_mode = AppMode::Launcher;
+                    return;
+                }
                 log::info!("Cierre de ventana solicitado.");
                 event_loop.exit();
             }
