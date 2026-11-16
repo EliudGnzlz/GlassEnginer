@@ -27,6 +27,38 @@ namespace GlassEngine.Core.Physics
         }
         private float _stepOffset = 0.4f;
 
+        /// <summary>
+        /// Unity: minMoveDistance. Si el movimiento pedido a Move es más corto,
+        /// se descarta. Defecto 0 (desactivado), a diferencia de Unity (0.001),
+        /// para no cambiar el comportamiento de los juegos existentes.
+        /// </summary>
+        public float MinMoveDistance
+        {
+            get => _minMoveDistance;
+            set
+            {
+                _minMoveDistance = value;
+                if (IsCreated) RuntimeBridge.CharacterSetMinMoveDistance(EntityId, value);
+            }
+        }
+        private float _minMoveDistance = 0.0f;
+
+        /// <summary>
+        /// Unity: center. Desplaza la cápsula respecto a la entidad; al
+        /// cambiarlo la cápsula se mueve en (nuevo − anterior). Position sigue
+        /// siendo el centro de la cápsula en mundo.
+        /// </summary>
+        public Vector3 Center
+        {
+            get => _center;
+            set
+            {
+                _center = value;
+                if (IsCreated) RuntimeBridge.CharacterSetCenter(EntityId, value);
+            }
+        }
+        private Vector3 _center = Vector3.Zero;
+
         // Límite de pendiente en grados.
         public float SlopeLimit
         {
@@ -133,6 +165,11 @@ namespace GlassEngine.Core.Physics
         {
             if (IsCreated) return true;
             IsCreated = RuntimeBridge.CharacterCreate(EntityId, Position, Radius, Height, SkinWidth, StepOffset, SlopeLimit, SnapDistance);
+            if (IsCreated)
+            {
+                if (_minMoveDistance != 0f) RuntimeBridge.CharacterSetMinMoveDistance(EntityId, _minMoveDistance);
+                if (_center.X != 0f || _center.Y != 0f || _center.Z != 0f) RuntimeBridge.CharacterSetCenter(EntityId, _center);
+            }
             return IsCreated;
         }
 
@@ -148,6 +185,35 @@ namespace GlassEngine.Core.Physics
         Vector3 applied = MoveCore(motion, dt);
         ReadLastMove();
         return applied;
+    }
+
+    private float _simpleMoveFallSpeed;
+
+    /// <summary>
+    /// SimpleMove de Unity: mueve al personaje a la velocidad dada (m/s),
+    /// ignorando su componente Y: la caída la lleva este método con la
+    /// gravedad del mundo por defecto del motor (0, -9.81, 0). En el
+    /// suelo la velocidad vertical se pega a -1 m/s. Devuelve los
+    /// CollisionFlags del movimiento. Usa Time.deltaTime.
+    /// Simplificación conocida: no hay FFI de gravedad mundial, así que un
+    /// cambio de gravedad del mundo no se refleja aquí.
+    /// </summary>
+    public CollisionFlags SimpleMove(Vector3 speed)
+    {
+        if (!IsCreated && !Create())
+            return CollisionFlags.None;
+
+        float dt = UnityEngine.Time.deltaTime;
+        if (IsGrounded)
+            _simpleMoveFallSpeed = -1.0f;
+        else
+            _simpleMoveFallSpeed += -9.81f * dt;
+
+        Vector3 motion = new Vector3(speed.X, _simpleMoveFallSpeed, speed.Z) * dt;
+        Move(motion, dt);
+        if ((LastFlags & CollisionFlags.Above) != 0 && _simpleMoveFallSpeed > 0f)
+            _simpleMoveFallSpeed = 0f;
+        return LastFlags;
     }
 
     private void ReadLastMove()

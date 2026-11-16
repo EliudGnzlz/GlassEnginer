@@ -76,6 +76,10 @@ public static class RuntimeBridge
     private static CharacterGetOverlapRecoveryDelegate? _characterGetOverlapRecovery;
     private static CharacterSetStepOffsetDelegate? _characterSetStepOffset;
     private static CharacterGetStepOffsetDelegate? _characterGetStepOffset;
+    private static CharacterSetMinMoveDistanceDelegate? _characterSetMinMoveDistance;
+    private static CharacterGetMinMoveDistanceDelegate? _characterGetMinMoveDistance;
+    private static CharacterSetCenterDelegate? _characterSetCenter;
+    private static CharacterGetCenterDelegate? _characterGetCenter;
     private static CharacterSetSlopeLimitDelegate? _characterSetSlopeLimit;
     private static CharacterGetSlopeLimitDelegate? _characterGetSlopeLimit;
     private static CharacterSetEnabledDelegate? _characterSetEnabled;
@@ -388,6 +392,10 @@ public static class RuntimeBridge
         public IntPtr CharacterSetIncludeLayers;
         public IntPtr CharacterGetIncludeLayers;
         public IntPtr CharacterBounds;
+        public IntPtr CharacterSetMinMoveDistance;
+        public IntPtr CharacterGetMinMoveDistance;
+        public IntPtr CharacterSetCenter;
+        public IntPtr CharacterGetCenter;
         public IntPtr GetAngularVelocity;
         public IntPtr SetAngularVelocity;
         public IntPtr AddTorque;
@@ -527,6 +535,14 @@ public static class RuntimeBridge
             _characterGetIncludeLayers = Marshal.GetDelegateForFunctionPointer<CharacterGetIncludeLayersDelegate>(callbacks->CharacterGetIncludeLayers);
         if (callbacks->CharacterBounds != IntPtr.Zero)
             _characterBounds = Marshal.GetDelegateForFunctionPointer<CharacterBoundsDelegate>(callbacks->CharacterBounds);
+        if (callbacks->CharacterSetMinMoveDistance != IntPtr.Zero)
+            _characterSetMinMoveDistance = Marshal.GetDelegateForFunctionPointer<CharacterSetMinMoveDistanceDelegate>(callbacks->CharacterSetMinMoveDistance);
+        if (callbacks->CharacterGetMinMoveDistance != IntPtr.Zero)
+            _characterGetMinMoveDistance = Marshal.GetDelegateForFunctionPointer<CharacterGetMinMoveDistanceDelegate>(callbacks->CharacterGetMinMoveDistance);
+        if (callbacks->CharacterSetCenter != IntPtr.Zero)
+            _characterSetCenter = Marshal.GetDelegateForFunctionPointer<CharacterSetCenterDelegate>(callbacks->CharacterSetCenter);
+        if (callbacks->CharacterGetCenter != IntPtr.Zero)
+            _characterGetCenter = Marshal.GetDelegateForFunctionPointer<CharacterGetCenterDelegate>(callbacks->CharacterGetCenter);
         if (callbacks->GetAngularVelocity != IntPtr.Zero)
             _getAngularVelocity = Marshal.GetDelegateForFunctionPointer<GetAngularVelocityDelegate>(callbacks->GetAngularVelocity);
         if (callbacks->SetAngularVelocity != IntPtr.Zero)
@@ -1866,6 +1882,29 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         value = 0f;
         if (_characterGetStepOffset is null) return false;
         return _characterGetStepOffset(entityId, out value) != 0;
+    }
+
+    public static bool CharacterSetMinMoveDistance(ulong entityId, float value)
+        => _characterSetMinMoveDistance != null && _characterSetMinMoveDistance(entityId, value) != 0;
+
+    public static bool CharacterGetMinMoveDistance(ulong entityId, out float value)
+    {
+        value = 0f;
+        return _characterGetMinMoveDistance != null && _characterGetMinMoveDistance(entityId, out value) != 0;
+    }
+
+    public static bool CharacterSetCenter(ulong entityId, Vector3 center)
+        => _characterSetCenter != null && _characterSetCenter(entityId, center.X, center.Y, center.Z) != 0;
+
+    public static bool CharacterGetCenter(ulong entityId, out Vector3 center)
+    {
+        center = Vector3.Zero;
+        if (_characterGetCenter == null)
+            return false;
+        if (_characterGetCenter(entityId, out float x, out float y, out float z) == 0)
+            return false;
+        center = new Vector3(x, y, z);
+        return true;
     }
 
     public static bool CharacterSetSlopeLimit(ulong entityId, float degrees)

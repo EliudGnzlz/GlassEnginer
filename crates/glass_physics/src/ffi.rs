@@ -773,6 +773,104 @@ pub unsafe extern "C" fn glass_character_set_step_offset(entity_id: u64, v: f32)
     0
 }
 
+/// CC-1: minMoveDistance. Devuelve 1 si el personaje existe y el valor es
+/// válido (finito y >= 0; 0 desactiva).
+///
+/// # Safety
+/// Sin punteros; se llama desde el host por FFI.
+#[no_mangle]
+pub unsafe extern "C" fn glass_character_set_min_move_distance(entity_id: u64, v: f32) -> i32 {
+    if !v.is_finite() {
+        return 0;
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_character_min_move_distance(entity_id, v) as i32;
+        }
+    }
+    0
+}
+
+/// CC-1: lee minMoveDistance. Escribe 0.0 por defecto y devuelve 1 si
+/// escribió el valor del personaje.
+///
+/// # Safety
+/// `out` debe ser nulo o apuntar a un `f32` válido y escribible.
+#[no_mangle]
+pub unsafe extern "C" fn glass_character_get_min_move_distance(entity_id: u64, out: *mut f32) -> i32 {
+    if out.is_null() {
+        return 0;
+    }
+    // SAFETY: `out` no es nulo y el llamador garantiza que es escribible.
+    unsafe { *out = 0.0 };
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            if let Some(v) = world.get_character_min_move_distance(entity_id) {
+                // SAFETY: ver arriba.
+                unsafe { *out = v };
+                return 1;
+            }
+        }
+    }
+    0
+}
+
+/// CC-1: center. Desplaza la cápsula en (nuevo − anterior). Devuelve 1 si
+/// el personaje existe y los valores son finitos.
+///
+/// # Safety
+/// Sin punteros; se llama desde el host por FFI.
+#[no_mangle]
+pub unsafe extern "C" fn glass_character_set_center(entity_id: u64, x: f32, y: f32, z: f32) -> i32 {
+    if !(x.is_finite() && y.is_finite() && z.is_finite()) {
+        return 0;
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_character_center(entity_id, [x, y, z]) as i32;
+        }
+    }
+    0
+}
+
+/// CC-1: lee center. Escribe 0.0 por defecto en los tres ejes y devuelve 1
+/// si escribió el valor del personaje.
+///
+/// # Safety
+/// `out_x`, `out_y` y `out_z` deben ser no nulos y apuntar a `f32` válidos
+/// y escribibles.
+#[no_mangle]
+pub unsafe extern "C" fn glass_character_get_center(
+    entity_id: u64,
+    out_x: *mut f32,
+    out_y: *mut f32,
+    out_z: *mut f32,
+) -> i32 {
+    if out_x.is_null() || out_y.is_null() || out_z.is_null() {
+        return 0;
+    }
+    // SAFETY: punteros no nulos y escribibles según el contrato.
+    unsafe {
+        *out_x = 0.0;
+        *out_y = 0.0;
+        *out_z = 0.0;
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            if let Some(c) = world.get_character_center(entity_id) {
+                // SAFETY: ver arriba.
+                unsafe {
+                    *out_x = c[0];
+                    *out_y = c[1];
+                    *out_z = c[2];
+                }
+                return 1;
+            }
+        }
+    }
+    0
+}
+
 /// # Safety
 /// `out` debe ser null o apuntar a memoria válida y escribible durante la llamada.
 #[no_mangle]

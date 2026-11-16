@@ -268,6 +268,18 @@ public delegate int CharacterSetStepOffsetDelegate(ulong entityId, float value);
 public delegate int CharacterGetStepOffsetDelegate(ulong entityId, out float value);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterSetMinMoveDistanceDelegate(ulong entityId, float value);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterGetMinMoveDistanceDelegate(ulong entityId, out float value);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterSetCenterDelegate(ulong entityId, float x, float y, float z);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int CharacterGetCenterDelegate(ulong entityId, out float x, out float y, out float z);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate int CharacterSetSlopeLimitDelegate(ulong entityId, float degrees);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]

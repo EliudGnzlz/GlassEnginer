@@ -43,6 +43,12 @@ pub struct CharacterState {
     pub enabled: bool,
     /// Paquete C: máscara de capas que el CC puede ver en sus sondas.
     pub include_mask: u32,
+    /// CC-1: distancia mínima de Move (Unity: minMoveDistance). Un movimiento
+    /// pedido más corto se descarta. 0.0 = desactivado (Unity usa 0.001).
+    pub min_move_distance: f32,
+    /// CC-1: desplazamiento de la cápsula respecto a la entidad (Unity: center).
+    /// `pos` sigue siendo el centro de la cápsula en mundo.
+    pub center: [f32; 3],
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -137,6 +143,8 @@ impl PhysicsWorld {
                 slope_limit_deg: cfg.slope_limit_deg,
                 enabled: true,
                 include_mask: u32::MAX,
+                min_move_distance: 0.0,
+                center: [0.0, 0.0, 0.0],
             },
         );
 
@@ -272,11 +280,25 @@ impl PhysicsWorld {
         let overlap_recovery = state.overlap_recovery;
         let step_offset = state.step_offset;
         let include_mask = state.include_mask;
+        let min_move_distance = state.min_move_distance;
         let pos_entrada = pos;
 
         // Paquete C: un CharacterController deshabilitado no se mueve ni
         // colisiona (Unity: CharacterController.enabled = false).
         if !enabled {
+            if let Some(state) = self.characters.get_mut(&entity_id) {
+                state.last_velocity = [0.0, 0.0, 0.0];
+            }
+            return Some(([0.0, 0.0, 0.0], self.characters.get(&entity_id)?.grounded, false));
+        }
+
+        // CC-1: minMoveDistance (Unity). Si el movimiento pedido es más corto
+        // que el umbral se descarta la llamada entera, incluido el arrastre de
+        // plataforma de este frame (en Unity el descarte es de la llamada a
+        // Move completa). 0.0 = desactivado.
+        let magnitud_pedida =
+            (desired[0] * desired[0] + desired[1] * desired[1] + desired[2] * desired[2]).sqrt();
+        if min_move_distance > 0.0 && magnitud_pedida < min_move_distance {
             if let Some(state) = self.characters.get_mut(&entity_id) {
                 state.last_velocity = [0.0, 0.0, 0.0];
             }
@@ -754,6 +776,59 @@ impl PhysicsWorld {
         self.characters.get(&entity_id).map(|s| s.include_mask)
     }
 
+    /// CC-1: minMoveDistance. Rechaza no finitos y negativos; 0.0 = desactivado.
+    pub fn set_character_min_move_distance(&mut self, entity_id: u64, v: f32) -> bool {
+        if !v.is_finite() || v < 0.0 {
+            return false;
+        }
+        if let Some(state) = self.characters.get_mut(&entity_id) {
+            state.min_move_distance = v;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn get_character_min_move_distance(&self, entity_id: u64) -> Option<f32> {
+        self.characters.get(&entity_id).map(|s| s.min_move_distance)
+    }
+
+    /// CC-1: center. Desplaza la cápsula en (nuevo − anterior) y mueve el
+    /// cuerpo cinemático (patrón teleport_character). No se tocan grounded ni
+    /// ground_body: la cápsula se mueve con su entidad y el siguiente Move
+    /// reevalúa el suelo con sus sondas.
+    pub fn set_character_center(&mut self, entity_id: u64, center: [f32; 3]) -> bool {
+        if !center.iter().all(|c| c.is_finite()) {
+            return false;
+        }
+        let (body, pos) = if let Some(state) = self.characters.get_mut(&entity_id) {
+            let delta = [
+                center[0] - state.center[0],
+                center[1] - state.center[1],
+                center[2] - state.center[2],
+            ];
+            state.center = center;
+            if delta == [0.0, 0.0, 0.0] {
+                return true;
+            }
+            state.pos = [
+                state.pos[0] + delta[0],
+                state.pos[1] + delta[1],
+                state.pos[2] + delta[2],
+            ];
+            (state.body, state.pos)
+        } else {
+            return false;
+        };
+
+        self.set_transform(body, pos, [0.0, 0.0, 0.0, 1.0]);
+        true
+    }
+
+    pub fn get_character_center(&self, entity_id: u64) -> Option<[f32; 3]> {
+        self.characters.get(&entity_id).map(|s| s.center)
+    }
+
     pub fn character_bounds(&self, entity_id: u64) -> Option<([f32; 3], [f32; 3])> {
         let state = self.characters.get(&entity_id)?;
         let pos = state.pos;
@@ -762,5 +837,119 @@ impl PhysicsWorld {
         let min = [pos[0] - radius, pos[1] - (half_height + radius), pos[2] - radius];
         let max = [pos[0] + radius, pos[1] + (half_height + radius), pos[2] + radius];
         Some((min, max))
+    }
+}
+
+#[cfg(test)]
+mod cc1_tests {
+    use super::*;
+
+    const ID: u64 = 4242;
+    const DT: f32 = 1.0 / 60.0;
+
+    // Mismo patrón de mundo y CharacterConfig que los tests existentes de
+    // create_character (mundo vacío: no hace falta suelo para estos casos).
+    fn mundo_con_personaje(pos: [f32; 3]) -> PhysicsWorld {
+        let mut world = PhysicsWorld::new();
+        let cfg = CharacterConfig {
+            radius: 0.5,
+            height: 2.0,
+            skin: 0.02,
+            step_offset: 0.4,
+            slope_limit_deg: 45.0,
+            snap: 0.2,
+        };
+        assert!(world.create_character(ID, pos, cfg));
+        world
+    }
+
+    fn cerca(a: [f32; 3], b: [f32; 3]) -> bool {
+        a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 1e-5)
+    }
+
+    #[test]
+    fn min_move_distance_descarta_movimiento_corto() {
+        let mut world = mundo_con_personaje([0.0, 1.0, 0.0]);
+        assert!(world.set_character_min_move_distance(ID, 0.5));
+        let (aplicado, _, _) = world
+            .move_character(ID, [0.1, 0.0, 0.0], DT)
+            .expect("personaje existente");
+        assert!(cerca(aplicado, [0.0, 0.0, 0.0]));
+        assert!(cerca(world.characters[&ID].pos, [0.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn min_move_distance_deja_pasar_movimiento_largo() {
+        let mut world = mundo_con_personaje([0.0, 1.0, 0.0]);
+        assert!(world.set_character_min_move_distance(ID, 0.5));
+        let (aplicado, _, _) = world
+            .move_character(ID, [1.0, 0.0, 0.0], DT)
+            .expect("personaje existente");
+        assert!(aplicado[0] > 0.9);
+        assert!(world.characters[&ID].pos[0] > 0.9);
+    }
+
+    #[test]
+    fn min_move_distance_cero_por_defecto_no_descarta() {
+        let mut world = mundo_con_personaje([0.0, 1.0, 0.0]);
+        assert_eq!(world.get_character_min_move_distance(ID), Some(0.0));
+        let (aplicado, _, _) = world
+            .move_character(ID, [0.1, 0.0, 0.0], DT)
+            .expect("personaje existente");
+        assert!(aplicado[0] > 0.09);
+        assert!(world.characters[&ID].pos[0] > 0.09);
+    }
+
+    #[test]
+    fn min_move_distance_set_get_e_inexistente() {
+        let mut world = mundo_con_personaje([0.0, 1.0, 0.0]);
+        assert!(world.set_character_min_move_distance(ID, 0.25));
+        assert_eq!(world.get_character_min_move_distance(ID), Some(0.25));
+        assert!(world.set_character_min_move_distance(ID, 0.0));
+        assert_eq!(world.get_character_min_move_distance(ID), Some(0.0));
+        assert!(!world.set_character_min_move_distance(ID + 1, 0.25));
+        assert_eq!(world.get_character_min_move_distance(ID + 1), None);
+    }
+
+    #[test]
+    fn min_move_distance_rechaza_negativo_y_no_finito() {
+        let mut world = mundo_con_personaje([0.0, 1.0, 0.0]);
+        assert!(world.set_character_min_move_distance(ID, 0.25));
+        assert!(!world.set_character_min_move_distance(ID, -0.1));
+        assert!(!world.set_character_min_move_distance(ID, f32::NAN));
+        assert_eq!(world.get_character_min_move_distance(ID), Some(0.25));
+    }
+
+    #[test]
+    fn center_desplaza_la_capsula_y_vuelve() {
+        let mut world = mundo_con_personaje([0.0, 1.0, 0.0]);
+        assert!(world.set_character_center(ID, [0.5, 0.0, 0.0]));
+        assert!(cerca(world.characters[&ID].pos, [0.5, 1.0, 0.0]));
+        assert!(cerca(
+            world.get_character_center(ID).expect("personaje existente"),
+            [0.5, 0.0, 0.0]
+        ));
+
+        assert!(world.set_character_center(ID, [0.0, 0.0, 0.0]));
+        assert!(cerca(world.characters[&ID].pos, [0.0, 1.0, 0.0]));
+        assert!(cerca(
+            world.get_character_center(ID).expect("personaje existente"),
+            [0.0, 0.0, 0.0]
+        ));
+    }
+
+    #[test]
+    fn center_inexistente_y_no_finito() {
+        let mut world = mundo_con_personaje([0.0, 1.0, 0.0]);
+        assert!(!world.set_character_center(ID + 1, [0.5, 0.0, 0.0]));
+        assert_eq!(world.get_character_center(ID + 1), None);
+
+        assert!(!world.set_character_center(ID, [f32::INFINITY, 0.0, 0.0]));
+        assert!(!world.set_character_center(ID, [0.0, f32::NAN, 0.0]));
+        assert!(cerca(world.characters[&ID].pos, [0.0, 1.0, 0.0]));
+        assert!(cerca(
+            world.get_character_center(ID).expect("personaje existente"),
+            [0.0, 0.0, 0.0]
+        ));
     }
 }
