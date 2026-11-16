@@ -122,3 +122,31 @@ Consumo acumulado por proveedor al final de cada sub-bloque.
 - Nota de integración: el integrador SOLO aplica pares con VIEJO de
   coincidencia única (los 7 pares idénticos de sitios de inserción se
   saltaron; los apliqué yo con replace exacto, 7/7).
+
+## RB-4 — CERRADO (2026-11-16)
+
+- **Commit `afe07d0`** (8 archivos, 507 inserciones) + este registro.
+  **CI 43935543838 success.** Pipeline local exacto en verde (36 suites).
+- Contenido: **toggles automaticCenterOfMass/automaticInertiaTensor**
+  (Unity): la maquinaria de override de paridad gana una puerta —
+  `com_override_activo`/`inertia_override_activo` devuelven el valor
+  manual solo si el toggle está en false; la puerta se aplica en los 4
+  lectores (apply paso 3, get_center_of_mass, effective_local_com,
+  total_inertia). Fijar centerOfMass/inertiaTensor apaga el automático;
+  Reset* lo reactiva; apagarlo sin valor manual congela el valor
+  efectivo actual (snapshot). Nota honesta: si ambos componentes quedan
+  automáticos, apply limpia el override y el manual se descarta (la
+  documentación de C# dice exactamente eso). **PublishTransform**
+  (solo C#): compone GetTransform(entidad) + SetPhysicsTransform.
+  **ClosestPointOnBounds**: AABB mundial por collider (compute_aabb),
+  clamp por componente, gana el más cercano; sin colliders, C#
+  devuelve el punto sin cambios.
+- **Decisión de integración de Rayo (hallazgo de Opus, confirmado):**
+  en escena los toggles se aplican DESPUÉS de adjuntar los colliders y
+  fijar la masa (create_body en sus dos salidas y rebuild), porque el
+  snapshot sin colliders congelaría un COM sin geometría.
+- Escena: `automatic_center_of_mass`/`automatic_inertia_tensor` en
+  PhysicsData (serde default true); DescriptorCuerpo a 13 elementos
+  (los 2 bool al final). 5 tests `rb4_*` en verde.
+- **Consumo RB-4: Opus 62.070** (46.571 + 15.499).
+  **Acumulado del bloque: Opus 232.443.**
