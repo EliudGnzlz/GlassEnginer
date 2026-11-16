@@ -138,6 +138,11 @@ pub struct LauncherPanel {
     pub plugin_catalog: Option<crate::plugins::PluginCatalog>,
     /// Estado de la descarga/instalación de complementos en curso.
     pub plugin_state: PluginUiState,
+    /// Pantalla de carga a pantalla completa (precarga diferida del motor).
+    pub mostrar_carga: bool,
+    /// La pantalla de carga ya se dibujó al menos un frame: main.rs solo
+    /// ejecuta la precarga cuando esa imagen ya está presentada.
+    pub carga_dibujada: bool,
     /// Canal con el hilo que descarga el catálogo o instala (uno a la vez).
     plugin_rx: Option<std::sync::mpsc::Receiver<PluginMsg>>,
 }
@@ -205,6 +210,8 @@ impl Default for LauncherPanel {
             plugin_catalog: None,
             plugin_state: PluginUiState::Idle,
             plugin_rx: None,
+            mostrar_carga: false,
+            carga_dibujada: false,
         }
     }
 }
@@ -326,6 +333,41 @@ impl LauncherPanel {
         // El Launcher es claro como el Hub viejo; el editor, oscuro.
         ui.ctx().set_visuals(launcher_visuals());
         let mut action: Option<LauncherAction> = None;
+
+        // Pantalla de carga: capa Foreground opaca sobre todo el Hub. Se
+        // pinta con un painter de capa (visible desde el primer frame) y el
+        // orden de capa la deja encima aunque se dibuje antes que los paneles.
+        if self.mostrar_carga {
+            let rect = ui.ctx().content_rect();
+            let painter = ui.ctx().layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("pantalla_carga"),
+            ));
+            painter.rect_filled(rect, 0.0, SIDEBAR_BG);
+            let centro = rect.center();
+            painter.text(
+                centro - egui::vec2(0.0, 40.0),
+                egui::Align2::CENTER_CENTER,
+                "GlassEnginer",
+                egui::FontId::proportional(42.0),
+                TEXT_MAIN,
+            );
+            painter.text(
+                centro + egui::vec2(0.0, 20.0),
+                egui::Align2::CENTER_CENTER,
+                "Cargando el motor…",
+                egui::FontId::proportional(18.0),
+                ACCENT,
+            );
+            painter.text(
+                centro + egui::vec2(0.0, 50.0),
+                egui::Align2::CENTER_CENTER,
+                "Preparando modelos y materiales",
+                egui::FontId::proportional(13.0),
+                TEXT_MAIN,
+            );
+            self.carga_dibujada = true;
+        }
 
         // Paneles reales a pantalla completa: la barra lateral y el
         // contenido ocupan toda la ventana, sin zonas sin pintar.

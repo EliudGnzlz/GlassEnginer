@@ -1767,6 +1767,18 @@ struct GlassEngineApp {
     pub start_instant: std::time::Instant,
     #[cfg(feature = "editor")]
     pub pending_launcher_action: Option<LauncherAction>,
+    /// La precarga de modelos y materiales ya se ejecutó (solo se hace una
+    /// vez, al entrar al editor por primera vez).
+    #[cfg(feature = "editor")]
+    pub precarga_hecha: bool,
+    /// Precarga solicitada: se ejecuta en cuanto la pantalla de carga se
+    /// haya presentado al menos un frame.
+    #[cfg(feature = "editor")]
+    pub precarga_pendiente: bool,
+    /// Arranque con editor (--scene o pruebas): al terminar la precarga se
+    /// pasa a `AppMode::Editor`.
+    #[cfg(feature = "editor")]
+    pub entrar_editor_tras_precarga: bool,
     pub scene_state: Arc<Mutex<SceneState>>,
     /// Posiciones de mundo del frame anterior por entidad (bloque
     /// Portales): el pase de cruce compara el segmento prev->curr de
@@ -2154,12 +2166,11 @@ impl GlassEngineApp {
             || is_m8_test
             || is_m9_test
             || is_m10_test;
+        // Con editor se arranca siempre en el Hub: si se pidió el editor
+        // (--scene o pruebas), el paso a Editor lo hace la precarga diferida
+        // del bucle de frame al terminar.
         #[cfg(feature = "editor")]
-        let app_mode = if start_in_editor {
-            AppMode::Editor
-        } else {
-            AppMode::Launcher
-        };
+        let app_mode = AppMode::Launcher;
 
         Self {
             window_config: WindowConfig::default(),
@@ -2201,10 +2212,22 @@ impl GlassEngineApp {
             #[cfg(feature = "editor")]
             app_mode,
             #[cfg(feature = "editor")]
-            launcher: LauncherPanel::new(),
+            launcher: {
+                let mut panel = LauncherPanel::new();
+                // Arranque directo al editor: la pantalla de carga se ve
+                // desde el primer frame, antes de que bloquee la precarga.
+                panel.mostrar_carga = start_in_editor;
+                panel
+            },
             start_instant: std::time::Instant::now(),
             #[cfg(feature = "editor")]
             pending_launcher_action: None,
+            #[cfg(feature = "editor")]
+            precarga_hecha: false,
+            #[cfg(feature = "editor")]
+            precarga_pendiente: start_in_editor,
+            #[cfg(feature = "editor")]
+            entrar_editor_tras_precarga: start_in_editor,
             scene_state,
             portal_prev_pos: std::collections::HashMap::new(),
             ui_images_key: String::new(),
@@ -3003,6 +3026,330 @@ impl GlassEngineApp {
     /// para la subida rígida y las texturas). Volver a bloquear cualquiera
     /// de los dos aquí dentro cuelga la app: ni Mutex ni RwLock de std son
     /// reentrantes (cazado en vivo dos veces durante este bloque).
+    /// Calentamiento de assets: textura por defecto del PBR, esquemas de
+    /// grafos de shaders, precarga de TODOS los .glb de assets/models a
+    /// VRAM y primitivas integradas. Antes vivía en `resumed()` y dejaba
+    /// la ventana en blanco (y la consola en Windows) durante toda la
+    /// carga, antes del primer frame. Ahora el standalone lo llama al
+    /// arrancar, como siempre, y el editor lo llama DIFERIDO: al entrar
+    /// al editor por primera vez, con la pantalla de carga del Launcher
+    /// ya presentada en el frame anterior.
+    fn preparar_assets(&mut self, renderer: &mut GlassRenderer, vk_ctx: &VulkanContext) {
+        if let Some(set_layout) = renderer.pbr_pipeline.descriptor_set_layout {
+            {
+                let mut alloc = renderer.allocator.lock().unwrap();
+                let mut cache = self.asset_cache.write().unwrap();
+                cache.ensure_default_texture(
+                    &renderer.device,
+                    &mut alloc,
+                    vk_ctx.graphics_queue,
+                    renderer.command_pool,
+                    set_layout,
+                );
+            }
+            if let Some(set) = self.asset_cache.read().unwrap().default_set {
+                renderer.fallback_set = set;
+            }
+        }
+
+        // Esquemas de propiedades de los grafos: se registran globalmente
+        // (glass_core::shader_graph) para que la resolución por entidad y
+        // las tools MCP de inspección puedan consultarlos sin recargar los
+        // .graph.json en cada acceso.
+        if let Ok(entries) = std::fs::read_dir("assets/shader_graphs") {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let is_graph_json = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.ends_with(".graph.json"))
+                    .unwrap_or(false);
+                if !is_graph_json {
+                    continue;
+                }
+                match std::fs::read_to_string(&path) {
+                    Ok(contents) => match glass_core::shader_graph::ShaderGraph::from_json(&contents) {
+                        Ok(graph) => {
+                            glass_core::shader_graph::register_graph_schema(
+                                graph.name.clone(),
+                                graph.properties.clone(),
+                            );
+                            glass_core::shader_graph::register_graph_passes(
+                                graph.name.clone(),
+                                graph.passes.clone(),
+                            );
+                            if std::path::Path::new(&format!(
+                                "assets/shaders/graph_{}.transparent",
+                                graph.name
+                            ))
+                            .exists()
+                            {
+                                self.transparent_graphs.insert(graph.name.clone());
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "No se pudo parsear el grafo de shaders {:?}: {}",
+                                path,
+                                e
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!("No se pudo leer el grafo de shaders {:?}: {}", path, e);
+                    }
+                }
+            }
+        }
+
+        // Materiales de grafo: cada graph_<nombre>.frag.spv de assets/shaders
+        // se registra como pipeline; una entidad lo usa con shader =
+        // "graph:<nombre>" en su MeshData.
+        renderer.load_graph_materials(std::path::Path::new("assets/shaders"));
+
+        // Auditoría 2S (M-8): un grafo con .spv pero sin .graph.json
+        // cargado perdía sus pases Shadow/Outline en silencio (el
+        // pipeline existe, así que el fallback magenta no salta). Se
+        // avisa una vez por grafo al arrancar.
+        if let Ok(entries) = std::fs::read_dir("assets/shaders") {
+            for entry in entries.flatten() {
+                let fname = entry.file_name();
+                let Some(fname) = fname.to_str() else { continue };
+                let Some(nombre) = fname
+                    .strip_prefix("graph_")
+                    .and_then(|r| r.strip_suffix(".frag.spv"))
+                else {
+                    continue;
+                };
+                if glass_core::shader_graph::graph_passes(nombre).is_none() {
+                    log::warn!(
+                        "Grafo '{}': tiene .spv pero no se cargó su .graph.json (¿nombre o carpeta distinta?); se asume [Forward], sin pase Shadow ni Outline",
+                        nombre
+                    );
+                }
+            }
+        }
+
+
+        // El pipeline transparente de los materiales vive en el
+        // renderer (registrado como «material_transparent» al
+        // construirlo, con los layouts completos del PBR).
+
+        {
+            let models_dir = Path::new("assets/models");
+            let mut glb_paths: Vec<std::path::PathBuf> = Vec::new();
+            // Recorrido recursivo (mismo patrón que el cargador de
+            // audio): los kits viven en subcarpetas (p. ej.
+            // assets/models/polygon/) y se registran por su stem,
+            // igual que los de la raíz.
+            let mut pending: Vec<std::path::PathBuf> = vec![models_dir.to_path_buf()];
+            while let Some(dir) = pending.pop() {
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            pending.push(path);
+                        } else if path.extension().and_then(|e| e.to_str()) == Some("glb") {
+                            glb_paths.push(path);
+                        }
+                    }
+                }
+            }
+            glb_paths.sort();
+            for glb_path in &glb_paths {
+                let stem = glb_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unnamed")
+                    .to_string();
+                let bytes = match std::fs::read(glb_path) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        log::error!("Error leyendo modelo {:?}: {}", glb_path, e);
+                        continue;
+                    }
+                };
+                match MeshLoader::load_model_from_glb_bytes(&bytes) {
+                    Ok(model) => {
+                        log::info!(
+                            "Cargador glTF: {} vértices, {} índices, {} materiales y {} imágenes extraídos de {:?}",
+                            model.vertices.len(),
+                            model.indices.len(),
+                            model.materials.len(),
+                            model.images.len(),
+                            glb_path
+                        );
+                        let upload_res = {
+                            let mut alloc = renderer.allocator.lock().unwrap();
+                            MeshLoader::upload_to_gpu(
+                                &renderer.device,
+                                &mut alloc,
+                                &model.vertices,
+                                &model.indices,
+                                vk_ctx.graphics_queue,
+                                renderer.command_pool,
+                            )
+                        };
+
+                        match upload_res {
+                            Ok(gpu_mesh) => {
+                                let mut alloc = renderer.allocator.lock().unwrap();
+                                let mut cache = self.asset_cache.write().unwrap();
+                                let primary = model.primary_material().cloned();
+                                cache.insert_mesh(
+                                    &renderer.device,
+                                    &mut alloc,
+                                    stem.clone(),
+                                    gpu_mesh,
+                                );
+                                cache.insert_model_data(
+                                    stem.clone(),
+                                    model.materials.clone(),
+                                    primary,
+                                    model.images.clone(),
+                                    model.primitive_ranges.clone(),
+                                        model.objects.clone(),
+                                );
+                                // Geometría CPU retenida (Fase 1.5), como en la
+                                // ruta de recarga en caliente.
+                                cache.insert_geometry(stem.clone(), &model);
+                                self.upload_skin_if_any(renderer, vk_ctx, &mut alloc, &mut cache, &model, &stem);
+                                // Texturas base de TODOS los materiales: una
+                                // subida por cada imagen distinta referenciada,
+                                // para que cada primitiva muestree la suya.
+                                if let Some(layout) = renderer.pbr_pipeline.descriptor_set_layout {
+                                    let mut uploaded: Vec<usize> = Vec::new();
+                                    for mat in &model.materials {
+                                        if let Some(idx) = mat.base_color_image {
+                                            if !uploaded.contains(&idx) {
+                                                uploaded.push(idx);
+                                                if let Some(img) = model.images.get(idx) {
+                                                    cache.insert_texture(
+                                                        &renderer.device,
+                                                        &mut alloc,
+                                                        TextureUpload { queue: vk_ctx.graphics_queue, command_pool: renderer.command_pool, set_layout: layout },
+                                                        stem.clone(),
+                                                        idx,
+                                                        img,
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                log::info!("main: Modelo '{}' registrado en la caché.", stem);
+                            }
+                            Err(e) => log::error!("Error subiendo malla a GPU: {}", e),
+                        }
+                    }
+                    Err(e) => log::error!("Error importando glTF {:?}: {}", glb_path, e),
+                }
+            }
+        }
+
+        // Primitiva Plano integrada: no es un archivo, la genera el
+        // renderer (rejilla subdividida lista para que un grafo con etapa
+        // de vértices la ondule) y se registra en la caché con el mismo
+        // mecanismo que los .glb — clave por nombre, `MeshData.model =
+        // "plane"`. Si un proyecto trae su propio plane.glb, ese gana:
+        // solo se registra cuando la clave está libre.
+        {
+            let has_plane = self.asset_cache.read().unwrap().meshes.contains_key("plane");
+            if !has_plane {
+                let (vertices, indices) = glass_renderer::generate_plane(glass_renderer::PLANE_SEGMENTS);
+                let upload_res = {
+                    let mut alloc = renderer.allocator.lock().unwrap();
+                    glass_renderer::MeshLoader::upload_to_gpu(
+                        &renderer.device,
+                        &mut alloc,
+                        &vertices,
+                        &indices,
+                        vk_ctx.graphics_queue,
+                        renderer.command_pool,
+                    )
+                };
+                match upload_res {
+                    Ok(gpu_mesh) => {
+                        let mut alloc = renderer.allocator.lock().unwrap();
+                        let mut cache = self.asset_cache.write().unwrap();
+                        cache.insert_mesh(&renderer.device, &mut alloc, "plane", gpu_mesh);
+                        // Cotas reales desde los vértices (culling):
+                        // sin registrarlas, la primitiva cae en el
+                        // respaldo ±1e6 y nunca se descarta.
+                        let (mut pmin, mut pmax) = ([f32::MAX; 3], [f32::MIN; 3]);
+                        for v in &vertices {
+                            for i in 0..3 {
+                                pmin[i] = pmin[i].min(v.position[i]);
+                                pmax[i] = pmax[i].max(v.position[i]);
+                            }
+                        }
+                        cache.insert_bounds("plane", pmin, pmax);
+                        log::info!(
+                            "main: Primitiva 'plane' registrada ({} vértices, {} índices).",
+                            vertices.len(),
+                            indices.len()
+                        );
+                    }
+                    Err(e) => log::error!("main: fallo subiendo la primitiva 'plane': {}", e),
+                }
+            }
+        }
+
+        // Primitivas Esfera/Cápsula/Cilindro integradas: mismo
+        // mecanismo y misma regla que el plano — generadas por el
+        // renderer, registradas por nombre solo si la clave está
+        // libre (un sphere.glb del proyecto ganaría a la integrada).
+        // Hasta aquí, los presets de esfera/cápsula/cilindro del
+        // editor dibujaban la malla de cubo: no existían generadores.
+        for (name, generator) in [
+            ("sphere", glass_renderer::generate_sphere as fn() -> (Vec<glass_renderer::Vertex>, Vec<u32>)),
+            ("capsule", glass_renderer::generate_capsule as fn() -> (Vec<glass_renderer::Vertex>, Vec<u32>)),
+            ("cylinder", glass_renderer::generate_cylinder as fn() -> (Vec<glass_renderer::Vertex>, Vec<u32>)),
+        ] {
+            let ya_registrada = self.asset_cache.read().unwrap().meshes.contains_key(name);
+            if ya_registrada {
+                continue;
+            }
+            let (vertices, indices) = generator();
+            // Cotas reales desde los vértices generados (culling):
+            // sin registrarlas, estas primitivas caen en el respaldo
+            // ±1e6 del bucle de render y nunca se descartan.
+            let (mut pmin, mut pmax) = ([f32::MAX; 3], [f32::MIN; 3]);
+            for v in &vertices {
+                for i in 0..3 {
+                    pmin[i] = pmin[i].min(v.position[i]);
+                    pmax[i] = pmax[i].max(v.position[i]);
+                }
+            }
+            let upload_res = {
+                let mut alloc = renderer.allocator.lock().unwrap();
+                glass_renderer::MeshLoader::upload_to_gpu(
+                    &renderer.device,
+                    &mut alloc,
+                    &vertices,
+                    &indices,
+                    vk_ctx.graphics_queue,
+                    renderer.command_pool,
+                )
+            };
+            match upload_res {
+                Ok(gpu_mesh) => {
+                    let mut alloc = renderer.allocator.lock().unwrap();
+                    let mut cache = self.asset_cache.write().unwrap();
+                    cache.insert_mesh(&renderer.device, &mut alloc, name, gpu_mesh);
+                    cache.insert_bounds(name, pmin, pmax);
+                    log::info!(
+                        "main: Primitiva '{}' registrada ({} vértices, {} índices).",
+                        name,
+                        vertices.len(),
+                        indices.len()
+                    );
+                }
+                Err(e) => log::error!("main: fallo subiendo la primitiva '{}': {}", name, e),
+            }
+        }
+    }
+
     fn upload_skin_if_any(
         &self,
         renderer: &GlassRenderer,
@@ -3716,8 +4063,72 @@ let resueltos = colliders_resueltos(body, shape);
         
         
 
+        // Precarga diferida (solo editor): se ejecuta un frame después de
+        // presentar la pantalla de carga; esa imagen queda en pantalla
+        // mientras la precarga bloquea este frame.
         #[cfg(feature = "editor")]
-        if let Some(action) = self.pending_launcher_action.take() {
+        if self.precarga_pendiente {
+            if self.launcher.carga_dibujada {
+                // Renderer y contexto salen de `self` para poder llamar al
+                // método `&mut self`; vuelven siempre a su sitio.
+                let lista = match (self.renderer.take(), self.vulkan_context.take()) {
+                    (Some(mut renderer), Some(vk_ctx)) => {
+                        self.preparar_assets(&mut renderer, &vk_ctx);
+                        self.renderer = Some(renderer);
+                        self.vulkan_context = Some(vk_ctx);
+                        true
+                    }
+                    (renderer, vk_ctx) => {
+                        // Sin renderer o contexto todavía: se reintenta luego.
+                        self.renderer = renderer;
+                        self.vulkan_context = vk_ctx;
+                        false
+                    }
+                };
+                if lista {
+                    self.precarga_pendiente = false;
+                    self.precarga_hecha = true;
+                    self.launcher.mostrar_carga = false;
+                    self.launcher.carga_dibujada = false;
+                    if self.entrar_editor_tras_precarga {
+                        self.entrar_editor_tras_precarga = false;
+                        self.app_mode = AppMode::Editor;
+                    }
+                }
+            } else if let Some(window) = self.window.as_ref() {
+                // La pantalla de carga se dibuja en este frame: se pide el
+                // siguiente para ejecutar la precarga.
+                window.request_redraw();
+            }
+        }
+
+        // Una acción que entra al editor antes de la precarga se aplaza:
+        // se enciende la pantalla de carga y se reprocesa al terminar.
+        #[cfg(feature = "editor")]
+        let accion_lista = match self.pending_launcher_action.take() {
+            Some(action)
+                if !self.precarga_hecha
+                    && matches!(
+                        action,
+                        LauncherAction::LoadSampleScene(..)
+                            | LauncherAction::CreateProject { .. }
+                            | LauncherAction::OpenProject(..)
+                            | LauncherAction::OpenSceneFile(..)
+                            | LauncherAction::OpenDefaultScene
+                    ) =>
+            {
+                self.launcher.mostrar_carga = true;
+                self.precarga_pendiente = true;
+                self.pending_launcher_action = Some(action);
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+                None
+            }
+            otra => otra,
+        };
+        #[cfg(feature = "editor")]
+        if let Some(action) = accion_lista {
             match action {
                 LauncherAction::OpenDefaultScene => {
                     self.app_mode = AppMode::Editor;
@@ -6506,327 +6917,13 @@ impl ApplicationHandler for GlassEngineApp {
             (None, None, None, None, None, None, None, None)
         };
 
-        // 5. Precargar TODOS los modelos .glb de assets/models/ a VRAM, cada
-        // uno bajo la clave de su nombre de archivo sin extensión, junto con
-        // sus materiales e imágenes importados. Antes solo se cargaba
-        // cube.glb: cualquier otro modelo de la escena no existía en la caché
-        // al arrancar (solo entraba si el watcher lo recargaba en caliente).
-        // Textura blanca por defecto y su descriptor set: el shader PBR
-        // siempre muestrea la textura base; las entidades sin textura
-        // enlazan este set y el color plano se comporta como siempre.
-        if let Some(set_layout) = renderer.pbr_pipeline.descriptor_set_layout {
-            {
-                let mut alloc = renderer.allocator.lock().unwrap();
-                let mut cache = self.asset_cache.write().unwrap();
-                cache.ensure_default_texture(
-                    &renderer.device,
-                    &mut alloc,
-                    vk_ctx.graphics_queue,
-                    renderer.command_pool,
-                    set_layout,
-                );
-            }
-            if let Some(set) = self.asset_cache.read().unwrap().default_set {
-                renderer.fallback_set = set;
-            }
-        }
-
-        // Esquemas de propiedades de los grafos: se registran globalmente
-        // (glass_core::shader_graph) para que la resolución por entidad y
-        // las tools MCP de inspección puedan consultarlos sin recargar los
-        // .graph.json en cada acceso.
-        if let Ok(entries) = std::fs::read_dir("assets/shader_graphs") {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let is_graph_json = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| n.ends_with(".graph.json"))
-                    .unwrap_or(false);
-                if !is_graph_json {
-                    continue;
-                }
-                match std::fs::read_to_string(&path) {
-                    Ok(contents) => match glass_core::shader_graph::ShaderGraph::from_json(&contents) {
-                        Ok(graph) => {
-                            glass_core::shader_graph::register_graph_schema(
-                                graph.name.clone(),
-                                graph.properties.clone(),
-                            );
-                            glass_core::shader_graph::register_graph_passes(
-                                graph.name.clone(),
-                                graph.passes.clone(),
-                            );
-                            if std::path::Path::new(&format!(
-                                "assets/shaders/graph_{}.transparent",
-                                graph.name
-                            ))
-                            .exists()
-                            {
-                                self.transparent_graphs.insert(graph.name.clone());
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!(
-                                "No se pudo parsear el grafo de shaders {:?}: {}",
-                                path,
-                                e
-                            );
-                        }
-                    },
-                    Err(e) => {
-                        log::warn!("No se pudo leer el grafo de shaders {:?}: {}", path, e);
-                    }
-                }
-            }
-        }
-
-        // Materiales de grafo: cada graph_<nombre>.frag.spv de assets/shaders
-        // se registra como pipeline; una entidad lo usa con shader =
-        // "graph:<nombre>" en su MeshData.
-        renderer.load_graph_materials(std::path::Path::new("assets/shaders"));
-
-        // Auditoría 2S (M-8): un grafo con .spv pero sin .graph.json
-        // cargado perdía sus pases Shadow/Outline en silencio (el
-        // pipeline existe, así que el fallback magenta no salta). Se
-        // avisa una vez por grafo al arrancar.
-        if let Ok(entries) = std::fs::read_dir("assets/shaders") {
-            for entry in entries.flatten() {
-                let fname = entry.file_name();
-                let Some(fname) = fname.to_str() else { continue };
-                let Some(nombre) = fname
-                    .strip_prefix("graph_")
-                    .and_then(|r| r.strip_suffix(".frag.spv"))
-                else {
-                    continue;
-                };
-                if glass_core::shader_graph::graph_passes(nombre).is_none() {
-                    log::warn!(
-                        "Grafo '{}': tiene .spv pero no se cargó su .graph.json (¿nombre o carpeta distinta?); se asume [Forward], sin pase Shadow ni Outline",
-                        nombre
-                    );
-                }
-            }
-        }
-
-
-        // El pipeline transparente de los materiales vive en el
-        // renderer (registrado como «material_transparent» al
-        // construirlo, con los layouts completos del PBR).
-
-        {
-            let models_dir = Path::new("assets/models");
-            let mut glb_paths: Vec<std::path::PathBuf> = Vec::new();
-            // Recorrido recursivo (mismo patrón que el cargador de
-            // audio): los kits viven en subcarpetas (p. ej.
-            // assets/models/polygon/) y se registran por su stem,
-            // igual que los de la raíz.
-            let mut pending: Vec<std::path::PathBuf> = vec![models_dir.to_path_buf()];
-            while let Some(dir) = pending.pop() {
-                if let Ok(entries) = std::fs::read_dir(&dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.is_dir() {
-                            pending.push(path);
-                        } else if path.extension().and_then(|e| e.to_str()) == Some("glb") {
-                            glb_paths.push(path);
-                        }
-                    }
-                }
-            }
-            glb_paths.sort();
-            for glb_path in &glb_paths {
-                let stem = glb_path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("unnamed")
-                    .to_string();
-                let bytes = match std::fs::read(glb_path) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        log::error!("Error leyendo modelo {:?}: {}", glb_path, e);
-                        continue;
-                    }
-                };
-                match MeshLoader::load_model_from_glb_bytes(&bytes) {
-                    Ok(model) => {
-                        log::info!(
-                            "Cargador glTF: {} vértices, {} índices, {} materiales y {} imágenes extraídos de {:?}",
-                            model.vertices.len(),
-                            model.indices.len(),
-                            model.materials.len(),
-                            model.images.len(),
-                            glb_path
-                        );
-                        let upload_res = {
-                            let mut alloc = renderer.allocator.lock().unwrap();
-                            MeshLoader::upload_to_gpu(
-                                &renderer.device,
-                                &mut alloc,
-                                &model.vertices,
-                                &model.indices,
-                                vk_ctx.graphics_queue,
-                                renderer.command_pool,
-                            )
-                        };
-
-                        match upload_res {
-                            Ok(gpu_mesh) => {
-                                let mut alloc = renderer.allocator.lock().unwrap();
-                                let mut cache = self.asset_cache.write().unwrap();
-                                let primary = model.primary_material().cloned();
-                                cache.insert_mesh(
-                                    &renderer.device,
-                                    &mut alloc,
-                                    stem.clone(),
-                                    gpu_mesh,
-                                );
-                                cache.insert_model_data(
-                                    stem.clone(),
-                                    model.materials.clone(),
-                                    primary,
-                                    model.images.clone(),
-                                    model.primitive_ranges.clone(),
-                                        model.objects.clone(),
-                                );
-                                // Geometría CPU retenida (Fase 1.5), como en la
-                                // ruta de recarga en caliente.
-                                cache.insert_geometry(stem.clone(), &model);
-                                self.upload_skin_if_any(&renderer, &vk_ctx, &mut alloc, &mut cache, &model, &stem);
-                                // Texturas base de TODOS los materiales: una
-                                // subida por cada imagen distinta referenciada,
-                                // para que cada primitiva muestree la suya.
-                                if let Some(layout) = renderer.pbr_pipeline.descriptor_set_layout {
-                                    let mut uploaded: Vec<usize> = Vec::new();
-                                    for mat in &model.materials {
-                                        if let Some(idx) = mat.base_color_image {
-                                            if !uploaded.contains(&idx) {
-                                                uploaded.push(idx);
-                                                if let Some(img) = model.images.get(idx) {
-                                                    cache.insert_texture(
-                                                        &renderer.device,
-                                                        &mut alloc,
-                                                        TextureUpload { queue: vk_ctx.graphics_queue, command_pool: renderer.command_pool, set_layout: layout },
-                                                        stem.clone(),
-                                                        idx,
-                                                        img,
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                log::info!("main: Modelo '{}' registrado en la caché.", stem);
-                            }
-                            Err(e) => log::error!("Error subiendo malla a GPU: {}", e),
-                        }
-                    }
-                    Err(e) => log::error!("Error importando glTF {:?}: {}", glb_path, e),
-                }
-            }
-        }
-
-        // Primitiva Plano integrada: no es un archivo, la genera el
-        // renderer (rejilla subdividida lista para que un grafo con etapa
-        // de vértices la ondule) y se registra en la caché con el mismo
-        // mecanismo que los .glb — clave por nombre, `MeshData.model =
-        // "plane"`. Si un proyecto trae su propio plane.glb, ese gana:
-        // solo se registra cuando la clave está libre.
-        {
-            let has_plane = self.asset_cache.read().unwrap().meshes.contains_key("plane");
-            if !has_plane {
-                let (vertices, indices) = glass_renderer::generate_plane(glass_renderer::PLANE_SEGMENTS);
-                let upload_res = {
-                    let mut alloc = renderer.allocator.lock().unwrap();
-                    glass_renderer::MeshLoader::upload_to_gpu(
-                        &renderer.device,
-                        &mut alloc,
-                        &vertices,
-                        &indices,
-                        vk_ctx.graphics_queue,
-                        renderer.command_pool,
-                    )
-                };
-                match upload_res {
-                    Ok(gpu_mesh) => {
-                        let mut alloc = renderer.allocator.lock().unwrap();
-                        let mut cache = self.asset_cache.write().unwrap();
-                        cache.insert_mesh(&renderer.device, &mut alloc, "plane", gpu_mesh);
-                        // Cotas reales desde los vértices (culling):
-                        // sin registrarlas, la primitiva cae en el
-                        // respaldo ±1e6 y nunca se descarta.
-                        let (mut pmin, mut pmax) = ([f32::MAX; 3], [f32::MIN; 3]);
-                        for v in &vertices {
-                            for i in 0..3 {
-                                pmin[i] = pmin[i].min(v.position[i]);
-                                pmax[i] = pmax[i].max(v.position[i]);
-                            }
-                        }
-                        cache.insert_bounds("plane", pmin, pmax);
-                        log::info!(
-                            "main: Primitiva 'plane' registrada ({} vértices, {} índices).",
-                            vertices.len(),
-                            indices.len()
-                        );
-                    }
-                    Err(e) => log::error!("main: fallo subiendo la primitiva 'plane': {}", e),
-                }
-            }
-        }
-
-        // Primitivas Esfera/Cápsula/Cilindro integradas: mismo
-        // mecanismo y misma regla que el plano — generadas por el
-        // renderer, registradas por nombre solo si la clave está
-        // libre (un sphere.glb del proyecto ganaría a la integrada).
-        // Hasta aquí, los presets de esfera/cápsula/cilindro del
-        // editor dibujaban la malla de cubo: no existían generadores.
-        for (name, generator) in [
-            ("sphere", glass_renderer::generate_sphere as fn() -> (Vec<glass_renderer::Vertex>, Vec<u32>)),
-            ("capsule", glass_renderer::generate_capsule as fn() -> (Vec<glass_renderer::Vertex>, Vec<u32>)),
-            ("cylinder", glass_renderer::generate_cylinder as fn() -> (Vec<glass_renderer::Vertex>, Vec<u32>)),
-        ] {
-            let ya_registrada = self.asset_cache.read().unwrap().meshes.contains_key(name);
-            if ya_registrada {
-                continue;
-            }
-            let (vertices, indices) = generator();
-            // Cotas reales desde los vértices generados (culling):
-            // sin registrarlas, estas primitivas caen en el respaldo
-            // ±1e6 del bucle de render y nunca se descartan.
-            let (mut pmin, mut pmax) = ([f32::MAX; 3], [f32::MIN; 3]);
-            for v in &vertices {
-                for i in 0..3 {
-                    pmin[i] = pmin[i].min(v.position[i]);
-                    pmax[i] = pmax[i].max(v.position[i]);
-                }
-            }
-            let upload_res = {
-                let mut alloc = renderer.allocator.lock().unwrap();
-                glass_renderer::MeshLoader::upload_to_gpu(
-                    &renderer.device,
-                    &mut alloc,
-                    &vertices,
-                    &indices,
-                    vk_ctx.graphics_queue,
-                    renderer.command_pool,
-                )
-            };
-            match upload_res {
-                Ok(gpu_mesh) => {
-                    let mut alloc = renderer.allocator.lock().unwrap();
-                    let mut cache = self.asset_cache.write().unwrap();
-                    cache.insert_mesh(&renderer.device, &mut alloc, name, gpu_mesh);
-                    cache.insert_bounds(name, pmin, pmax);
-                    log::info!(
-                        "main: Primitiva '{}' registrada ({} vértices, {} índices).",
-                        name,
-                        vertices.len(),
-                        indices.len()
-                    );
-                }
-                Err(e) => log::error!("main: fallo subiendo la primitiva '{}': {}", name, e),
-            }
-        }
+        // 5. Precarga de modelos, materiales y primitivas (`preparar_assets`).
+        // Sin editor (standalone) se hace aquí, como siempre: la escena los
+        // necesita desde el primer frame. Con editor se difiere hasta la
+        // primera entrada al editor (gate del bucle de frame), para que el
+        // Hub, que no usa ningún modelo, aparezca en seguida.
+        #[cfg(not(feature = "editor"))]
+        self.preparar_assets(&mut renderer, &vk_ctx);
 
         // 6. Iniciar AssetWatcher en segundo plano sobre assets/
         log::info!("main: Iniciando AssetWatcher...");
