@@ -196,6 +196,12 @@ pub struct PhysicsData {
     /// Amortiguación lineal (freno de velocidad). Defecto histórico 1.5.
     #[serde(default = "default_linear_damping")]
     pub linear_damping: f32,
+    /// Amortiguación angular (freno de rotación). Defecto 0.0, el de Rapier.
+    #[serde(default = "default_angular_damping")]
+    pub angular_damping: f32,
+    /// Iteraciones TOTALES del solver para el cuerpo. Defecto 4, la base de Rapier.
+    #[serde(default = "default_solver_iterations")]
+    pub solver_iterations: u32,
     /// Si el cuerpo responde a la gravedad del mundo.
     #[serde(default = "default_true")]
     pub use_gravity: bool,
@@ -209,6 +215,14 @@ pub struct PhysicsData {
 
 fn default_linear_damping() -> f32 {
     1.5
+}
+
+fn default_angular_damping() -> f32 {
+    0.0
+}
+
+fn default_solver_iterations() -> u32 {
+    4
 }
 
 fn default_true() -> bool {
@@ -232,6 +246,8 @@ impl Default for PhysicsData {
             colliders: Vec::new(),
             mesh_collider: MeshColliderMode::None,
             linear_damping: 1.5,
+            angular_damping: 0.0,
+            solver_iterations: 4,
             use_gravity: true,
             ccd: false,
         }
@@ -1291,6 +1307,8 @@ impl EntityData {
                 is_trigger: false,
                 constraints: 0,
                 linear_damping: 1.5,
+                angular_damping: 0.0,
+                solver_iterations: 4,
                 use_gravity: true,
                 ccd: false,
                 interpolate: false,

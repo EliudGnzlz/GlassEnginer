@@ -1247,6 +1247,57 @@ pub unsafe extern "C" fn glass_physics_get_linear_damping(body_handle: u64) -> f
 /// # Safety
 /// No recibe punteros; es segura de llamar con cualquier valor.
 #[no_mangle]
+pub unsafe extern "C" fn glass_physics_set_angular_damping(body_handle: u64, damping: f32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_angular_damping(body_handle, damping) as i32;
+        }
+    }
+    0
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+/// Devuelve -1.0 si el cuerpo no existe.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_get_angular_damping(body_handle: u64) -> f32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            return world.get_angular_damping(body_handle).unwrap_or(-1.0);
+        }
+    }
+    -1.0
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+/// `iterations` es el total del solver para el cuerpo; negativos cuentan como 0.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_set_solver_iterations(body_handle: u64, iterations: i32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_solver_iterations(body_handle, iterations) as i32;
+        }
+    }
+    0
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+/// Devuelve -1 si el cuerpo no existe.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_get_solver_iterations(body_handle: u64) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            return world.get_solver_iterations(body_handle).unwrap_or(-1);
+        }
+    }
+    -1
+}
+
+/// # Safety
+/// No recibe punteros; es segura de llamar con cualquier valor.
+#[no_mangle]
 pub unsafe extern "C" fn glass_physics_set_gravity_scale(body_handle: u64, scale: f32) -> i32 {
     if let Some(sys) = get_global_physics_world() {
         if let Ok(mut world) = sys.lock() {

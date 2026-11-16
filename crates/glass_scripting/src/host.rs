@@ -143,6 +143,11 @@ struct PhysicsBridgeCallbacks {
     move_kinematic_rotation: *const c_void,
     sweep_body: *const c_void,
     sweep_body_all: *const c_void,
+    // Añadidos AL FINAL (RB/CC 100% RB-1): damping angular e iteraciones del solver por cuerpo.
+    set_angular_damping: *const c_void,
+    get_angular_damping: *const c_void,
+    set_solver_iterations: *const c_void,
+    get_solver_iterations: *const c_void,
 }
 
 type InitPhysicsBridgeFn = unsafe extern "system" fn(*const PhysicsBridgeCallbacks);
@@ -534,6 +539,11 @@ impl ScriptHost {
                 move_kinematic_rotation: glass_physics::glass_physics_move_kinematic_rotation as *const c_void,
                 sweep_body: glass_physics::glass_physics_sweep_body as *const c_void,
                 sweep_body_all: glass_physics::glass_physics_sweep_body_all as *const c_void,
+                // Añadidos AL FINAL (RB/CC 100% RB-1): damping angular e iteraciones del solver por cuerpo.
+                set_angular_damping: glass_physics::glass_physics_set_angular_damping as *const c_void,
+                get_angular_damping: glass_physics::glass_physics_get_angular_damping as *const c_void,
+                set_solver_iterations: glass_physics::glass_physics_set_solver_iterations as *const c_void,
+                get_solver_iterations: glass_physics::glass_physics_get_solver_iterations as *const c_void,
             };
             unsafe {
                 init_physics_fn(&callbacks as *const PhysicsBridgeCallbacks);

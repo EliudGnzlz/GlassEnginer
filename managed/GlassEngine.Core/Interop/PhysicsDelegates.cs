@@ -193,6 +193,20 @@ public delegate int SetLinearDampingDelegate(ulong handle, float value);
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate float GetLinearDampingDelegate(ulong handle);
 
+// Amortiguación angular: espejo de `glass_physics_set_angular_damping`/`glass_physics_get_angular_damping`.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetAngularDampingDelegate(ulong handle, float value);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate float GetAngularDampingDelegate(ulong handle);
+
+// Iteraciones del solver: espejo de `glass_physics_set_solver_iterations`/`glass_physics_get_solver_iterations`.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetSolverIterationsDelegate(ulong handle, int value);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int GetSolverIterationsDelegate(ulong handle);
+
 // Escala de gravedad: espejo de `glass_physics_set_gravity_scale`/`glass_physics_get_gravity_scale`.
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate int SetGravityScaleDelegate(ulong handle, float value);

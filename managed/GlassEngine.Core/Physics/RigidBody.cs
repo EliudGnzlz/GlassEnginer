@@ -89,6 +89,31 @@ public sealed class RigidBody
         }
     }
 
+    public float AngularDamping
+    {
+        get => RuntimeBridge.GetAngularDamping(Handle);
+        set
+        {
+            if (IsValid)
+            {
+                RuntimeBridge.SetAngularDamping(Handle, value);
+            }
+        }
+    }
+
+    /// <summary>Iteraciones TOTALES del solver para este cuerpo.</summary>
+    public int SolverIterations
+    {
+        get => RuntimeBridge.GetSolverIterations(Handle);
+        set
+        {
+            if (IsValid)
+            {
+                RuntimeBridge.SetSolverIterations(Handle, value);
+            }
+        }
+    }
+
     private bool _useGravity = true;
 
     public bool UseGravity

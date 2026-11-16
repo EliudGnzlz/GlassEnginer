@@ -89,6 +89,10 @@ public static class RuntimeBridge
     private static GetMassDelegate? _getMass;
     private static SetLinearDampingDelegate? _setLinearDamping;
     private static GetLinearDampingDelegate? _getLinearDamping;
+    private static SetAngularDampingDelegate? _setAngularDamping;
+    private static GetAngularDampingDelegate? _getAngularDamping;
+    private static SetSolverIterationsDelegate? _setSolverIterations;
+    private static GetSolverIterationsDelegate? _getSolverIterations;
     private static SetGravityScaleDelegate? _setGravityScale;
     private static GetAngularVelocityDelegate? _getAngularVelocity;
     private static SetAngularVelocityDelegate? _setAngularVelocity;
@@ -394,6 +398,13 @@ public static class RuntimeBridge
         public IntPtr MoveKinematicRotation;
         public IntPtr SweepBody;
         public IntPtr SweepBodyAll;
+
+        // Añadidos AL FINAL (RB/CC 100% RB-1): damping angular e
+        // iteraciones del solver por cuerpo.
+        public IntPtr SetAngularDamping;
+        public IntPtr GetAngularDamping;
+        public IntPtr SetSolverIterations;
+        public IntPtr GetSolverIterations;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitPhysicsBridge")]
@@ -551,6 +562,14 @@ public static class RuntimeBridge
             _setLinearDamping = Marshal.GetDelegateForFunctionPointer<SetLinearDampingDelegate>(callbacks->SetLinearDamping);
         if (callbacks->GetLinearDamping != IntPtr.Zero)
             _getLinearDamping = Marshal.GetDelegateForFunctionPointer<GetLinearDampingDelegate>(callbacks->GetLinearDamping);
+        if (callbacks->SetAngularDamping != IntPtr.Zero)
+            _setAngularDamping = Marshal.GetDelegateForFunctionPointer<SetAngularDampingDelegate>(callbacks->SetAngularDamping);
+        if (callbacks->GetAngularDamping != IntPtr.Zero)
+            _getAngularDamping = Marshal.GetDelegateForFunctionPointer<GetAngularDampingDelegate>(callbacks->GetAngularDamping);
+        if (callbacks->SetSolverIterations != IntPtr.Zero)
+            _setSolverIterations = Marshal.GetDelegateForFunctionPointer<SetSolverIterationsDelegate>(callbacks->SetSolverIterations);
+        if (callbacks->GetSolverIterations != IntPtr.Zero)
+            _getSolverIterations = Marshal.GetDelegateForFunctionPointer<GetSolverIterationsDelegate>(callbacks->GetSolverIterations);
         if (callbacks->SetGravityScale != IntPtr.Zero)
             _setGravityScale = Marshal.GetDelegateForFunctionPointer<SetGravityScaleDelegate>(callbacks->SetGravityScale);
         if (callbacks->GetGravityScale != IntPtr.Zero)
@@ -1620,6 +1639,30 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
     {
         if (_getLinearDamping is null) return -1f;
         return _getLinearDamping(handle);
+    }
+
+    public static bool SetAngularDamping(ulong handle, float value)
+    {
+        if (_setAngularDamping is null) return false;
+        return _setAngularDamping(handle, value) != 0;
+    }
+
+    public static float GetAngularDamping(ulong handle)
+    {
+        if (_getAngularDamping is null) return -1f;
+        return _getAngularDamping(handle);
+    }
+
+    public static bool SetSolverIterations(ulong handle, int value)
+    {
+        if (_setSolverIterations is null) return false;
+        return _setSolverIterations(handle, value) != 0;
+    }
+
+    public static int GetSolverIterations(ulong handle)
+    {
+        if (_getSolverIterations is null) return -1;
+        return _getSolverIterations(handle);
     }
 
     public static bool SetGravityScale(ulong handle, float value)

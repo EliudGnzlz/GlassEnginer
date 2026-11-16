@@ -2084,6 +2084,52 @@ impl PhysicsWorld {
         self.rigid_body_set.get(rapier).map(|rb| rb.linear_damping())
     }
 
+    pub fn set_angular_damping(&mut self, handle: BodyHandle, damping: f32) -> bool {
+        let Some((rapier, _)) = self.get_rapier_handle(handle) else {
+            return false;
+        };
+        match self.rigid_body_set.get_mut(rapier) {
+            Some(rb) => {
+                rb.set_angular_damping(damping);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn get_angular_damping(&self, handle: BodyHandle) -> Option<f32> {
+        let (rapier, _) = self.get_rapier_handle(handle)?;
+        self.rigid_body_set.get(rapier).map(|rb| rb.angular_damping())
+    }
+
+    /// Fija las iteraciones TOTALES del solver para el cuerpo. Rapier solo admite
+    /// iteraciones adicionales sobre la base global, así que se guarda
+    /// `n - base` saturado a 0. Los valores negativos cuentan como 0.
+    pub fn set_solver_iterations(&mut self, handle: BodyHandle, iterations: i32) -> bool {
+        let Some((rapier, _)) = self.get_rapier_handle(handle) else {
+            return false;
+        };
+        let base = self.integration_parameters.num_solver_iterations.get();
+        let additional = (iterations.max(0) as usize).saturating_sub(base);
+        match self.rigid_body_set.get_mut(rapier) {
+            Some(rb) => {
+                rb.set_additional_solver_iterations(additional);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Devuelve las iteraciones TOTALES (base global + adicionales del cuerpo).
+    pub fn get_solver_iterations(&self, handle: BodyHandle) -> Option<i32> {
+        let (rapier, _) = self.get_rapier_handle(handle)?;
+        let base = self.integration_parameters.num_solver_iterations.get();
+        self.rigid_body_set.get(rapier).map(|rb| {
+            i32::try_from(base.saturating_add(rb.additional_solver_iterations()))
+                .unwrap_or(i32::MAX)
+        })
+    }
+
     pub fn set_gravity_scale(&mut self, handle: BodyHandle, scale: f32) -> bool {
         let Some((rapier, _)) = self.get_rapier_handle(handle) else {
             return false;
@@ -2730,6 +2776,75 @@ mod tests {
 
     /// Mundo mínimo: suelo fijo (caja ancha con la superficie en
     /// y = 0) y pasos de 1/60 hasta que el cuerpo de prueba se asiente.
+    #[test]
+    fn angular_damping_set_get() {
+        let (mut world, _suelo) = mundo_con_suelo();
+        let bola = world.create_rigid_body(20, BodyType::Dynamic, [0.0, 3.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+
+        assert!(world.set_angular_damping(bola, 2.5));
+        assert_eq!(world.get_angular_damping(bola), Some(2.5));
+
+        assert!(world.set_angular_damping(bola, 0.0));
+        assert_eq!(world.get_angular_damping(bola), Some(0.0));
+
+        assert!(!world.set_angular_damping(9999, 1.0));
+        assert_eq!(world.get_angular_damping(9999), None);
+    }
+
+    #[test]
+    fn solver_iterations_total() {
+        let (mut world, _suelo) = mundo_con_suelo();
+        let bola = world.create_rigid_body(20, BodyType::Dynamic, [0.0, 3.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+
+        assert!(world.set_solver_iterations(bola, 6));
+        assert_eq!(world.get_solver_iterations(bola), Some(6));
+
+        assert!(world.set_solver_iterations(bola, 4));
+        assert_eq!(world.get_solver_iterations(bola), Some(4));
+
+        // 0 adicionales: queda la base de Rapier (4).
+        assert!(world.set_solver_iterations(bola, 0));
+        assert_eq!(world.get_solver_iterations(bola), Some(4));
+
+        assert!(world.set_solver_iterations(bola, 10));
+        assert_eq!(world.get_solver_iterations(bola), Some(10));
+
+        assert!(!world.set_solver_iterations(9999, 6));
+        assert_eq!(world.get_solver_iterations(9999), None);
+    }
+
+    #[test]
+    fn angular_damping_frena_rotacion() {
+        let (mut world, _suelo) = mundo_con_suelo();
+        // Con collider: sin él el cuerpo no tiene masa/inercia y Rapier
+        // anula la velocidad angular en el primer paso. A y = 8 no tocan
+        // el suelo en los 60 pasos (caerían ~4,9 m en 1 s).
+        let frenado = world.create_rigid_body(30, BodyType::Dynamic, [0.0, 8.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        let libre = world.create_rigid_body(31, BodyType::Dynamic, [5.0, 8.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        world
+            .attach_box_collider(frenado, [1.0, 1.0, 1.0], 0.0, 0.0)
+            .expect("collider frenado");
+        world
+            .attach_box_collider(libre, [1.0, 1.0, 1.0], 0.0, 0.0)
+            .expect("collider libre");
+
+        assert!(world.set_angular_damping(frenado, 5.0));
+        assert!(world.set_angular_damping(libre, 0.0));
+        assert!(world.set_angular_velocity(frenado, [0.0, 10.0, 0.0]));
+        assert!(world.set_angular_velocity(libre, [0.0, 10.0, 0.0]));
+
+        for _ in 0..60 {
+            world.step(1.0 / 60.0);
+        }
+
+        let v1 = world.get_angular_velocity(frenado).expect("cuerpo frenado debe existir");
+        let v2 = world.get_angular_velocity(libre).expect("cuerpo libre debe existir");
+        let n1 = (v1[0] * v1[0] + v1[1] * v1[1] + v1[2] * v1[2]).sqrt();
+        let n2 = (v2[0] * v2[0] + v2[1] * v2[1] + v2[2] * v2[2]).sqrt();
+
+        assert!(n1 < n2, "con damping 5.0 ({n1}) debe girar menos que con 0.0 ({n2})");
+    }
+
     fn mundo_con_suelo() -> (PhysicsWorld, u64) {
         let mut world = PhysicsWorld::new();
         let suelo = world.create_rigid_body(10, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
