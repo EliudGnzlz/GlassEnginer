@@ -364,6 +364,12 @@ impl EditorDockingLayout {
         let seleccion_inicial = selected_id;
 
         // --- 0. ATAJOS DE TECLADO GLOBALES ESTILO UNITY ---
+        // Con la Herramienta 3D abierta, un esquema de malla elegido y el
+        // ratón encima del panel, mandan los atajos de ese esquema (los lee
+        // el propio panel); en el resto del editor, los de Unity.
+        let malla_manda = self.mesh_tool.session.is_some()
+            && self.mesh_tool.prefs.scheme.is_some()
+            && self.mesh_tool.panel_hovered;
         if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::B)) {
             self.request_build_and_run = true;
         }
@@ -378,14 +384,14 @@ impl EditorDockingLayout {
                 }
             };
         }
-        if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
+        if !malla_manda && ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
             self.save_scene_to(scene_state, scene_manager, None);
         }
         // Deshacer / rehacer de la escena. Con un campo de texto
         // enfocado, las teclas son del campo (que tiene su propio
         // deshacer), no de la escena.
         let texto_enfocado = ui.ctx().memory(|m| m.focused().is_some());
-        if !texto_enfocado {
+        if !texto_enfocado && !malla_manda {
             let (deshacer, rehacer) = ui.input(|i| {
                 (
                     i.modifiers.command && !i.modifiers.shift && i.key_pressed(egui::Key::Z),

@@ -9,6 +9,9 @@ use glass_mesh_edit::{
     MirrorAxis, OrbitCamera,
 };
 
+use crate::panels::mesh_keymap::{action_for, help_text, plane_point, MeshKeyAction};
+use crate::tool_prefs::{ShortcutScheme, ToolPrefs};
+
 const VIEWPORT_HEIGHT: f32 = 320.0;
 const FOV_DEG: f32 = 60.0;
 const QUANT: f32 = 1e-4;
@@ -40,10 +43,29 @@ pub struct MeshToolPanel {
     gizmo_commit_pending: bool,
     pending_pick: Option<(f32, f32, f32, f32, bool)>,
     selection_overlay: Option<(egui::Rect, Vec<egui::Shape>)>,
+    /// Preferencias de la herramienta (esquema de atajos elegido).
+    pub prefs: ToolPrefs,
+    /// Archivo donde se persisten las preferencias.
+    pub prefs_file: std::path::PathBuf,
+    /// El puntero está sobre el panel (según el rect del frame anterior).
+    pub panel_hovered: bool,
+    last_rect: Option<egui::Rect>,
+    grab: Option<GrabState>,
+    grab_requested: bool,
+    grab_commit_pending: bool,
+}
+
+/// Estado del modo «agarrar»: plano de cámara fijo por el centroide.
+struct GrabState {
+    centroid: [f32; 3],
+    normal: [f32; 3],
+    start: [f32; 3],
+    delta: [f32; 3],
 }
 
 impl Default for MeshToolPanel {
     fn default() -> Self {
+        let prefs_file = crate::tool_prefs::prefs_path();
         Self {
             session: None,
             selection_mode: SelectionMode::Verts,
@@ -57,6 +79,13 @@ impl Default for MeshToolPanel {
             gizmo_commit_pending: false,
             pending_pick: None,
             selection_overlay: None,
+            prefs: ToolPrefs::load_from(&prefs_file),
+            prefs_file,
+            panel_hovered: false,
+            last_rect: None,
+            grab: None,
+            grab_requested: false,
+            grab_commit_pending: false,
             path_input: String::new(),
             status: "Sin sesión: abre un .glb de assets/.".to_owned(),
             camera: OrbitCamera::new([0.0, 0.0, 0.0]),
@@ -293,7 +322,140 @@ impl MeshToolPanel {
         }
     }
 
+    /// Fija el esquema de atajos de malla y lo persiste.
+    pub fn set_scheme(&mut self, scheme: ShortcutScheme) {
+        self.prefs.scheme = Some(scheme);
+        self.status = match self.prefs.save_to(&self.prefs_file) {
+            Ok(()) => match scheme {
+                ShortcutScheme::Blender => "Atajos de edición de malla: Blender.".to_string(),
+                ShortcutScheme::Unity => "Atajos de edición de malla: Unity.".to_string(),
+            },
+            Err(e) => format!("No se pudo guardar la preferencia de atajos: {e}"),
+        };
+    }
+
+    /// Ejecuta una acción de teclado de edición de malla.
+    pub fn run_key_action(&mut self, action: MeshKeyAction) {
+        match action {
+            MeshKeyAction::Undo => self.undo(),
+            MeshKeyAction::Redo => self.redo(),
+            MeshKeyAction::Bake => {
+                let _ = self.bake();
+            }
+            MeshKeyAction::Mirror => {
+                self.apply_cmd(MeshCommand::Mirror {
+                    axis: self.mirror_axis,
+                });
+            }
+            MeshKeyAction::DeleteSelection => {
+                let indices = self.selection_vert_indices();
+                if indices.is_empty() {
+                    self.status = "Sin selección que eliminar.".to_string();
+                } else {
+                    self.apply_cmd(MeshCommand::DeleteVerts { indices });
+                }
+            }
+            MeshKeyAction::ModeVerts => self.selection_mode = SelectionMode::Verts,
+            MeshKeyAction::ModeFaces => self.selection_mode = SelectionMode::Faces,
+            MeshKeyAction::Grab => {
+                if self.session.is_some() && !self.selection_vert_indices().is_empty() {
+                    self.grab_requested = true;
+                    self.status = "Moviendo la selección: mueve el ratón sobre el viewport y haz clic para confirmar · Esc para cancelar.".to_string();
+                } else {
+                    self.status = "Selecciona vértices o caras antes de mover.".to_string();
+                }
+            }
+        }
+    }
+
+    /// Fila de elección/cambio del esquema de atajos (visible haya o no sesión).
+    fn render_scheme_prefs(&mut self, ui: &mut egui::Ui) {
+        let mut elegido: Option<ShortcutScheme> = None;
+        match self.prefs.scheme {
+            None => {
+                ui.label(egui::RichText::new("Primera vez en la Herramienta 3D").strong());
+                ui.label("¿Qué atajos quieres usar mientras editas la malla? En el resto del editor mandan los de Unity, como siempre.");
+                ui.horizontal(|ui| {
+                    if ui.button("Esquema Blender").clicked() {
+                        elegido = Some(ShortcutScheme::Blender);
+                    }
+                    if ui.button("Esquema Unity").clicked() {
+                        elegido = Some(ShortcutScheme::Unity);
+                    }
+                });
+            }
+            Some(actual) => {
+                let mut scheme_local = actual;
+                ui.horizontal(|ui| {
+                    ui.label("Atajos de malla:");
+                    ui.selectable_value(&mut scheme_local, ShortcutScheme::Blender, "Blender");
+                    ui.selectable_value(&mut scheme_local, ShortcutScheme::Unity, "Unity");
+                });
+                ui.label(egui::RichText::new(help_text(scheme_local)).weak());
+                if scheme_local != actual {
+                    elegido = Some(scheme_local);
+                }
+            }
+        }
+        if let Some(esquema) = elegido {
+            self.set_scheme(esquema);
+        }
+    }
+
+    /// Lee como mucho una acción de teclado por frame. Con «agarrar» activo,
+    /// solo Esc (cancelar) tiene efecto; sin el ratón sobre el panel, ninguna
+    /// tecla es de la malla (son del resto del editor).
+    fn read_mesh_key(&mut self, ui: &egui::Ui) -> Option<MeshKeyAction> {
+        let scheme = self.prefs.scheme?;
+        if self.session.is_none() || ui.ctx().egui_wants_keyboard_input() {
+            return None;
+        }
+        if self.grab.is_some() {
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.grab = None;
+                self.grab_requested = false;
+                self.status = "Movimiento cancelado.".to_string();
+            }
+            // Durante el movimiento no se aceptan otras acciones (cambiarían los índices).
+            return None;
+        }
+        if !self.panel_hovered {
+            return None;
+        }
+        const CANDIDATAS: [egui::Key; 10] = [
+            egui::Key::Z,
+            egui::Key::Y,
+            egui::Key::S,
+            egui::Key::M,
+            egui::Key::G,
+            egui::Key::X,
+            egui::Key::W,
+            egui::Key::Delete,
+            egui::Key::Num1,
+            egui::Key::Num2,
+        ];
+        ui.input(|i| {
+            CANDIDATAS
+                .iter()
+                .copied()
+                .filter(|k| i.key_pressed(*k))
+                .find_map(|k| action_for(scheme, k, i.modifiers))
+        })
+    }
+
     pub fn render(&mut self, ui: &mut egui::Ui) {
+        // Hover determinista: rect del panel en el frame anterior.
+        self.panel_hovered = ui
+            .input(|i| i.pointer.hover_pos())
+            .zip(self.last_rect)
+            .is_some_and(|(p, r)| r.contains(p));
+        self.render_scheme_prefs(ui);
+        let mut key_action = self.read_mesh_key(ui);
+        if key_action == Some(MeshKeyAction::Grab) {
+            // «Agarrar» solo pone la bandera: el viewport debe verla en este mismo frame.
+            self.run_key_action(MeshKeyAction::Grab);
+            key_action = None;
+        }
         let mut action: Option<Action> = None;
 
         match self.session.as_mut() {
@@ -499,7 +661,9 @@ impl MeshToolPanel {
                         self.gizmo_commit_pending = true;
                     }
                 } else if let Some(centroid) = gizmo_centroid {
-                    if response.drag_started_by(egui::PointerButton::Primary) {
+                    if self.grab.is_none()
+                        && response.drag_started_by(egui::PointerButton::Primary)
+                    {
                         let origin = ui
                             .input(|i| i.pointer.press_origin())
                             .or_else(|| response.interact_pointer_pos());
@@ -523,7 +687,10 @@ impl MeshToolPanel {
                             Some((pos.x - rect.min.x, pos.y - rect.min.y, vp_w, vp_h, additive));
                     }
                 }
-                if !gizmo_busy && response.dragged_by(egui::PointerButton::Primary) {
+                if !gizmo_busy
+                    && self.grab.is_none()
+                    && response.dragged_by(egui::PointerButton::Primary)
+                {
                     let d = response.drag_delta();
                     self.camera.yaw += d.x * 0.01;
                     self.camera.pitch = (self.camera.pitch + d.y * 0.01).clamp(-1.4, 1.4);
@@ -536,7 +703,52 @@ impl MeshToolPanel {
                     }
                 }
 
-                let drag_offset = self.gizmo_axis.is_some().then_some(self.gizmo_delta);
+                // Modo «agarrar»: arranque y seguimiento del puntero sobre el
+                // plano de cámara que pasa por el centroide de la selección.
+                let grab_puntero = response
+                    .hover_pos()
+                    .map(|p| (p.x - rect.min.x, p.y - rect.min.y));
+                if self.grab_requested && self.grab.is_none() {
+                    if let (Some(centroid), Some((px, py))) = (gizmo_centroid, grab_puntero) {
+                        let hacia = sub3(centroid, self.camera.eye());
+                        let largo = len3(hacia);
+                        if largo > 1e-6 {
+                            let normal = scale3(hacia, 1.0 / largo);
+                            let (origen, dir) = glass_mesh_edit::preview::screen_ray(
+                                &self.camera, px, py, vp_w, vp_h, FOV_DEG,
+                            );
+                            if let Some(start) = plane_point(origen, dir, centroid, normal) {
+                                self.grab = Some(GrabState {
+                                    centroid,
+                                    normal,
+                                    start,
+                                    delta: [0.0; 3],
+                                });
+                            }
+                        }
+                    }
+                }
+                if let (Some(g), Some((px, py))) = (self.grab.as_mut(), grab_puntero) {
+                    let (origen, dir) = glass_mesh_edit::preview::screen_ray(
+                        &self.camera, px, py, vp_w, vp_h, FOV_DEG,
+                    );
+                    if let Some(p) = plane_point(origen, dir, g.centroid, g.normal) {
+                        let mut delta = sub3(p, g.start);
+                        if self.snap_enabled {
+                            delta = glass_mesh_edit::preview::snap_delta(delta, self.snap_step);
+                        }
+                        g.delta = delta;
+                    }
+                }
+                if self.grab.is_some() && response.clicked() {
+                    // El clic confirma el movimiento; el picking de este frame se descarta.
+                    self.grab_commit_pending = true;
+                }
+                let drag_offset = self
+                    .gizmo_axis
+                    .is_some()
+                    .then_some(self.gizmo_delta)
+                    .or_else(|| self.grab.as_ref().map(|g| g.delta));
                 let mut baked = session.bake();
                 if let Some(offset) = drag_offset {
                     displace_positions(
@@ -594,13 +806,34 @@ impl MeshToolPanel {
                 ui.painter().with_clip_rect(clip).extend(shapes);
             }
         }
-        if let Some((px, py, w, h, additive)) = self.pending_pick.take() {
+        if let Some((px, py, w, h, additive)) =
+            self.pending_pick.take().filter(|_| !self.grab_commit_pending)
+        {
             self.pick_at(px, py, w, h, additive);
         }
         if self.gizmo_commit_pending {
             self.gizmo_commit_pending = false;
             self.commit_gizmo_drag();
         }
+        if self.grab_commit_pending {
+            self.grab_commit_pending = false;
+            if let Some(g) = self.grab.take() {
+                if g.delta != [0.0; 3] {
+                    let indices = self.selection_vert_indices();
+                    self.apply_cmd(MeshCommand::MoveVerts {
+                        indices,
+                        delta: g.delta,
+                    });
+                } else {
+                    self.status = "Sin desplazamiento.".to_string();
+                }
+            }
+        }
+        self.grab_requested = false;
+        if let Some(accion) = key_action {
+            self.run_key_action(accion);
+        }
+        self.last_rect = Some(ui.max_rect());
         ui.label(self.status.as_str());
     }
 }
@@ -624,6 +857,9 @@ const GIZMO_AXES: [([f32; 3], egui::Color32); 3] = [
 impl MeshToolPanel {
     /// Vacía la selección y cancela el arrastre del gizmo.
     pub fn clear_selection(&mut self) {
+        self.grab = None;
+        self.grab_requested = false;
+        self.grab_commit_pending = false;
         self.selected_verts.clear();
         self.selected_faces.clear();
         self.gizmo_axis = None;
@@ -1290,5 +1526,85 @@ mod tests {
         assert!(panel.status.starts_with("Sin sesión"), "{}", panel.status);
         assert!(panel.bake().is_err());
         assert!(panel.status.starts_with("Sin sesión"), "{}", panel.status);
+    }
+
+    fn ruta_prefs_temporal(sufijo: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "glass_mesh_tool_prefs_{}_{sufijo}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir.join("tool_prefs.json")
+    }
+
+    fn panel_con_prefs(ruta: &std::path::Path) -> MeshToolPanel {
+        let mut panel = MeshToolPanel::default();
+        panel.prefs_file = ruta.to_path_buf();
+        panel.prefs = ToolPrefs::load_from(ruta);
+        panel
+    }
+
+    #[test]
+    fn panel_sin_prefs_pide_esquema() {
+        let ruta = ruta_prefs_temporal("sin_prefs");
+        let panel = panel_con_prefs(&ruta);
+        assert_eq!(panel.prefs.scheme, None);
+    }
+
+    #[test]
+    fn panel_guardar_esquema_persiste() {
+        let ruta = ruta_prefs_temporal("guardar_esquema");
+        let mut panel = panel_con_prefs(&ruta);
+        panel.set_scheme(ShortcutScheme::Blender);
+        assert_eq!(
+            ToolPrefs::load_from(&ruta).scheme,
+            Some(ShortcutScheme::Blender)
+        );
+        panel.set_scheme(ShortcutScheme::Unity);
+        assert_eq!(
+            ToolPrefs::load_from(&ruta).scheme,
+            Some(ShortcutScheme::Unity)
+        );
+        if let Some(dir) = ruta.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn accion_eliminar_borra_seleccion() {
+        let dir =
+            std::env::temp_dir().join(format!("glass_mesh_tool_be1_del_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("cube.glb");
+        write_glb(&MeshData::cube(2.0), &src).unwrap();
+
+        let mut panel = MeshToolPanel::new();
+        panel.open(src.to_str().unwrap()).unwrap();
+        let antes = panel.session.as_ref().expect("sesión").mesh.verts.len();
+        panel.selection_mode = SelectionMode::Verts;
+        panel.selected_verts.insert(0);
+        panel.run_key_action(MeshKeyAction::DeleteSelection);
+        let sesion = panel.session.as_ref().expect("sesión");
+        assert!(sesion.mesh.verts.len() < antes);
+        assert_eq!(sesion.recipe.commands.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn accion_modo_cambia_modo() {
+        let mut panel = MeshToolPanel::default();
+        panel.run_key_action(MeshKeyAction::ModeFaces);
+        assert_eq!(panel.selection_mode, SelectionMode::Faces);
+        panel.run_key_action(MeshKeyAction::ModeVerts);
+        assert_eq!(panel.selection_mode, SelectionMode::Verts);
+    }
+
+    #[test]
+    fn grab_sin_seleccion_no_arranca() {
+        let mut panel = MeshToolPanel::default();
+        panel.run_key_action(MeshKeyAction::Grab);
+        assert!(!panel.grab_requested);
+        assert_eq!(panel.status, "Selecciona vértices o caras antes de mover.");
     }
 }
