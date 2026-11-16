@@ -424,6 +424,31 @@ public sealed class RigidBody
         return RuntimeBridge.SetPhysicsTransform(Handle, position, rotation);
     }
 
+    /// <summary>
+    /// Publica AHORA la pose del Transform de la entidad en el cuerpo
+    /// (PublishTransform de Unity): sin esperar a la sincronización del
+    /// siguiente paso físico. False si no hay cuerpo o no se pudo leer
+    /// el Transform de la entidad.
+    /// </summary>
+    public bool PublishTransform()
+    {
+        if (!IsValid) return false;
+        if (RuntimeBridge.GetTransform(EntityId, out TransformData data) == 0) return false;
+        return RuntimeBridge.SetPhysicsTransform(Handle, data.Position, data.Rotation);
+    }
+
+    /// <summary>
+    /// Punto más cercano a <paramref name="position"/> sobre el AABB mundial de los
+    /// colliders del cuerpo (ClosestPointOnBounds de Unity). Si el punto está dentro,
+    /// devuelve el propio punto. Si no hay cuerpo, el cuerpo no tiene colliders o el
+    /// puente falla, devuelve <paramref name="position"/> sin cambios.
+    /// </summary>
+    public Vector3 ClosestPointOnBounds(Vector3 position)
+    {
+        if (!IsValid) return position;
+        return RuntimeBridge.ClosestPointOnBounds(Handle, position, out Vector3 closest) ? closest : position;
+    }
+
     public bool GetLinearVelocity(out Vector3 velocity)
     {
         if (!IsValid)
@@ -578,6 +603,36 @@ public sealed class RigidBody
         set
         {
             if (IsValid) RuntimeBridge.SetCenterOfMass(Handle, value);
+        }
+    }
+
+    /// <summary>
+    /// automaticCenterOfMass de Unity. True (defecto): el centro de masa sale de los
+    /// colliders. False: manda el valor manual. Fijar <see cref="CenterOfMass"/> lo pone
+    /// a false; <c>ResetCenterOfMass()</c> lo vuelve a true. Ponerlo a false sin valor
+    /// manual congela el centro de masa actual. Mientras siga en true, el valor manual se ignora.
+    /// </summary>
+    public bool AutomaticCenterOfMass
+    {
+        get => RuntimeBridge.GetAutomaticCenterOfMass(Handle);
+        set
+        {
+            if (IsValid) RuntimeBridge.SetAutomaticCenterOfMass(Handle, value);
+        }
+    }
+
+    /// <summary>
+    /// automaticInertiaTensor de Unity. True (defecto): la inercia sale de los colliders.
+    /// False: manda el tensor manual. Fijar <see cref="InertiaTensor"/> lo pone a false;
+    /// <c>ResetInertiaTensor()</c> lo vuelve a true. Ponerlo a false sin valor manual
+    /// congela la inercia actual. Mientras siga en true, el valor manual se ignora.
+    /// </summary>
+    public bool AutomaticInertiaTensor
+    {
+        get => RuntimeBridge.GetAutomaticInertiaTensor(Handle);
+        set
+        {
+            if (IsValid) RuntimeBridge.SetAutomaticInertiaTensor(Handle, value);
         }
     }
 

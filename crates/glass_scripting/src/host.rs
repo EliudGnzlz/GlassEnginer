@@ -162,6 +162,11 @@ struct PhysicsBridgeCallbacks {
     get_angular_damping: *const c_void,
     set_solver_iterations: *const c_void,
     get_solver_iterations: *const c_void,
+    set_automatic_center_of_mass: *const c_void,
+    get_automatic_center_of_mass: *const c_void,
+    set_automatic_inertia_tensor: *const c_void,
+    get_automatic_inertia_tensor: *const c_void,
+    closest_point_on_bounds: *const c_void,
 }
 
 type InitPhysicsBridgeFn = unsafe extern "system" fn(*const PhysicsBridgeCallbacks);
@@ -571,6 +576,11 @@ impl ScriptHost {
                 get_angular_damping: glass_physics::glass_physics_get_angular_damping as *const c_void,
                 set_solver_iterations: glass_physics::glass_physics_set_solver_iterations as *const c_void,
                 get_solver_iterations: glass_physics::glass_physics_get_solver_iterations as *const c_void,
+    set_automatic_center_of_mass: glass_physics::glass_physics_set_automatic_center_of_mass as *const c_void,
+    get_automatic_center_of_mass: glass_physics::glass_physics_get_automatic_center_of_mass as *const c_void,
+    set_automatic_inertia_tensor: glass_physics::glass_physics_set_automatic_inertia_tensor as *const c_void,
+    get_automatic_inertia_tensor: glass_physics::glass_physics_get_automatic_inertia_tensor as *const c_void,
+    closest_point_on_bounds: glass_physics::glass_physics_closest_point_on_bounds as *const c_void,
             };
             unsafe {
                 init_physics_fn(&callbacks as *const PhysicsBridgeCallbacks);

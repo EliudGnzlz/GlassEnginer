@@ -216,6 +216,12 @@ pub struct PhysicsData {
     /// excludeLayers por cuerpo (Unity): capas con las que NO colisiona. Defecto 0.
     #[serde(default)]
     pub exclude_layers: u32,
+    /// automaticCenterOfMass (Unity): COM desde los colliders. Defecto true.
+    #[serde(default = "default_true")]
+    pub automatic_center_of_mass: bool,
+    /// automaticInertiaTensor (Unity): inercia desde los colliders. Defecto true.
+    #[serde(default = "default_true")]
+    pub automatic_inertia_tensor: bool,
     /// Si el cuerpo responde a la gravedad del mundo.
     #[serde(default = "default_true")]
     pub use_gravity: bool,
@@ -273,6 +279,8 @@ impl Default for PhysicsData {
             solver_velocity_iterations: 4,
             include_layers: u32::MAX,
             exclude_layers: 0,
+            automatic_center_of_mass: true,
+            automatic_inertia_tensor: true,
             mesh_collider: MeshColliderMode::None,
             linear_damping: 1.5,
             angular_damping: 0.0,
@@ -1340,6 +1348,8 @@ impl EntityData {
                 solver_velocity_iterations: 4,
                 include_layers: u32::MAX,
                 exclude_layers: 0,
+                automatic_center_of_mass: true,
+                automatic_inertia_tensor: true,
                 angular_damping: 0.0,
                 solver_iterations: 4,
                 max_depenetration_velocity: 0.0,

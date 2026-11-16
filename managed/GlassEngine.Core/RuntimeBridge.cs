@@ -107,6 +107,11 @@ public static class RuntimeBridge
     private static GetExcludeLayersDelegate? _getExcludeLayers;
     private static SetSolverVelocityIterationsDelegate? _setSolverVelocityIterations;
     private static GetSolverVelocityIterationsDelegate? _getSolverVelocityIterations;
+    private static SetAutomaticCenterOfMassDelegate? _setAutomaticCenterOfMass;
+    private static GetAutomaticCenterOfMassDelegate? _getAutomaticCenterOfMass;
+    private static SetAutomaticInertiaTensorDelegate? _setAutomaticInertiaTensor;
+    private static GetAutomaticInertiaTensorDelegate? _getAutomaticInertiaTensor;
+    private static ClosestPointOnBoundsDelegate? _closestPointOnBounds;
     private static SetAngularVelocityDelegate? _setAngularVelocity;
     private static AddTorqueDelegate? _addTorque;
     private static ApplyTorqueImpulseDelegate? _applyTorqueImpulse;
@@ -431,6 +436,11 @@ public static class RuntimeBridge
         public IntPtr GetAngularDamping;
         public IntPtr SetSolverIterations;
         public IntPtr GetSolverIterations;
+        public IntPtr SetAutomaticCenterOfMass;
+        public IntPtr GetAutomaticCenterOfMass;
+        public IntPtr SetAutomaticInertiaTensor;
+        public IntPtr GetAutomaticInertiaTensor;
+        public IntPtr ClosestPointOnBounds;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitPhysicsBridge")]
@@ -591,6 +601,16 @@ public static class RuntimeBridge
             _setSolverVelocityIterations = Marshal.GetDelegateForFunctionPointer<SetSolverVelocityIterationsDelegate>(callbacks->SetSolverVelocityIterations);
         if (callbacks->GetSolverVelocityIterations != IntPtr.Zero)
             _getSolverVelocityIterations = Marshal.GetDelegateForFunctionPointer<GetSolverVelocityIterationsDelegate>(callbacks->GetSolverVelocityIterations);
+        if (callbacks->SetAutomaticCenterOfMass != IntPtr.Zero)
+            _setAutomaticCenterOfMass = Marshal.GetDelegateForFunctionPointer<SetAutomaticCenterOfMassDelegate>(callbacks->SetAutomaticCenterOfMass);
+        if (callbacks->GetAutomaticCenterOfMass != IntPtr.Zero)
+            _getAutomaticCenterOfMass = Marshal.GetDelegateForFunctionPointer<GetAutomaticCenterOfMassDelegate>(callbacks->GetAutomaticCenterOfMass);
+        if (callbacks->SetAutomaticInertiaTensor != IntPtr.Zero)
+            _setAutomaticInertiaTensor = Marshal.GetDelegateForFunctionPointer<SetAutomaticInertiaTensorDelegate>(callbacks->SetAutomaticInertiaTensor);
+        if (callbacks->GetAutomaticInertiaTensor != IntPtr.Zero)
+            _getAutomaticInertiaTensor = Marshal.GetDelegateForFunctionPointer<GetAutomaticInertiaTensorDelegate>(callbacks->GetAutomaticInertiaTensor);
+        if (callbacks->ClosestPointOnBounds != IntPtr.Zero)
+            _closestPointOnBounds = Marshal.GetDelegateForFunctionPointer<ClosestPointOnBoundsDelegate>(callbacks->ClosestPointOnBounds);
         if (callbacks->GetMaxDepenetrationVelocity != IntPtr.Zero)
             _getMaxDepenetrationVelocity = Marshal.GetDelegateForFunctionPointer<GetMaxDepenetrationVelocityDelegate>(callbacks->GetMaxDepenetrationVelocity);
         if (callbacks->GetAccumulatedTorque != IntPtr.Zero)
@@ -1981,6 +2001,42 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
     {
         if (_getSolverVelocityIterations is null) return -1;
         return _getSolverVelocityIterations(bodyHandle);
+    }
+
+    public static bool SetAutomaticCenterOfMass(ulong bodyHandle, bool value)
+    {
+        if (_setAutomaticCenterOfMass is null) return false;
+        return _setAutomaticCenterOfMass(bodyHandle, value ? 1 : 0) != 0;
+    }
+
+    /// <summary>Sin puente o cuerpo inexistente (-1) devuelve true, el defecto.</summary>
+    public static bool GetAutomaticCenterOfMass(ulong bodyHandle)
+    {
+        if (_getAutomaticCenterOfMass is null) return true;
+        return _getAutomaticCenterOfMass(bodyHandle) != 0;
+    }
+
+    public static bool SetAutomaticInertiaTensor(ulong bodyHandle, bool value)
+    {
+        if (_setAutomaticInertiaTensor is null) return false;
+        return _setAutomaticInertiaTensor(bodyHandle, value ? 1 : 0) != 0;
+    }
+
+    /// <summary>Sin puente o cuerpo inexistente (-1) devuelve true, el defecto.</summary>
+    public static bool GetAutomaticInertiaTensor(ulong bodyHandle)
+    {
+        if (_getAutomaticInertiaTensor is null) return true;
+        return _getAutomaticInertiaTensor(bodyHandle) != 0;
+    }
+
+    public static bool ClosestPointOnBounds(ulong bodyHandle, Vector3 position, out Vector3 closest)
+    {
+        closest = Vector3.Zero;
+        if (_closestPointOnBounds is null) return false;
+        var buffer = new float[3];
+        if (_closestPointOnBounds(bodyHandle, position.X, position.Y, position.Z, buffer) == 0) return false;
+        closest = new Vector3(buffer[0], buffer[1], buffer[2]);
+        return true;
     }
 
     /// <summary>Velocidad máxima de despenetración (infinito = sin límite); -1 si no hay puente o el cuerpo no existe.</summary>

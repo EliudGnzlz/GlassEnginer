@@ -100,6 +100,8 @@ struct SpawnedBodySpec {
     pub solver_velocity_iterations: u32,
     pub include_layers: u32,
     pub exclude_layers: u32,
+    pub automatic_center_of_mass: bool,
+    pub automatic_inertia_tensor: bool,
     pub use_gravity: bool,
     pub ccd: bool,
     /// Interpolación de render (PhysicsData.interpolate).
@@ -153,6 +155,8 @@ impl EngineSceneBridge {
         solver_velocity_iterations: body.solver_velocity_iterations,
         include_layers: body.include_layers,
         exclude_layers: body.exclude_layers,
+        automatic_center_of_mass: body.automatic_center_of_mass,
+        automatic_inertia_tensor: body.automatic_inertia_tensor,
             use_gravity: body.use_gravity,
             ccd: body.ccd,
             interpolate: body.interpolate,
@@ -202,6 +206,12 @@ impl EngineSceneBridge {
         }
         if spec.exclude_layers != 0 {
             physics.set_exclude_layers(handle, spec.exclude_layers);
+        }
+        if !spec.automatic_center_of_mass {
+            physics.set_automatic_center_of_mass(handle, false);
+        }
+        if !spec.automatic_inertia_tensor {
+            physics.set_automatic_inertia_tensor(handle, false);
         }
         if !spec.use_gravity {
             physics.set_gravity_scale(handle, 0.0);
@@ -295,6 +305,12 @@ impl EngineSceneBridge {
             if spec.body_type == BodyType::Dynamic {
                 physics.set_mass(handle, spec.mass);
             }
+            if !spec.automatic_center_of_mass {
+                physics.set_automatic_center_of_mass(handle, false);
+            }
+            if !spec.automatic_inertia_tensor {
+                physics.set_automatic_inertia_tensor(handle, false);
+            }
             return;
         }
         // OJO, orden deliberado: se pasa (friction, restitution) a la
@@ -316,6 +332,12 @@ impl EngineSceneBridge {
         // Masa al final: los colliders primitivos ya están adjuntos.
         if spec.body_type == BodyType::Dynamic {
             physics.set_mass(handle, spec.mass);
+        }
+        if !spec.automatic_center_of_mass {
+            physics.set_automatic_center_of_mass(handle, false);
+        }
+        if !spec.automatic_inertia_tensor {
+            physics.set_automatic_inertia_tensor(handle, false);
         }
     }
 
@@ -1997,7 +2019,7 @@ type DescriptorCuerpo = (
     Option<(glass_core::MeshColliderMode, String, [f32; 3], bool)>,
     // Superficie de Rigidbody (huecos beta + RB-1): masa, damping lineal,
     // usa gravedad, CCD, interpola, damping angular, iteraciones del solver.
-    (f32, f32, bool, bool, bool, f32, u32, f32, u32, u32, u32),
+    (f32, f32, bool, bool, bool, f32, u32, f32, u32, u32, u32, bool, bool),
 );
 
 /// Elemento de dibujo de un lote del Canvas: (rect destino, rect
@@ -3318,6 +3340,8 @@ let resueltos = colliders_resueltos(body, shape);
     body.include_layers,
     body.exclude_layers,
     body.solver_velocity_iterations,
+    body.automatic_center_of_mass,
+    body.automatic_inertia_tensor,
 ),
                 ));
             }
@@ -3359,6 +3383,8 @@ let resueltos = colliders_resueltos(body, shape);
                 include_layers,
                 exclude_layers,
                 solver_velocity_iterations,
+                automatic_center_of_mass,
+                automatic_inertia_tensor,
             ) = superficie;
             if interpola {
                 physics.set_interpolation(id, true);
@@ -3378,6 +3404,12 @@ let resueltos = colliders_resueltos(body, shape);
             }
             if include_layers != u32::MAX {
                 physics.set_include_layers(handle, include_layers);
+            }
+            if !automatic_center_of_mass {
+                physics.set_automatic_center_of_mass(handle, false);
+            }
+            if !automatic_inertia_tensor {
+                physics.set_automatic_inertia_tensor(handle, false);
             }
             if exclude_layers != 0 {
                 physics.set_exclude_layers(handle, exclude_layers);
@@ -3466,6 +3498,12 @@ let resueltos = colliders_resueltos(body, shape);
             // Masa al final del cuerpo: los colliders ya están adjuntos.
             if body_type == BodyType::Dynamic {
                 physics.set_mass(handle, masa);
+            }
+            if !automatic_center_of_mass {
+                physics.set_automatic_center_of_mass(handle, false);
+            }
+            if !automatic_inertia_tensor {
+                physics.set_automatic_inertia_tensor(handle, false);
             }
             physics.set_linear_velocity(handle, linvel);
         }

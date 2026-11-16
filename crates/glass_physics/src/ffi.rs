@@ -978,6 +978,82 @@ pub unsafe extern "C" fn glass_physics_get_angular_velocity(body_handle: u64, ou
     0
 }
 
+/// automaticCenterOfMass (RB/CC 100% RB-4). `value != 0` = true. 1 ok, 0 fallo.
+#[no_mangle]
+pub extern "C" fn glass_physics_set_automatic_center_of_mass(body_handle: u64, value: i32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_automatic_center_of_mass(body_handle, value != 0) as i32;
+        }
+    }
+    0
+}
+
+/// automaticCenterOfMass (RB/CC 100% RB-4). -1 no existe, 0 false, 1 true.
+#[no_mangle]
+pub extern "C" fn glass_physics_get_automatic_center_of_mass(body_handle: u64) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            return world
+                .get_automatic_center_of_mass(body_handle)
+                .map_or(-1, i32::from);
+        }
+    }
+    -1
+}
+
+/// automaticInertiaTensor (RB/CC 100% RB-4). `value != 0` = true. 1 ok, 0 fallo.
+#[no_mangle]
+pub extern "C" fn glass_physics_set_automatic_inertia_tensor(body_handle: u64, value: i32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.set_automatic_inertia_tensor(body_handle, value != 0) as i32;
+        }
+    }
+    0
+}
+
+/// automaticInertiaTensor (RB/CC 100% RB-4). -1 no existe, 0 false, 1 true.
+#[no_mangle]
+pub extern "C" fn glass_physics_get_automatic_inertia_tensor(body_handle: u64) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            return world
+                .get_automatic_inertia_tensor(body_handle)
+                .map_or(-1, i32::from);
+        }
+    }
+    -1
+}
+
+/// ClosestPointOnBounds (RB/CC 100% RB-4): escribe en `out` el punto más
+/// cercano a (x, y, z) sobre los AABB de los colliders del cuerpo. 1 ok, 0 fallo.
+///
+/// # Safety
+/// `out` debe ser nulo o apuntar a un buffer válido y escribible de al menos 3 `f32`.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_closest_point_on_bounds(
+    body_handle: u64,
+    x: f32,
+    y: f32,
+    z: f32,
+    out: *mut f32,
+) -> i32 {
+    if out.is_null() {
+        return 0;
+    }
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            if let Some(punto) = world.closest_point_on_bounds(body_handle, [x, y, z]) {
+                let out = std::slice::from_raw_parts_mut(out, 3);
+                out.copy_from_slice(&punto);
+                return 1;
+            }
+        }
+    }
+    0
+}
+
 /// Fuerza en coordenadas locales del cuerpo, rotada a mundo con su rotación actual.
 /// Devuelve true si el cuerpo existe.
 /// # Safety

@@ -324,6 +324,26 @@ public delegate int SetSolverVelocityIterationsDelegate(ulong bodyHandle, int it
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate int GetSolverVelocityIterationsDelegate(ulong bodyHandle);
 
+// espejo de glass_physics_set_automatic_center_of_mass(u64, i32) -> i32 (RB/CC 100% RB-4)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetAutomaticCenterOfMassDelegate(ulong bodyHandle, int value);
+
+// espejo de glass_physics_get_automatic_center_of_mass(u64) -> i32 (RB/CC 100% RB-4)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int GetAutomaticCenterOfMassDelegate(ulong bodyHandle);
+
+// espejo de glass_physics_set_automatic_inertia_tensor(u64, i32) -> i32 (RB/CC 100% RB-4)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int SetAutomaticInertiaTensorDelegate(ulong bodyHandle, int value);
+
+// espejo de glass_physics_get_automatic_inertia_tensor(u64) -> i32 (RB/CC 100% RB-4)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int GetAutomaticInertiaTensorDelegate(ulong bodyHandle);
+
+// espejo de glass_physics_closest_point_on_bounds(u64, f32, f32, f32, *mut f32) -> i32 (RB/CC 100% RB-4)
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int ClosestPointOnBoundsDelegate(ulong bodyHandle, float x, float y, float z, [In, Out] float[] outPoint);
+
 // espejo de glass_physics_add_relative_force(u64, f32, f32, f32) -> bool (RB/CC 100% RB-2a)
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate bool AddRelativeForceDelegate(

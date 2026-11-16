@@ -48,6 +48,10 @@ pub struct PhysicsWorld {
     solver_iterations: std::collections::HashMap<u64, i32>,
     /// solverVelocityIterations TOTALES guardadas por cuerpo. Sin entrada = 4.
     solver_velocity_iterations: std::collections::HashMap<u64, i32>,
+    /// automaticCenterOfMass por cuerpo (Unity). Sin entrada = true.
+    automatic_center_of_mass: std::collections::HashMap<u64, bool>,
+    /// automaticInertiaTensor por cuerpo (Unity). Sin entrada = true.
+    automatic_inertia_tensor: std::collections::HashMap<u64, bool>,
     /// Grupos de colisión originales de los colliders de un cuerpo con
     /// detectCollisions desactivado, guardados para poder restaurarlos.
     detect_disabled: std::collections::HashMap<u64, Vec<(rapier3d::geometry::ColliderHandle, rapier3d::geometry::InteractionGroups)>>,
@@ -197,6 +201,8 @@ impl PhysicsWorld {
             layer_base_masks: HashMap::new(),
             solver_iterations: HashMap::new(),
             solver_velocity_iterations: HashMap::new(),
+            automatic_center_of_mass: HashMap::new(),
+            automatic_inertia_tensor: HashMap::new(),
             detect_disabled: HashMap::new(),
             mprops_override: HashMap::new(),
             event_handler: ChannelEventCollector::new(event_sender, force_sender),
@@ -1755,10 +1761,8 @@ impl PhysicsWorld {
     /// de COM activo se devuelve su objetivo (siempre fresco, aunque las
     /// `local_mprops` cacheadas de Rapier aún no se hayan actualizado).
     pub fn get_center_of_mass(&self, handle: BodyHandle) -> Option<[f32; 3]> {
-        if let Some(ov) = self.mprops_override.get(&handle) {
-            if let Some(com) = ov.com {
-                return Some(com);
-            }
+        if let Some(com) = self.com_override_activo(handle) {
+            return Some(com);
         }
         let (rapier, _) = self.get_rapier_handle(handle)?;
         let rb = self.rigid_body_set.get(rapier)?;
@@ -1779,12 +1783,36 @@ impl PhysicsWorld {
     /// COM local efectivo: el objetivo del override de COM si lo hay;
     /// si no, el de las `local_mprops` de Rapier.
     fn effective_local_com(&self, handle: BodyHandle, rb: &RigidBody) -> Point<f32> {
-        if let Some(ov) = self.mprops_override.get(&handle) {
-            if let Some(com) = ov.com {
-                return Point::new(com[0], com[1], com[2]);
-            }
+        if let Some(com) = self.com_override_activo(handle) {
+            return Point::new(com[0], com[1], com[2]);
         }
         rb.mass_properties().local_mprops.local_com
+    }
+
+    /// COM manual del override, solo si automaticCenterOfMass está en false.
+    fn com_override_activo(&self, handle: BodyHandle) -> Option<[f32; 3]> {
+        if self
+            .automatic_center_of_mass
+            .get(&handle)
+            .copied()
+            .unwrap_or(true)
+        {
+            return None;
+        }
+        self.mprops_override.get(&handle).and_then(|ov| ov.com)
+    }
+
+    /// Inercia manual del override, solo si automaticInertiaTensor está en false.
+    fn inertia_override_activo(&self, handle: BodyHandle) -> Option<([f32; 3], [f32; 4])> {
+        if self
+            .automatic_inertia_tensor
+            .get(&handle)
+            .copied()
+            .unwrap_or(true)
+        {
+            return None;
+        }
+        self.mprops_override.get(&handle).and_then(|ov| ov.inertia)
     }
 
     /// Suma de las propiedades de masa de SOLO los colliders del cuerpo
@@ -1888,10 +1916,9 @@ impl PhysicsWorld {
         let qn = natural.principal_inertia_local_frame.quaternion();
         let frame_natural = [qn.i, qn.j, qn.k, qn.w];
         // 3. Resolver objetivos: lo fijado manda; lo demás, natural.
-        let (com_obj, inertia_obj) = match self.mprops_override.get(&handle) {
-            Some(ov) => (ov.com, ov.inertia),
-            None => (None, None),
-        };
+        // El valor manual solo manda si el toggle automático está en false.
+        let com_obj = self.com_override_activo(handle);
+        let inertia_obj = self.inertia_override_activo(handle);
         // Sin componentes fijados no hay nada que aplicar: limpiar.
         if com_obj.is_none() && inertia_obj.is_none() {
             let Some(rb) = self.rigid_body_set.get_mut(rapier) else {
@@ -1956,10 +1983,8 @@ impl PhysicsWorld {
     fn total_inertia(&self, handle: BodyHandle) -> Option<([f32; 3], [f32; 4])> {
         let halved = self.mprops_override.contains_key(&handle);
         if halved {
-            if let Some(ov) = self.mprops_override.get(&handle) {
-                if let Some(inertia) = ov.inertia {
-                    return Some(inertia);
-                }
+            if let Some(inertia) = self.inertia_override_activo(handle) {
+                return Some(inertia);
             }
         }
         let (rapier, _) = self.get_rapier_handle(handle)?;
@@ -1995,6 +2020,7 @@ impl PhysicsWorld {
             return false;
         }
         self.mprops_entry(handle).com = Some(com);
+        self.automatic_center_of_mass.insert(handle, false);
         self.apply_current_override(handle)
     }
 
@@ -2004,6 +2030,7 @@ impl PhysicsWorld {
         if self.get_rapier_handle(handle).is_none() {
             return false;
         }
+        self.automatic_center_of_mass.insert(handle, true);
         if let Some(ov) = self.mprops_override.get_mut(&handle) {
             ov.com = None;
         } else {
@@ -2035,6 +2062,7 @@ impl PhysicsWorld {
             return false;
         }
         self.mprops_entry(handle).inertia = Some((tensor, rotation));
+        self.automatic_inertia_tensor.insert(handle, false);
         self.apply_current_override(handle)
     }
 
@@ -2045,12 +2073,104 @@ impl PhysicsWorld {
         if self.get_rapier_handle(handle).is_none() {
             return false;
         }
+        self.automatic_inertia_tensor.insert(handle, true);
         if let Some(ov) = self.mprops_override.get_mut(&handle) {
             ov.inertia = None;
         } else {
             return true; // Sin override no hay nada que restaurar.
         }
         self.apply_current_override(handle)
+    }
+
+    /// automaticCenterOfMass (Unity). A false sin COM manual guardado congela
+    /// el COM efectivo actual como manual. A true el natural vuelve a mandar;
+    /// el manual guardado se ignora (y se descarta si tampoco queda inercia manual activa).
+    pub fn set_automatic_center_of_mass(&mut self, handle: BodyHandle, automatic: bool) -> bool {
+        if self.get_rapier_handle(handle).is_none() {
+            return false;
+        }
+        if !automatic {
+            let tiene_manual = self
+                .mprops_override
+                .get(&handle)
+                .is_some_and(|ov| ov.com.is_some());
+            if !tiene_manual {
+                let Some(com) = self.get_center_of_mass(handle) else {
+                    return false;
+                };
+                self.mprops_entry(handle).com = Some(com);
+            }
+        }
+        self.automatic_center_of_mass.insert(handle, automatic);
+        self.apply_current_override(handle)
+    }
+
+    /// automaticCenterOfMass del cuerpo (defecto true). None si no existe.
+    pub fn get_automatic_center_of_mass(&self, handle: BodyHandle) -> Option<bool> {
+        self.get_rapier_handle(handle)?;
+        Some(
+            self.automatic_center_of_mass
+                .get(&handle)
+                .copied()
+                .unwrap_or(true),
+        )
+    }
+
+    /// automaticInertiaTensor (Unity). Misma semántica que
+    /// set_automatic_center_of_mass, con snapshot de la inercia efectiva.
+    pub fn set_automatic_inertia_tensor(&mut self, handle: BodyHandle, automatic: bool) -> bool {
+        if self.get_rapier_handle(handle).is_none() {
+            return false;
+        }
+        if !automatic {
+            let tiene_manual = self
+                .mprops_override
+                .get(&handle)
+                .is_some_and(|ov| ov.inertia.is_some());
+            if !tiene_manual {
+                let Some(inertia) = self.total_inertia(handle) else {
+                    return false;
+                };
+                self.mprops_entry(handle).inertia = Some(inertia);
+            }
+        }
+        self.automatic_inertia_tensor.insert(handle, automatic);
+        self.apply_current_override(handle)
+    }
+
+    /// automaticInertiaTensor del cuerpo (defecto true). None si no existe.
+    pub fn get_automatic_inertia_tensor(&self, handle: BodyHandle) -> Option<bool> {
+        self.get_rapier_handle(handle)?;
+        Some(
+            self.automatic_inertia_tensor
+                .get(&handle)
+                .copied()
+                .unwrap_or(true),
+        )
+    }
+
+    /// ClosestPointOnBounds (Unity): punto más cercano a `point` sobre los AABB
+    /// mundiales de los colliders del cuerpo. Punto interior → el propio punto.
+    /// None si el cuerpo no existe, no tiene colliders o el punto no es finito.
+    pub fn closest_point_on_bounds(&self, handle: BodyHandle, point: [f32; 3]) -> Option<[f32; 3]> {
+        if !point.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        let (rapier, _) = self.get_rapier_handle(handle)?;
+        let rb = self.rigid_body_set.get(rapier)?;
+        rb.colliders()
+            .iter()
+            .filter_map(|&ch| self.collider_set.get(ch))
+            .map(|collider| {
+                let aabb = collider.compute_aabb();
+                let candidato: [f32; 3] = std::array::from_fn(|i| {
+                    point[i].clamp(aabb.mins.coords[i], aabb.maxs.coords[i])
+                });
+                let d2: f32 = (0..3).map(|i| (candidato[i] - point[i]).powi(2)).sum();
+                (candidato, d2)
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(candidato, _)| candidato)
     }
 
     /// Velocidad lineal de un punto del cuerpo, dado en coordenadas MUNDIALES.
@@ -3432,6 +3552,111 @@ mod tests {
         assert_eq!(world.get_solver_velocity_iterations(u64::MAX), None);
         let a = world.create_rigid_body(9161, BodyType::Dynamic, [0.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
         assert_eq!(world.get_solver_velocity_iterations(a), Some(4));
+    }
+
+    fn rb4_cerca(a: [f32; 3], b: [f32; 3]) -> bool {
+        a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 1e-4)
+    }
+
+    fn rb4_cuerpo_caja(world: &mut PhysicsWorld, id: u64) -> BodyHandle {
+        let h = world.create_rigid_body(id, BodyType::Dynamic, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        world
+            .attach_box_collider(h, [0.5, 0.5, 0.5], 0.0, 0.5)
+            .expect("collider rb4");
+        h
+    }
+
+    #[test]
+    fn rb4_fijar_com_desactiva_automatico_y_true_vuelve_al_natural() {
+        let (mut world, _) = mundo_con_suelo();
+        let h = rb4_cuerpo_caja(&mut world, 9401);
+        let natural = world.get_center_of_mass(h).expect("COM natural");
+        let manual = [0.3, -0.2, 0.1];
+        assert!(!rb4_cerca(natural, manual));
+
+        assert!(world.set_center_of_mass(h, manual));
+        assert_eq!(world.get_automatic_center_of_mass(h), Some(false));
+        assert!(rb4_cerca(world.get_center_of_mass(h).unwrap(), manual));
+
+        assert!(world.set_automatic_center_of_mass(h, true));
+        assert_eq!(world.get_automatic_center_of_mass(h), Some(true));
+        let vuelto = world.get_center_of_mass(h).unwrap();
+        assert!(rb4_cerca(vuelto, natural));
+        assert!(!rb4_cerca(vuelto, manual));
+
+        assert!(world.set_center_of_mass(h, manual));
+        assert!(world.reset_center_of_mass(h));
+        assert_eq!(world.get_automatic_center_of_mass(h), Some(true));
+        assert!(rb4_cerca(world.get_center_of_mass(h).unwrap(), natural));
+    }
+
+    #[test]
+    fn rb4_automatico_com_a_false_congela_el_valor_actual() {
+        let (mut world, _) = mundo_con_suelo();
+        let h = rb4_cuerpo_caja(&mut world, 9402);
+        let antes = world.get_center_of_mass(h).expect("COM natural");
+        assert!(world.set_automatic_center_of_mass(h, false));
+        assert_eq!(world.get_automatic_center_of_mass(h), Some(false));
+        assert!(rb4_cerca(world.get_center_of_mass(h).unwrap(), antes));
+    }
+
+    #[test]
+    fn rb4_fijar_inercia_desactiva_automatico_y_true_vuelve_a_la_natural() {
+        let (mut world, _) = mundo_con_suelo();
+        let h = rb4_cuerpo_caja(&mut world, 9403);
+        let natural = world.total_inertia(h).expect("inercia natural").0;
+
+        assert!(world.set_inertia_tensor(h, [2.0, 2.0, 2.0], [0.0, 0.0, 0.0, 1.0]));
+        assert_eq!(world.get_automatic_inertia_tensor(h), Some(false));
+        assert!(rb4_cerca(world.total_inertia(h).unwrap().0, [2.0, 2.0, 2.0]));
+
+        assert!(world.set_automatic_inertia_tensor(h, true));
+        assert_eq!(world.get_automatic_inertia_tensor(h), Some(true));
+        let vuelta = world.total_inertia(h).unwrap().0;
+        if !rb4_cerca(natural, [2.0, 2.0, 2.0]) {
+            assert!(!rb4_cerca(vuelta, [2.0, 2.0, 2.0]));
+        }
+
+        assert!(world.set_inertia_tensor(h, [2.0, 2.0, 2.0], [0.0, 0.0, 0.0, 1.0]));
+        assert!(world.reset_inertia_tensor(h));
+        assert_eq!(world.get_automatic_inertia_tensor(h), Some(true));
+    }
+
+    #[test]
+    fn rb4_automaticos_handle_invalido_y_defecto() {
+        let (mut world, _) = mundo_con_suelo();
+        let invalido: BodyHandle = u64::MAX;
+        assert!(!world.set_automatic_center_of_mass(invalido, false));
+        assert!(!world.set_automatic_inertia_tensor(invalido, false));
+        assert_eq!(world.get_automatic_center_of_mass(invalido), None);
+        assert_eq!(world.get_automatic_inertia_tensor(invalido), None);
+
+        let h = rb4_cuerpo_caja(&mut world, 9405);
+        assert_eq!(world.get_automatic_center_of_mass(h), Some(true));
+        assert_eq!(world.get_automatic_inertia_tensor(h), Some(true));
+    }
+
+    #[test]
+    fn rb4_closest_point_on_bounds() {
+        let (mut world, _) = mundo_con_suelo();
+        let h = rb4_cuerpo_caja(&mut world, 9406);
+        assert!(rb4_cerca(
+            world.closest_point_on_bounds(h, [3.0, 0.25, 0.0]).unwrap(),
+            [0.5, 0.25, 0.0]
+        ));
+        assert!(rb4_cerca(
+            world.closest_point_on_bounds(h, [2.0, 2.0, 2.0]).unwrap(),
+            [0.5, 0.5, 0.5]
+        ));
+        assert!(rb4_cerca(
+            world.closest_point_on_bounds(h, [0.1, 0.0, 0.0]).unwrap(),
+            [0.1, 0.0, 0.0]
+        ));
+
+        let sin_colliders =
+            world.create_rigid_body(9407, BodyType::Dynamic, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        assert!(world.closest_point_on_bounds(sin_colliders, [1.0, 0.0, 0.0]).is_none());
+        assert!(world.closest_point_on_bounds(u64::MAX, [1.0, 0.0, 0.0]).is_none());
     }
 
     fn mundo_con_suelo() -> (PhysicsWorld, u64) {
