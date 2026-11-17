@@ -158,6 +158,34 @@ impl EditorDockingLayout {
         }
     }
 
+    /// ¿Está esta pestaña presente en el dock ahora mismo?
+    pub fn tab_visible(&self, tab: &EditorTab) -> bool {
+        self.dock_state.find_tab(tab).is_some()
+    }
+
+    /// Muestra u oculta cualquier pestaña del dock. Idempotente, como la
+    /// de Frametime (que se reutiliza para su pestaña, porque además
+    /// sincroniza el flag que la restaura tras los presets). La de
+    /// MeshForge sincroniza `mesh_tool_enabled` para que los presets
+    /// posteriores la sigan incluyendo, sin reaplicar ninguno ahora.
+    pub fn set_tab_visible(&mut self, tab: EditorTab, on: bool) {
+        if tab == EditorTab::Frametime {
+            self.set_frametime_visible(on);
+            return;
+        }
+        if tab == EditorTab::MeshTool {
+            self.mesh_tool_enabled = on;
+        }
+        let actual = self.dock_state.find_tab(&tab);
+        match (on, actual) {
+            (true, None) => self.dock_state.push_to_focused_leaf(tab),
+            (false, Some(path)) => {
+                let _ = self.dock_state.remove_tab(path);
+            }
+            _ => {}
+        }
+    }
+
     /// Repone la pestaña «Frametime» tras reconstruir el `dock_state` si debe estar visible.
     fn restaurar_frametime(&mut self) {
         if self.show_frametime && self.dock_state.find_tab(&EditorTab::Frametime).is_none() {
@@ -944,6 +972,29 @@ impl EditorDockingLayout {
                     if ui.button("4 Split").clicked() { self.apply_preset(LayoutPreset::FourSplit); ui.close(); }
                     if ui.button("Wide").clicked() { self.apply_preset(LayoutPreset::Wide); ui.close(); }
                 });
+                ui.separator();
+                for (tab, etiqueta) in [
+                    (EditorTab::Hierarchy, "🌿 Jerarquía"),
+                    (EditorTab::SceneView, "🎬 Escena (Scene)"),
+                    (EditorTab::GameView, "🎮 Juego (Game)"),
+                    (EditorTab::Inspector, "🔍 Inspector"),
+                    (EditorTab::Console, "📟 Consola"),
+                    (EditorTab::Project, "📁 Proyecto / Assets"),
+                    (EditorTab::ShaderGraph, "🎨 Grafo de Shaders"),
+                ] {
+                    let mut ver = self.tab_visible(&tab);
+                    if ui.checkbox(&mut ver, etiqueta).changed() {
+                        self.set_tab_visible(tab, ver);
+                        ui.close();
+                    }
+                }
+                if crate::plugins::plugin_enabled("herramienta-3d") {
+                    let mut ver = self.tab_visible(&EditorTab::MeshTool);
+                    if ui.checkbox(&mut ver, "🧊 MeshForge").changed() {
+                        self.set_tab_visible(EditorTab::MeshTool, ver);
+                        ui.close();
+                    }
+                }
                 let mut ver_frametime = self.show_frametime;
                 if ui.checkbox(&mut ver_frametime, "⏱ Frametime").changed() {
                     self.set_frametime_visible(ver_frametime);
@@ -1624,6 +1675,34 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
 
 #[cfg(test)]
 mod tests_puerta_herramienta_3d {
+    #[test]
+    fn paneles_se_muestran_y_se_ocultan_desde_window() {
+        let mut layout = super::EditorDockingLayout::new();
+        // La jerarquía nace en el dock; se oculta y se vuelve a mostrar.
+        assert!(layout.tab_visible(&super::EditorTab::Hierarchy));
+        layout.set_tab_visible(super::EditorTab::Hierarchy, false);
+        assert!(!layout.tab_visible(&super::EditorTab::Hierarchy));
+        layout.set_tab_visible(super::EditorTab::Hierarchy, true);
+        assert!(layout.tab_visible(&super::EditorTab::Hierarchy));
+        // Idempotente: mostrar dos veces no duplica la pestaña.
+        layout.set_tab_visible(super::EditorTab::Hierarchy, true);
+        layout.set_tab_visible(super::EditorTab::Hierarchy, false);
+        assert!(!layout.tab_visible(&super::EditorTab::Hierarchy));
+    }
+
+    #[test]
+    fn meshforge_desde_window_sincroniza_el_porton_sin_reaplicar_preset() {
+        let mut layout = super::EditorDockingLayout::new();
+        layout.set_mesh_tool_enabled(false);
+        assert!(!layout.tab_visible(&super::EditorTab::MeshTool));
+        layout.set_tab_visible(super::EditorTab::MeshTool, true);
+        assert!(layout.tab_visible(&super::EditorTab::MeshTool));
+        assert!(layout.mesh_tool_enabled, "el flag queda sincronizado para los presets");
+        layout.set_tab_visible(super::EditorTab::MeshTool, false);
+        assert!(!layout.tab_visible(&super::EditorTab::MeshTool));
+        assert!(!layout.mesh_tool_enabled);
+    }
+
     #[test]
     fn frametime_se_muestra_y_se_oculta() {
         let mut layout = super::EditorDockingLayout::new();

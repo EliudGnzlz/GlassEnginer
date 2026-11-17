@@ -1103,3 +1103,40 @@ rescates):
   portapapeles X11 no se verificó: la VM no tiene xclip/xsel; el copiado
   usa el mecanismo estándar de egui.) El caso Windows del nombre queda
   cubierto por los tests unitarios con rutas reales.
+
+## MENÚ WINDOW CON TODOS LOS PANELES (CERRADO)
+
+**Pedido** (2026-11-17): un botón arriba por si se cierra alguna
+herramienta (jerarquía, game, inspector…), «como lo hace Unity».
+
+**Diagnóstico**: ningún panel se podía cerrar a mano (`is_closeable`
+false en todas), pero los presets de Layouts reconstruyen el dock y un
+panel fuera de la plantilla desaparecía sin retorno individual;
+Frametime nacía oculta y MeshForge dependía del portón de arranque — el
+mismo defecto del diagnóstico A: el portón se evaluaba una sola vez por
+proceso, así que instalar MeshForge desde el Hub y abrir un proyecto en
+la misma sesión dejaba el editor sin su pestaña y sin aviso.
+
+**Arreglo** (paquete **DeepSeek V4 Flash**, 4.112 tokens, integrado sin
+rescates):
+- `set_tab_visible(tab, on)` + `tab_visible(tab)` en el layout:
+  generaliza el mecanismo probado de Frametime (find_tab →
+  push_to_focused_leaf / remove_tab, idempotente). Frametime reutiliza
+  su vía (sincroniza el flag que la restaura tras los presets); la de
+  MeshForge sincroniza `mesh_tool_enabled` para los presets sin
+  reaplicar ninguno en el momento.
+- El menú **Window** lista los 9 paneles con casilla y sus títulos
+  reales. La de **MeshForge solo aparece si el portón está activo en
+  ese momento**: `plugin_enabled` relee el almacén de disco en cada
+  llamada, así que instalar el complemento a mitad de sesión ya ofrece
+  la casilla **sin reiniciar la app** (arreglo del diagnóstico A).
+
+**Verificación**: glass_editor 113/113 (2 tests nuevos); pipeline 5/5.
+**Test físico PASS con el escenario exacto del diagnóstico A**:
+arranque con el complemento desactivado en el registro → editor sin
+pestaña MeshForge y Window sin su casilla; activación del registro a
+mitad de sesión (lo que escribe una instalación desde el Hub) → Window
+ofrece «🧊 MeshForge» sin marcar; al marcarla, la pestaña aparece en el
+dock con su panel, sin reiniciar. Además: desmarcar «Consola» la quita
+del dock y volver a marcarla la trae de vuelta. El registro de
+complementos quedó restaurado a su estado original tras la prueba.
