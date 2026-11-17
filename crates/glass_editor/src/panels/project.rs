@@ -267,6 +267,32 @@ pub fn crear_material(assets_root: &Path, nombre: &str) -> Result<PathBuf, Strin
     Ok(destino)
 }
 
+/// Crea `<assets>/prefabs/<Nombre>.prefab.json` (o `Prefabs/` si el
+/// proyecto usa mayúsculas) con un prefab vacío: una sola entidad raíz
+/// con Transform y el nombre dado.
+pub fn crear_prefab(assets_root: &Path, nombre: &str) -> Result<PathBuf, String> {
+    crear_prefab_en(&subcarpeta(assets_root, "prefabs", "Prefabs"), nombre)
+}
+
+/// Crea `<dir>/<Nombre>.prefab.json` con un prefab vacío válido.
+pub fn crear_prefab_en(dir: &Path, nombre: &str) -> Result<PathBuf, String> {
+    let base = nombre_sin_sufijo(nombre.trim(), &[".prefab.json", ".json"]);
+    validar_nombre(&base)?;
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+    let destino = dir.join(format!("{base}.prefab.json"));
+    if destino.exists() {
+        return Err(format!("Ya existe {}", destino.display()));
+    }
+    let mut escena = glass_core::SceneState::new();
+    let raiz = escena.create_entity(base.clone(), vec!["Transform".to_string()]);
+    let prefab = glass_core::Prefab::from_entity(&escena, raiz)?;
+    prefab
+        .save_to_file(&destino)
+        .map_err(|e| format!("No se pudo escribir {}: {e}", destino.display()))?;
+    Ok(destino)
+}
+
 /// Renombra un elemento dentro de su misma carpeta.
 pub fn renombrar(ruta: &Path, nuevo_nombre: &str) -> Result<PathBuf, String> {
     let nuevo = nuevo_nombre.trim();
@@ -598,6 +624,7 @@ enum TipoCreacion {
     Grafo,
     Escena,
     Material,
+    Prefab,
 }
 
 impl TipoCreacion {
@@ -610,6 +637,7 @@ impl TipoCreacion {
             TipoCreacion::Grafo => "NuevoGrafo",
             TipoCreacion::Escena => "NuevaEscena",
             TipoCreacion::Material => "NuevoMaterial",
+            TipoCreacion::Prefab => "NuevoPrefab",
         }
     }
 }
@@ -659,6 +687,9 @@ pub struct ProjectPanel {
     pub pending_scene_load: Option<PathBuf>,
     /// Cola consumida por `EditorApp`: instanciar prefab.
     pub pending_prefab_instantiate: Option<PathBuf>,
+    /// Cola consumida por `EditorApp`: reconvertir un .blend/.fbx a .glb
+    /// (la misma maquinaria que la conversión al soltar en la escena).
+    pub pending_conversion: Option<PathBuf>,
     /// Asset cuyo arrastre hacia la escena o la jerarquía está en curso.
     pub arrastre_asset: Option<PathBuf>,
 }
@@ -684,6 +715,7 @@ impl ProjectPanel {
             status: None,
             pending_scene_load: None,
             pending_prefab_instantiate: None,
+            pending_conversion: None,
             arrastre_asset: None,
         };
         panel.refrescar();
@@ -899,6 +931,10 @@ impl ProjectPanel {
                 None => crear_escena(&self.assets_root, &nombre),
             },
             TipoCreacion::Material => crear_material(&self.assets_root, &nombre),
+            TipoCreacion::Prefab => match destino {
+                Some(dir) => crear_prefab_en(&dir, &nombre),
+                None => crear_prefab(&self.assets_root, &nombre),
+            },
         };
         match resultado {
             Ok(ruta) => {
@@ -980,6 +1016,9 @@ impl ProjectPanel {
             if ui.button("🖌 Material").clicked() {
                 accion_crear = Some(TipoCreacion::Material);
             }
+            if ui.button("🧩 Prefab").clicked() {
+                accion_crear = Some(TipoCreacion::Prefab);
+            }
         });
         if let Some(tipo) = accion_crear {
             self.ejecutar_creacion(tipo);
@@ -1020,6 +1059,27 @@ impl ProjectPanel {
                         let destino = self.current_dir.clone();
                         self.ejecutar_creacion_con(tipo, nombre, Some(destino));
                     }
+                    ui.separator();
+                    if ui.button("📥 Importar asset…").clicked() {
+                        ui.close();
+                        if let Some(origen) = rfd::FileDialog::new()
+                            .set_title("Importar asset")
+                            .pick_file()
+                        {
+                            match importar_archivo(&origen, &self.current_dir.clone()) {
+                                Ok(destino) => {
+                                    self.seleccion = Some(destino.clone());
+                                    self.refrescar();
+                                    self.set_info(format!("Importado: {}", destino.display()));
+                                }
+                                Err(e) => self.set_error(e),
+                            }
+                        }
+                    }
+                    if ui.button("↻ Refrescar").clicked() {
+                        self.refrescar();
+                        ui.close();
+                    }
                 });
                 if self.entradas.is_empty() {
                     ui.label(egui::RichText::new("(carpeta vacía)").italics().weak());
@@ -1037,6 +1097,10 @@ impl ProjectPanel {
                 let mut eliminar: Option<PathBuf> = None;
                 let mut crear_contextual: Option<(TipoCreacion, PathBuf)> = None;
                 let mut accion_mover: Option<(PathBuf, PathBuf)> = None;
+                let mut abrir_explorador: Option<PathBuf> = None;
+                let mut reconvertir: Option<PathBuf> = None;
+                let mut importar = false;
+                let mut refrescar_pedido = false;
                 let mut confirmar_renombrado = false;
                 let mut cancelar_renombrado = false;
                 let mut nuevo_arrastre: Option<PathBuf> = None;
@@ -1177,6 +1241,30 @@ impl ProjectPanel {
                             }
                         });
 
+                        if ui.button("📂 Abrir en el explorador").clicked() {
+                            abrir_explorador = Some(ruta.clone());
+                            ui.close();
+                        }
+                        if ui.button("📋 Copiar ruta").clicked() {
+                            ui.ctx().copy_text(ruta.to_string_lossy().into_owned());
+                            info = Some("Ruta copiada al portapapeles".to_string());
+                            ui.close();
+                        }
+                        let nombre_min = nombre.to_lowercase();
+                        if (nombre_min.ends_with(".blend") || nombre_min.ends_with(".fbx"))
+                            && ui.button("🔄 Reconvertir").clicked()
+                        {
+                            reconvertir = Some(ruta.clone());
+                            ui.close();
+                        }
+                        if ui.button("📥 Importar asset…").clicked() {
+                            importar = true;
+                            ui.close();
+                        }
+                        if ui.button("↻ Refrescar").clicked() {
+                            refrescar_pedido = true;
+                            ui.close();
+                        }
                         ui.separator();
                         if ui.button("🗑 Eliminar").clicked() {
                             eliminar = Some(ruta.clone());
@@ -1217,6 +1305,31 @@ impl ProjectPanel {
                 }
                 if let Some((item, destino)) = accion_mover {
                     self.ejecutar_movimiento(item, destino);
+                }
+                if let Some(r) = abrir_explorador {
+                    crate::launcher::abrir_en_explorador(&r);
+                }
+                if let Some(r) = reconvertir {
+                    self.pending_conversion = Some(r.clone());
+                    self.set_info(format!("Conversión solicitada: {}", r.display()));
+                }
+                if importar {
+                    if let Some(origen) = rfd::FileDialog::new()
+                        .set_title("Importar asset")
+                        .pick_file()
+                    {
+                        match importar_archivo(&origen, &self.current_dir.clone()) {
+                            Ok(destino) => {
+                                self.seleccion = Some(destino.clone());
+                                self.refrescar();
+                                self.set_info(format!("Importado: {}", destino.display()));
+                            }
+                            Err(e) => self.set_error(e),
+                        }
+                    }
+                }
+                if refrescar_pedido {
+                    self.refrescar();
                 }
                 if confirmar_renombrado {
                     self.confirmar_renombrado();
@@ -1653,5 +1766,20 @@ mod tests {
         assert_eq!(entidad.transform.position, [3.0, 0.0, 4.0]);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn crear_prefab_vacio_produce_un_archivo_cargable() {
+        let raiz = std::env::temp_dir()
+            .join(format!("glass_prefab_vacio_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&raiz);
+        let ruta = crear_prefab(&raiz, "Heroe").unwrap();
+        assert!(ruta.ends_with("Heroe.prefab.json"));
+        let prefab = glass_core::Prefab::load_from_file(&ruta).unwrap();
+        assert_eq!(prefab.name, "Heroe");
+        assert_eq!(prefab.root_entity.name, "Heroe");
+        assert!(prefab.descendant_entities.is_empty());
+        assert!(crear_prefab(&raiz, "Heroe").is_err(), "duplicado debe fallar");
+        let _ = std::fs::remove_dir_all(&raiz);
     }
 }

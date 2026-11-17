@@ -3528,6 +3528,9 @@ impl GlassEngineApp {
             if let Some(p) = self.editor_layout.hierarchy.pending_conversion.take() {
                 peticiones.push(p);
             }
+            if let Some(p) = self.editor_layout.project.pending_conversion.take() {
+                peticiones.push(p);
+            }
             for ruta in peticiones {
                 let canonica =
                     std::fs::canonicalize(&ruta).unwrap_or_else(|_| ruta.clone());

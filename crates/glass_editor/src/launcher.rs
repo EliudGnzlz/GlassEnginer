@@ -261,6 +261,26 @@ pub fn abrir_carpeta_contenedora(dir: &Path) {
     }
 }
 
+/// Abre `path` en el explorador de archivos del sistema: si es una
+/// carpeta, la carpeta misma; si es un archivo, su carpeta contenedora.
+/// El fallo al lanzar el explorador se anota y no rompe nada.
+pub fn abrir_en_explorador(path: &Path) {
+    let destino = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| path.to_path_buf())
+    };
+    #[cfg(target_os = "windows")]
+    let programa = "explorer";
+    #[cfg(target_os = "macos")]
+    let programa = "open";
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let programa = "xdg-open";
+    if let Err(e) = std::process::Command::new(programa).arg(&destino).spawn() {
+        log::warn!("No se pudo abrir {} en el explorador: {e}", destino.display());
+    }
+}
+
 /// Renombra un proyecto: mueve su carpeta a una hermana con el nuevo
 /// nombre, actualiza el campo "name" de su project.glass (mejor
 /// esfuerzo: si el meta no se puede reescribir se anota y se sigue) y

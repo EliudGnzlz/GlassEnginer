@@ -1140,3 +1140,15 @@ ofrece «🧊 MeshForge» sin marcar; al marcarla, la pestaña aparece en el
 dock con su panel, sin reiniciar. Además: desmarcar «Consola» la quita
 del dock y volver a marcarla la trae de vuelta. El registro de
 complementos quedó restaurado a su estado original tras la prueba.
+
+## PUNTO 9 — MENÚ CREAR Y CLIC DERECHO DEL PANEL PROYECTO AMPLIADOS (2026-11-17, CERRADO)
+
+**Qué faltaba:** el panel Proyecto creaba 5 tipos (Carpeta, Script, Grafo, Escena, Material) y sus menús contextuales no tenían las acciones de trabajo diario: crear un prefab vacío, importar un asset desde el disco, abrir la carpeta en el explorador del sistema, copiar la ruta ni reconvertir un .blend/.fbx a demanda.
+
+**Arreglo:**
+- **Prefab vacío:** nueva variante `TipoCreacion::Prefab` («🧩 Prefab», nombre por defecto «NuevoPrefab») con `crear_prefab`/`crear_prefab_en`: crea una escena temporal con una entidad raíz del nombre dado y la guarda con `Prefab::from_entity` en la subcarpeta `prefabs`/`Prefabs`; entra en el submenú Crear compartido y en la cabecera del panel. Test: el archivo creado se carga con `Prefab::load_from_file`, la raíz lleva el nombre y un duplicado falla.
+- **Menú de fondo:** además de «➕ Crear ▸», «📥 Importar asset…» (diálogo del sistema vía rfd → `importar_archivo` a la carpeta actual) y «↻ Refrescar».
+- **Menú de elemento:** «📂 Abrir en el explorador» (helper nuevo `abrir_en_explorador` en launcher.rs: una carpeta se abre ella misma y un archivo abre su contenedora — semántica distinta de `abrir_carpeta_contenedora`, que abre el padre de lo dado), «📋 Copiar ruta», «🔄 Reconvertir» SOLO para .blend/.fbx, «📥 Importar asset…» y «↻ Refrescar», antes del separador de Eliminar.
+- **Reconvertir de verdad:** el panel gana la cola pública `pending_conversion` (no la tenía; solo la tenían viewport y jerarquía) y `App::drenar_peticiones_conversion` la drena igual que las otras dos, reenviando la petición al vigía de assets, que convierte con el cerrojo de un solo Blender.
+
+**Verificación:** suite glass_editor 114/114 (test nuevo del prefab incluido); pipeline local exacto 5/5 a 0 (un `collapsible_if` de clippy en el menú nuevo, corregido al integrar). **Test físico PASS por el camino real:** botón «🧩 Prefab» de la cabecera → `assets/prefabs/PruebaP9.prefab.json` creado en disco (con el aviso «Creado: …» en el panel; sin nombre escrito da el error «Escribe un nombre antes de crear el asset», comportamiento previo de la cabecera); menú de fondo con las tres entradas; menú de elemento sobre una carpeta con todas las acciones y «Abrir en el explorador» invocando el explorador con la carpeta misma (`assets/animators`, verificado con un xdg-open instrumentado); menú sobre `fase6_test.blend` con «🔄 Reconvertir» → petición drenada al vigía y, con Blender en el PATH, .glb regenerado y malla reemplazada en VRAM por recarga en caliente. El prefab de prueba se borró tras la verificación.
