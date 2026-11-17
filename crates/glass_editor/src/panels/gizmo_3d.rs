@@ -64,6 +64,52 @@ pub fn matmul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
     res
 }
 
+/// Longitud en mundo de cada eje del gizmo de transformación (la usan el
+/// dibujo, el hit-test y el arrastre: tienen que coincidir).
+pub const GIZMO_EJE_LEN: f32 = 1.4;
+
+/// Avance en unidades de mundo a lo largo de un eje del gizmo cuando el ratón
+/// se desplaza `delta` píxeles en pantalla: la proyección del delta sobre la
+/// dirección EN PANTALLA del eje, a la escala (mundo/píxel) de ese eje a esa
+/// profundidad. Arrastrar hacia la punta avanza en positivo y el objeto sigue
+/// al cursor 1:1 sobre la línea del eje, desde cualquier punto de vista.
+///
+/// Existe porque el arrastre usaba un mapeo fijo pantalla→eje
+/// (`X += delta.x`, `Y -= delta.y`, `Z += delta.x + delta.y`) que solo
+/// coincide con la vista por defecto del editor: al orbitar, los ejes se
+/// proyectan en otras direcciones y el objeto se movía AL CONTRARIO de la
+/// flecha arrastrada (reporte de D3m3tr10, 2026-11-17). Si el eje apunta a la
+/// cámara (proyección casi nula) no hay avance fiable y devuelve 0.
+pub fn avance_arrastre_eje(
+    origen: [f32; 3],
+    dir: [f32; 3],
+    vp: &[f32; 16],
+    rect: Rect,
+    delta: egui::Vec2,
+) -> f32 {
+    let (Some(p0), Some(p1)) = (
+        world_to_screen(origen, vp, rect),
+        world_to_screen(
+            [
+                origen[0] + dir[0] * GIZMO_EJE_LEN,
+                origen[1] + dir[1] * GIZMO_EJE_LEN,
+                origen[2] + dir[2] * GIZMO_EJE_LEN,
+            ],
+            vp,
+            rect,
+        ),
+    ) else {
+        return 0.0;
+    };
+    let v = p1 - p0;
+    let len = v.length();
+    if len < 1.0 {
+        return 0.0;
+    }
+    let firmado_px = (delta.x * v.x + delta.y * v.y) / len;
+    firmado_px * (GIZMO_EJE_LEN / len)
+}
+
 /// Proyecta una coordenada de mundo 3D a coordenadas 2D en pantalla dentro del rectángulo del Viewport.
 pub fn world_to_screen(pos: [f32; 3], vp: &[f32; 16], rect: Rect) -> Option<Pos2> {
     let x = pos[0] * vp[0] + pos[1] * vp[4] + pos[2] * vp[8] + vp[12];
@@ -154,7 +200,7 @@ pub fn render_3d_transform_gizmo(
         return GizmoAxis::None;
     };
 
-    let axis_len_3d = 1.4_f32;
+    let axis_len_3d = GIZMO_EJE_LEN;
 
     // Calcular puntas de los 3 ejes en espacio de mundo
     let p_x_world = [origin_3d[0] + axis_len_3d, origin_3d[1], origin_3d[2]];
@@ -178,9 +224,9 @@ pub fn render_3d_transform_gizmo(
     // Anillos de rotación 3D reales (solo en modo Rotate), radio en pantalla ≈ 45 px
     let anillos_2d: Option<[Vec<Option<Pos2>>; 3]> = if matches!(mode, crate::panels::viewport::GizmoMode::Rotate) {
         let mut px_por_unidad = [
-            (tip_x - center_2d).length() / 1.4,
-            (tip_y - center_2d).length() / 1.4,
-            (tip_z - center_2d).length() / 1.4,
+            (tip_x - center_2d).length() / GIZMO_EJE_LEN,
+            (tip_y - center_2d).length() / GIZMO_EJE_LEN,
+            (tip_z - center_2d).length() / GIZMO_EJE_LEN,
         ];
         px_por_unidad.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let mediana = px_por_unidad[1];
@@ -1379,5 +1425,98 @@ mod tests_picking {
             let dist = (rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]).sqrt();
             assert!((dist - dist_esperada).abs() < 1e-4, "distancia al centro: {dist}");
         }
+    }
+
+    fn vp_desde(eye: [f32; 3], rect: Rect) -> [f32; 16] {
+        let view = look_at(eye, [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+        let proj = perspective_matrix(
+            45.0_f32.to_radians(),
+            rect.width() / rect.height(),
+            0.1,
+            1000.0,
+        );
+        matmul(&proj, &view)
+    }
+
+    /// Vista por defecto (ojo en +Z): el eje X se proyecta a la derecha y un
+    /// arrastre a la derecha avanza en +X siguiendo al cursor 1:1.
+    #[test]
+    fn avance_eje_x_vista_defecto_sigue_al_cursor() {
+        let rect = rect_prueba();
+        let vp = vp_desde([0.0, 0.0, 10.0], rect);
+        let origen = [0.0, 0.0, 0.0];
+        let delta = egui::Vec2::new(60.0, 0.0);
+        let a = avance_arrastre_eje(origen, [1.0, 0.0, 0.0], &vp, rect, delta);
+        assert!(a > 0.0, "arrastrar a la derecha debe avanzar en +X: {a}");
+        let p0 = world_to_screen(origen, &vp, rect).unwrap();
+        let p1 = world_to_screen([origen[0] + a, origen[1], origen[2]], &vp, rect).unwrap();
+        assert!(
+            (p1.x - p0.x - 60.0).abs() < 1.5,
+            "el objeto debe seguir al cursor: {} px",
+            p1.x - p0.x
+        );
+        assert!((p1.y - p0.y).abs() < 1.5, "sin deriva vertical: {}", p1.y - p0.y);
+    }
+
+    /// LA REGRESIÓN del arrastre invertido: orbitando 180° (ojo en −Z), el eje
+    /// X se proyecta a la IZQUIERDA; arrastrar hacia la punta (a la izquierda)
+    /// debe avanzar en +X, no al contrario.
+    #[test]
+    fn avance_eje_x_vista_orbitada_no_se_invierte() {
+        let rect = rect_prueba();
+        let vp = vp_desde([0.0, 0.0, -10.0], rect);
+        let origen = [0.0, 0.0, 0.0];
+        let hacia_la_punta = avance_arrastre_eje(
+            origen,
+            [1.0, 0.0, 0.0],
+            &vp,
+            rect,
+            egui::Vec2::new(-60.0, 0.0),
+        );
+        assert!(
+            hacia_la_punta > 0.0,
+            "arrastrar hacia la punta debe avanzar en +X: {hacia_la_punta}"
+        );
+        let en_contra = avance_arrastre_eje(
+            origen,
+            [1.0, 0.0, 0.0],
+            &vp,
+            rect,
+            egui::Vec2::new(60.0, 0.0),
+        );
+        assert!(en_contra < 0.0, "arrastrar en contra debe retroceder: {en_contra}");
+    }
+
+    /// El caso exacto de la reproducción física (ojo en +X, como al orbitar
+    /// +90°): el eje Z se proyecta a la izquierda y arrastrar hacia su punta
+    /// avanza en +Z (antes el Z caía 2,40 en negativo con ese mismo arrastre).
+    #[test]
+    fn avance_eje_z_desde_el_lado_avanza_hacia_la_punta() {
+        let rect = rect_prueba();
+        let vp = vp_desde([10.0, 2.0, 0.0], rect);
+        let a = avance_arrastre_eje(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            &vp,
+            rect,
+            egui::Vec2::new(-80.0, 0.0),
+        );
+        assert!(a > 0.0, "arrastrar hacia la punta de Z debe avanzar en +Z: {a}");
+    }
+
+    /// Un eje que apunta a la cámara no tiene dirección de pantalla fiable:
+    /// el avance es 0 y el objeto no salta.
+    #[test]
+    fn avance_eje_apuntando_a_la_camara_es_cero() {
+        let rect = rect_prueba();
+        let vp = vp_desde([0.0, 0.0, 10.0], rect);
+        let a = avance_arrastre_eje(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            &vp,
+            rect,
+            egui::Vec2::new(120.0, 40.0),
+        );
+        assert!(a.abs() < 1e-6, "sin avance con el eje hacia la cámara: {a}");
     }
 }

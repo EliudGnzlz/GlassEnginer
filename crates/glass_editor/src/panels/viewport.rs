@@ -121,6 +121,12 @@ pub struct ViewportPanel {
     pub selected_camera_id: Option<u64>,
     // Eje activo actualmente arrastrado en el Gizmo 3D
     pub active_drag_axis: GizmoAxis,
+    // Eje bajo el puntero en el momento de PULSAR el botón primario: la
+    // captura del arrastre se decide ahí, no cuando egui declara el inicio
+    // del arrastre (con un eje muy escorzado, un primer movimiento brusco
+    // saca el puntero del segmento antes de ese frame y la captura se
+    // perdía en silencio).
+    pub press_axis: GizmoAxis,
     // Rect [x, y, ancho, alto] en puntos egui donde se pinta el juego en la
     // pestaña Game; None si aún no se ha dibujado.
     pub game_view_rect: Option<[f32; 4]>,
@@ -158,6 +164,7 @@ impl Default for ViewportPanel {
             editor_cam_center: [3.5, 1.5, 0.0],
             selected_camera_id: None,
             active_drag_axis: GizmoAxis::None,
+            press_axis: GizmoAxis::None,
             game_view_rect: None,
             fly_speed: 10.0,
             fly_active: false,
@@ -445,15 +452,35 @@ impl ViewportPanel {
             // Arrastre e interactividad
             // Solo el izquierdo captura el gizmo: un pan o look que empieza
             // sobre él debe navegar, no manipular el objeto.
+            // El eje se decide al PULSAR: si se espera a `drag_started()`,
+            // un primer movimiento brusco puede haber sacado ya el puntero
+            // de un eje muy escorzado (pocos píxeles en pantalla) y la
+            // captura se pierde en silencio.
+            if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
+                && !ui.input(|i| i.modifiers.alt)
+            {
+                self.press_axis = hovered_gizmo_axis;
+            }
+            if ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary)) {
+                self.press_axis = GizmoAxis::None;
+            }
             if response.drag_started()
                 && ui.input(|i| i.pointer.primary_down())
-                && self.gizmo_mode != GizmoMode::View && hovered_gizmo_axis != GizmoAxis::None
+                && self.gizmo_mode != GizmoMode::View
                 && !ui.input(|i| i.modifiers.alt) {
-                    self.active_drag_axis = hovered_gizmo_axis;
+                    let eje = if hovered_gizmo_axis != GizmoAxis::None {
+                        hovered_gizmo_axis
+                    } else {
+                        self.press_axis
+                    };
+                    if eje != GizmoAxis::None {
+                        self.active_drag_axis = eje;
+                    }
                 }
 
             if response.drag_stopped() {
                 self.active_drag_axis = GizmoAxis::None;
+                self.press_axis = GizmoAxis::None;
             }
 
             if response.dragged() {
@@ -466,20 +493,117 @@ impl ViewportPanel {
                 if self.active_drag_axis != GizmoAxis::None {
                     if let Some(target_id) = *selected_entity_id {
                         if let Ok(mut state) = scene_state.lock() {
+                            // El gizmo se dibuja en el origen de MUNDO de la
+                            // entidad y con los ejes de mundo: el arrastre se
+                            // calcula en mundo (proyectando el delta de
+                            // pantalla sobre la dirección en pantalla de cada
+                            // eje, ver `gizmo_3d::avance_arrastre_eje`) y se
+                            // convierte a la posición local al aplicar. El
+                            // mapeo fijo anterior (X=delta.x, Y=-delta.y,
+                            // Z=delta.x+delta.y) solo coincidía con la vista
+                            // por defecto y al orbitar movía el objeto AL
+                            // CONTRARIO de la flecha (reporte 2026-11-17).
+                            let matrices_mundo = state.compute_world_matrices();
+                            let pos_mundo = matrices_mundo
+                                .get(&target_id)
+                                .map(|m| glass_core::mat4_translation(*m));
+                            let inv_padre = state
+                                .entities
+                                .iter()
+                                .find(|e| e.id == target_id)
+                                .and_then(|e| e.parent)
+                                .and_then(|p| matrices_mundo.get(&p))
+                                .and_then(|m| glass_core::mat4_inverse_affine(*m));
+                            let avance = |dir: [f32; 3]| -> f32 {
+                                match pos_mundo {
+                                    Some(pm) => gizmo_3d::avance_arrastre_eje(
+                                        pm,
+                                        dir,
+                                        &view_proj,
+                                        rect,
+                                        delta,
+                                    ),
+                                    None => 0.0,
+                                }
+                            };
+                            let aplicar = |ent: &mut glass_core::EntityData, dm: [f32; 3]| {
+                                match pos_mundo {
+                                    Some(pm) => {
+                                        let nuevo =
+                                            [pm[0] + dm[0], pm[1] + dm[1], pm[2] + dm[2]];
+                                        ent.transform.position = match inv_padre {
+                                            Some(inv) => {
+                                                glass_core::mat4_transform_point(inv, nuevo)
+                                            }
+                                            None => nuevo,
+                                        };
+                                    }
+                                    None => {
+                                        ent.transform.position[0] += dm[0];
+                                        ent.transform.position[1] += dm[1];
+                                        ent.transform.position[2] += dm[2];
+                                    }
+                                }
+                            };
                             if let Some(ent) = state.entities.iter_mut().find(|e| e.id == target_id) {
                                 match self.gizmo_mode {
                                     GizmoMode::Translate => {
                                         match self.active_drag_axis {
-                                            GizmoAxis::X => ent.transform.position[0] += delta.x * 0.02,
-                                            GizmoAxis::Y => ent.transform.position[1] -= delta.y * 0.02,
-                                            GizmoAxis::Z => ent.transform.position[2] += (delta.x + delta.y) * 0.02,
+                                            GizmoAxis::X => {
+                                                let a = avance([1.0, 0.0, 0.0]);
+                                                aplicar(ent, [a, 0.0, 0.0]);
+                                            }
+                                            GizmoAxis::Y => {
+                                                let a = avance([0.0, 1.0, 0.0]);
+                                                aplicar(ent, [0.0, a, 0.0]);
+                                            }
+                                            GizmoAxis::Z => {
+                                                let a = avance([0.0, 0.0, 1.0]);
+                                                aplicar(ent, [0.0, 0.0, a]);
+                                            }
                                             GizmoAxis::Center => {
-                                                if is_shift {
-                                                    ent.transform.position[2] += delta.y * 0.02;
+                                                // Libre en el plano de la vista (con
+                                                // Shift, en profundidad), a la escala
+                                                // del objeto y no a la del pivote.
+                                                let dist_obj = pos_mundo
+                                                    .map(|pm| {
+                                                        let d = [
+                                                            pm[0] - eye[0],
+                                                            pm[1] - eye[1],
+                                                            pm[2] - eye[2],
+                                                        ];
+                                                        (d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
+                                                            .sqrt()
+                                                    })
+                                                    .unwrap_or(self.editor_cam_dist);
+                                                let wpp = 2.0
+                                                    * dist_obj
+                                                    * 22.5_f32.to_radians().tan()
+                                                    / rect.height();
+                                                let dm = if is_shift {
+                                                    let mut fwd = [
+                                                        self.editor_cam_center[0] - eye[0],
+                                                        self.editor_cam_center[1] - eye[1],
+                                                        self.editor_cam_center[2] - eye[2],
+                                                    ];
+                                                    let l = (fwd[0] * fwd[0]
+                                                        + fwd[1] * fwd[1]
+                                                        + fwd[2] * fwd[2])
+                                                        .sqrt()
+                                                        .max(1e-6);
+                                                    fwd = [fwd[0] / l, fwd[1] / l, fwd[2] / l];
+                                                    let k = -delta.y * wpp;
+                                                    [fwd[0] * k, fwd[1] * k, fwd[2] * k]
                                                 } else {
-                                                    ent.transform.position[0] += delta.x * 0.02;
-                                                    ent.transform.position[1] -= delta.y * 0.02;
-                                                }
+                                                    let kx = delta.x * wpp;
+                                                    let ky = -delta.y * wpp;
+                                                    [
+                                                        cam_right[0] * kx + cam_up[0] * ky,
+                                                        cam_right[1] * kx + cam_up[1] * ky,
+                                                        cam_right[2] * kx + cam_up[2] * ky,
+                                                    ]
+                                                };
+                                                aplicar(ent, dm);
                                             }
                                             GizmoAxis::None => {}
                                         }
@@ -494,9 +618,9 @@ impl ViewportPanel {
                                     }
                                     GizmoMode::Scale => {
                                         match self.active_drag_axis {
-                                            GizmoAxis::X => ent.transform.scale[0] = (ent.transform.scale[0] + delta.x * 0.02).max(0.1),
-                                            GizmoAxis::Y => ent.transform.scale[1] = (ent.transform.scale[1] - delta.y * 0.02).max(0.1),
-                                            GizmoAxis::Z => ent.transform.scale[2] = (ent.transform.scale[2] + delta.x * 0.02).max(0.1),
+                                            GizmoAxis::X => ent.transform.scale[0] = (ent.transform.scale[0] + avance([1.0, 0.0, 0.0]) * 0.5).max(0.1),
+                                            GizmoAxis::Y => ent.transform.scale[1] = (ent.transform.scale[1] + avance([0.0, 1.0, 0.0]) * 0.5).max(0.1),
+                                            GizmoAxis::Z => ent.transform.scale[2] = (ent.transform.scale[2] + avance([0.0, 0.0, 1.0]) * 0.5).max(0.1),
                                             GizmoAxis::Center => {
                                                 let factor = (delta.x - delta.y) * 0.02;
                                                 ent.transform.scale[0] = (ent.transform.scale[0] + factor).max(0.1);
@@ -515,9 +639,18 @@ impl ViewportPanel {
                                     }
                                     GizmoMode::Transform => {
                                         match self.active_drag_axis {
-                                            GizmoAxis::X => ent.transform.position[0] += delta.x * 0.02,
-                                            GizmoAxis::Y => ent.transform.position[1] -= delta.y * 0.02,
-                                            GizmoAxis::Z => ent.transform.position[2] += (delta.x + delta.y) * 0.02,
+                                            GizmoAxis::X => {
+                                                let a = avance([1.0, 0.0, 0.0]);
+                                                aplicar(ent, [a, 0.0, 0.0]);
+                                            }
+                                            GizmoAxis::Y => {
+                                                let a = avance([0.0, 1.0, 0.0]);
+                                                aplicar(ent, [0.0, a, 0.0]);
+                                            }
+                                            GizmoAxis::Z => {
+                                                let a = avance([0.0, 0.0, 1.0]);
+                                                aplicar(ent, [0.0, 0.0, a]);
+                                            }
                                             _ => ent.transform.add_rotation_euler([0.0, delta.x * 0.5, 0.0]),
                                         }
                                     }

@@ -654,3 +654,66 @@ las esquinas correctas es el tamaño de siempre del gizmo; si se quiere más
 corto, es decisión aparte.
 
 **Consumo: Opus 0** (diagnóstico, arreglo y tests directos de Rayo).
+
+---
+
+## GIZMO DE MOVER INVERTIDO (reporte de D3m3tr10, 2026-11-17, probando la v0.10.17.1-beta)
+
+Sus palabras: «cuando selecciono un objeto para mover, ejemplo el Z si
+muevo el mouse para donde esta mirando la flecha, se va a la direccion
+contraria, al igual con los otros ejes». Captura suya: Main Camera
+seleccionada con la flecha Z azul apuntando a la izquierda en pantalla.
+
+**¿Comparte raíz con B7? No.** En B7 el dibujo del frustum tenía dos
+índices cambiados; aquí el dibujo del gizmo es correcto (los ejes se
+pintan desde el origen de mundo de la entidad con los ejes de mundo) y lo
+que fallaba era la matemática del ARRASTRE.
+
+**Causa raíz:** el arrastre de traslación no proyectaba nada: aplicaba un
+mapeo fijo pantalla→eje pensado para la vista por defecto del editor
+(`X += delta.x·0,02`, `Y -= delta.y·0,02`, `Z += (delta.x+delta.y)·0,02`,
+y mapeos análogos en escala y en el modo combinado). Ese mapeo solo
+coincide con la realidad cuando la cámara mira desde +Z con X a la
+derecha e Y arriba; al orbitar, cada eje se proyecta en otra dirección de
+pantalla y el objeto se movía al contrario de su flecha (o en diagonal).
+
+**Reproducción física del defecto (binario sin el arreglo):** SampleScene,
+Platform Tier 2 en (6.00, 1.50, 0.00); órbita de +90° (la flecha Z apunta
+a la izquierda, como en su captura); arrastre real de −120 px HACIA la
+punta de la flecha Z: el Inspector marcó Z = −2,40 (exactamente
+−120 × 0,02 del mapeo fijo) y el objeto se desplazó en pantalla en
+dirección contraria al arrastre.
+
+**Arreglo de raíz:** `gizmo_3d::avance_arrastre_eje(origen, dir, vp, rect,
+delta)` proyecta el eje a pantalla y devuelve el avance firmado en
+unidades de mundo que sigue al cursor 1:1 sobre la dirección proyectada
+del eje (0 si el eje apunta a la cámara: su proyección mide < 1 px). La
+constante `GIZMO_EJE_LEN` (1,4) es ahora la única fuente de la longitud
+del eje para dibujo, anillos y arrastre. El viewport aplica el avance en
+el eje de MUNDO y convierte el resultado a local con la inversa de la
+matriz de mundo del padre cuando la entidad tiene padre. El arrastre por
+el centro pasa a mover en el plano de la vista (derecha/arriba de la
+cámara, mundo-por-píxel calculado a la distancia del objeto; con Shift,
+profundidad a lo largo de la mirada), y el de escala usa el mismo avance
+por eje. Además, la captura del eje se decide al PULSAR el botón
+(`press_axis`), no en `drag_started()`: con un eje muy escorzado
+(≈25 px), un primer movimiento brusco sacaba el puntero del segmento
+antes del frame de inicio del arrastre y la captura se perdía en
+silencio (medido con sonda temporal en el binario; la sonda se retiró).
+
+**Tests:** 4 nuevos sobre `avance_arrastre_eje` (vista por defecto 1:1
+con el cursor; vista orbitada 180° sin inversión — la regresión; eje Z
+desde el lado avanzando hacia la punta; eje apuntando a la cámara = 0).
+Suite del editor: 102/102.
+
+**Verificación física (binario con el arreglo, misma coreografía que la
+reproducción; vista orbitada +90°):** Z: 0,00 → +1,8935 arrastrando
+120 px hacia la punta (predicho por la proyección 1:1: +1,91); el objeto
+sigue al cursor hacia la izquierda. Y: 1,50 → 3,0450 arrastrando ~100 px
+hacia arriba (predicho +1,57). X (eje casi hacia la cámara, ~25-30 px en
+pantalla): 6,00 → 8,8189 con arrastre continuo hacia la punta y
+6,00 → 9,4439 repitiendo el primer paso brusco que antes no capturaba.
+En los tres casos los otros dos ejes quedan intactos.
+
+**Consumo: Opus 0 · DeepSeek 0 · Kimi 0** (diagnóstico, reproducción,
+arreglo, tests y verificación directos de Rayo).
