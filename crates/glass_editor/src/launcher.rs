@@ -109,6 +109,14 @@ pub enum LauncherTab {
 /// creaciones, shaders, mapas y juegos; aún sin red, botón
 /// deshabilitado). El resto del Launcher funciona sin conexión:
 /// Instalaciones solo se conecta cuando el usuario lo pide.
+/// Acción elegida en el menú contextual de una tarjeta de proyecto.
+enum AccionTarjeta {
+    AbrirContenedora(PathBuf),
+    Renombrar(PathBuf),
+    Quitar(PathBuf),
+    Eliminar(PathBuf),
+}
+
 pub struct LauncherPanel {
     pub active_tab: LauncherTab,
     pub search_filter: String,
@@ -145,6 +153,14 @@ pub struct LauncherPanel {
     /// carpetas (p. ej. la carpeta no contiene project.glass); se pinta
     /// sobre la lista de proyectos hasta el siguiente intento.
     pub error_abrir: Option<String>,
+    /// Acción elegida en el menú contextual de una tarjeta, pendiente
+    /// de ejecutar al terminar la cuadrícula (no se muta el almacén
+    /// mientras se pintan las tarjetas).
+    accion_tarjeta: Option<AccionTarjeta>,
+    /// Ventana de renombrar abierta: carpeta y texto editable.
+    renombrando: Option<(PathBuf, String)>,
+    /// Ventana de confirmación de borrado abierta: carpeta a eliminar.
+    confirmar_borrado: Option<PathBuf>,
     /// Pantalla de carga a pantalla completa (precarga diferida del motor).
     pub mostrar_carga: bool,
     /// La pantalla de carga ya se dibujó al menos un frame: main.rs solo
@@ -229,6 +245,76 @@ pub fn abrir_carpeta_proyecto(
     store.register_project(&nombre, dir);
     Ok(LauncherAction::OpenProject(dir.to_path_buf()))
 }
+/// Abre la carpeta PADRE de `dir` en el explorador de archivos del
+/// sistema (si no hay padre, abre la propia). El fallo al lanzar el
+/// explorador se anota y no rompe nada.
+pub fn abrir_carpeta_contenedora(dir: &Path) {
+    let destino = dir.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| dir.to_path_buf());
+    #[cfg(target_os = "windows")]
+    let programa = "explorer";
+    #[cfg(target_os = "macos")]
+    let programa = "open";
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let programa = "xdg-open";
+    if let Err(e) = std::process::Command::new(programa).arg(&destino).spawn() {
+        log::warn!("No se pudo abrir la carpeta contenedora de {}: {e}", destino.display());
+    }
+}
+
+/// Renombra un proyecto: mueve su carpeta a una hermana con el nuevo
+/// nombre, actualiza el campo "name" de su project.glass (mejor
+/// esfuerzo: si el meta no se puede reescribir se anota y se sigue) y
+/// refresca el registro. Devuelve la ruta nueva.
+pub fn renombrar_proyecto(
+    store: &mut crate::updates::LauncherStore,
+    dir: &Path,
+    nuevo_nombre: &str,
+) -> Result<PathBuf, String> {
+    let nombre = nuevo_nombre.trim();
+    if nombre.is_empty() {
+        return Err("El nombre no puede estar vacío.".to_string());
+    }
+    if nombre.contains('/') || nombre.contains('\\') {
+        return Err("El nombre no puede contener barras.".to_string());
+    }
+    let padre = dir
+        .parent()
+        .ok_or_else(|| "El proyecto no tiene carpeta contenedora.".to_string())?;
+    let destino = padre.join(nombre);
+    if destino.exists() {
+        return Err(format!("Ya existe una carpeta llamada «{nombre}» en la misma ubicación."));
+    }
+    std::fs::rename(dir, &destino)
+        .map_err(|e| format!("No se pudo renombrar la carpeta: {e}"))?;
+    // El "name" del project.glass, a la par del nombre visible.
+    let meta_path = destino.join("project.glass");
+    if let Ok(texto) = std::fs::read_to_string(&meta_path) {
+        if let Ok(mut meta) = serde_json::from_str::<serde_json::Value>(&texto) {
+            if let Some(obj) = meta.as_object_mut() {
+                obj.insert("name".to_string(), serde_json::Value::String(nombre.to_string()));
+                if let Ok(nuevo_texto) = serde_json::to_string_pretty(&meta) {
+                    let _ = std::fs::write(&meta_path, nuevo_texto);
+                }
+            }
+        }
+    }
+    store.desregistrar_proyecto(dir);
+    store.register_project(nombre, &destino);
+    Ok(destino)
+}
+
+/// Elimina un proyecto del disco (la carpeta entera) y lo desregistra.
+/// Pensado para llamarse solo tras la confirmación del usuario.
+pub fn eliminar_proyecto_del_disco(
+    store: &mut crate::updates::LauncherStore,
+    dir: &Path,
+) -> Result<(), String> {
+    std::fs::remove_dir_all(dir)
+        .map_err(|e| format!("No se pudo eliminar la carpeta del proyecto: {e}"))?;
+    store.desregistrar_proyecto(dir);
+    Ok(())
+}
+
 /// Lista de proyectos del Hub: primero el CWD, pero SOLO si contiene un
 /// `project.glass` (como un proyecto más, con su nombre real); después los
 /// registrados (más recientes primero, solo si siguen teniendo project.glass)
@@ -236,13 +322,18 @@ pub fn abrir_carpeta_proyecto(
 /// Cada ruta aparece una sola vez; el CWD gana sobre cualquier otra fuente.
 fn descubrir_proyectos(
     registrados: &[crate::updates::ProjectEntry],
+    ocultos: &[String],
     dir_base: &std::path::Path,
     cwd: &std::path::Path,
 ) -> Vec<(String, String, PathBuf)> {
     let mut vistos: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     vistos.insert(canon(cwd));
+    let ocultos_set: std::collections::HashSet<PathBuf> = ocultos
+        .iter()
+        .map(|o| canon(std::path::Path::new(o)))
+        .collect();
     let mut salida: Vec<(String, String, PathBuf)> = Vec::new();
-    if cwd.join("project.glass").is_file() {
+    if cwd.join("project.glass").is_file() && !ocultos_set.contains(&canon(cwd)) {
         salida.push((
             nombre_proyecto(cwd),
             "Proyecto • En este equipo".to_string(),
@@ -258,7 +349,8 @@ fn descubrir_proyectos(
         if !dir.join("project.glass").is_file() {
             continue;
         }
-        if vistos.insert(canon(&dir)) {
+        let c = canon(&dir);
+        if !ocultos_set.contains(&c) && vistos.insert(c) {
             salida.push((entry.name.clone(), "Proyecto • En este equipo".to_string(), dir));
         }
     }
@@ -288,7 +380,8 @@ fn descubrir_proyectos(
     }
     candidatas.sort_by(|a, b| a.0.cmp(&b.0));
     for (nombre, dir) in candidatas {
-        if vistos.insert(canon(&dir)) {
+        let c = canon(&dir);
+        if !ocultos_set.contains(&c) && vistos.insert(c) {
             salida.push((nombre, "Proyecto • En este equipo".to_string(), dir));
         }
     }
@@ -322,6 +415,9 @@ impl Default for LauncherPanel {
             plugin_rx: None,
             gpu_aviso: None,
             error_abrir: None,
+            accion_tarjeta: None,
+            renombrando: None,
+            confirmar_borrado: None,
             mostrar_carga: false,
             carga_dibujada: false,
         }
@@ -705,6 +801,29 @@ impl LauncherPanel {
         if response.clicked() {
             *action = Some(LauncherAction::OpenProject(dir.to_path_buf()));
         }
+        response.context_menu(|ui| {
+            if ui.button("Abrir").clicked() {
+                *action = Some(LauncherAction::OpenProject(dir.to_path_buf()));
+                ui.close();
+            }
+            if ui.button("Abrir carpeta contenedora").clicked() {
+                self.accion_tarjeta = Some(AccionTarjeta::AbrirContenedora(dir.to_path_buf()));
+                ui.close();
+            }
+            if ui.button("Renombrar…").clicked() {
+                self.accion_tarjeta = Some(AccionTarjeta::Renombrar(dir.to_path_buf()));
+                ui.close();
+            }
+            ui.separator();
+            if ui.button("Quitar de la lista").clicked() {
+                self.accion_tarjeta = Some(AccionTarjeta::Quitar(dir.to_path_buf()));
+                ui.close();
+            }
+            if ui.button("Eliminar del disco…").clicked() {
+                self.accion_tarjeta = Some(AccionTarjeta::Eliminar(dir.to_path_buf()));
+                ui.close();
+            }
+        });
     }
 
     /// Fila de lista estilo Hub viejo: nombre, descripción/ruta y un botón.
@@ -827,7 +946,7 @@ impl LauncherPanel {
         // doble carpeta de builds viejas. Sin duplicados.
         let filter = self.search_filter.to_lowercase();
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let projects = descubrir_proyectos(&self.update_store.projects, &default_projects_dir(), &cwd);
+        let projects = descubrir_proyectos(&self.update_store.projects, &self.update_store.ocultos, &default_projects_dir(), &cwd);
         let mut shown = 0;
         ui.spacing_mut().item_spacing = egui::vec2(14.0, 14.0);
         ui.horizontal_wrapped(|ui| {
@@ -841,6 +960,101 @@ impl LauncherPanel {
                 self.project_card(ui, name, desc, dir, action);
             }
         });
+        // Acción del menú contextual elegida en alguna tarjeta.
+        if let Some(accion) = self.accion_tarjeta.take() {
+            match accion {
+                AccionTarjeta::AbrirContenedora(dir) => abrir_carpeta_contenedora(&dir),
+                AccionTarjeta::Renombrar(dir) => {
+                    let nombre = nombre_proyecto(&dir);
+                    self.renombrando = Some((dir, nombre));
+                }
+                AccionTarjeta::Quitar(dir) => {
+                    self.update_store.quitar_de_la_lista(&dir);
+                    let _ = self.update_store.save();
+                }
+                AccionTarjeta::Eliminar(dir) => {
+                    self.confirmar_borrado = Some(dir);
+                }
+            }
+        }
+
+        // Ventana de renombrar.
+        if let Some((dir, mut texto)) = self.renombrando.take() {
+            let mut abierta = true;
+            let mut confirmar = false;
+            let mut cancelar = false;
+            egui::Window::new("Renombrar proyecto")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .open(&mut abierta)
+                .show(ui.ctx(), |ui| {
+                    ui.label("Nuevo nombre (también se renombra la carpeta en el disco):");
+                    ui.text_edit_singleline(&mut texto);
+                    ui.horizontal(|ui| {
+                        if ui.button("Renombrar").clicked() {
+                            confirmar = true;
+                        }
+                        if ui.button("Cancelar").clicked() {
+                            cancelar = true;
+                        }
+                    });
+                });
+            if confirmar {
+                match renombrar_proyecto(&mut self.update_store, &dir, &texto) {
+                    Ok(_) => {
+                        let _ = self.update_store.save();
+                        self.error_abrir = None;
+                    }
+                    Err(e) => self.error_abrir = Some(e),
+                }
+            } else if !cancelar && abierta {
+                self.renombrando = Some((dir, texto));
+            }
+        }
+
+        // Ventana de confirmación de borrado.
+        if let Some(dir) = self.confirmar_borrado.take() {
+            let mut abierta = true;
+            let mut confirmar = false;
+            let mut cancelar = false;
+            egui::Window::new("Eliminar proyecto del disco")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .open(&mut abierta)
+                .show(ui.ctx(), |ui| {
+                    ui.label(format!(
+                        "Se eliminará la carpeta entera del proyecto:\n{}\n\nEsta acción no se puede deshacer.",
+                        dir.display()
+                    ));
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add(egui::Button::new(
+                                RichText::new("Eliminar del disco").color(egui::Color32::from_rgb(220, 70, 50)),
+                            ))
+                            .clicked()
+                        {
+                            confirmar = true;
+                        }
+                        if ui.button("Cancelar").clicked() {
+                            cancelar = true;
+                        }
+                    });
+                });
+            if confirmar {
+                match eliminar_proyecto_del_disco(&mut self.update_store, &dir) {
+                    Ok(()) => {
+                        let _ = self.update_store.save();
+                        self.error_abrir = None;
+                    }
+                    Err(e) => self.error_abrir = Some(e),
+                }
+            } else if !cancelar && abierta {
+                self.confirmar_borrado = Some(dir);
+            }
+        }
+
         if projects.is_empty() {
             ui.label(
                 RichText::new(
@@ -1430,7 +1644,10 @@ impl LauncherPanel {
 
 #[cfg(test)]
 mod tests_descubrimiento {
-    use super::{abrir_carpeta_proyecto, canon, descubrir_proyectos, LauncherAction};
+    use super::{
+        abrir_carpeta_proyecto, canon, descubrir_proyectos, eliminar_proyecto_del_disco,
+        renombrar_proyecto, LauncherAction,
+    };
     use crate::updates::ProjectEntry;
     use std::path::PathBuf;
 
@@ -1464,7 +1681,7 @@ mod tests_descubrimiento {
             },
         ];
 
-        let salida = descubrir_proyectos(&registrados, &base, &proyecto_a);
+        let salida = descubrir_proyectos(&registrados, &[], &base, &proyecto_a);
         let rutas: Vec<PathBuf> = salida.iter().map(|(_, _, p)| canon(p)).collect();
 
         assert_eq!(salida.len(), 3);
@@ -1489,7 +1706,7 @@ mod tests_descubrimiento {
         std::fs::create_dir_all(&base).unwrap();
         std::fs::create_dir_all(&cwd).unwrap();
 
-        let salida = descubrir_proyectos(&[], &base, &cwd);
+        let salida = descubrir_proyectos(&[], &[], &base, &cwd);
 
         assert!(salida.is_empty());
 
@@ -1509,7 +1726,7 @@ mod tests_descubrimiento {
         std::fs::create_dir_all(&cwd).unwrap();
         std::fs::write(cwd.join("project.glass"), r#"{"name": "MiMotor"}"#).unwrap();
 
-        let salida = descubrir_proyectos(&[], &base, &cwd);
+        let salida = descubrir_proyectos(&[], &[], &base, &cwd);
         assert_eq!(salida.len(), 1);
         assert_eq!(salida[0].0, "MiMotor");
         assert_eq!(canon(&salida[0].2), canon(&cwd));
@@ -1519,7 +1736,7 @@ mod tests_descubrimiento {
             path: cwd.to_string_lossy().into_owned(),
             last_opened_unix: 1,
         }];
-        let salida = descubrir_proyectos(&registrados, &base, &cwd);
+        let salida = descubrir_proyectos(&registrados, &[], &base, &cwd);
         let rutas: Vec<PathBuf> = salida.iter().map(|(_, _, p)| canon(p)).collect();
         assert_eq!(salida.len(), 1);
         assert_eq!(salida[0].0, "MiMotor");
@@ -1551,6 +1768,83 @@ mod tests_descubrimiento {
         assert_eq!(store.projects.len(), 1);
         assert_eq!(store.projects[0].name, "ProyectoSeis");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn descubrir_filtra_los_ocultos_en_las_tres_fuentes() {
+        let raiz = std::env::temp_dir().join(format!("glass_hub_ocultos_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&raiz);
+        let base = raiz.join("base");
+        let escaneado = base.join("Escaneado");
+        let registrado = raiz.join("Registrado");
+        let cwd = raiz.join("DelCwd");
+        for d in [&escaneado, &registrado, &cwd] {
+            std::fs::create_dir_all(d).unwrap();
+            std::fs::write(d.join("project.glass"), "{}").unwrap();
+        }
+        let registrados = vec![crate::updates::ProjectEntry {
+            name: "Registrado".to_string(),
+            path: registrado.to_string_lossy().into_owned(),
+            last_opened_unix: 1,
+        }];
+        let ocultos = vec![
+            canon(&escaneado).to_string_lossy().into_owned(),
+            canon(&registrado).to_string_lossy().into_owned(),
+            canon(&cwd).to_string_lossy().into_owned(),
+        ];
+        let salida = descubrir_proyectos(&registrados, &ocultos, &base, &cwd);
+        assert!(salida.is_empty(), "ningún oculto debe listarse: {salida:?}");
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn quitar_de_la_lista_desregistra_y_oculta() {
+        let raiz = std::env::temp_dir().join(format!("glass_hub_quitar_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&raiz);
+        let dir = raiz.join("Proyecto");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut store = crate::updates::LauncherStore::default();
+        store.register_project("Proyecto", &dir);
+        assert_eq!(store.projects.len(), 1);
+        store.quitar_de_la_lista(&dir);
+        assert!(store.projects.is_empty());
+        assert!(store.esta_oculto(&dir));
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn renombrar_mueve_la_carpeta_y_actualiza_meta_y_registro() {
+        let raiz = std::env::temp_dir().join(format!("glass_hub_renombrar_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&raiz);
+        let dir = raiz.join("Viejo");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("project.glass"), "{\"name\": \"Viejo\"}").unwrap();
+        let mut store = crate::updates::LauncherStore::default();
+        store.register_project("Viejo", &dir);
+        let nueva = renombrar_proyecto(&mut store, &dir, "Nuevo").unwrap();
+        assert!(!dir.exists() && nueva.join("project.glass").is_file());
+        let meta: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(nueva.join("project.glass")).unwrap()).unwrap();
+        assert_eq!(meta["name"], "Nuevo");
+        assert_eq!(store.projects.len(), 1);
+        assert_eq!(store.projects[0].name, "Nuevo");
+        assert!(renombrar_proyecto(&mut store, &nueva, "con/barra").is_err());
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn eliminar_borra_la_carpeta_y_desregistra() {
+        let raiz = std::env::temp_dir().join(format!("glass_hub_eliminar_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&raiz);
+        let dir = raiz.join("Borrable");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("project.glass"), "{}").unwrap();
+        let mut store = crate::updates::LauncherStore::default();
+        store.register_project("Borrable", &dir);
+        eliminar_proyecto_del_disco(&mut store, &dir).unwrap();
+        assert!(!dir.exists());
+        assert!(store.projects.is_empty());
+        let _ = std::fs::remove_dir_all(&raiz);
     }
 
 }

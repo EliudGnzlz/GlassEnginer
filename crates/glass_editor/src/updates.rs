@@ -68,6 +68,11 @@ pub struct LauncherStore {
     /// launcher.json anteriores (sin este campo) sigan cargando.
     #[serde(default)]
     pub projects: Vec<ProjectEntry>,
+    /// Rutas canonicalizadas de proyectos quitados de la lista a mano:
+    /// el descubrimiento del Hub las filtra en las tres fuentes
+    /// (registro, escaneo y directorio de trabajo).
+    #[serde(default)]
+    pub ocultos: Vec<String>,
     /// Intervalo de autoguardado del editor en minutos (0 = desactivado).
     #[serde(default = "default_autosave_minutes")]
     pub autosave_minutes: u32,
@@ -87,6 +92,7 @@ impl Default for LauncherStore {
             repo: default_repo(),
             installations: Vec::new(),
             projects: Vec::new(),
+            ocultos: Vec::new(),
             autosave_minutes: default_autosave_minutes(),
         }
     }
@@ -157,6 +163,42 @@ impl LauncherStore {
                 last_opened_unix: now,
             });
         }
+    }
+
+    /// Ruta canonicalizada como texto, con fallback a la ruta tal cual.
+    fn canon_texto(path: &std::path::Path) -> String {
+        std::fs::canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// ¿Está esta ruta en la lista de ocultos? (comparación canonicalizada)
+    pub fn esta_oculto(&self, path: &std::path::Path) -> bool {
+        let canon = Self::canon_texto(path);
+        self.ocultos.contains(&canon)
+    }
+
+    /// Añade la ruta a la lista de ocultos (sin duplicados).
+    pub fn ocultar_proyecto(&mut self, path: &std::path::Path) {
+        let canon = Self::canon_texto(path);
+        if !self.ocultos.contains(&canon) {
+            self.ocultos.push(canon);
+        }
+    }
+
+    /// Quita la ruta del registro de proyectos (sin tocar los ocultos).
+    pub fn desregistrar_proyecto(&mut self, path: &std::path::Path) {
+        let canon = Self::canon_texto(path);
+        self.projects.retain(|e| Self::canon_texto(std::path::Path::new(&e.path)) != canon);
+    }
+
+    /// «Quitar de la lista»: desregistra y oculta, para que el proyecto
+    /// no reaparezca ni por el escaneo ni como proyecto del directorio
+    /// de trabajo.
+    pub fn quitar_de_la_lista(&mut self, path: &std::path::Path) {
+        self.desregistrar_proyecto(path);
+        self.ocultar_proyecto(path);
     }
 }
 

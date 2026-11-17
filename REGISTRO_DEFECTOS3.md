@@ -1026,3 +1026,45 @@ mano al módulo `tests_descubrimiento`, ampliando sus imports selectivos.
   lista. Extra verificado de paso: sin servicio de portal, `pick_folder`
   devuelve None y la app sigue viva sin hacer nada (degradación limpia,
   registrada por rfd en glass.log).
+
+## PUNTO 7 — MENÚ CONTEXTUAL EN LAS TARJETAS DE PROYECTO (CERRADO)
+
+**Capacidad nueva (bloque H2 del análisis Hub/Proyecto)**: las tarjetas no
+tenían menú contextual; los proyectos solo se podían abrir.
+
+**Arreglo** (paquete **DeepSeek V4 Flash**, 12.581 tokens; rescates de
+integración de Rayo: las tres funciones libres y los 4 tests se insertaron a
+mano porque sus pares no anclaron — el ancla de la función del punto 6 se
+escribió de memoria en el prompt y no coincidía; clippy cazó además un
+`iter().any()` sustituible por `contains()` en los métodos nuevos):
+- Clic derecho en una tarjeta → **Abrir · Abrir carpeta contenedora ·
+  Renombrar… · Quitar de la lista · Eliminar del disco…**. La acción elegida
+  se anota (`AccionTarjeta`) y se ejecuta al terminar la cuadrícula, sin
+  mutar el almacén mientras se pintan las tarjetas.
+- **Abrir carpeta contenedora**: `abrir_carpeta_contenedora()` lanza el
+  explorador del SO (explorer/open/xdg-open) sobre la carpeta padre.
+- **Renombrar**: ventana con el nombre actual; `renombrar_proyecto()` mueve
+  la carpeta en disco, reescribe el "name" del project.glass y refresca el
+  registro (valida vacío, barras y destino existente).
+- **Quitar de la lista**: `LauncherStore` gana el campo persistente
+  **`ocultos`** (serde default) y `quitar_de_la_lista()` = desregistrar +
+  ocultar; `descubrir_proyectos` filtra los ocultos en las TRES fuentes
+  (CWD, registro y escaneo), así un proyecto escaneado no resucita.
+- **Eliminar del disco…**: ventana de confirmación con la ruta y el aviso
+  de irreversibilidad; al confirmar, `eliminar_proyecto_del_disco()` borra
+  la carpeta entera y desregistra. Los errores se pintan en la línea de
+  error del Hub (la del punto 6).
+
+**Verificación**:
+- Suite glass_editor **111/111** (4 nuevos: filtro de ocultos en las tres
+  fuentes, quitar desregistra y oculta, renombrar mueve carpeta+meta+
+  registro y rechaza barras, eliminar borra y desregistra).
+- Pipeline local completo 5/5 a 0; CI verificado tras el push.
+- **Test físico PASS completo** (HOME aislado, un proyecto registrado y uno
+  escaneado): el menú sale con las 5 entradas; «Abrir carpeta contenedora»
+  lanzó xdg-open con la carpeta padre exacta (verificado con un xdg-open
+  instrumentado en el PATH); «Renombrar…» renombró la carpeta en disco, el
+  project.glass y la tarjeta; «Quitar de la lista» quitó la tarjeta,
+  desregistró y dejó la ruta en `ocultos` con la carpeta intacta;
+  «Eliminar del disco…» pidió confirmación con la ruta y borró la carpeta
+  y el registro.
