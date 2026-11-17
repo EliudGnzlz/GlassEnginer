@@ -49,12 +49,25 @@ pub struct Installation {
     pub installed_unix: u64,
 }
 
+/// Proyecto conocido por el Launcher (creado o abierto desde el Hub),
+/// viva donde viva en disco.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ProjectEntry {
+    pub name: String,
+    pub path: String,
+    pub last_opened_unix: u64,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LauncherStore {
     #[serde(default = "default_repo")]
     pub repo: String,
     #[serde(default)]
     pub installations: Vec<Installation>,
+    /// Registro persistente de proyectos. `serde(default)` para que los
+    /// launcher.json anteriores (sin este campo) sigan cargando.
+    #[serde(default)]
+    pub projects: Vec<ProjectEntry>,
 }
 
 fn default_repo() -> String {
@@ -66,6 +79,7 @@ impl Default for LauncherStore {
         Self {
             repo: default_repo(),
             installations: Vec::new(),
+            projects: Vec::new(),
         }
     }
 }
@@ -115,6 +129,26 @@ impl LauncherStore {
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
         let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
         std::fs::write(store_path(), text).map_err(|e| e.to_string())
+    }
+
+    /// Registra (o refresca) un proyecto. Las rutas se comparan
+    /// canonicalizadas, con fallback a la ruta tal cual si no existe.
+    pub fn register_project(&mut self, name: &str, path: &std::path::Path) {
+        let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let now = now_unix();
+        if let Some(entry) = self.projects.iter_mut().find(|e| {
+            let p = std::path::Path::new(&e.path);
+            std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()) == canon
+        }) {
+            entry.name = name.to_string();
+            entry.last_opened_unix = now;
+        } else {
+            self.projects.push(ProjectEntry {
+                name: name.to_string(),
+                path: canon.to_string_lossy().into_owned(),
+                last_opened_unix: now,
+            });
+        }
     }
 }
 
@@ -918,6 +952,34 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *glass.zip
         assert_eq!(n, 2);
         assert_eq!(std::fs::read(dir.join("glass_app")).unwrap(), b"BIN");
         assert_eq!(std::fs::read(dir.join("assets/version.txt")).unwrap(), b"9.9.9");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn registrar_proyecto_no_duplica_y_actualiza() {
+        let dir = std::env::temp_dir().join(format!(
+            "registrar_proyecto_no_duplica_y_actualiza_{}",
+            std::process::id()
+        ));
+        let mut store = LauncherStore::default();
+        store.register_project("Primero", &dir);
+        store.register_project("Segundo", &dir);
+        assert_eq!(store.projects.len(), 1);
+        assert_eq!(store.projects[0].name, "Segundo");
+        assert!(store.projects[0].last_opened_unix > 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn registrar_dos_proyectos_distintos() {
+        let dir = std::env::temp_dir().join(format!(
+            "registrar_dos_proyectos_distintos_{}",
+            std::process::id()
+        ));
+        let mut store = LauncherStore::default();
+        store.register_project("A", &dir.join("a"));
+        store.register_project("B", &dir.join("b"));
+        assert_eq!(store.projects.len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

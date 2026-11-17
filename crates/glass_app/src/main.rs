@@ -2950,6 +2950,13 @@ impl GlassEngineApp {
             name, template
         );
         let _ = std::fs::write(project_dir.join("project.glass"), meta);
+        // Registrar el proyecto en el almacén del Launcher: sin esto, un
+        // proyecto creado en una ubicación distinta de ~/GlassProjects
+        // nunca aparecía en la lista del Hub.
+        self.launcher.update_store.register_project(name, &project_dir);
+        if let Err(e) = self.launcher.update_store.save() {
+            log::error!("No se pudo guardar el registro de proyectos: {}", e);
+        }
 
         match template {
             ProjectTemplate::Platformer3D => {
@@ -4187,6 +4194,15 @@ let resueltos = colliders_resueltos(body, shape);
                         self.setup_empty_scene();
                     }
                     log::info!("Proyecto abierto: {:?} (escena: {:?}, cargada: {})", path, escena, cargada);
+                    // Registrar el proyecto abierto para que aparezca en el Hub.
+                    let nombre = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "Proyecto".to_string());
+                    self.launcher.update_store.register_project(&nombre, &path);
+                    if let Err(e) = self.launcher.update_store.save() {
+                        log::error!("No se pudo guardar el registro de proyectos: {}", e);
+                    }
                     self.app_mode = AppMode::Editor;
                 }
                 LauncherAction::OpenSceneFile(ruta) => {

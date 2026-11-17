@@ -186,6 +186,74 @@ fn default_projects_dir() -> PathBuf {
     PathBuf::from(home).join("GlassProjects")
 }
 
+/// Ruta canonicalizada, o la ruta tal cual si no se puede canonicalizar.
+fn canon(p: &std::path::Path) -> PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+}
+
+/// Lista de proyectos del Hub: tarjeta del CWD, después los registrados
+/// (más recientes primero, solo si siguen teniendo project.glass) y después
+/// el escaneo de `dir_base` (normal y heredado de doble carpeta). Cada ruta
+/// aparece una sola vez; el CWD gana sobre cualquier otra fuente.
+fn descubrir_proyectos(
+    registrados: &[crate::updates::ProjectEntry],
+    dir_base: &std::path::Path,
+    cwd: &std::path::Path,
+) -> Vec<(String, String, PathBuf)> {
+    let mut vistos: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    vistos.insert(canon(cwd));
+    let mut salida = vec![(
+        "GlassEnginer".to_string(),
+        "Proyecto del motor • En este equipo".to_string(),
+        cwd.to_path_buf(),
+    )];
+
+    // Registro persistente, más recientes primero.
+    let mut ordenados: Vec<&crate::updates::ProjectEntry> = registrados.iter().collect();
+    ordenados.sort_by_key(|e| std::cmp::Reverse(e.last_opened_unix));
+    for entry in ordenados {
+        let dir = PathBuf::from(&entry.path);
+        if !dir.join("project.glass").is_file() {
+            continue;
+        }
+        if vistos.insert(canon(&dir)) {
+            salida.push((entry.name.clone(), "Proyecto • En este equipo".to_string(), dir));
+        }
+    }
+
+    // Escaneo de la carpeta base: subcarpetas con project.glass y, si no lo
+    // tienen, un nivel más adentro (doble carpeta de builds viejas).
+    let mut candidatas: Vec<(String, PathBuf)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir_base) {
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            if dir.join("project.glass").is_file() {
+                let nombre = entry.file_name().to_string_lossy().into_owned();
+                candidatas.push((nombre, dir));
+            } else if let Ok(internas) = std::fs::read_dir(&dir) {
+                for interna in internas.flatten() {
+                    let dir_interna = interna.path();
+                    if dir_interna.is_dir() && dir_interna.join("project.glass").is_file() {
+                        let nombre = interna.file_name().to_string_lossy().into_owned();
+                        candidatas.push((nombre, dir_interna));
+                    }
+                }
+            }
+        }
+    }
+    candidatas.sort_by(|a, b| a.0.cmp(&b.0));
+    for (nombre, dir) in candidatas {
+        if vistos.insert(canon(&dir)) {
+            salida.push((nombre, "Proyecto • En este equipo".to_string(), dir));
+        }
+    }
+
+    salida
+}
+
 impl Default for LauncherPanel {
     fn default() -> Self {
         let name = "MyGlassGame".to_string();
@@ -533,6 +601,7 @@ impl LauncherPanel {
         name: &str,
         desc: &str,
         dir: &Path,
+        es_del_motor: bool,
         action: &mut Option<LauncherAction>,
     ) {
         let size = Vec2::new(232.0, 178.0);
@@ -573,7 +642,11 @@ impl LauncherPanel {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         if response.clicked() {
-            *action = Some(LauncherAction::OpenDefaultScene);
+            *action = Some(if es_del_motor {
+                LauncherAction::OpenDefaultScene
+            } else {
+                LauncherAction::OpenProject(dir.to_path_buf())
+            });
         }
     }
 
@@ -665,40 +738,14 @@ impl LauncherPanel {
         ui.add_space(12.0);
 
         // Cuadrícula de proyectos: cada uno en su cuadro, con la imagen de
-        // su escena y el nombre debajo. Primero el proyecto de trabajo del
-        // motor (el directorio desde el que se lanza el Hub); después, los
-        // proyectos encontrados en la carpeta de proyectos por defecto.
+        // su escena y el nombre debajo. La lista une el proyecto del
+        // directorio de trabajo, el registro persistente del Launcher
+        // (proyectos creados o abiertos, vivan donde vivan) y el escaneo
+        // de la carpeta de proyectos por defecto, incluido el heredado de
+        // doble carpeta de builds viejas. Sin duplicados.
         let filter = self.search_filter.to_lowercase();
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let mut projects: Vec<(String, String, PathBuf)> = vec![(
-            "GlassEnginer".to_string(),
-            "Proyecto del motor • En este equipo".to_string(),
-            cwd.clone(),
-        )];
-        // Escaneo: cada subcarpeta con project.glass es un proyecto. Se usa el
-        // nombre de la carpeta como nombre visible para no depender de serde_json.
-        let cwd_canon = std::fs::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone());
-        let mut scanned: Vec<(String, String, PathBuf)> = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(default_projects_dir()) {
-            for entry in entries.flatten() {
-                let dir = entry.path();
-                if !dir.is_dir() || !dir.join("project.glass").is_file() {
-                    continue;
-                }
-                // Evitar duplicar el proyecto del CWD.
-                let dir_canon = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
-                if dir_canon == cwd_canon {
-                    continue;
-                }
-                let name = dir
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                scanned.push((name, "Proyecto • En este equipo".to_string(), dir));
-            }
-        }
-        scanned.sort_by(|a, b| a.0.cmp(&b.0));
-        projects.extend(scanned);
+        let projects = descubrir_proyectos(&self.update_store.projects, &default_projects_dir(), &cwd);
         let mut shown = 0;
         ui.spacing_mut().item_spacing = egui::vec2(14.0, 14.0);
         ui.horizontal_wrapped(|ui| {
@@ -707,7 +754,12 @@ impl LauncherPanel {
                     continue;
                 }
                 shown += 1;
-                self.project_card(ui, name, desc, dir, action);
+                // La tarjeta del directorio de trabajo es el proyecto del
+                // motor: abre la escena por defecto. Todas las demás abren
+                // SU proyecto (antes todas abrían el por defecto: clicar un
+                // proyecto abría siempre el anterior).
+                let es_del_motor = canon(dir) == canon(&cwd);
+                self.project_card(ui, name, desc, dir, es_del_motor, action);
             }
         });
         if shown == 0 {
@@ -1286,5 +1338,55 @@ impl LauncherPanel {
             });
             self.plugin_rx = Some(rx);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_descubrimiento {
+    use super::{canon, descubrir_proyectos};
+    use crate::updates::ProjectEntry;
+    use std::path::PathBuf;
+
+    #[test]
+    fn descubre_registro_escaneo_y_legado_sin_duplicados() {
+        let raiz = std::env::temp_dir().join(format!(
+            "descubre_registro_escaneo_y_legado_sin_duplicados_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&raiz);
+        let base = raiz.join("base");
+        let proyecto_a = base.join("ProyectoA");
+        let legado = base.join("Legado").join("Legado");
+        let externo = raiz.join("externo").join("ProyectoExt");
+        let inexistente = raiz.join("NoExiste");
+        for d in [&proyecto_a, &legado, &externo] {
+            std::fs::create_dir_all(d).unwrap();
+            std::fs::write(d.join("project.glass"), "{}").unwrap();
+        }
+
+        let registrados = [
+            ProjectEntry {
+                name: "ProyectoExt".to_string(),
+                path: externo.to_string_lossy().into_owned(),
+                last_opened_unix: 2,
+            },
+            ProjectEntry {
+                name: "Fantasma".to_string(),
+                path: inexistente.to_string_lossy().into_owned(),
+                last_opened_unix: 1,
+            },
+        ];
+
+        let salida = descubrir_proyectos(&registrados, &base, &proyecto_a);
+        let rutas: Vec<PathBuf> = salida.iter().map(|(_, _, p)| canon(p)).collect();
+
+        assert_eq!(salida.len(), 3);
+        assert_eq!(salida[0].0, "GlassEnginer");
+        assert_eq!(rutas[0], canon(&proyecto_a));
+        assert_eq!(rutas[1], canon(&externo));
+        assert_eq!(rutas[2], canon(&legado));
+        assert!(!rutas.contains(&canon(&inexistente)));
+
+        let _ = std::fs::remove_dir_all(&raiz);
     }
 }
