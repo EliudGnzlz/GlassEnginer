@@ -190,7 +190,7 @@ pub fn crear_grafo(assets_root: &Path, nombre: &str) -> Result<PathBuf, String> 
     let base = nombre_sin_sufijo(nombre.trim(), &[".graph.json", ".json"]);
     validar_nombre(&base)?;
 
-    let dir = assets_root.join("shader_graphs");
+    let dir = subcarpeta(assets_root, "shader_graphs", "ShaderGraphs");
     if !dir.is_dir() {
         return Err(format!("No existe la carpeta {}", dir.display()));
     }
@@ -211,13 +211,30 @@ pub fn crear_grafo(assets_root: &Path, nombre: &str) -> Result<PathBuf, String> 
     Ok(destino)
 }
 
-/// Crea `assets/scenes/<Nombre>.scene.json` con la plantilla mínima.
+/// Subcarpeta de assets respetando la convención del proyecto abierto:
+/// si existe la variante con mayúscula inicial (`Scenes`), se usa esa;
+/// si no, la de minúsculas (`scenes`).
+pub fn subcarpeta(assets_root: &Path, minuscula: &str, mayuscula: &str) -> PathBuf {
+    let capitalizada = assets_root.join(mayuscula);
+    if capitalizada.is_dir() {
+        capitalizada
+    } else {
+        assets_root.join(minuscula)
+    }
+}
+
+/// Crea `<assets>/scenes/<Nombre>.scene.json` (o `Scenes/` si el proyecto
+/// usa mayúsculas) con la plantilla mínima.
 pub fn crear_escena(assets_root: &Path, nombre: &str) -> Result<PathBuf, String> {
+    crear_escena_en(&subcarpeta(assets_root, "scenes", "Scenes"), nombre)
+}
+
+/// Crea `<dir>/<Nombre>.scene.json` con la plantilla mínima.
+pub fn crear_escena_en(dir: &Path, nombre: &str) -> Result<PathBuf, String> {
     let base = nombre_sin_sufijo(nombre.trim(), &[".scene.json", ".json"]);
     validar_nombre(&base)?;
 
-    let dir = assets_root.join("scenes");
-    std::fs::create_dir_all(&dir)
+    std::fs::create_dir_all(dir)
         .map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
 
     let destino = dir.join(format!("{base}.scene.json"));
@@ -225,6 +242,27 @@ pub fn crear_escena(assets_root: &Path, nombre: &str) -> Result<PathBuf, String>
         return Err(format!("Ya existe {}", destino.display()));
     }
     std::fs::write(&destino, PLANTILLA_ESCENA)
+        .map_err(|e| format!("No se pudo escribir {}: {e}", destino.display()))?;
+    Ok(destino)
+}
+
+/// Crea `<assets>/materials/<Nombre>.material.json` (o `Materials/` si el
+/// proyecto usa mayúsculas) con un `MaterialData` por defecto.
+pub fn crear_material(assets_root: &Path, nombre: &str) -> Result<PathBuf, String> {
+    let base = nombre_sin_sufijo(nombre.trim(), &[".material.json", ".json"]);
+    validar_nombre(&base)?;
+
+    let dir = subcarpeta(assets_root, "materials", "Materials");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+
+    let destino = dir.join(format!("{base}.material.json"));
+    if destino.exists() {
+        return Err(format!("Ya existe {}", destino.display()));
+    }
+    let json = serde_json::to_string_pretty(&glass_core::MaterialData::default())
+        .map_err(|e| format!("No se pudo serializar el material: {e}"))?;
+    std::fs::write(&destino, json)
         .map_err(|e| format!("No se pudo escribir {}: {e}", destino.display()))?;
     Ok(destino)
 }
@@ -532,6 +570,9 @@ pub fn icono_para(nombre: &str, es_dir: bool) -> &'static str {
     if nombre.ends_with(".graph.json") {
         return "🎨";
     }
+    if nombre.ends_with(".material.json") {
+        return "🖌";
+    }
     let ext = nombre
         .rsplit('.')
         .next()
@@ -556,6 +597,44 @@ enum TipoCreacion {
     Script,
     Grafo,
     Escena,
+    Material,
+}
+
+impl TipoCreacion {
+    /// Nombre usado al crear desde un menú contextual con el campo
+    /// «Nombre:» vacío.
+    fn nombre_por_defecto(self) -> &'static str {
+        match self {
+            TipoCreacion::Carpeta => "NuevaCarpeta",
+            TipoCreacion::Script => "NuevoScript",
+            TipoCreacion::Grafo => "NuevoGrafo",
+            TipoCreacion::Escena => "NuevaEscena",
+            TipoCreacion::Material => "NuevoMaterial",
+        }
+    }
+}
+
+/// Submenú «➕ Crear» compartido por los menús contextuales del panel.
+/// Devuelve el tipo pulsado (si alguno) y cierra el menú.
+fn submenu_crear(ui: &mut egui::Ui) -> Option<TipoCreacion> {
+    ui.menu_button("➕ Crear", |ui| {
+        let mut elegido = None;
+        for (tipo, etiqueta) in [
+            (TipoCreacion::Carpeta, "📁 Carpeta"),
+            (TipoCreacion::Escena, "🎬 Escena"),
+            (TipoCreacion::Material, "🖌 Material"),
+            (TipoCreacion::Grafo, "🎨 Grafo de shaders"),
+            (TipoCreacion::Script, "📜 Script C#"),
+        ] {
+            if ui.button(etiqueta).clicked() {
+                elegido = Some(tipo);
+                ui.close();
+            }
+        }
+        elegido
+    })
+    .inner
+    .flatten()
 }
 
 /// Panel «Proyecto / Assets».
@@ -609,6 +688,19 @@ impl ProjectPanel {
         };
         panel.refrescar();
         panel
+    }
+
+    /// Re-enraíza el panel a la carpeta de assets del proyecto abierto
+    /// (`<proyecto>/Assets` o `<proyecto>/assets`). Crea la carpeta si
+    /// no existe, vuelve a la raíz y refresca la lista.
+    pub fn set_assets_root(&mut self, raiz: PathBuf) {
+        let _ = std::fs::create_dir_all(&raiz);
+        self.current_dir = raiz.clone();
+        self.assets_root = raiz;
+        self.seleccion = None;
+        self.rename_target = None;
+        self.arrastre_asset = None;
+        self.refrescar();
     }
 
     // --- utilidades internas -------------------------------------------------
@@ -779,21 +871,57 @@ impl ProjectPanel {
             self.set_error("Escribe un nombre antes de crear el asset");
             return;
         }
+        if self.ejecutar_creacion_con(tipo, nombre, None) {
+            self.nuevo_nombre.clear();
+        }
+    }
+
+    /// Crea el asset `tipo` con `nombre` (ya validado como no vacío).
+    /// `destino` solo se aplica a carpetas y escenas: materiales, grafos y
+    /// scripts viven en su carpeta canónica. Selecciona el resultado,
+    /// refresca y deja el mensaje de estado. Devuelve `true` si se creó.
+    fn ejecutar_creacion_con(
+        &mut self,
+        tipo: TipoCreacion,
+        nombre: String,
+        destino: Option<PathBuf>,
+    ) -> bool {
         let raiz_proyecto = self.raiz_proyecto();
         let resultado = match tipo {
-            TipoCreacion::Carpeta => crear_carpeta(&self.current_dir, &nombre),
+            TipoCreacion::Carpeta => crear_carpeta(
+                destino.as_deref().unwrap_or(self.current_dir.as_path()),
+                &nombre,
+            ),
             TipoCreacion::Script => crear_script_cs(&raiz_proyecto, &nombre),
             TipoCreacion::Grafo => crear_grafo(&self.assets_root, &nombre),
-            TipoCreacion::Escena => crear_escena(&self.assets_root, &nombre),
+            TipoCreacion::Escena => match destino {
+                Some(dir) => crear_escena_en(&dir, &nombre),
+                None => crear_escena(&self.assets_root, &nombre),
+            },
+            TipoCreacion::Material => crear_material(&self.assets_root, &nombre),
         };
         match resultado {
             Ok(ruta) => {
-                self.nuevo_nombre.clear();
                 self.seleccion = Some(ruta.clone());
                 self.refrescar();
                 self.set_info(format!("Creado: {}", ruta.display()));
+                true
             }
-            Err(e) => self.set_error(e),
+            Err(e) => {
+                self.set_error(e);
+                false
+            }
+        }
+    }
+
+    /// Nombre para una creación desde menú contextual: el del campo
+    /// «Nombre:» si hay algo escrito; si no, el nombre por defecto del tipo.
+    fn nombre_para_creacion(&self, tipo: TipoCreacion) -> String {
+        let escrito = self.nuevo_nombre.trim();
+        if escrito.is_empty() {
+            tipo.nombre_por_defecto().to_string()
+        } else {
+            escrito.to_string()
         }
     }
 
@@ -849,6 +977,9 @@ impl ProjectPanel {
             if ui.button("🎬 Escena").clicked() {
                 accion_crear = Some(TipoCreacion::Escena);
             }
+            if ui.button("🖌 Material").clicked() {
+                accion_crear = Some(TipoCreacion::Material);
+            }
         });
         if let Some(tipo) = accion_crear {
             self.ejecutar_creacion(tipo);
@@ -875,6 +1006,21 @@ impl ProjectPanel {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                // Fondo clicable de la zona visible. Se registra ANTES que los
+                // elementos para que estos queden encima y conserven su propio
+                // menú contextual; el clic derecho en hueco vacío cae aquí.
+                let fondo = ui.interact(
+                    ui.clip_rect(),
+                    ui.make_persistent_id("fondo_lista_assets"),
+                    egui::Sense::click(),
+                );
+                fondo.context_menu(|ui| {
+                    if let Some(tipo) = submenu_crear(ui) {
+                        let nombre = self.nombre_para_creacion(tipo);
+                        let destino = self.current_dir.clone();
+                        self.ejecutar_creacion_con(tipo, nombre, Some(destino));
+                    }
+                });
                 if self.entradas.is_empty() {
                     ui.label(egui::RichText::new("(carpeta vacía)").italics().weak());
                 }
@@ -889,6 +1035,7 @@ impl ProjectPanel {
                 let mut info: Option<String> = None;
                 let mut empezar_renombrado: Option<PathBuf> = None;
                 let mut eliminar: Option<PathBuf> = None;
+                let mut crear_contextual: Option<(TipoCreacion, PathBuf)> = None;
                 let mut accion_mover: Option<(PathBuf, PathBuf)> = None;
                 let mut confirmar_renombrado = false;
                 let mut cancelar_renombrado = false;
@@ -990,6 +1137,18 @@ impl ProjectPanel {
                         ui.label(egui::RichText::new(nombre.as_str()).strong());
                         ui.separator();
 
+                        if let Some(tipo) = submenu_crear(ui) {
+                            // Carpeta → se crea dentro de ella; archivo → en
+                            // la carpeta visible.
+                            let destino = if *es_dir {
+                                ruta.clone()
+                            } else {
+                                self.current_dir.clone()
+                            };
+                            crear_contextual = Some((tipo, destino));
+                        }
+                        ui.separator();
+
                         if ui.button("✏ Renombrar").clicked() {
                             empezar_renombrado = Some(ruta.clone());
                             ui.close();
@@ -1048,6 +1207,10 @@ impl ProjectPanel {
                 }
                 if let Some(r) = empezar_renombrado {
                     self.iniciar_renombrado(r);
+                }
+                if let Some((tipo, destino)) = crear_contextual {
+                    let nombre = self.nombre_para_creacion(tipo);
+                    self.ejecutar_creacion_con(tipo, nombre, Some(destino));
                 }
                 if let Some(r) = eliminar {
                     self.eliminar(r);
@@ -1139,6 +1302,64 @@ impl ProjectPanel {
 
 #[cfg(test)]
 mod tests {
+    /// Carpeta temporal única por test (proceso + instante).
+    fn dir_temporal_creacion(etiqueta: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "glass_editor_{etiqueta}_{}_{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("debe crearse el dir temporal");
+        dir
+    }
+
+    #[test]
+    fn crear_material_escribe_json_valido() {
+        let assets = dir_temporal_creacion("material");
+        let ruta = super::crear_material(&assets, "Rojo").expect("debe crear el material");
+        assert_eq!(ruta, assets.join("materials").join("Rojo.material.json"));
+
+        let texto = std::fs::read_to_string(&ruta).expect("debe poder leerse");
+        let _: glass_core::MaterialData =
+            serde_json::from_str(&texto).expect("debe ser un MaterialData válido");
+
+        assert!(super::crear_material(&assets, "Rojo").is_err());
+        let _ = std::fs::remove_dir_all(&assets);
+    }
+
+    #[test]
+    fn subcarpeta_respeta_la_convencion_existente() {
+        let assets = dir_temporal_creacion("subcarpeta");
+        assert_eq!(
+            super::subcarpeta(&assets, "scenes", "Scenes"),
+            assets.join("scenes")
+        );
+
+        std::fs::create_dir_all(assets.join("Scenes")).expect("debe crearse Scenes");
+        assert_eq!(
+            super::subcarpeta(&assets, "scenes", "Scenes"),
+            assets.join("Scenes")
+        );
+        let _ = std::fs::remove_dir_all(&assets);
+    }
+
+    #[test]
+    fn set_assets_root_reenraiza_y_refresca() {
+        let assets = dir_temporal_creacion("reenraizar");
+        std::fs::write(assets.join("Prueba.scene.json"), "{}").expect("debe escribirse");
+        std::fs::create_dir_all(assets.join("Scenes")).expect("debe crearse Scenes");
+
+        let mut panel = super::ProjectPanel::new();
+        panel.set_assets_root(assets.clone());
+
+        assert_eq!(panel.assets_root, assets);
+        assert_eq!(panel.current_dir, assets);
+        assert!(!panel.entradas.is_empty());
+        let _ = std::fs::remove_dir_all(&assets);
+    }
     use super::*;
 
     /// Directorio temporal único (sin crates externas).

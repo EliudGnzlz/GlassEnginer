@@ -2987,6 +2987,9 @@ impl GlassEngineApp {
         if let Err(e) = self.launcher.update_store.save() {
             log::error!("No se pudo guardar el registro de proyectos: {}", e);
         }
+        // El panel de proyecto apunta desde el primer momento a los
+        // assets del proyecto recién creado.
+        self.editor_layout.project.set_assets_root(project_dir.join("Assets"));
 
         match template {
             ProjectTemplate::Platformer3D => {
@@ -4249,6 +4252,18 @@ let resueltos = colliders_resueltos(body, shape);
                         self.setup_empty_scene();
                     }
                     log::info!("Proyecto abierto: {:?} (escena: {:?}, cargada: {})", path, escena, cargada);
+                    // El panel de proyecto muestra los assets DEL PROYECTO abierto,
+                    // no los del CWD: se respeta la convención que ya exista en
+                    // disco (`Assets` en los proyectos del Launcher, `assets` en
+                    // minúsculas en otros).
+                    let raiz_assets = if path.join("Assets").is_dir() {
+                        path.join("Assets")
+                    } else if path.join("assets").is_dir() {
+                        path.join("assets")
+                    } else {
+                        path.join("Assets")
+                    };
+                    self.editor_layout.project.set_assets_root(raiz_assets);
                     // Registrar el proyecto abierto para que aparezca en el Hub.
                     let nombre = path
                         .file_name()

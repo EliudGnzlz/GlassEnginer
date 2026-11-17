@@ -355,3 +355,74 @@ perpendicularidad entre anillos, nº de segmentos).
 
 **Consumo B7-8+10: Opus 21.065** (las correcciones de integración y el
 test físico, de Rayo: 0 tokens de API).
+
+## B9 — Estructura tipo Unity y crear con clic derecho — CERRADO
+
+**Reporte**: al abrir su proyecto, el panel Proyecto mostraba las
+carpetas y archivos del motor mezclados, no los assets del proyecto; y
+con clic derecho no se podía crear nada (pidió «verifica»).
+
+**Verificación del reporte (era cierto en lo esencial)**:
+- El menú contextual de cada elemento solo tenía Renombrar / Mover a… /
+  Eliminar: **ninguna creación con clic derecho**. Sí existía una barra
+  superior de creación (Carpeta/Script/Grafo/Escena con campo de
+  nombre), pero no es la vía que un usuario de Unity busca, y **no
+  incluía Material** pese a que el motor sí tiene assets de material
+  (`MaterialData` en `assets/materials/<nombre>.material.json`).
+- El panel estaba enraizado SIEMPRE en la carpeta `assets` del CWD del
+  proceso: nada lo re-enraizaba al abrir un proyecto, así que mostraba
+  los assets de la instalación (los del motor), no los del proyecto
+  abierto. La estructura de carpetas tipo Unity al crear el proyecto
+  (Assets/Scenes, Scripts, Materials, Models, Textures) ya existía
+  desde B1/B2; lo que faltaba era que el panel la mirara.
+
+**Arreglo**:
+- `ProjectPanel::set_assets_root(raiz)`: re-enraíza el panel (crea la
+  carpeta si falta, vuelve a la raíz y refresca). La App lo llama al
+  abrir un proyecto (`OpenProject`, respetando la convención que exista
+  en disco: `Assets` o `assets`) y al crear uno nuevo (su `Assets`).
+  El proyecto del CWD (el del motor) no cambia: sigue en `assets`.
+- Submenú **«➕ Crear»** en el menú contextual de cada elemento Y en el
+  del fondo del panel (clic derecho en hueco vacío, registrado antes
+  que los elementos para no robarles su menú): Carpeta, Escena,
+  Material, Grafo de shaders y Script C#. El destino de Carpeta/Escena
+  es la carpeta clicada (o la visible si se clicó un archivo o el
+  fondo); Material/Grafo/Script van a su carpeta canónica. El nombre
+  sale del campo «Nombre:» si hay algo escrito; si no, nombre por
+  defecto del tipo (NuevaCarpeta, NuevaEscena, NuevoMaterial…).
+- Tipo **Material** nuevo en todo el flujo: `crear_material` escribe un
+  `MaterialData::default()` serializado en la carpeta de materiales, la
+  barra de creación gana el botón «🖌 Material» y el icono 🖌 para
+  `.material.json`.
+- `subcarpeta(root, minúscula, Mayúscula)`: las creaciones de escenas,
+  materiales y grafos respetan la convención del proyecto abierto
+  (`Scenes`/`Materials` si existen; si no, minúsculas como en el repo).
+- `crear_escena_en(dir, nombre)`: la escena contextual se crea en la
+  carpeta pedida; `crear_escena` delega en ella.
+
+**Límite honesto (adyacente, fuera de B9)**: la RESOLUCIÓN de contenido
+de assets (materiales por nombre en el Inspector/renderer, precarga de
+modelos, AssetWatcher) sigue resolviendo contra el `assets` del CWD;
+el panel (navegación, creación, apertura de escenas y prefabs por ruta)
+ya sigue al proyecto abierto. Hacer todo el motor relativo al proyecto
+es un cambio mayor que no es lo que pedía este punto.
+
+**Paquete**: Opus 48.064 tokens (14 pares; corrección de integración de
+Rayo: el destino contextual usa la ruta y el tipo reales de la entrada
+en vez de reconstruirlos por nombre). Tests: `cargo test -p
+glass_editor` **94/94** (91 + 3 nuevos: material escribe JSON válido y
+relee como MaterialData, subcarpeta respeta la convención,
+set_assets_root re-enraíza y refresca).
+
+**Test físico PASS (VM, proyecto de usuario con estructura de
+plantilla)**: al abrirlo, el panel muestra SOLO sus carpetas
+(Materials, Models, Scenes, Scripts, Textures), sin un solo archivo
+del motor; clic derecho en el fondo → Crear → Carpeta crea
+`NuevaCarpeta` en su Assets (verificado en disco); clic derecho sobre
+Materials → Crear → Material crea `Materials/NuevoMaterial.material.json`
+con los 9 campos de MaterialData (JSON validado); clic derecho sobre
+la carpeta Scenes → Crear → Escena crea `Scenes/NuevaEscena.scene.json`
+DENTRO de Scenes (plantilla válida).
+
+**Consumo B9: Opus 48.064** (la corrección del destino contextual y el
+test físico, de Rayo: 0 tokens de API).
