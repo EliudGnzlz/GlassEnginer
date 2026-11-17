@@ -68,6 +68,13 @@ pub struct LauncherStore {
     /// launcher.json anteriores (sin este campo) sigan cargando.
     #[serde(default)]
     pub projects: Vec<ProjectEntry>,
+    /// Intervalo de autoguardado del editor en minutos (0 = desactivado).
+    #[serde(default = "default_autosave_minutes")]
+    pub autosave_minutes: u32,
+}
+
+fn default_autosave_minutes() -> u32 {
+    5
 }
 
 fn default_repo() -> String {
@@ -80,6 +87,7 @@ impl Default for LauncherStore {
             repo: default_repo(),
             installations: Vec::new(),
             projects: Vec::new(),
+            autosave_minutes: default_autosave_minutes(),
         }
     }
 }

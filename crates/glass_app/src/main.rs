@@ -1767,6 +1767,26 @@ struct GlassEngineApp {
     pub start_instant: std::time::Instant,
     #[cfg(feature = "editor")]
     pub pending_launcher_action: Option<LauncherAction>,
+    /// Ruta absoluta del archivo de la escena abierta (open_scene_file o
+    /// proyecto recién creado); None si la escena no tiene archivo (preset,
+    /// por defecto o nueva): su guardado pasa por «Save Scene As».
+    #[cfg(feature = "editor")]
+    ruta_escena_actual: Option<std::path::PathBuf>,
+    /// Nombre activo de la escena cuando se fijó la ruta; si el vigía del
+    /// editor anuncia otro nombre, la ruta ya no vale.
+    #[cfg(feature = "editor")]
+    nombre_escena_con_ruta: String,
+    /// Vuelta al Hub en espera de la decisión del diálogo de guardado.
+    #[cfg(feature = "editor")]
+    volver_al_hub_pendiente: bool,
+    /// Tras «Guardar» sin ruta se abrió «Save Scene As»: al cerrarse ese
+    /// diálogo se retoma (o se abandona) la vuelta al Hub pendiente.
+    #[cfg(feature = "editor")]
+    esperando_save_as: bool,
+    /// Último autoguardado (o arranque): el intervalo se mide desde aquí
+    /// y se reinicia en cada guardado hecho por la app.
+    #[cfg(feature = "editor")]
+    ultimo_autoguardado: std::time::Instant,
     /// La precarga de modelos y materiales ya se ejecutó (solo se hace una
     /// vez, al entrar al editor por primera vez).
     #[cfg(feature = "editor")]
@@ -2222,6 +2242,16 @@ impl GlassEngineApp {
             start_instant: std::time::Instant::now(),
             #[cfg(feature = "editor")]
             pending_launcher_action: None,
+            #[cfg(feature = "editor")]
+            ruta_escena_actual: None,
+            #[cfg(feature = "editor")]
+            nombre_escena_con_ruta: String::new(),
+            #[cfg(feature = "editor")]
+            volver_al_hub_pendiente: false,
+            #[cfg(feature = "editor")]
+            esperando_save_as: false,
+            #[cfg(feature = "editor")]
+            ultimo_autoguardado: std::time::Instant::now(),
             #[cfg(feature = "editor")]
             precarga_hecha: false,
             #[cfg(feature = "editor")]
@@ -2982,6 +3012,18 @@ impl GlassEngineApp {
             }
             Err(_) => log::error!("No se pudo bloquear la escena para guardarla ({})", scene_str),
         }
+        #[cfg(feature = "editor")]
+        {
+            self.ruta_escena_actual = Some(scene_path.clone());
+            self.nombre_escena_con_ruta = self
+                .scene_manager
+                .lock()
+                .map(|m| m.active_scene_name().to_string())
+                .unwrap_or_default();
+            if let Ok(sc) = self.scene_state.lock() {
+                self.editor_layout.marcar_guardada(&sc);
+            }
+        }
         log::info!("Proyecto '{}' creado y cargado en el editor: {:?}", name, project_dir);
     }
 
@@ -3002,6 +3044,17 @@ impl GlassEngineApp {
         };
         if cargada {
             self.bootstrap_scene_scripts_and_physics(scene_path);
+            #[cfg(feature = "editor")]
+            {
+                self.ruta_escena_actual = Some(std::path::PathBuf::from(scene_path));
+                self.nombre_escena_con_ruta =
+                    glass_core::scenes::short_scene_name(scene_path);
+                // Recién cargada = limpia, aunque el vigía no dispare (mismo
+                // nombre que la escena anterior, p. ej. SampleScene).
+                if let Ok(sc) = self.scene_state.lock() {
+                    self.editor_layout.marcar_guardada(&sc);
+                }
+            }
         }
         cargada
     }
@@ -4138,9 +4191,11 @@ let resueltos = colliders_resueltos(body, shape);
         if let Some(action) = accion_lista {
             match action {
                 LauncherAction::OpenDefaultScene => {
+                    self.ruta_escena_actual = None;
                     self.app_mode = AppMode::Editor;
                 }
                 LauncherAction::LoadSampleScene(preset) => {
+                    self.ruta_escena_actual = None;
                     match preset {
                         SampleScenePreset::PlatformerDemo => {
                             self.setup_interactive_platformer_scene();
@@ -6670,8 +6725,129 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
 
             if editor_layout.request_launcher {
                 editor_layout.request_launcher = false;
-                self.app_mode = AppMode::Launcher;
+                // Con cambios sin guardar no se vuelve al Hub a secas: se
+                // pide decisión (Guardar / No guardar / Cancelar).
+                let sucia = editor_layout.viewport.play_state == glass_editor::PlayState::Edit
+                    && matches!(scene_state.lock(), Ok(sc) if editor_layout.escena_sucia(&sc));
+                if sucia {
+                    self.volver_al_hub_pendiente = true;
+                    editor_layout.dialogo_guardar_cierre = true;
+                } else {
+                    self.app_mode = AppMode::Launcher;
+                }
                 self.egui_ctx.request_repaint();
+            }
+
+            // --- Guardado (B2): cambios de escena, decisión y autoguardado ---
+            if editor_layout
+                .cambio_escena
+                .take()
+                .is_some_and(|nombre| nombre != self.nombre_escena_con_ruta)
+            {
+                self.ruta_escena_actual = None;
+            }
+            // Defensa: si el nombre activo ya no es el de la ruta (p. ej. New
+            // Scene en este mismo frame, antes de que el vigía lo anuncie), la
+            // ruta se descarta y esta escena nunca se escribe sobre ese archivo.
+            if self.ruta_escena_actual.is_some()
+                && matches!(
+                    scene_manager.lock(),
+                    Ok(m) if m.active_scene_name() != self.nombre_escena_con_ruta.as_str()
+                )
+            {
+                self.ruta_escena_actual = None;
+            }
+            let en_edicion = editor_layout.viewport.play_state == glass_editor::PlayState::Edit;
+            if let Some(decision) = editor_layout.decision_cierre.take() {
+                match decision {
+                    glass_editor::DecisionCierre::Guardar => {
+                        if let Some(ruta) = self.ruta_escena_actual.clone() {
+                            let resultado = match scene_state.lock() {
+                                Ok(sc) => {
+                                    let r = sc
+                                        .save_to_json(&ruta.to_string_lossy())
+                                        .map_err(|e| format!("{e:?}"));
+                                    if r.is_ok() {
+                                        editor_layout.marcar_guardada(&sc);
+                                    }
+                                    r
+                                }
+                                Err(_) => Err("mutex de la escena envenenado".to_string()),
+                            };
+                            match resultado {
+                                Ok(()) => {
+                                    self.ultimo_autoguardado = std::time::Instant::now();
+                                    self.volver_al_hub_pendiente = false;
+                                    self.app_mode = AppMode::Launcher;
+                                    self.egui_ctx.request_repaint();
+                                }
+                                Err(e) => {
+                                    // Se queda en el editor y lo avisa.
+                                    self.volver_al_hub_pendiente = false;
+                                    log::error!("No se pudo guardar la escena en {}: {e}", ruta.display());
+                                    editor_layout.status_message = Some((
+                                        format!("No se pudo guardar la escena: {e}"),
+                                        std::time::Instant::now(),
+                                    ));
+                                }
+                            }
+                        } else {
+                            // Sin archivo: «Save Scene As» del editor; al
+                            // cerrarse se retoma la vuelta pendiente.
+                            editor_layout.save_as_name = match scene_manager.lock() {
+                                Ok(m) => m.active_scene_name().to_string(),
+                                Err(_) => "SampleScene".to_string(),
+                            };
+                            editor_layout.show_save_as_dialog = true;
+                            self.esperando_save_as = true;
+                        }
+                    }
+                    glass_editor::DecisionCierre::NoGuardar => {
+                        if let Ok(sc) = scene_state.lock() {
+                            editor_layout.marcar_guardada(&sc);
+                        }
+                        self.volver_al_hub_pendiente = false;
+                        self.app_mode = AppMode::Launcher;
+                        self.egui_ctx.request_repaint();
+                    }
+                    glass_editor::DecisionCierre::Cancelar => {
+                        self.volver_al_hub_pendiente = false;
+                    }
+                }
+            }
+            // La suciedad se RECALCULA tras la decisión: «No guardar» la
+            // acaba de limpiar y el autoguardado no debe resucitarla.
+            let sucia = en_edicion
+                && matches!(scene_state.lock(), Ok(sc) if editor_layout.escena_sucia(&sc));
+            if self.esperando_save_as && !editor_layout.show_save_as_dialog {
+                self.esperando_save_as = false;
+                // Guardado o cancelado, la espera termina aquí.
+                let volver = self.volver_al_hub_pendiente;
+                self.volver_al_hub_pendiente = false;
+                if volver && !sucia {
+                    self.app_mode = AppMode::Launcher;
+                    self.egui_ctx.request_repaint();
+                }
+            }
+            let toca_autoguardar = sucia
+                && !editor_layout.dialogo_guardar_cierre
+                && editor_layout.autosave_minutos > 0
+                && self.ultimo_autoguardado.elapsed()
+                    >= std::time::Duration::from_secs(u64::from(editor_layout.autosave_minutos) * 60);
+            if let Some(ruta) = self.ruta_escena_actual.as_ref().filter(|_| toca_autoguardar) {
+                // El intervalo se reinicia también si falla: se reintenta en
+                // el siguiente intervalo, no en cada frame.
+                self.ultimo_autoguardado = std::time::Instant::now();
+                match scene_state.lock() {
+                    Ok(sc) => match sc.save_to_json(&ruta.to_string_lossy()) {
+                        Ok(()) => {
+                            editor_layout.marcar_guardada(&sc);
+                            log::info!("Autoguardado de la escena en {}", ruta.display());
+                        }
+                        Err(e) => log::warn!("Autoguardado fallido en {}: {e:?}", ruta.display()),
+                    },
+                    Err(_) => log::warn!("Autoguardado omitido: mutex de la escena envenenado."),
+                }
             }
 
             if editor_layout.request_build_and_run {
@@ -7823,6 +7999,18 @@ impl ApplicationHandler for GlassEngineApp {
                 // en modo standalone/juego.
                 #[cfg(feature = "editor")]
                 if self.app_mode == AppMode::Editor && !self.is_standalone {
+                    // Con cambios sin guardar no se vuelve al Launcher a
+                    // secas: se pide decisión (Guardar / No guardar /
+                    // Cancelar) y la ventana se queda abierta.
+                    let sucia = self.editor_layout.viewport.play_state == glass_editor::PlayState::Edit
+                        && matches!(self.scene_state.lock(), Ok(sc) if self.editor_layout.escena_sucia(&sc));
+                    if sucia {
+                        log::info!("Cierre de ventana con cambios sin guardar: pidiendo decisión.");
+                        self.volver_al_hub_pendiente = true;
+                        self.editor_layout.dialogo_guardar_cierre = true;
+                        self.egui_ctx.request_repaint();
+                        return;
+                    }
                     log::info!("Cierre de ventana en el editor: volviendo al Launcher.");
                     self.app_mode = AppMode::Launcher;
                     return;

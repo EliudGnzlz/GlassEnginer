@@ -53,6 +53,21 @@ pub input_axes_edit: Option<Vec<glass_scripting::input_axes::InputAxisDef>>,
     /// Diálogo "Save Scene As" (equivalente al de Unity).
     pub show_save_as_dialog: bool,
     pub save_as_name: String,
+    /// Hash (undo::scene_hash) de la escena en el último guardado o carga:
+    /// si el hash actual difiere, la escena tiene cambios sin guardar.
+    hash_guardado: u64,
+    /// Nombre de la escena activa nueva cuando el vigía detecta un cambio
+    /// (carga o reemplazo); la app lo consume para invalidar su ruta.
+    pub cambio_escena: Option<String>,
+    /// Intervalo de autoguardado en minutos (0 = desactivado). Se carga
+    /// del almacén del Launcher y se persiste al cambiarlo.
+    pub autosave_minutos: u32,
+    /// Ventana «Preferencias del editor».
+    pub show_preferences_dialog: bool,
+    /// Diálogo «cambios sin guardar» abierto (lo pide la app al cerrar).
+    pub dialogo_guardar_cierre: bool,
+    /// Decisión del usuario en ese diálogo; la consume la app.
+    pub decision_cierre: Option<DecisionCierre>,
     /// Historial de deshacer/rehacer por instantáneas (módulo `undo`).
     pub undo_history: crate::undo::UndoHistory,
     /// Nombre de la escena activa visto en el último frame: si
@@ -99,6 +114,12 @@ impl EditorDockingLayout {
             input_axes_edit: None,
             show_save_as_dialog: false,
             save_as_name: String::new(),
+            hash_guardado: 0,
+            cambio_escena: None,
+            autosave_minutos: crate::updates::LauncherStore::load().autosave_minutes,
+            show_preferences_dialog: false,
+            dialogo_guardar_cierre: false,
+            decision_cierre: None,
             undo_history: crate::undo::UndoHistory::new(),
             undo_escena: String::new(),
             undo_suspendido: false,
@@ -223,6 +244,27 @@ impl EditorDockingLayout {
         true
     }
 
+    /// ¿La escena difiere del último guardado/carga? (Comparación por
+    /// hash de contenido: deshacer hasta el estado guardado la limpia.)
+    pub fn escena_sucia(&self, scene: &SceneState) -> bool {
+        crate::undo::scene_hash(&scene.entities, scene.next_entity_id) != self.hash_guardado
+    }
+
+    /// Marca la escena como guardada con su contenido actual.
+    pub fn marcar_guardada(&mut self, scene: &SceneState) {
+        self.hash_guardado = crate::undo::scene_hash(&scene.entities, scene.next_entity_id);
+    }
+}
+
+/// Decisión del usuario ante el diálogo de cambios sin guardar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecisionCierre {
+    Guardar,
+    NoGuardar,
+    Cancelar,
+}
+
+impl EditorDockingLayout {
     /// Guarda la escena activa en la ruta que dicta el `SceneManager`.
     ///
     /// Antes había tres copias del literal `"assets/scenes/SampleScene.scene.json"`,
@@ -263,6 +305,7 @@ impl EditorDockingLayout {
 
         let mensaje = match scene.save_to_json(&path.to_string_lossy()) {
             Ok(()) => {
+                self.hash_guardado = crate::undo::scene_hash(&scene.entities, scene.next_entity_id);
                 if save_as.is_some() {
                     // La escena pasa a "ser" ese archivo: el siguiente Ctrl+S
                     // reescribe esta clave en lugar de volver a preguntar.
@@ -453,6 +496,9 @@ impl EditorDockingLayout {
             ui.spacing_mut().item_spacing.x = 6.0;
             ui.menu_button("File", |ui| {
                 if ui.button("📁 New Scene\tCtrl+N").clicked() {
+                    if let Ok(mut m) = scene_manager.lock() {
+                        m.set_active_name("Untitled");
+                    }
                     if let Ok(mut sc) = scene_state.lock() {
                         sc.entities.clear();
                         sc.next_entity_id = 1;
@@ -510,6 +556,11 @@ impl EditorDockingLayout {
             });
 
             ui.menu_button("Edit", |ui| {
+                if ui.button("⚙ Preferencias...").clicked() {
+                    self.show_preferences_dialog = true;
+                    ui.close();
+                }
+                ui.separator();
                 if ui.add_enabled(self.undo_history.can_undo(), egui::Button::new("↩ Undo\tCtrl+Z")).clicked() {
                     if self.apply_history(scene_state, false) {
                         selected_id = self.hierarchy.selected_entity;
@@ -1070,9 +1121,11 @@ impl EditorDockingLayout {
             .map(|m| m.active_scene_name().to_string())
             .unwrap_or_default();
         if nombre_escena != self.undo_escena {
-            self.undo_escena = nombre_escena;
+            self.undo_escena = nombre_escena.clone();
+            self.cambio_escena = Some(nombre_escena);
             if let Ok(sc) = scene_state.lock() {
                 self.undo_history.reset(&sc.entities, sc.next_entity_id);
+                self.hash_guardado = crate::undo::scene_hash(&sc.entities, sc.next_entity_id);
             }
         }
         if self.viewport.play_state != PlayState::Edit {
@@ -1165,6 +1218,74 @@ impl EditorDockingLayout {
             if !open {
                 self.show_save_as_dialog = false;
             }
+        }
+
+        if self.show_preferences_dialog {
+            let mut open = true;
+            let mut cerrar = false;
+            egui::Window::new("⚙ Preferencias del editor")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    let cambiado = ui
+                        .horizontal(|ui| {
+                            ui.label("Autoguardado cada");
+                            ui.add(
+                                egui::DragValue::new(&mut self.autosave_minutos)
+                                    .range(0..=120)
+                                    .speed(1.0)
+                                    .suffix(" min"),
+                            )
+                            .changed()
+                        })
+                        .inner;
+                    ui.label("0 = desactivado. Por defecto, 5. Guarda la escena abierta cuando tiene cambios.");
+                    if cambiado {
+                        // Cargar-modificar-guardar FRESCO: el almacén también
+                        // guarda proyectos e instalaciones.
+                        let mut store = crate::updates::LauncherStore::load();
+                        store.autosave_minutes = self.autosave_minutos;
+                        if let Err(e) = store.save() {
+                            self.status_message = Some((
+                                format!("No se pudieron guardar las preferencias: {e:?}"),
+                                std::time::Instant::now(),
+                            ));
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("Cerrar").clicked() {
+                        cerrar = true;
+                    }
+                });
+            if !open || cerrar {
+                self.show_preferences_dialog = false;
+            }
+        }
+
+        if self.dialogo_guardar_cierre {
+            egui::Window::new("⚠ Cambios sin guardar")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ui.ctx(), |ui| {
+                    ui.label("La escena tiene cambios sin guardar. ¿Quieres guardarlos antes de salir del editor?");
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("💾 Guardar").clicked() {
+                            self.decision_cierre = Some(DecisionCierre::Guardar);
+                            self.dialogo_guardar_cierre = false;
+                        }
+                        if ui.button("No guardar").clicked() {
+                            self.decision_cierre = Some(DecisionCierre::NoGuardar);
+                            self.dialogo_guardar_cierre = false;
+                        }
+                        if ui.button("Cancelar").clicked() {
+                            self.decision_cierre = Some(DecisionCierre::Cancelar);
+                            self.dialogo_guardar_cierre = false;
+                        }
+                    });
+                });
         }
 
         if self.request_build_settings {
@@ -1424,5 +1545,30 @@ mod tests_puerta_herramienta_3d {
 
         layout.set_mesh_tool_enabled(true);
         assert!(layout.dock_state.find_tab(&EditorTab::MeshTool).is_some());
+    }
+}
+
+#[cfg(test)]
+mod tests_guardado {
+    use super::*;
+
+    #[test]
+    fn suciedad_por_contenido() {
+        let mut layout = EditorDockingLayout::new();
+        let mut escena = SceneState::new();
+
+        layout.marcar_guardada(&escena);
+        assert!(!layout.escena_sucia(&escena));
+
+        escena.next_entity_id += 1;
+        assert!(layout.escena_sucia(&escena));
+
+        // Volver al contenido guardado la limpia sola.
+        escena.next_entity_id -= 1;
+        assert!(!layout.escena_sucia(&escena));
+
+        escena.next_entity_id += 1;
+        layout.marcar_guardada(&escena);
+        assert!(!layout.escena_sucia(&escena));
     }
 }

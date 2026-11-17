@@ -8,7 +8,7 @@ pub mod tool_prefs;
 pub mod undo;
 pub mod updates;
 
-pub use docking::EditorDockingLayout;
+pub use docking::{DecisionCierre, EditorDockingLayout};
 pub use launcher::{AppMode, LauncherAction, LauncherPanel, ProjectTemplate, SampleScenePreset};
 pub use panels::{GameResolution, PlayState, ViewportTab};
 
