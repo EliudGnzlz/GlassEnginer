@@ -195,10 +195,24 @@ fn canon(p: &std::path::Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
-/// Lista de proyectos del Hub: tarjeta del CWD, después los registrados
-/// (más recientes primero, solo si siguen teniendo project.glass) y después
-/// el escaneo de `dir_base` (normal y heredado de doble carpeta). Cada ruta
-/// aparece una sola vez; el CWD gana sobre cualquier otra fuente.
+/// Nombre visible de un proyecto: el campo "name" de su `project.glass` si
+/// es un string no vacío; si no, el nombre de la carpeta; y si tampoco hay,
+/// "Proyecto".
+fn nombre_proyecto(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join("project.glass"))
+        .ok()
+        .and_then(|texto| serde_json::from_str::<serde_json::Value>(&texto).ok())
+        .and_then(|meta| meta.get("name").and_then(|n| n.as_str()).map(str::to_string))
+        .filter(|n| !n.trim().is_empty())
+        .or_else(|| dir.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "Proyecto".to_string())
+}
+
+/// Lista de proyectos del Hub: primero el CWD, pero SOLO si contiene un
+/// `project.glass` (como un proyecto más, con su nombre real); después los
+/// registrados (más recientes primero, solo si siguen teniendo project.glass)
+/// y después el escaneo de `dir_base` (normal y heredado de doble carpeta).
+/// Cada ruta aparece una sola vez; el CWD gana sobre cualquier otra fuente.
 fn descubrir_proyectos(
     registrados: &[crate::updates::ProjectEntry],
     dir_base: &std::path::Path,
@@ -206,11 +220,14 @@ fn descubrir_proyectos(
 ) -> Vec<(String, String, PathBuf)> {
     let mut vistos: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     vistos.insert(canon(cwd));
-    let mut salida = vec![(
-        "GlassEnginer".to_string(),
-        "Proyecto del motor • En este equipo".to_string(),
-        cwd.to_path_buf(),
-    )];
+    let mut salida: Vec<(String, String, PathBuf)> = Vec::new();
+    if cwd.join("project.glass").is_file() {
+        salida.push((
+            nombre_proyecto(cwd),
+            "Proyecto • En este equipo".to_string(),
+            cwd.to_path_buf(),
+        ));
+    }
 
     // Registro persistente, más recientes primero.
     let mut ordenados: Vec<&crate::updates::ProjectEntry> = registrados.iter().collect();
@@ -618,7 +635,6 @@ impl LauncherPanel {
         name: &str,
         desc: &str,
         dir: &Path,
-        es_del_motor: bool,
         action: &mut Option<LauncherAction>,
     ) {
         let size = Vec2::new(232.0, 178.0);
@@ -659,11 +675,7 @@ impl LauncherPanel {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         if response.clicked() {
-            *action = Some(if es_del_motor {
-                LauncherAction::OpenDefaultScene
-            } else {
-                LauncherAction::OpenProject(dir.to_path_buf())
-            });
+            *action = Some(LauncherAction::OpenProject(dir.to_path_buf()));
         }
     }
 
@@ -771,15 +783,20 @@ impl LauncherPanel {
                     continue;
                 }
                 shown += 1;
-                // La tarjeta del directorio de trabajo es el proyecto del
-                // motor: abre la escena por defecto. Todas las demás abren
-                // SU proyecto (antes todas abrían el por defecto: clicar un
-                // proyecto abría siempre el anterior).
-                let es_del_motor = canon(dir) == canon(&cwd);
-                self.project_card(ui, name, desc, dir, es_del_motor, action);
+                // Todas las tarjetas, incluida la del directorio de trabajo
+                // si tiene project.glass, abren SU proyecto.
+                self.project_card(ui, name, desc, dir, action);
             }
         });
-        if shown == 0 {
+        if projects.is_empty() {
+            ui.label(
+                RichText::new(
+                    "Todavía no hay proyectos en este equipo. Crea uno con «➕ Nuevo» o abre uno existente con «📂 Abrir».",
+                )
+                .size(12.0)
+                .color(TEXT_DIM),
+            );
+        } else if shown == 0 {
             ui.label(RichText::new("Ningún proyecto coincide con la búsqueda.").size(12.0).color(TEXT_DIM));
         }
         ui.add_space(4.0);
@@ -1398,11 +1415,62 @@ mod tests_descubrimiento {
         let rutas: Vec<PathBuf> = salida.iter().map(|(_, _, p)| canon(p)).collect();
 
         assert_eq!(salida.len(), 3);
-        assert_eq!(salida[0].0, "GlassEnginer");
+        assert_eq!(salida[0].0, "ProyectoA");
         assert_eq!(rutas[0], canon(&proyecto_a));
         assert_eq!(rutas[1], canon(&externo));
         assert_eq!(rutas[2], canon(&legado));
         assert!(!rutas.contains(&canon(&inexistente)));
+
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn cwd_sin_proyecto_no_aparece() {
+        let raiz = std::env::temp_dir().join(format!(
+            "cwd_sin_proyecto_no_aparece_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&raiz);
+        let base = raiz.join("base");
+        let cwd = raiz.join("Instalacion");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let salida = descubrir_proyectos(&[], &base, &cwd);
+
+        assert!(salida.is_empty());
+
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn cwd_con_nombre_en_el_meta_lo_usa() {
+        let raiz = std::env::temp_dir().join(format!(
+            "cwd_con_nombre_en_el_meta_lo_usa_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&raiz);
+        let base = raiz.join("base");
+        // El cwd cuelga de la base para que el escaneo también lo encuentre.
+        let cwd = base.join("MiCarpeta");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::write(cwd.join("project.glass"), r#"{"name": "MiMotor"}"#).unwrap();
+
+        let salida = descubrir_proyectos(&[], &base, &cwd);
+        assert_eq!(salida.len(), 1);
+        assert_eq!(salida[0].0, "MiMotor");
+        assert_eq!(canon(&salida[0].2), canon(&cwd));
+
+        let registrados = [ProjectEntry {
+            name: "MiCarpeta".to_string(),
+            path: cwd.to_string_lossy().into_owned(),
+            last_opened_unix: 1,
+        }];
+        let salida = descubrir_proyectos(&registrados, &base, &cwd);
+        let rutas: Vec<PathBuf> = salida.iter().map(|(_, _, p)| canon(p)).collect();
+        assert_eq!(salida.len(), 1);
+        assert_eq!(salida[0].0, "MiMotor");
+        assert_eq!(rutas[0], canon(&cwd));
 
         let _ = std::fs::remove_dir_all(&raiz);
     }

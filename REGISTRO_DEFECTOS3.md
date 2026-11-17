@@ -874,3 +874,44 @@ siguiente release.
 **Consumo: Opus 0 · DeepSeek 0 · Kimi 0** (auditoría, arreglo y tests
 de Rayo, en la clase de arreglos quirúrgicos directos con precedente:
 dock, B7, gizmo).
+
+---
+
+## PUNTO 5 — PROYECTO FANTASMA ROSADO DEL HUB — CERRADO (2026-11-17)
+
+**Reporte**: con el motor recién instalado salía siempre la tarjeta
+rosada «GlassEnginer — Proyecto del motor», aunque se borrara todo, y
+no se podía quitar.
+
+**Causa raíz**: `descubrir_proyectos` (launcher.rs) sembraba la
+tarjeta del directorio de trabajo INCONDICIONALMENTE como primera
+entrada, sin comprobar que ahí hubiera un proyecto. En una
+instalación el CWD es la carpeta de instalación: la tarjeta se
+fabricaba en cada pintado y, al no estar en ningún registro, era
+inamovible por construcción.
+
+**Arreglo** (paquete Opus, integrado por Rayo): la entrada del CWD
+solo se incluye si `cwd/project.glass` existe, y entonces como un
+proyecto más: nombre real con la nueva `nombre_proyecto` (campo
+"name" del project.glass; si no, el de la carpeta), descripción
+«Proyecto • En este equipo» y clic uniforme `OpenProject` (fuera el
+parámetro `es_del_motor` de `project_card` y su ruta especial
+OpenDefaultScene, que queda solo para el botón «Abrir» hasta el
+punto 6). La deduplicación por ruta canonizada se mantiene. Estado
+vacío diferenciado: sin proyectos → «Todavía no hay proyectos en
+este equipo. Crea uno con «➕ Nuevo» o abre uno existente con
+«📂 Abrir».»; con proyectos pero filtro sin coincidencias → el
+mensaje de búsqueda de siempre.
+
+**Verificación**: tests del descubrimiento 3/3 (el existente
+actualizado a la regla nueva + `cwd_sin_proyecto_no_aparece` +
+`cwd_con_nombre_en_el_meta_lo_usa`, que cubre también la no
+duplicación con registro y escaneo). Pipeline local 5/5 a 0. Test
+físico en dos ambientes: (a) HOME vacío y CWD sin project.glass
+(assets enlazados) → pestaña Proyectos SIN ninguna tarjeta y con el
+mensaje de vacío nuevo (captura p5_a.png); (b) mismo ambiente con un
+project.glass `{"name": "ProyectoFisico"}` en el CWD → la tarjeta
+aparece una vez, con ese nombre y la descripción normal (captura
+p5_b.png). Quitar/renombrar tarjetas es el punto 7 (menú contextual).
+
+**Consumo: Opus 14.225** · DeepSeek 0 · Kimi 0.
