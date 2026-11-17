@@ -264,3 +264,19 @@ lo cambie — este salto exige UNA instalación manual de la .3
 (AppImage en Linux). Desde la .3, las actualizaciones por el
 Launcher descargan e instalan enteras, verificado en la VM de
 punta a punta contra el paquete real.
+
+Cierre 8c: commit `21f89ba`, pipeline local exacto en verde y CI
+43986234373 success. Verificación física del código nuevo por el
+camino real: el Launcher con identidad v0.10.16.3-beta, contra el
+stub con la lista real de releases más una v0.10.16.4-beta ficticia
+cuyo asset es el .zip real de la .2 (25.628.039 bytes, digest el de
+la API), lo ofreció, lo descargó en streaming, verificó su SHA-256
+y lo instaló: la pestaña muestra «GlassEnginer v0.10.16.4-beta —
+✓ Instalada», con 252 archivos extraídos en
+`versions/0.10.16.4-beta/` (binario de 38,5 MB incluido), el store
+registró la instalación y no quedó ningún temporal. Publicado como
+**v0.10.16.3-beta** y pasada a completa/«Latest» como la .2.
+Consumo 8c: Opus 0 (implementación directa de Rayo: el diseño venía
+especificado —streaming + hash sobre archivo— y el arreglo es
+quirúrgico sobre `updates.rs`). Acumulado del bloque de defectos
+(2ª ronda + defecto 8 + 8c): **Opus 227.017**.
