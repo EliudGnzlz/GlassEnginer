@@ -182,6 +182,27 @@ pub fn select_gpu(devices: &[GpuDeviceInfo], preferred_gpu_name: Option<&str>) -
 /// mensaje (igvk64.dll, 2026-11-17). None si no hay nada que avisar.
 pub fn aviso_gpu(devices: &[GpuDeviceInfo], elegida: usize) -> Option<String> {
     let ganadora = devices.get(elegida)?;
+    // Aviso preventivo: la rama de drivers Intel 27.20.100.x (2021) ha cerrado
+    // el motor con un access violation en igvk64.dll al abrir un proyecto.
+    // Va antes que el resto porque debe avisar aunque no haya dedicada.
+    if !ganadora.es_discreta() && es_driver_intel_2021(ganadora) {
+        let (tercero, cuarto) = version_intel_windows(ganadora.driver_version);
+        let mut aviso = format!(
+            "La gráfica «{}» usa un controlador Intel antiguo ({}.{}; en Windows, \
+             la familia 2x.20.100.x de 2021) que puede cerrar el motor al abrir un \
+             proyecto. Actualiza el controlador de Intel desde la web del \
+             fabricante antes de trabajar.",
+            ganadora.name, tercero, cuarto
+        );
+        if let Some(dedicada) = devices.iter().find(|d| d.es_discreta()) {
+            aviso.push_str(&format!(
+                " Se detectó también la dedicada «{}»: puedes forzar su uso en \
+                 Configuración > Sistema > Pantalla > Gráficos.",
+                dedicada.name
+            ));
+        }
+        return Some(aviso);
+    }
     if ganadora.es_discreta() {
         return None;
     }
@@ -196,6 +217,125 @@ pub fn aviso_gpu(devices: &[GpuDeviceInfo], elegida: usize) -> Option<String> {
          el driver de la integrada: un driver antiguo puede fallar con Vulkan.",
         ganadora.name, discreta.name, motivo
     ))
+}
+
+/// Desempaqueta una versión de driver Vulkan en (mayor, menor, parche)
+/// con el empaquetado estándar VK_VERSION.
+pub fn version_driver_legible(raw: u32) -> (u32, u32, u32) {
+    (raw >> 22, (raw >> 12) & 0x3FF, raw & 0xFFF)
+}
+
+/// Versión de un driver Intel en Windows tal como la codifica Vulkan:
+/// (tercer componente, cuarto) = (raw >> 14, raw & 0x3FFF). El driver
+/// 27.20.100.9415 del Visor de eventos llega como (100, 9415); los
+/// drivers Intel de Windows NO usan el empaquetado estándar VK_VERSION
+/// (con él, ese mismo valor se leería 0.402.661).
+pub fn version_intel_windows(raw: u32) -> (u32, u32) {
+    (raw >> 14, raw & 0x3FFF)
+}
+
+/// Indica si la GPU es Intel con un driver de la era 2021 o anterior:
+/// tercer componente < 101 (la familia 100.x —en Windows, 2x.20.100.x—
+/// y todo lo anterior; la rama 101 llega en 2022). La 27.20.100.9415
+/// cerró el motor en el equipo de un probador con un access violation
+/// dentro de igvk64.dll al abrir un proyecto.
+pub fn es_driver_intel_2021(info: &GpuDeviceInfo) -> bool {
+    info.vendor_id == 0x8086 && version_intel_windows(info.driver_version).0 < 101
+}
+
+/// Enumeración ligera de GPUs sin ventana ni superficie.
+///
+/// Permite al proceso principal conocer las GPUs (nombre, driver) sin crear
+/// el contexto completo. `present_family` queda siempre en `None` porque sin
+/// superficie no se puede consultar. Ante cualquier error devuelve un Vec
+/// vacío y lo anota con `log::warn!`; nunca entra en pánico.
+pub fn enumerar_gpus() -> Vec<GpuDeviceInfo> {
+    // SAFETY: carga del loader de Vulkan del sistema; no hay otros requisitos.
+    let entry = match unsafe { ash::Entry::load() } {
+        Ok(entry) => entry,
+        Err(e) => {
+            log::warn!("enumerar_gpus: no se pudo cargar Vulkan: {e}");
+            return Vec::new();
+        }
+    };
+
+    let app_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
+    let create_info = vk::InstanceCreateInfo::default().application_info(&app_info);
+
+    // SAFETY: create_info y app_info viven hasta el final de la llamada.
+    let instance = match unsafe { entry.create_instance(&create_info, None) } {
+        Ok(instance) => instance,
+        Err(e) => {
+            log::warn!("enumerar_gpus: no se pudo crear la instancia Vulkan: {e}");
+            return Vec::new();
+        }
+    };
+
+    // SAFETY: la instancia es válida hasta destroy_instance, al final.
+    let fisicos = match unsafe { instance.enumerate_physical_devices() } {
+        Ok(fisicos) => fisicos,
+        Err(e) => {
+            log::warn!("enumerar_gpus: no se pudieron enumerar las GPUs: {e}");
+            Vec::new()
+        }
+    };
+
+    let mut gpus = Vec::with_capacity(fisicos.len());
+    for fisico in fisicos {
+        // SAFETY: `fisico` procede de esta instancia, que sigue viva.
+        let props = unsafe { instance.get_physical_device_properties(fisico) };
+        // SAFETY: Vulkan garantiza que device_name termina en NUL.
+        let name = unsafe { std::ffi::CStr::from_ptr(props.device_name.as_ptr()) }
+            .to_string_lossy()
+            .into_owned();
+
+        // SAFETY: igual que arriba.
+        let familias = unsafe { instance.get_physical_device_queue_family_properties(fisico) };
+        let graphics_family = familias
+            .iter()
+            .position(|f| f.queue_flags.contains(vk::QueueFlags::GRAPHICS))
+            .map(|i| i as u32);
+
+        // SAFETY: igual que arriba.
+        let swapchain_supported =
+            match unsafe { instance.enumerate_device_extension_properties(fisico) } {
+                Ok(extensiones) => extensiones.iter().any(|ext| {
+                    // SAFETY: Vulkan garantiza que extension_name termina en NUL.
+                    let nombre =
+                        unsafe { std::ffi::CStr::from_ptr(ext.extension_name.as_ptr()) };
+                    nombre == ash::khr::swapchain::NAME
+                }),
+                Err(e) => {
+                    log::warn!("enumerar_gpus: extensiones de «{name}» no disponibles: {e}");
+                    false
+                }
+            };
+
+        // SAFETY: igual que arriba.
+        let memoria = unsafe { instance.get_physical_device_memory_properties(fisico) };
+        let num_heaps = (memoria.memory_heap_count as usize).min(memoria.memory_heaps.len());
+        let local_vram_mb = memoria.memory_heaps[..num_heaps]
+            .iter()
+            .filter(|h| h.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL))
+            .map(|h| h.size)
+            .sum::<u64>()
+            / (1024 * 1024);
+
+        gpus.push(GpuDeviceInfo {
+            name,
+            device_type: props.device_type,
+            vendor_id: props.vendor_id,
+            driver_version: props.driver_version,
+            local_vram_mb,
+            graphics_family,
+            present_family: None,
+            swapchain_supported,
+        });
+    }
+
+    // SAFETY: no quedan objetos hijos de la instancia.
+    unsafe { instance.destroy_instance(None) };
+    gpus
 }
 
 impl VulkanContext {
@@ -527,6 +667,66 @@ impl Drop for VulkanContext {
 
 #[cfg(test)]
 mod tests {
+    /// Integrada Intel con el driver 27.20.100.9415, tal como lo
+    /// codifica Vulkan: (100 << 14) | 9415.
+    fn intel_2021() -> GpuDeviceInfo {
+        let mut i = intel();
+        i.vendor_id = 0x8086;
+        i.driver_version = (100 << 14) | 9415;
+        i
+    }
+
+    #[test]
+    fn version_driver_legible_desempaqueta() {
+        assert_eq!(
+            version_driver_legible((27 << 22) | (20 << 12) | 100),
+            (27, 20, 100)
+        );
+    }
+
+    #[test]
+    fn aviso_intel_2021_sin_dedicada_avisa() {
+        let aviso = aviso_gpu(&[intel_2021()], 0).expect("debe avisar del driver Intel 2021");
+        assert!(aviso.contains("2021"));
+    }
+
+    #[test]
+    fn aviso_intel_2021_con_dedicada_la_nombra() {
+        let dedicada = nvidia();
+        let nombre_dedicada = dedicada.name.clone();
+        let aviso =
+            aviso_gpu(&[intel_2021(), dedicada], 0).expect("debe avisar del driver Intel 2021");
+        assert!(aviso.contains("2021"));
+        assert!(aviso.contains(&nombre_dedicada));
+    }
+
+    #[test]
+    fn aviso_intel_moderno_no_es_2021() {
+        let mut i = intel();
+        i.vendor_id = 0x8086;
+        // Driver 31.0.101.2115, codificado como (101 << 14) | 2115.
+        i.driver_version = (101 << 14) | 2115;
+        assert!(aviso_gpu(&[i], 0).is_none());
+    }
+
+    #[test]
+    fn es_driver_intel_2021_solo_rama_27_20() {
+        assert!(es_driver_intel_2021(&intel_2021()));
+
+        // Otro 100.x (27.20.100.8729) también es de la era.
+        let mut otro_100 = intel_2021();
+        otro_100.driver_version = (100 << 14) | 8729;
+        assert!(es_driver_intel_2021(&otro_100));
+
+        // La rama 101 (2022) ya no.
+        let mut otra_rama = intel_2021();
+        otra_rama.driver_version = (101 << 14) | 2115;
+        assert!(!es_driver_intel_2021(&otra_rama));
+
+        let mut otro_vendor = intel_2021();
+        otro_vendor.vendor_id = 0x10de;
+        assert!(!es_driver_intel_2021(&otro_vendor));
+    }
     use super::*;
 
     fn gpu(

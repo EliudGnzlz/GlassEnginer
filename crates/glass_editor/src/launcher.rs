@@ -507,15 +507,21 @@ impl LauncherPanel {
             .show(ui, |ui| {
                 ui.add_space(16.0);
                 if let Some(aviso) = &self.gpu_aviso {
-                    ui.horizontal(|ui| {
-                        ui.add_space(24.0);
-                        ui.label(
-                            RichText::new(format!("⚠ {}", aviso))
-                                .size(12.5)
-                                .color(Color32::from_rgb(176, 124, 0)),
-                        );
-                        ui.add_space(24.0);
-                    });
+                    // Banda de aviso: el texto se parte en líneas al ancho
+                    // disponible (los diagnósticos son largos y en una sola
+                    // línea se salían de la ventana).
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin::symmetric(24, 0))
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(format!("⚠ {}", aviso))
+                                        .size(12.5)
+                                        .color(Color32::from_rgb(176, 124, 0)),
+                                )
+                                .wrap(),
+                            );
+                        });
                     ui.add_space(10.0);
                 }
                 egui::ScrollArea::vertical().show(ui, |ui| {

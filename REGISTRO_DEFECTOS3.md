@@ -915,3 +915,72 @@ aparece una vez, con ese nombre y la descripción normal (captura
 p5_b.png). Quitar/renombrar tarjetas es el punto 7 (menú contextual).
 
 **Consumo: Opus 14.225** · DeepSeek 0 · Kimi 0.
+
+---
+
+## BLOQUE WINDOWS — QUE NINGÚN CIERRE SEA MUDO — CERRADO (2026-11-17)
+
+**Origen**: el probador en Windows perdió el motor sin mensaje ni log
+(access violation en igvk64.dll 27.20.100.9415, driver Intel de 2021,
+al abrir el proyecto). Aprobado por D3m3tr10 como bloque completo,
+con su condición: sin conflictos con Vulkan — la secuencia arriesgada
+corre SOLO en el hijo y el arranque normal no se toca.
+
+**Tres piezas**:
+
+1. **Log a archivo + hook de panic** (`glass_app/src/logfile.rs`,
+   nuevo): todo el registro va a `glass.log` en la carpeta
+   GlassEnginer (rotación a `glass.log.old` a los 5 MiB) además de
+   stderr, con vaciado en cada escritura (si el proceso muere dentro
+   del driver, lo último ya está en disco). El hook de panic anota
+   `PANIC: mensaje (en archivo:línea)` reabriendo el archivo, sin
+   pasar por el mutex del logger. La ruta de datos duplica la regla
+   de `updates::data_root` porque glass_editor es opcional en
+   glass_app.
+2. **Aviso preventivo Intel 2021** (`context.rs`): si la GPU elegida
+   es una integrada Intel con driver de la era, el Hub lo avisa antes
+   de abrir nada, nombrando la dedicada si existe. **Corrección de
+   integración de Rayo**: los drivers Intel de Windows NO usan el
+   empaquetado estándar VK_VERSION — codifican (tercer componente,
+   cuarto) como (raw >> 14, raw & 0x3FFF); la 27.20.100.9415 llega
+   como (100, 9415). La detección usa `version_intel_windows` y la
+   regla «tercer componente < 101» (la rama 101 llega en 2022); con el
+   empaquetado estándar la 9415 se leería 0.402.661 y el aviso nunca
+   saltaría en el equipo real. La enumeración ligera `enumerar_gpus`
+   (solo instancia, sin ventana) alimenta la clave de la sonda.
+3. **Sonda Vulkan en proceso hijo** (`main.rs`): en el arranque
+   normal del editor (ni standalone ni tests), el padre enumera las
+   GPUs y, si la caché `gpu_probe.json` no cubre (versión del motor,
+   conjunto nombre+driver), lanza el mismo ejecutable con
+   `--gpu-probe`. El hijo crea ventana, contexto, renderer, compila
+   los materiales de grafo y sube 10 modelos, anunciando por stdout
+   `GLASS_PROBE_GPU` al crear el contexto y `GLASS_PROBE_OK` al
+   completar; el padre espera hasta 180 s leyendo su salida en un
+   hilo. Si el hijo muere o no completa, el padre sigue vivo, cachea
+   el fallo y el Hub muestra el diagnóstico (GPU, controlador legible
+   — para Intel en su formato 100.9415 —, la dedicada si existe y la
+   salida práctica). La banda del Hub ahora parte el texto en líneas
+   (antes se salía de la ventana) y el ⚠ ya no se duplica.
+
+**Condición de no-interferencia, verificada**: el padre solo enumera
+(con una instancia efímera que se destruye) y ESPERA a que el hijo
+termine antes de crear su propio contexto: nunca hay dos Vulkan
+activos a la vez y el arranque normal no cambia. En las tres
+arrancadas físicas el motor creó después su contexto y su Hub con
+normalidad.
+
+**Verificación**: pipeline local 5/5 a 0 (clippy cazó un
+`let_unit_value` en la sonda, corregido). Tests: renderer 75/75
+(5 nuevos del aviso Intel, con el valor real 1647815 del driver del
+probador), app 66/66 (formateador de pánico + diagnóstico). Test
+físico con HOME aislado: (1) primer arranque — el hijo ejecutó la
+secuencia entera (10 modelos subidos) dentro de `glass.log`, caché
+`ok` escrita, Hub sin banda; (2) segundo arranque — «resultado en
+caché correcto; no se repite», sin hijo; (3) caché sembrada en
+fallo — el Hub muestra la banda ámbar con el diagnóstico completo
+en dos líneas (capturas win_1/win_4.png). El aviso Intel no es
+reproducible en la VM (no hay GPU Intel): cubierto por tests con la
+codificación real.
+
+**Consumo: Opus 73.209** (AB 26.578 · C intento vacío 11.450 ·
+C 35.181) · DeepSeek 0 · Kimi 0.

@@ -35,6 +35,7 @@ mod canvas_ui;
 mod luces_objeto;
 mod ibl;
 mod mouse_input;
+mod logfile;
 
 use std::ffi::CStr;
 use std::path::Path;
@@ -7200,6 +7201,11 @@ impl ApplicationHandler for GlassEngineApp {
         {
             // El aviso de GPU (si lo hay) se muestra como banda en el Hub.
             self.launcher.gpu_aviso = vk_ctx.gpu_aviso.clone();
+            // El diagnóstico de la sonda manda sobre el aviso de selección:
+            // es el problema confirmado por el hijo, no el posible.
+            if let Some(Some(diagnostico)) = DIAGNOSTICO_SONDA.get() {
+                self.launcher.gpu_aviso = Some(diagnostico.clone());
+            }
         }
         self.vulkan_context = Some(vk_ctx);
         self.window = Some(window);
@@ -8618,10 +8624,368 @@ fn registrar_muestra_frame(
     });
 }
 
+// ─── Sonda de GPU (proceso hijo) ────────────────────────────────────────────
+//
+// El modo `--gpu-probe` existe en todos los builds: el padre solo lo lanza con
+// la feature `editor`, pero el binario siempre sabe actuar como hijo.
+
+/// Punto de entrada del proceso hijo de la sonda. Sale con código 0 si la
+/// secuencia gráfica terminó, 2 si falló de forma controlada. Si el driver
+/// revienta, el proceso muere y el padre lo detecta por el código y por la
+/// ausencia del marcador `GLASS_PROBE_OK`.
+fn ejecutar_sonda_hijo() -> Result<(), Box<dyn std::error::Error>> {
+    log::info!("Sonda de GPU: proceso hijo iniciado.");
+    let mut builder = EventLoop::builder();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        if std::env::var("WINIT_UNIX_BACKEND").as_deref() == Ok("x11") || std::env::var("DISPLAY").is_ok() {
+            log::info!("Sonda de GPU: forzando backend X11/XWayland en Winit, igual que el arranque normal.");
+            builder.with_x11();
+        }
+    }
+    let event_loop = builder.build()?;
+    let mut sonda = SondaGpuApp {
+        hecho: false,
+        exito: false,
+    };
+    event_loop.run_app(&mut sonda)?;
+    std::process::exit(if sonda.exito { 0 } else { 2 })
+}
+
+/// Aplicación mínima del hijo: ejecuta la secuencia una sola vez en el primer
+/// `resumed` y sale del bucle.
+struct SondaGpuApp {
+    hecho: bool,
+    exito: bool,
+}
+
+impl ApplicationHandler for SondaGpuApp {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.hecho {
+            return;
+        }
+        self.hecho = true;
+        self.exito = secuencia_sonda(event_loop);
+        event_loop.exit();
+    }
+
+    fn window_event(&mut self, _event_loop: &ActiveEventLoop, _window_id: WindowId, _event: WindowEvent) {
+        // Nada que hacer: la ventana se destruye al terminar la secuencia.
+    }
+}
+
+/// Escribe una línea de protocolo para el padre y vacía stdout en el acto, para
+/// que llegue aunque el proceso muera justo después.
+fn emitir_linea_sonda(linea: &str) {
+    println!("{linea}");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+}
+
+/// Recoge recursivamente las rutas `.glb` bajo `dir`. Los directorios
+/// ilegibles se ignoran.
+fn recoger_glb(dir: &std::path::Path, salida: &mut Vec<std::path::PathBuf>) {
+    let Ok(entradas) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entrada in entradas.flatten() {
+        let ruta = entrada.path();
+        if ruta.is_dir() {
+            recoger_glb(&ruta, salida);
+        } else if ruta.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("glb")) {
+            salida.push(ruta);
+        }
+    }
+}
+
+/// Reproduce la secuencia que hace caer a algunos drivers al abrir un
+/// proyecto: contexto Vulkan, pipelines de materiales de grafo y subida de
+/// modelos. Devuelve `true` si llegó al final.
+fn secuencia_sonda(event_loop: &ActiveEventLoop) -> bool {
+    // Orden de declaración: ventana → contexto → renderer → mallas. Al salir se
+    // destruyen en orden inverso (mallas, renderer, contexto, ventana).
+    let window = match GlassWindow::new(
+        event_loop,
+        &WindowConfig {
+            title: "GlassEngine — comprobación de gráficos".to_string(),
+            ..Default::default()
+        },
+    ) {
+        Ok(window) => window,
+        Err(e) => {
+            log::error!("Sonda de GPU: no se pudo crear la ventana: {e:?}");
+            return false;
+        }
+    };
+
+    let vk_ctx = match VulkanContext::new(&window, VulkanConfig::default()) {
+        Ok(vk_ctx) => vk_ctx,
+        Err(e) => {
+            log::error!("Sonda de GPU: no se pudo crear el contexto Vulkan: {e:?}");
+            return false;
+        }
+    };
+
+    let nombre_gpu = unsafe { std::ffi::CStr::from_ptr(vk_ctx.physical_device_properties.device_name.as_ptr()) }
+        .to_string_lossy()
+        .into_owned();
+    let driver_version = vk_ctx.physical_device_properties.driver_version;
+    log::info!("Sonda de GPU: GPU seleccionada «{nombre_gpu}» (driver_version {driver_version}).");
+    emitir_linea_sonda(&format!("GLASS_PROBE_GPU\t{nombre_gpu}\t{driver_version}"));
+
+    let mut renderer = match GlassRenderer::new(&vk_ctx, 1280, 720) {
+        Ok(renderer) => renderer,
+        Err(e) => {
+            log::error!("Sonda de GPU: no se pudo crear el renderer: {e:?}");
+            return false;
+        }
+    };
+
+    // Compilación de los pipelines de grafo: aquí se produjo el cierre real.
+    log::info!("Sonda de GPU: compilando los pipelines de materiales de grafo...");
+    renderer.load_graph_materials(std::path::Path::new("assets/shaders"));
+
+    // Subidas acotadas: los 10 primeros .glb en orden de ruta.
+    let mut rutas = Vec::new();
+    recoger_glb(std::path::Path::new("assets/models"), &mut rutas);
+    rutas.sort();
+    let mut subidos = Vec::new();
+    for ruta in rutas.iter().take(10) {
+        let bytes = match std::fs::read(ruta) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                log::warn!("Sonda de GPU: no se pudo leer {}: {e}", ruta.display());
+                continue;
+            }
+        };
+        // Un modelo corrupto no es un veredicto del driver: se anota y se sigue.
+        let model = match MeshLoader::load_model_from_glb_bytes(&bytes) {
+            Ok(model) => model,
+            Err(e) => {
+                log::warn!("Sonda de GPU: no se pudo parsear {}: {e:?}", ruta.display());
+                continue;
+            }
+        };
+        let upload_res = {
+            let mut alloc = renderer.allocator.lock().unwrap();
+            MeshLoader::upload_to_gpu(
+                &renderer.device,
+                &mut alloc,
+                &model.vertices,
+                &model.indices,
+                vk_ctx.graphics_queue,
+                renderer.command_pool,
+            )
+        };
+        match upload_res {
+            Ok(malla) => subidos.push(malla),
+            Err(e) => log::warn!("Sonda de GPU: no se pudo subir {}: {e:?}", ruta.display()),
+        }
+    }
+
+    unsafe {
+        let _ = renderer.device.device_wait_idle();
+    }
+    log::info!("Sonda de GPU: secuencia completada ({} modelos subidos).", subidos.len());
+    emitir_linea_sonda("GLASS_PROBE_OK");
+    true
+}
+
+// ─── Sonda de GPU (proceso padre) ───────────────────────────────────────────
+
+/// Diagnóstico calculado en `main()` antes del bucle de eventos; `resumed()` lo
+/// lleva a la banda del Hub.
+#[cfg(feature = "editor")]
+static DIAGNOSTICO_SONDA: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Texto de la banda del Hub cuando la sonda falla en la GPU `seleccionada`.
+/// Función pura: solo depende de sus argumentos.
+#[cfg(any(feature = "editor", test))]
+fn texto_diagnostico_sonda(seleccionada: &str, gpus: &[glass_renderer::context::GpuDeviceInfo]) -> String {
+    let version = gpus.iter().find(|g| g.name == seleccionada).map(|g| {
+        if g.vendor_id == 0x8086 {
+            let v = glass_renderer::context::version_intel_windows(g.driver_version);
+            format!("{}.{}", v.0, v.1)
+        } else {
+            let v = glass_renderer::context::version_driver_legible(g.driver_version);
+            format!("{}.{}.{}", v.0, v.1, v.2)
+        }
+    });
+    let mut texto = match version {
+        Some(version) => format!(
+            "La comprobación de gráficos falló en la GPU «{seleccionada}» (controlador {version}): ese controlador puede cerrar el motor al abrir un proyecto."
+        ),
+        None => format!(
+            "La comprobación de gráficos falló en la GPU «{seleccionada}»: ese controlador puede cerrar el motor al abrir un proyecto."
+        ),
+    };
+    if let Some(dedicada) = gpus.iter().find(|g| g.es_discreta() && g.name != seleccionada) {
+        texto.push_str(&format!(
+            " Se detectó también la dedicada «{}»: fuerza su uso en Configuración > Sistema > Pantalla > Gráficos.",
+            dedicada.name
+        ));
+    }
+    texto.push_str(
+        " Actualiza el controlador desde la web del fabricante. El detalle quedó en el registro (glass.log, en la carpeta GlassEnginer).",
+    );
+    texto
+}
+
+/// Ejecuta la sonda en un proceso hijo si no hay un resultado en caché para
+/// este conjunto de GPUs, drivers y versión del motor. Devuelve el texto de
+/// diagnóstico si la sonda falló.
+#[cfg(feature = "editor")]
+fn comprobar_sonda_gpu() -> Option<String> {
+    let gpus = glass_renderer::context::enumerar_gpus();
+    if gpus.is_empty() {
+        log::warn!("Sonda de GPU: no se enumeró ninguna GPU; se omite la comprobación.");
+        return None;
+    }
+
+    // Clave de la caché: pares (nombre, driver) ordenados por nombre.
+    let mut clave: Vec<(String, u32)> = gpus.iter().map(|g| (g.name.clone(), g.driver_version)).collect();
+    clave.sort();
+    let clave_json = serde_json::json!(clave);
+    let ruta_cache = glass_editor::updates::data_root().join("gpu_probe.json");
+
+    if let Some(cache) = std::fs::read_to_string(&ruta_cache)
+        .ok()
+        .and_then(|texto| serde_json::from_str::<serde_json::Value>(&texto).ok())
+    {
+        if cache["motor"].as_str() == Some(glass_editor::updates::ENGINE_VERSION) && cache["gpus"] == clave_json {
+            match cache["resultado"].as_str() {
+                Some("ok") => {
+                    log::info!("Sonda de GPU: resultado en caché correcto; no se repite.");
+                    return None;
+                }
+                Some("fallo") => {
+                    let seleccionada = cache["seleccionada"].as_str().unwrap_or_default();
+                    log::warn!("Sonda de GPU: resultado en caché de fallo en «{seleccionada}».");
+                    return Some(texto_diagnostico_sonda(seleccionada, &gpus));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => {
+            log::warn!("Sonda de GPU: no se pudo localizar el ejecutable: {e}");
+            return None;
+        }
+    };
+    log::info!("Sonda de GPU: lanzando el proceso hijo de comprobación...");
+    let mut hijo = match std::process::Command::new(&exe)
+        .arg("--gpu-probe")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(hijo) => hijo,
+        Err(e) => {
+            log::warn!("Sonda de GPU: no se pudo lanzar el proceso hijo: {e}");
+            return None;
+        }
+    };
+
+    // stdout se lee en un hilo mientras el hijo corre, para que una salida
+    // abundante no llene la tubería y bloquee al hijo.
+    let lector = hijo.stdout.take().map(|mut stdout| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut stdout, &mut bytes);
+            String::from_utf8_lossy(&bytes).into_owned()
+        })
+    });
+
+    let inicio = std::time::Instant::now();
+    let limite = std::time::Duration::from_secs(180);
+    let estado = loop {
+        match hijo.try_wait() {
+            Ok(Some(estado)) => break Some(estado),
+            Ok(None) => {
+                if inicio.elapsed() >= limite {
+                    log::error!("Sonda de GPU: el hijo superó {} s; se termina.", limite.as_secs());
+                    let _ = hijo.kill();
+                    let _ = hijo.wait();
+                    break None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => {
+                log::error!("Sonda de GPU: error esperando al hijo: {e}");
+                let _ = hijo.kill();
+                let _ = hijo.wait();
+                break None;
+            }
+        }
+    };
+    let salida = lector.and_then(|hilo| hilo.join().ok()).unwrap_or_default();
+
+    let mut gpu_hijo: Option<String> = None;
+    let mut marcador_ok = false;
+    for linea in salida.lines() {
+        if let Some(resto) = linea.strip_prefix("GLASS_PROBE_GPU\t") {
+            let (nombre, driver) = resto.split_once('\t').unwrap_or((resto, ""));
+            log::info!("Sonda de GPU: el hijo usó «{nombre}» (driver_version {driver}).");
+            gpu_hijo = Some(nombre.to_string());
+        } else if linea == "GLASS_PROBE_OK" {
+            marcador_ok = true;
+        }
+    }
+
+    let exito = estado.is_some_and(|estado| estado.success()) && marcador_ok;
+    let seleccionada = gpu_hijo.unwrap_or_else(|| {
+        gpus.iter()
+            .find(|g| g.es_discreta())
+            .unwrap_or(&gpus[0])
+            .name
+            .clone()
+    });
+    if exito {
+        log::info!("Sonda de GPU: comprobación correcta en «{seleccionada}».");
+    } else {
+        log::error!(
+            "Sonda de GPU: comprobación FALLIDA en «{seleccionada}» (código {:?}, marcador OK: {marcador_ok}).",
+            estado.and_then(|estado| estado.code())
+        );
+    }
+
+    let cache = serde_json::json!({
+        "motor": glass_editor::updates::ENGINE_VERSION,
+        "gpus": clave_json,
+        "seleccionada": seleccionada,
+        "resultado": if exito { "ok" } else { "fallo" },
+    });
+    if let Some(dir) = ruta_cache.parent() {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            log::warn!("Sonda de GPU: no se pudo crear {}: {e}", dir.display());
+        }
+    }
+    if let Err(e) = std::fs::write(&ruta_cache, cache.to_string()) {
+        log::warn!("Sonda de GPU: no se pudo escribir {}: {e}", ruta_cache.display());
+    }
+
+    if exito {
+        None
+    } else {
+        Some(texto_diagnostico_sonda(&seleccionada, &gpus))
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    let ruta_log = logfile::iniciar();
+    log::info!("Registro de la sesión en {}", ruta_log.display());
 
     let args: Vec<String> = std::env::args().collect();
+
+    // Modo hijo de la sonda de GPU: ejecuta la secuencia gráfica arriesgada
+    // en este proceso desechable (ver `ejecutar_sonda_hijo`).
+    if args.iter().any(|arg| arg == "--gpu-probe") {
+        return ejecutar_sonda_hijo();
+    }
 
     // Modo Servidor MCP stdio puro para integración con agentes y herramientas externas
     #[cfg(feature = "editor")]
@@ -8652,6 +9016,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let is_headless_test = args
         .iter()
         .any(|arg| arg == "--test-init" || arg == "--check-vulkan" || arg == "--test-m3" || arg == "--test-m4");
+
+    // Sonda de GPU en proceso hijo: solo en el arranque normal del editor
+    // (ni standalone, ni tests headless, ni modos de prueba).
+    #[cfg(feature = "editor")]
+    {
+        let es_arranque_normal = !is_standalone
+            && !is_headless_test
+            && !is_m5_test
+            && !is_m6_test
+            && !is_m7_test
+            && !is_m8_test
+            && !is_m9_test
+            && !is_m10_test
+            && !is_platformer_test
+            && !is_sample_game_test
+            && !is_standalone_test;
+        let diagnostico = if es_arranque_normal {
+            comprobar_sonda_gpu()
+        } else {
+            None
+        };
+        let _ = DIAGNOSTICO_SONDA.set(diagnostico);
+    }
 
     let mut builder = EventLoop::builder();
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -9480,5 +9867,57 @@ mod play_transition_tests {
         for (prev, now, esperado) in casos {
             assert_eq!(play_transition(prev, now), esperado);
         }
+    }
+}
+
+#[cfg(test)]
+mod sonda_gpu_tests {
+    use super::*;
+
+    fn gpu(
+        nombre: &str,
+        vendor_id: u32,
+        driver_version: u32,
+        device_type: vk::PhysicalDeviceType,
+    ) -> glass_renderer::context::GpuDeviceInfo {
+        glass_renderer::context::GpuDeviceInfo {
+            name: nombre.to_string(),
+            device_type,
+            vendor_id,
+            driver_version,
+            local_vram_mb: 1024,
+            graphics_family: Some(0),
+            present_family: Some(0),
+            swapchain_supported: true,
+        }
+    }
+
+    fn intel_uhd() -> glass_renderer::context::GpuDeviceInfo {
+        gpu("Intel UHD", 0x8086, (100 << 14) | 9415, vk::PhysicalDeviceType::INTEGRATED_GPU)
+    }
+
+    #[test]
+    fn diagnostico_nombra_gpu_y_dedicada() {
+        let lista = vec![
+            intel_uhd(),
+            gpu(
+                "NVIDIA GeForce GTX 1650",
+                0x10de,
+                (531 << 22) | (79 << 14),
+                vk::PhysicalDeviceType::DISCRETE_GPU,
+            ),
+        ];
+        let texto = texto_diagnostico_sonda("Intel UHD", &lista);
+        assert!(texto.contains("Intel UHD"), "{texto}");
+        assert!(texto.contains("100.9415"), "{texto}");
+        assert!(texto.contains("NVIDIA GeForce GTX 1650"), "{texto}");
+    }
+
+    #[test]
+    fn diagnostico_sin_dedicada_no_la_menciona() {
+        let lista = vec![intel_uhd()];
+        let texto = texto_diagnostico_sonda("Intel UHD", &lista);
+        assert!(texto.contains("100.9415"), "{texto}");
+        assert!(!texto.contains("dedicada"), "{texto}");
     }
 }
