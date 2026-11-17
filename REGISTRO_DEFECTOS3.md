@@ -94,3 +94,54 @@ launcher.json.
 **Consumo:** Opus 59.284 (paquete de 21 pares; el par del test lo añadió
 Rayo a mano porque Opus no tenía el final del archivo, y dos `.show(ctx)`
 se corrigieron a `ui.ctx()` al integrar).
+
+## B3 — Sin drag & drop del panel de proyecto a la escena/jerarquía — CERRADO
+
+**Reporte:** no se puede arrastrar nada —ni .blend ni .fbx— del panel de
+proyecto a la escena ni a la jerarquía.
+
+**Causa raíz:** el panel de proyecto no tenía ningún gesto de arrastre: las
+filas solo respondían a clic, doble clic y menú contextual, y ni el viewport
+ni la jerarquía aceptaban carga alguna.
+
+**Arreglo:**
+- Carga útil `ArrastreAsset { ruta }` (DragAndDrop de egui) e
+  `instanciar_asset(state, ruta, pos)` compartido: prefab →
+  `load_from_file` + `instantiate_prefab`; modelo (.glb/.gltf/.blend/.fbx)
+  → entidad con MeshRenderer cuyo `model` es el stem, que es la clave del
+  AssetCache (el .blend/.fbx llega ya convertido a .glb hermano por el
+  AssetWatcher, o precargado si vive en `assets/models`).
+- Destino viewport (solo en modo Edit): borde verde + «Soltar para
+  instanciar: <nombre>»; al soltar, instancia en el punto del plano y=0 bajo
+  el cursor (`screen_to_world_on_plane`) y selecciona la entidad.
+- Destino jerarquía: resalte verde si el puntero está sobre el panel con
+  carga; al soltar, instancia en el origen y selecciona. Sin conflicto con
+  el DnD interno de reparentado, que no usa cargas de egui.
+- Origen: **la primera versión usaba `ui.dnd_drag_source` y el test físico
+  cazó una regresión grave: su interact interno con Sense::drag() se queda
+  con la pulsación y las filas arrastrables dejaban de responder a clic,
+  doble clic y menú contextual.** Rehecho observando el puntero sobre la
+  propia etiqueta, que conserva intacto su comportamiento: el arrastre se
+  detecta con `press_origin` dentro del rect de la fila +
+  `is_decidedly_dragging()` — `is_pointer_button_down_on` tampoco sirve
+  aquí, porque la interacción de arrastre del ScrollArea se queda con los
+  ids potenciales de clic/arrastre (diagnóstico en vivo con log temporal:
+  down_on=false en todas las filas, origen y decidido correctos) — y la
+  carga se publica cada fotograma con su fantasma junto al cursor; el
+  plugin DragAndDrop de egui la limpia al soltar.
+- Tests nuevos: qué es instanciable, instanciar un modelo crea la entidad
+  con su stem, instanciar un prefab desde archivo.
+
+**Test físico (VM, proyecto desechable, assets del propio repo):**
+arrastrar `cube.blend` al viewport creó la entidad en el punto del plano
+bajo el cursor ([3.89, 0, −6.25], renderizada y seleccionada);
+`Gold_Coin.prefab.json` al viewport ([3.77, 0, −5.58], conservando su
+rotación, escala y componentes) y a la jerarquía (en el origen); fantasma
+y borde verde visibles durante el arrastre. Regresión verificada tras
+rehacer el origen: el clic selecciona la fila, el doble clic en un prefab
+instancia por la vía antigua y el menú contextual abre en las filas
+arrastrables.
+
+**Consumo:** Opus 23.881 (paquete de 6 pares). La corrección del origen
+del arrastre (de `dnd_drag_source` a observación del puntero con
+`press_origin`) la escribió Rayo directamente tras cazarla el test físico.

@@ -457,6 +457,67 @@ pub fn es_prefab(nombre: &str) -> bool {
     nombre.ends_with(".prefab.json")
 }
 
+pub fn es_modelo(nombre: &str) -> bool {
+    let ext = nombre.rsplit('.').next().unwrap_or("").to_lowercase();
+    matches!(ext.as_str(), "glb" | "gltf" | "blend" | "fbx")
+}
+
+pub fn es_instanciable(nombre: &str, es_dir: bool) -> bool {
+    !es_dir && (es_prefab(nombre) || es_modelo(nombre))
+}
+
+/// Carga útil del arrastre de un asset del panel Proyecto hacia la escena o la jerarquía.
+#[derive(Debug, Clone)]
+pub struct ArrastreAsset {
+    pub ruta: std::path::PathBuf,
+}
+
+/// Instancia un modelo o prefab en `posicion` y devuelve el id de la entidad raíz.
+///
+/// Para .blend/.fbx el modelo es el stem del archivo porque el motor los convierte
+/// a un .glb hermano (misma carpeta) con ese mismo nombre.
+pub fn instanciar_asset(
+    state: &mut glass_core::SceneState,
+    ruta: &std::path::Path,
+    posicion: [f32; 3],
+) -> Result<u64, String> {
+    let nombre = ruta.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+    if es_prefab(nombre) {
+        let prefab = glass_core::Prefab::load_from_file(ruta).map_err(|e| e.to_string())?;
+        return Ok(state.instantiate_prefab(&prefab, None, Some(posicion)));
+    }
+
+    if es_modelo(nombre) {
+        let stem = ruta
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        if stem.is_empty() {
+            return Err(format!(
+                "El modelo '{}' no tiene un nombre válido",
+                ruta.display()
+            ));
+        }
+        let id = state.create_entity(
+            stem.clone(),
+            vec!["Transform".to_string(), "MeshRenderer".to_string()],
+        );
+        if let Some(entidad) = state.get_entity_mut(id) {
+            entidad.transform.position = posicion;
+            if let Some(mesh) = entidad.mesh.as_mut() {
+                mesh.model = stem;
+                mesh.shader = "pbr.vert.spv".to_string();
+                mesh.color = [1.0, 1.0, 1.0];
+            }
+        }
+        return Ok(id);
+    }
+
+    Err(format!("El asset '{nombre}' no se puede instanciar en la escena"))
+}
+
 /// Icono por extensión (mismo criterio que el explorador clásico).
 pub fn icono_para(nombre: &str, es_dir: bool) -> &'static str {
     if es_dir {
@@ -519,6 +580,8 @@ pub struct ProjectPanel {
     pub pending_scene_load: Option<PathBuf>,
     /// Cola consumida por `EditorApp`: instanciar prefab.
     pub pending_prefab_instantiate: Option<PathBuf>,
+    /// Asset cuyo arrastre hacia la escena o la jerarquía está en curso.
+    pub arrastre_asset: Option<PathBuf>,
 }
 
 impl Default for ProjectPanel {
@@ -542,6 +605,7 @@ impl ProjectPanel {
             status: None,
             pending_scene_load: None,
             pending_prefab_instantiate: None,
+            arrastre_asset: None,
         };
         panel.refrescar();
         panel
@@ -828,6 +892,7 @@ impl ProjectPanel {
                 let mut accion_mover: Option<(PathBuf, PathBuf)> = None;
                 let mut confirmar_renombrado = false;
                 let mut cancelar_renombrado = false;
+                let mut nuevo_arrastre: Option<PathBuf> = None;
 
                 for entrada in &entradas {
                     let Entrada {
@@ -872,13 +937,38 @@ impl ProjectPanel {
 
                     // --- Fila normal ---
                     let seleccionada = self.seleccion.as_deref() == Some(ruta.as_path());
-                    let resp = ui
-                        .selectable_label(seleccionada, format!("{icono} {nombre}"))
-                        .on_hover_text(if *es_dir {
-                            format!("Carpeta: {}", ruta.display())
-                        } else {
-                            format!("{} — {} bytes", ruta.display(), bytes)
-                        });
+                    let etiqueta = format!("{icono} {nombre}");
+                    let pista = if *es_dir {
+                        format!("Carpeta: {}", ruta.display())
+                    } else {
+                        format!("{} — {} bytes", ruta.display(), bytes)
+                    };
+                    let resp = ui.selectable_label(seleccionada, etiqueta).on_hover_text(pista);
+
+                    // Inicio del arrastre de assets instanciables (modelos y
+                    // prefabs) hacia la escena o la jerarquía. No se usa
+                    // `ui.dnd_drag_source`: su interact interno con
+                    // Sense::drag() se queda con la pulsación y la fila deja
+                    // de responder a clic, doble clic y menú contextual
+                    // (regresión comprobada en vivo). En su lugar se observa
+                    // el puntero sobre la propia respuesta de la etiqueta —
+                    // que conserva intacto su comportamiento — y cuando el
+                    // gesto ya es un arrastre decidido se anota el origen;
+                    // la carga útil se publica tras el bucle.
+                    // El origen se detecta con `press_origin` dentro del
+                    // rect de la fila, no con `is_pointer_button_down_on`:
+                    // la interacción de arrastre del ScrollArea se queda con
+                    // los ids potenciales de clic/arrastre y la etiqueta
+                    // nunca lo reporta (comprobado en vivo).
+                    let origen_en_fila = ui
+                        .input(|i| i.pointer.press_origin())
+                        .is_some_and(|o| resp.rect.contains(o));
+                    if es_instanciable(nombre, *es_dir)
+                        && origen_en_fila
+                        && ui.input(|i| i.pointer.is_decidedly_dragging())
+                    {
+                        nuevo_arrastre = Some(ruta.clone());
+                    }
 
                     if resp.clicked() {
                         seleccionar = Some(ruta.clone());
@@ -972,6 +1062,72 @@ impl ProjectPanel {
                     self.rename_target = None;
                     self.rename_focus = false;
                     self.set_info("Renombrado cancelado");
+                }
+                if let Some(r) = nuevo_arrastre {
+                    self.arrastre_asset = Some(r);
+                }
+
+                // Arrastre de asset en curso: publicar la carga útil en cada
+                // fotograma y dibujar su fantasma junto al cursor (mismo
+                // recurso visual que el fantasma de la jerarquía). El plugin
+                // DragAndDrop de egui limpia la carga al soltar el botón;
+                // los destinos (viewport y jerarquía) la leen en ese mismo
+                // fotograma, antes de la limpieza de fin de pasada.
+                if self.arrastre_asset.is_some() {
+                    if ui.input(|i| i.pointer.any_released()) {
+                        self.arrastre_asset = None;
+                    } else if let Some(ruta_arrastre) = self.arrastre_asset.clone() {
+                        egui::DragAndDrop::set_payload(
+                            ui.ctx(),
+                            ArrastreAsset {
+                                ruta: ruta_arrastre.clone(),
+                            },
+                        );
+                        if let Some(mp) = ui.input(|i| i.pointer.interact_pos()) {
+                            let nombre_arrastre = ruta_arrastre
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default();
+                            let texto = format!(
+                                "{} {}",
+                                icono_para(&nombre_arrastre, false),
+                                nombre_arrastre
+                            );
+                            let pintor = ui.ctx().layer_painter(egui::LayerId::new(
+                                egui::Order::Foreground,
+                                egui::Id::new("fantasma_asset"),
+                            ));
+                            let ancho = (texto.chars().count() as f32 * 7.0 + 24.0).max(90.0);
+                            let rect_fantasma = egui::Rect::from_min_size(
+                                mp + egui::vec2(12.0, 10.0),
+                                egui::vec2(ancho, 22.0),
+                            );
+                            let sel = ui.visuals().selection.bg_fill;
+                            pintor.rect_filled(
+                                rect_fantasma,
+                                2.0,
+                                egui::Color32::from_rgba_unmultiplied(
+                                    sel.r(),
+                                    sel.g(),
+                                    sel.b(),
+                                    225,
+                                ),
+                            );
+                            pintor.rect_stroke(
+                                rect_fantasma,
+                                2.0,
+                                egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 160, 255)),
+                                egui::StrokeKind::Inside,
+                            );
+                            pintor.text(
+                                rect_fantasma.min + egui::vec2(10.0, 11.0),
+                                egui::Align2::LEFT_CENTER,
+                                texto,
+                                egui::FontId::proportional(12.0),
+                                egui::Color32::WHITE,
+                            );
+                        }
+                    }
                 }
             });
     }
@@ -1217,5 +1373,64 @@ mod tests {
         assert_eq!(icono_para("golpe.wav", false), "🔊");
         assert_eq!(icono_para("notas.txt", false), "📄");
         assert_eq!(icono_para("cualquiera", true), "📁");
+    }
+
+    #[test]
+    fn instanciables_solo_modelos_y_prefabs() {
+        assert!(es_instanciable("Heroe.blend", false));
+        assert!(es_instanciable("Heroe.fbx", false));
+        assert!(es_instanciable("Heroe.glb", false));
+        assert!(es_instanciable("Enemigo.prefab.json", false));
+        assert!(!es_instanciable("Nivel.scene.json", false));
+        assert!(!es_instanciable("Heroe.cs", false));
+        assert!(!es_instanciable("modelos", true));
+    }
+
+    #[test]
+    fn instanciar_modelo_crea_entidad_con_su_stem() {
+        let mut escena = glass_core::SceneState::new();
+        let id = instanciar_asset(
+            &mut escena,
+            std::path::Path::new("assets/models/Heroe.blend"),
+            [1.0, 0.0, 2.0],
+        )
+        .expect("el modelo debe instanciarse");
+
+        let entidad = escena.get_entity_mut(id).expect("la entidad debe existir");
+        assert_eq!(entidad.name, "Heroe");
+        assert_eq!(entidad.transform.position, [1.0, 0.0, 2.0]);
+        let mesh = entidad.mesh.as_ref().expect("debe tener mesh");
+        assert_eq!(mesh.model, "Heroe");
+        assert_eq!(mesh.shader, "pbr.vert.spv");
+
+        assert!(instanciar_asset(
+            &mut escena,
+            std::path::Path::new("assets/Heroe.cs"),
+            [0.0, 0.0, 0.0],
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn instanciar_prefab_desde_archivo() {
+        let dir = temp_dir_unico("prefab_drop");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut origen = glass_core::SceneState::new();
+        let raiz_id = origen.create_entity(
+            "Caja".to_string(),
+            vec!["Transform".to_string(), "MeshRenderer".to_string()],
+        );
+        let prefab = glass_core::Prefab::from_entity(&origen, raiz_id).unwrap();
+        let ruta = dir.join("Caja.prefab.json");
+        std::fs::write(&ruta, serde_json::to_string(&prefab).unwrap()).unwrap();
+
+        let mut escena = glass_core::SceneState::new();
+        let id = instanciar_asset(&mut escena, &ruta, [3.0, 0.0, 4.0]).unwrap();
+        let entidad = escena.get_entity_mut(id).expect("la entidad debe existir");
+        assert_eq!(entidad.name, "Caja");
+        assert_eq!(entidad.transform.position, [3.0, 0.0, 4.0]);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -202,6 +202,8 @@ impl HierarchyPanel {
 
         let mut pending_action: Option<HierarchyAction> = None;
         let mouse_pos = ui.input(|i| i.pointer.hover_pos());
+        // Rect del panel para detectar el soltado de assets del panel Proyecto.
+        let panel_rect = ui.max_rect();
         let is_pointer_released = ui.input(|i| i.pointer.any_released());
 
         // La tecla Supr ya no se comprueba aquí: es un comando
@@ -632,6 +634,40 @@ impl HierarchyPanel {
                 HierarchyAction::Create(preset) => {
                     let new_id = Self::instantiate_preset(&mut scene, preset);
                     self.selected_entity = Some(new_id);
+                }
+            }
+        }
+
+        // El arrastre interno de filas no lleva carga ArrastreAsset; soltar un
+        // modelo/prefab sobre el panel lo instancia en el origen.
+        let arrastre_asset =
+            egui::DragAndDrop::payload::<super::project::ArrastreAsset>(ui.ctx());
+        if let (Some(mp), Some(payload)) = (mouse_pos, arrastre_asset) {
+            if panel_rect.contains(mp) {
+                ui.painter().rect_stroke(
+                    panel_rect,
+                    0.0,
+                    egui::Stroke::new(2.0, Color32::from_rgb(80, 200, 120)),
+                    egui::StrokeKind::Inside,
+                );
+                if is_pointer_released {
+                    let ruta = payload.ruta.clone();
+                    let _ = egui::DragAndDrop::take_payload::<super::project::ArrastreAsset>(
+                        ui.ctx(),
+                    );
+                    match super::project::instanciar_asset(&mut scene, &ruta, [0.0, 0.0, 0.0]) {
+                        Ok(id) => {
+                            self.selected_entity = Some(id);
+                            log::info!(
+                                "Asset '{}' instanciado como entidad {} en el origen",
+                                ruta.display(),
+                                id
+                            );
+                        }
+                        Err(e) => {
+                            log::warn!("No se pudo instanciar '{}': {e}", ruta.display());
+                        }
+                    }
                 }
             }
         }

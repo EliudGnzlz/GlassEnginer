@@ -718,6 +718,73 @@ impl ViewportPanel {
                 ui.ctx().request_repaint();
             }
 
+            // Soltado de assets desde el panel Proyecto; solo en Edit (en Play la escena es transitoria).
+            if self.play_state == PlayState::Edit {
+                if let Some(payload) =
+                    response.dnd_hover_payload::<super::project::ArrastreAsset>()
+                {
+                    let nombre = payload
+                        .ruta
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("asset");
+                    painter.rect_stroke(
+                        rect,
+                        0.0,
+                        egui::Stroke::new(2.0, Color32::from_rgb(80, 200, 120)),
+                        egui::StrokeKind::Inside,
+                    );
+                    painter.text(
+                        rect.min + egui::vec2(12.0, 16.0),
+                        egui::Align2::LEFT_TOP,
+                        format!("Soltar para instanciar: {nombre}"),
+                        egui::FontId::proportional(13.0),
+                        Color32::from_rgb(160, 255, 190),
+                    );
+                }
+
+                if let Some(payload) =
+                    response.dnd_release_payload::<super::project::ArrastreAsset>()
+                {
+                    let ruta = payload.ruta.clone();
+                    let pos = ui
+                        .input(|i| i.pointer.interact_pos())
+                        .unwrap_or(rect.center());
+                    let destino = gizmo_3d::screen_to_world_on_plane(pos, &view_proj, rect, 0.0)
+                        .unwrap_or(self.editor_cam_center);
+                    match scene_state.lock() {
+                        Ok(mut state) => {
+                            match super::project::instanciar_asset(&mut state, &ruta, destino) {
+                                Ok(id) => {
+                                    *selected_entity_id = Some(id);
+                                    log::info!(
+                                        "Asset '{}' instanciado como entidad {} en [{:.2}, {:.2}, {:.2}]",
+                                        ruta.display(),
+                                        id,
+                                        destino[0],
+                                        destino[1],
+                                        destino[2]
+                                    );
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "No se pudo instanciar '{}': {e}",
+                                        ruta.display()
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "No se pudo bloquear la escena para soltar '{}': {e}",
+                                ruta.display()
+                            );
+                        }
+                    }
+                    ui.ctx().request_repaint();
+                }
+            }
+
             if frame_selected_request {
                 if let Ok(state) = scene_state.lock() {
                     if let Some(id) = *selected_entity_id {
