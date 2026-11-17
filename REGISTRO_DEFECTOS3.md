@@ -407,7 +407,7 @@ el panel (navegación, creación, apertura de escenas y prefabs por ruta)
 ya sigue al proyecto abierto. Hacer todo el motor relativo al proyecto
 es un cambio mayor que no es lo que pedía este punto.
 
-**Paquete**: Opus 48.064 tokens (14 pares; corrección de integración de
+**Paquete**: Opus 39.441 tokens (14 pares; corrección de integración de
 Rayo: el destino contextual usa la ruta y el tipo reales de la entrada
 en vez de reconstruirlos por nombre). Tests: `cargo test -p
 glass_editor` **94/94** (91 + 3 nuevos: material escribe JSON válido y
@@ -424,5 +424,66 @@ con los 9 campos de MaterialData (JSON validado); clic derecho sobre
 la carpeta Scenes → Crear → Escena crea `Scenes/NuevaEscena.scene.json`
 DENTRO de Scenes (plantilla válida).
 
-**Consumo B9: Opus 48.064** (la corrección del destino contextual y el
-test físico, de Rayo: 0 tokens de API).
+**Consumo B9: Opus 39.441** (la corrección del destino contextual y el
+test físico, de Rayo: 0 tokens de API). *(Cifra rectificada el
+2026-11-17 contra `resp_b9_proyecto.json`: el cierre anunció 48.064
+por un error de lectura; el `usage` del archivo es prompt 30.011 +
+completion 9.430 = 39.441, de la única llamada del paquete.)*
+
+## B11-13 — Demo FPS: mouse invertido, sin HUD de balas/arma, impacto antes que el proyectil — CERRADO
+
+**B11 — Causa raíz**: `JugadorPersonaje.ProcesarRaton()` sumaba el
+delta vertical de `Input.mousePosition` (cuya Y crece hacia abajo) al
+pitch que crece hacia arriba: ratón arriba → mirar abajo. El yaw era
+correcto. Confirmado físicamente con la build defectuosa (ratón abajo
++27 px → la vista subió). **Arreglo**: `_pitch - ddy * Sensibilidad`
+en `JugadorPersonaje.cs` y en el gemelo `JugadorFps.cs` (mismo modo de
+fallo en la demo de la Fase 10).
+
+**B12 — Causa raíz**: el estado ya existía (`ArmaActualNombre`,
+`MunicionEnCargador`) pero nada lo presentaba. **Arreglo**: script
+nuevo `HudArmas.cs` + entidades 230 «HudArma» (Text anclado abajo a la
+derecha del Canvas existente) y 231 «Hud» en `DemoFpsPolygon`;
+getter nuevo `CargadorActual` en `JugadorPersonaje`. El texto solo se
+reasigna cuando cambia.
+
+**B13 — Causa raíz DOBLE**: (1) `ProyectilF10.OnCollisionEnter`
+ignoraba el punto de contacto real (`Collision.point`, que llega con
+el evento durante el paso de física) y registraba el impacto con la
+posición del transform del proyectil, que en ese instante aún es la
+del frame anterior (hasta ~4,3 m por detrás a 260 m/s): el número de
+daño aparecía en el aire, antes de que el proyectil llegara al blanco.
+(2) `Lanzar` ponía `Scale = (1,1,1)` descartando la escala autorada
+0,12: el proyectil se veía como una bola de ~3 m con un collider de
+0,06. **Arreglo**: registrar con `c.point` (con la posición propia
+como respaldo si el punto viene a cero) y capturar/restaurar la
+escala autorada, a la par del patrón ya correcto de `ProyectilRpg`.
+
+**Paquete**: Opus 12.001 tokens (7 pares + `HudArmas.cs` nuevo;
+integración 7/7; la edición de escena —entidades 230/231— la hizo
+Rayo con round-trip exacto del JSON). `cargo test -p glass_core
+--test scene_assets` 3/3; build gestionado 0 errores.
+
+**Test físico PASS (standalone, build de juego + DLL nueva)**:
+- B12: el HUD muestra «Pistola 9mm 12 / 12» y descuenta en vivo
+  (11 / 12, 10 / 12) tras cada disparo.
+- B11: ratón arriba → la vista sube (contrario al comportamiento con
+  el defecto).
+- B13: el proyectil vuela como bolita a su escala autorada; dos
+  impactos registrados en el Enemigo (`ENEMIGO impacto dano=10
+  vida=90`, luego `vida=80`, con su retardo de vuelo, no instantáneo)
+  y el número de daño «10» aparece SOBRE el enemigo, a la altura del
+  torso, con la barra de vida reducida en la captura.
+- **Nota de diagnóstico (falsa alarma resuelta)**: una primera
+  medición a ojo de las capturas reducidas sugirió que los disparos
+  pasaban ~90 px por encima del enemigo. La medición con
+  `visual_grounding` y una sonda temporal de ida y vuelta por el
+  puente de transforms demostraron que la cadena completa (ratón →
+  pitch → cuaternión almacenado → cámara renderizada → dirección de
+  disparo) es exacta: a pitch −2° el enemigo aparece a 375 px
+  (predicho 374) y la respuesta de la cámara es a tasa completa
+  (11,9 px/° medidos). El error era de la medición a ojo, no del
+  motor; la sonda se retiró antes del commit.
+
+**Consumo B11-13: Opus 12.001** (la edición de escena, el diagnóstico
+de la falsa alarma y el test físico, de Rayo: 0 tokens de API).

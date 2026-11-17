@@ -204,7 +204,7 @@ namespace GlassEngine.Core.Scripts
             if (ddx != 0f || ddy != 0f)
             {
                 _yaw -= ddx * Sensibilidad;
-                _pitch = Math.Clamp(_pitch + ddy * Sensibilidad, -PitchMax, PitchMax);
+                _pitch = Math.Clamp(_pitch - ddy * Sensibilidad, -PitchMax, PitchMax);
                 if (_yaw > 360f || _yaw < -360f) _yaw %= 360f;
                 AplicarRotacion();
             }

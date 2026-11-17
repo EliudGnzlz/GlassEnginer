@@ -47,6 +47,7 @@ namespace GlassEngine.Core.Scripts
 
         public string ArmaActualNombre => ArmaActual?.Nombre ?? "";
         public int MunicionEnCargador => (_armaIdx >= 0 && _armaIdx < _municion.Length) ? _municion[_armaIdx] : 0;
+        public int CargadorActual => ArmaActual?.Cargador ?? 0;
         public int DisparosRealizados { get; private set; }
 
         /// <summary>Origen de disparo actual (posición de la cámara).</summary>
@@ -207,7 +208,7 @@ namespace GlassEngine.Core.Scripts
             if (ddx != 0f || ddy != 0f)
             {
                 _yaw -= ddx * Sensibilidad;
-                _pitch = Math.Clamp(_pitch + ddy * Sensibilidad, -PitchMax, PitchMax);
+                _pitch = Math.Clamp(_pitch - ddy * Sensibilidad, -PitchMax, PitchMax);
                 if (_yaw > 360f || _yaw < -360f) _yaw %= 360f;
             }
         }

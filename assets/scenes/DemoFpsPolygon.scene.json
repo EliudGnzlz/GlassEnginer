@@ -37051,5 +37051,134 @@
   "ui_drag": null,
   "fog": null,
   "light_profile": null
+ },
+ {
+  "id": 231,
+  "name": "Hud",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "Script"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": "GlassEngine.Core.Scripts.HudArmas",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.HudArmas"
+  },
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 230,
+  "name": "HudArma",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": null,
+  "portal": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    -30.0,
+    30.0
+   ],
+   "size_delta": [
+    560.0,
+    56.0
+   ],
+   "anchor_min": [
+    1.0,
+    0.0
+   ],
+   "anchor_max": [
+    1.0,
+    0.0
+   ],
+   "pivot": [
+    1.0,
+    0.0
+   ]
+  },
+  "ui_text": {
+   "text": "",
+   "font_size": 40.0,
+   "color": [
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
  }
 ]

@@ -14,6 +14,7 @@ namespace GlassEngine.Core.Scripts
 
         private RigidBody _body;
         private Vector3 _ancla;
+        private Vector3 _escalaAutorada;
         private bool _activo;
         private Vector3 _direccion;
         private float _velocidad;
@@ -24,6 +25,7 @@ namespace GlassEngine.Core.Scripts
         public override void Start()
         {
             _ancla = Position;
+            _escalaAutorada = Scale;
 
             _body = new RigidBody();
             _body.Initialize(EntityId, RigidBodyType.Dynamic, _ancla, Quaternion.Identity);
@@ -68,7 +70,7 @@ namespace GlassEngine.Core.Scripts
             _recorrida = 0f;
             _activo = true;
 
-            Scale = new Vector3(1f, 1f, 1f);
+            Scale = _escalaAutorada;
             if (_body != null)
             {
                 _body.SetTransform(origen, Quaternion.Identity);
@@ -107,7 +109,10 @@ namespace GlassEngine.Core.Scripts
             if (_body == null) return;
 
             ulong otro = c.gameObject.EntityId;
-            RegistroImpactos.Registrar(otro, _dano, Position);
+            Vector3 punto = Position;
+            if (c.point.x != 0f || c.point.y != 0f || c.point.z != 0f)
+                punto = new Vector3(c.point.x, c.point.y, c.point.z);
+            RegistroImpactos.Registrar(otro, _dano, punto);
             Retirar();
         }
 
