@@ -137,6 +137,168 @@ fn ejecutar_bridge(bridge_script: &Path, input_path: &Path, glb_path: &Path) -> 
     }
 }
 
+/// Lanza la conversión .blend/.fbx -> .glb hermano en un hilo propio y
+/// emite `MeshReloaded` al terminar cada ronda con éxito.
+/// Cerrojo global de conversión: como mucho UN proceso de Blender a la
+/// vez en todo el motor. Sin él, una ráfaga de peticiones (muchos
+/// archivos guardados a la vez, varias solicitudes de la escena) lanzaba
+/// un Blender por archivo y agotaba la memoria del proceso.
+static CERROJO_CONVERSION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn lanzar_conversion(path: &Path, tx: &Sender<AssetReloadEvent>) {
+    // Una sola exportación en vuelo por ruta: la que
+    // está en curso re-comprueba el hash al terminar.
+    let Some(en_vuelo) = EnVuelo::intentar(path) else {
+        log::info!(
+            "Exportación ya en curso para {:?}: se ignora el evento \
+             (se re-comprueba al terminar)",
+            path
+        );
+        return;
+    };
+    // Fase 6: sin cambio de contenido no hay
+    // re-exportación (los guardados en ráfaga de
+    // Blender reescriben el archivo sin tocar la
+    // escena).
+    let hash_inicial = match contenido_cambio(path) {
+        None => {
+            log::info!(
+                "Sin cambios de contenido (SHA-256 idéntico), no se re-exporta: {:?}",
+                path
+            );
+            return; // `en_vuelo` se suelta y se retira.
+        }
+        Some(h) => h,
+    };
+    let glb_path = path.with_extension("glb");
+    let input_path = path.to_path_buf();
+    let tx_clone = tx.clone();
+
+    // Ejecutar conversión desatendida en un hilo separado para no bloquear
+    thread::spawn(move || {
+        let _en_vuelo = en_vuelo;
+        // Esperar el turno: un solo Blender a la vez (ver CERROJO_CONVERSION).
+        let _turno = CERROJO_CONVERSION
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let bridge_script = bridge_path();
+        if !bridge_script.exists() {
+            // Fase 6: nada de fallos silenciosos.
+            log::error!(
+                "Bridge de Blender no encontrado en '{}': no se exporta {:?}. \
+                 El .glb queda como estaba.",
+                bridge_script.display(),
+                input_path
+            );
+            return;
+        }
+        let mut hash_previo = hash_inicial;
+        for ronda in 1..=MAX_RONDAS_EXPORTACION {
+            if !ejecutar_bridge(&bridge_script, &input_path, &glb_path) {
+                // Sin registro: el próximo guardado reintenta.
+                break;
+            }
+            if let Some(h) = &hash_previo {
+                registrar_exportado(&input_path, h.clone());
+            }
+            let _ = tx_clone.send(AssetReloadEvent::MeshReloaded(glb_path.clone()));
+            let actual = sha256_de_archivo(&input_path);
+            if actual.is_none() || actual == hash_previo {
+                break;
+            }
+            if ronda == MAX_RONDAS_EXPORTACION {
+                log::warn!(
+                    "{:?} siguió cambiando tras {} rondas de exportación; \
+                     el próximo guardado reintentará",
+                    input_path,
+                    MAX_RONDAS_EXPORTACION
+                );
+                break;
+            }
+            log::info!(
+                "{:?} cambió durante la exportación: se repite (ronda {})",
+                input_path,
+                ronda + 1
+            );
+            hash_previo = actual;
+        }
+    });
+}
+
+/// true si el .glb hermano no existe o es más antiguo que la fuente.
+fn glb_desactualizado(fuente: &Path) -> bool {
+    let glb = fuente.with_extension("glb");
+    let Ok(meta_glb) = std::fs::metadata(&glb) else {
+        return true;
+    };
+    let (Ok(meta_fuente), Ok(mtime_glb)) = (std::fs::metadata(fuente), meta_glb.modified()) else {
+        return true;
+    };
+    match meta_fuente.modified() {
+        Ok(mtime_fuente) => mtime_fuente > mtime_glb,
+        Err(_) => true,
+    }
+}
+
+fn es_fuente_modelo(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|s| s.to_str()),
+        Some("blend") | Some("fbx")
+    )
+}
+
+/// Recorre el árbol registrando los modelos YA convertidos: por cada
+/// fuente .blend/.fbx con un .glb al día emite `MeshReloaded`, para que
+/// el modelo entre en el caché aunque el editor acabe de arrancar (la
+/// precarga solo cubre `assets/models/`).
+///
+/// El escaneo NO convierte: convertir aquí lanzaría un Blender por cada
+/// fuente sin .glb del árbol (cientos en paquetes de assets) y tumbaría
+/// el proceso por memoria. Las fuentes sin convertir se convierten al
+/// soltarlas en la escena (`AssetWatcher::solicitar_conversion`) o al
+/// guardarse con el editor en marcha (el camino de eventos de siempre).
+///
+/// Con `incluir_modelos = false` se salta la carpeta `models/` de la
+/// raíz: es el territorio de la precarga diferida, y emitir sus modelos
+/// aquí los sube a GPU dos veces durante el arranque (la segunda subida
+/// pisa los buffers de la primera y el proceso muere en el
+/// rasterizador). El vigía inicial usa `false`; los de proyecto, `true`
+/// (ninguna precarga cubre los modelos de un proyecto abierto).
+fn escanear_fuentes(
+    dir: &Path,
+    tx: &Sender<AssetReloadEvent>,
+    es_raiz: bool,
+    incluir_modelos: bool,
+) {
+    let Ok(entradas) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entrada in entradas.flatten() {
+        let path = entrada.path();
+        if path.is_dir() {
+            if es_raiz
+                && !incluir_modelos
+                && path
+                    .file_name()
+                    .is_some_and(|n| n.eq_ignore_ascii_case("models"))
+            {
+                continue;
+            }
+            escanear_fuentes(&path, tx, false, incluir_modelos);
+        } else if es_fuente_modelo(&path) && !glb_desactualizado(&path) {
+            let _ = tx.send(AssetReloadEvent::MeshReloaded(
+                path.with_extension("glb"),
+            ));
+        }
+    }
+}
+
+/// true si `path` es una fuente .blend/.fbx cuyo .glb hermano falta o
+/// está desactualizado: para ver el modelo real hay que convertirla.
+pub fn necesita_conversion(path: &Path) -> bool {
+    es_fuente_modelo(path) && glb_desactualizado(path)
+}
+
 #[derive(Debug, Clone)]
 pub enum AssetReloadEvent {
     MeshReloaded(PathBuf),
@@ -146,6 +308,7 @@ pub enum AssetReloadEvent {
 pub struct AssetWatcher {
     _watcher: RecommendedWatcher,
     pub receiver: Receiver<AssetReloadEvent>,
+    sender: Sender<AssetReloadEvent>,
 }
 
 /// Ruta absoluta del bridge de Blender, fijada al crear el vigía a
@@ -163,15 +326,26 @@ fn bridge_path() -> PathBuf {
 }
 
 impl AssetWatcher {
-    pub fn new(assets_dir: impl AsRef<Path>) -> Result<Self, String> {
+    pub fn new(
+        assets_dir: impl AsRef<Path>,
+        incluir_modelos: bool,
+    ) -> Result<Self, String> {
         let (tx, rx) = channel();
+        let tx_scan = tx.clone();
+        let sender = tx.clone();
         // Canonizar: los eventos del vigía heredan el prefijo con el
         // que se registra la carpeta; si es absoluta, todas las rutas
         // de la recarga lo son.
         let path = std::fs::canonicalize(assets_dir.as_ref())
             .unwrap_or_else(|_| assets_dir.as_ref().to_path_buf());
         if let Some(raiz) = path.parent() {
-            let _ = BRIDGE_PATH.set(raiz.join("tools").join("headless_blender_bridge.py"));
+            // Solo fijar la ruta si el bridge EXISTE ahí: un vigía creado
+            // para la carpeta de un proyecto de usuario (que no trae
+            // `tools/`) no debe secuestrar la ruta del bridge del motor.
+            let candidato = raiz.join("tools").join("headless_blender_bridge.py");
+            if candidato.is_file() {
+                let _ = BRIDGE_PATH.set(candidato);
+            }
         }
 
         let mut watcher = RecommendedWatcher::new(
@@ -193,10 +367,26 @@ impl AssetWatcher {
 
         log::info!("AssetWatcher iniciado en {:?}", path);
 
+        // Los modelos ya convertidos que ya estaban en la carpeta no
+        // generan eventos: se registran aquí (sin convertir nada).
+        escanear_fuentes(&path, &tx_scan, true, incluir_modelos);
+
         Ok(Self {
             _watcher: watcher,
             receiver: rx,
+            sender,
         })
+    }
+
+    /// Pide la conversión de una fuente .blend/.fbx concreta (p. ej. la
+    /// que el usuario acaba de soltar en la escena sin que su .glb
+    /// existiera): la conversión va en su propio hilo y al terminar
+    /// emite `MeshReloaded`, con lo que la entidad pasa a dibujar el
+    /// modelo real.
+    pub fn solicitar_conversion(&self, path: &Path) {
+        if es_fuente_modelo(path) {
+            lanzar_conversion(path, &self.sender);
+        }
     }
 
     fn handle_event(event: Event, tx: &Sender<AssetReloadEvent>) {
@@ -214,80 +404,7 @@ impl AssetWatcher {
                     // binario propio que mantener.
                     "blend" | "fbx" => {
                         log::info!("Detectado cambio en archivo de modelo (blend/fbx): {:?}", path);
-                        // Una sola exportación en vuelo por ruta: la que
-                        // está en curso re-comprueba el hash al terminar.
-                        let Some(en_vuelo) = EnVuelo::intentar(&path) else {
-                            log::info!(
-                                "Exportación ya en curso para {:?}: se ignora el evento \
-                                 (se re-comprueba al terminar)",
-                                path
-                            );
-                            continue;
-                        };
-                        // Fase 6: sin cambio de contenido no hay
-                        // re-exportación (los guardados en ráfaga de
-                        // Blender reescriben el archivo sin tocar la
-                        // escena).
-                        let hash_inicial = match contenido_cambio(&path) {
-                            None => {
-                                log::info!(
-                                    "Sin cambios de contenido (SHA-256 idéntico), no se re-exporta: {:?}",
-                                    path
-                                );
-                                continue; // `en_vuelo` se suelta y se retira.
-                            }
-                            Some(h) => h,
-                        };
-                        let glb_path = path.with_extension("glb");
-                        let input_path = path.clone();
-                        let tx_clone = tx.clone();
-
-                        // Ejecutar conversión desatendida en un hilo separado para no bloquear
-                        thread::spawn(move || {
-                            let _en_vuelo = en_vuelo;
-                            let bridge_script = bridge_path();
-                            if !bridge_script.exists() {
-                                // Fase 6: nada de fallos silenciosos.
-                                log::error!(
-                                    "Bridge de Blender no encontrado en '{}': no se exporta {:?}. \
-                                     El .glb queda como estaba.",
-                                    bridge_script.display(),
-                                    input_path
-                                );
-                                return;
-                            }
-                            let mut hash_previo = hash_inicial;
-                            for ronda in 1..=MAX_RONDAS_EXPORTACION {
-                                if !ejecutar_bridge(&bridge_script, &input_path, &glb_path) {
-                                    // Sin registro: el próximo guardado reintenta.
-                                    break;
-                                }
-                                if let Some(h) = &hash_previo {
-                                    registrar_exportado(&input_path, h.clone());
-                                }
-                                let _ = tx_clone
-                                    .send(AssetReloadEvent::MeshReloaded(glb_path.clone()));
-                                let actual = sha256_de_archivo(&input_path);
-                                if actual.is_none() || actual == hash_previo {
-                                    break;
-                                }
-                                if ronda == MAX_RONDAS_EXPORTACION {
-                                    log::warn!(
-                                        "{:?} siguió cambiando tras {} rondas de exportación; \
-                                         el próximo guardado reintentará",
-                                        input_path,
-                                        MAX_RONDAS_EXPORTACION
-                                    );
-                                    break;
-                                }
-                                log::info!(
-                                    "{:?} cambió durante la exportación: se repite (ronda {})",
-                                    input_path,
-                                    ronda + 1
-                                );
-                                hash_previo = actual;
-                            }
-                        });
+                        lanzar_conversion(&path, tx);
                     }
                     "glb" => {
                         if path.to_string_lossy().contains(".glass-tmp") || fuente_en_vuelo(&path) {

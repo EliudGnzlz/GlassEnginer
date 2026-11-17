@@ -1832,7 +1832,10 @@ struct GlassEngineApp {
     #[cfg(feature = "editor")]
     pub mcp_stdio_thread: Option<std::thread::JoinHandle<()>>,
     asset_cache: Arc<RwLock<AssetCache>>,
-    asset_watcher: Option<AssetWatcher>,
+    asset_watchers: Vec<AssetWatcher>,
+    /// Raíces (canonizadas) ya vigiladas: abrir dos veces el mismo
+    /// proyecto no debe duplicar vigías ni conversiones.
+    asset_watchers_raices: Vec<std::path::PathBuf>,
     #[allow(dead_code)]
     start_time: Instant,
     pub script_host: ScriptHost,
@@ -2285,7 +2288,8 @@ impl GlassEngineApp {
             #[cfg(feature = "editor")]
             mcp_stdio_thread: None,
             asset_cache,
-            asset_watcher: None,
+            asset_watchers: Vec::new(),
+            asset_watchers_raices: Vec::new(),
             start_time: Instant::now(),
             script_host: ScriptHost::new(),
             audio_system,
@@ -3001,7 +3005,12 @@ impl GlassEngineApp {
         }
         // El panel de proyecto apunta desde el primer momento a los
         // assets del proyecto recién creado.
-        self.editor_layout.project.set_assets_root(project_dir.join("Assets"));
+        let raiz_assets = project_dir.join("Assets");
+        // Asegurar la carpeta para que el vigía pueda registrarse aunque la
+        // plantilla la cree después.
+        let _ = std::fs::create_dir_all(&raiz_assets);
+        self.vigilar_assets(&raiz_assets);
+        self.editor_layout.project.set_assets_root(raiz_assets);
 
         match template {
             ProjectTemplate::Platformer3D => {
@@ -3477,12 +3486,70 @@ impl GlassEngineApp {
         self.last_anim_instant = Instant::now();
     }
 
+    /// Vigía de assets para una carpeta de proyecto abierta: convierte y
+    /// registra los .blend/.fbx de ESE proyecto (el vigía inicial solo
+    /// cubre el `assets/` del directorio de trabajo).
+    #[cfg(feature = "editor")]
+    fn vigilar_assets(&mut self, raiz: &Path) {
+        if !raiz.is_dir() {
+            return;
+        }
+        let canonica =
+            std::fs::canonicalize(raiz).unwrap_or_else(|_| raiz.to_path_buf());
+        if self.asset_watchers_raices.contains(&canonica) {
+            return;
+        }
+        match AssetWatcher::new(raiz, true) {
+            Ok(watcher) => {
+                self.asset_watchers_raices.push(canonica);
+                self.asset_watchers.push(watcher);
+            }
+            Err(e) => log::warn!(
+                "No se pudo vigilar los assets de {:?}: {}",
+                raiz,
+                e
+            ),
+        }
+    }
+
+    /// Reenvía al vigía dueño de la carpeta cada conversión que los
+    /// paneles anotaron al soltar un .blend/.fbx sin .glb al día: el
+    /// modelo real sustituirá al cubo de respaldo cuando llegue.
+    fn drenar_peticiones_conversion(&mut self) {
+        // Las peticiones nacen en los paneles del editor; en la build de
+        // juego (sin la feature) no hay paneles ni peticiones que drenar.
+        #[cfg(feature = "editor")]
+        {
+            let mut peticiones: Vec<std::path::PathBuf> = Vec::new();
+            if let Some(p) = self.editor_layout.viewport.pending_conversion.take() {
+                peticiones.push(p);
+            }
+            if let Some(p) = self.editor_layout.hierarchy.pending_conversion.take() {
+                peticiones.push(p);
+            }
+            for ruta in peticiones {
+                let canonica =
+                    std::fs::canonicalize(&ruta).unwrap_or_else(|_| ruta.clone());
+                let idx = self
+                    .asset_watchers_raices
+                    .iter()
+                    .position(|raiz| canonica.starts_with(raiz))
+                    .unwrap_or(0);
+                if let Some(watcher) = self.asset_watchers.get(idx) {
+                    log::info!("Conversión solicitada al soltar: {:?}", ruta);
+                    watcher.solicitar_conversion(&ruta);
+                }
+            }
+        }
+    }
+
     fn check_asset_reloads(&mut self) {
-        let events: Vec<AssetReloadEvent> = if let Some(watcher) = &self.asset_watcher {
-            watcher.receiver.try_iter().collect()
-        } else {
-            Vec::new()
-        };
+        self.drenar_peticiones_conversion();
+        let events: Vec<AssetReloadEvent> = self
+            .asset_watchers
+            .iter()
+            .flat_map(|watcher| watcher.receiver.try_iter())
+            .collect();
 
         for ev in events {
             match ev {
@@ -4275,6 +4342,7 @@ let resueltos = colliders_resueltos(body, shape);
                     } else {
                         path.join("Assets")
                     };
+                    self.vigilar_assets(&raiz_assets);
                     self.editor_layout.project.set_assets_root(raiz_assets);
                     // Registrar el proyecto abierto para que aparezca en el Hub.
                     let nombre = path
@@ -7103,10 +7171,16 @@ impl ApplicationHandler for GlassEngineApp {
         // 6. Iniciar AssetWatcher en segundo plano sobre assets/
         log::info!("main: Iniciando AssetWatcher...");
         if Path::new("assets").exists() {
-            match AssetWatcher::new("assets") {
+            // Sin la carpeta models/: la registra la precarga diferida
+            // (ver `escanear_fuentes` en el vigía).
+            match AssetWatcher::new("assets", false) {
                 Ok(watcher) => {
                     log::info!("main: AssetWatcher listo.");
-                    self.asset_watcher = Some(watcher);
+                    self.asset_watchers_raices.push(
+                        std::fs::canonicalize("assets")
+                            .unwrap_or_else(|_| std::path::PathBuf::from("assets")),
+                    );
+                    self.asset_watchers.push(watcher);
                 }
                 Err(e) => log::warn!("No se pudo inicializar AssetWatcher: {}", e),
             }

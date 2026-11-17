@@ -141,6 +141,9 @@ pub struct ViewportPanel {
     // picking y la caja de selección para trabajar con la geometría
     // real en vez de un cubo unidad supuesto.
     pub mesh_bounds: std::collections::HashMap<String, ([f32; 3], [f32; 3])>,
+    // Fuente .blend/.fbx soltada cuyo .glb falta o está desactualizado:
+    // la app pide su conversión al vigía que corresponda y la vacía.
+    pub pending_conversion: Option<std::path::PathBuf>,
 }
 
 impl Default for ViewportPanel {
@@ -169,6 +172,7 @@ impl Default for ViewportPanel {
             fly_speed: 10.0,
             fly_active: false,
             mesh_bounds: std::collections::HashMap::new(),
+            pending_conversion: None,
         }
     }
 }
@@ -176,6 +180,21 @@ impl Default for ViewportPanel {
 impl ViewportPanel {
     pub fn is_playing(&self) -> bool {
         self.play_state == PlayState::Playing
+    }
+
+    /// Punto de mundo donde aterriza un asset soltado en `pos`: la
+    /// superficie de la geometría bajo el cursor si la hay.
+    fn punto_soltado(
+        &self,
+        pos: egui::Pos2,
+        view_proj: &[f32; 16],
+        rect: egui::Rect,
+        scene_state: &Arc<Mutex<SceneState>>,
+    ) -> Option<[f32; 3]> {
+        let (origin, dir) = gizmo_3d::screen_ray(pos, view_proj, rect)?;
+        let state = scene_state.lock().ok()?;
+        let matrices = state.compute_world_matrices();
+        gizmo_3d::punto_aterrizaje(&state.entities, &matrices, origin, dir, &self.mesh_bounds)
     }
 
     /// Renderiza la pestaña de Scene View (Edición 3D, Gizmos, PiP Preview y Picking en Edit y Play)
@@ -890,13 +909,24 @@ impl ViewportPanel {
                     let pos = ui
                         .input(|i| i.pointer.interact_pos())
                         .unwrap_or(rect.center());
-                    let destino = gizmo_3d::screen_to_world_on_plane(pos, &view_proj, rect, 0.0)
-                        .unwrap_or(self.editor_cam_center);
+                    let destino = self
+                        .punto_soltado(pos, &view_proj, rect, scene_state)
+                        .unwrap_or_else(|| {
+                            gizmo_3d::screen_to_world_on_plane(pos, &view_proj, rect, 0.0)
+                                .unwrap_or(self.editor_cam_center)
+                        });
                     match scene_state.lock() {
                         Ok(mut state) => {
                             match super::project::instanciar_asset(&mut state, &ruta, destino) {
                                 Ok(id) => {
                                     *selected_entity_id = Some(id);
+                                    // Si el .glb de la fuente no existe o está
+                                    // desactualizado, la entidad nace con el
+                                    // cubo de respaldo: se pide la conversión
+                                    // y al llegar el modelo real la sustituye.
+                                    if glass_renderer::watcher::necesita_conversion(&ruta) {
+                                        self.pending_conversion = Some(ruta.clone());
+                                    }
                                     log::info!(
                                         "Asset '{}' instanciado como entidad {} en [{:.2}, {:.2}, {:.2}]",
                                         ruta.display(),

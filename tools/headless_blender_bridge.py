@@ -98,11 +98,47 @@ print("GLASS_INVENTORY_END")
 """
 
 
+def _candidatos_blender():
+    """Rutas de instalación habituales de Blender por plataforma."""
+    import glob
+
+    candidatos = []
+    if os.name == "nt":
+        for base in (
+            os.environ.get("ProgramFiles", r"C:\Program Files"),
+            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+        ):
+            patron = os.path.join(base, "Blender Foundation", "Blender *", "blender.exe")
+            candidatos.extend(sorted(glob.glob(patron), reverse=True))
+            candidatos.append(
+                os.path.join(base, "Steam", "steamapps", "common", "Blender", "blender.exe")
+            )
+    home = os.path.expanduser("~")
+    candidatos.extend(
+        [
+            "/usr/bin/blender",
+            "/usr/local/bin/blender",
+            "/snap/bin/blender",
+            os.path.join(home, ".local", "bin", "blender"),
+            "/opt/blender/blender",
+            "/Applications/Blender.app/Contents/MacOS/Blender",
+            os.path.join(home, "Applications", "Blender.app", "Contents", "MacOS", "Blender"),
+        ]
+    )
+    return candidatos
+
+
 def resolver_blender():
     env = os.environ.get("GLASS_BLENDER")
     if env and os.path.isfile(env):
         return env
-    return shutil.which("blender")
+    en_path = shutil.which("blender")
+    if en_path:
+        return en_path
+    for candidato in _candidatos_blender():
+        if os.path.isfile(candidato):
+            return candidato
+    return None
 
 
 def sha256_de(ruta):

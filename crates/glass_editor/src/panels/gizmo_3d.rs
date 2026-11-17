@@ -683,6 +683,63 @@ pub fn pick_entity_at_screen(
     best_id
 }
 
+/// Punto donde un rayo golpea la AABB de mundo más cercana entre las
+/// entidades CON malla (la misma pasada de mallas que
+/// `pick_entity_at_screen`, sin iconos). Sirve para aterrizar un asset
+/// soltado sobre la superficie que el usuario señala, en vez de sobre el
+/// plano y=0.
+pub fn punto_aterrizaje(
+    entities: &[EntityData],
+    world_matrices: &std::collections::HashMap<u64, [f32; 16]>,
+    ray_origin: [f32; 3],
+    ray_dir: [f32; 3],
+    bounds: &std::collections::HashMap<String, ([f32; 3], [f32; 3])>,
+) -> Option<[f32; 3]> {
+    let world_of = |ent: &EntityData| -> [f32; 16] {
+        world_matrices
+            .get(&ent.id)
+            .copied()
+            .unwrap_or_else(|| {
+                glass_core::mat4_from_trs_euler(
+                    ent.transform.position,
+                    ent.transform.rotation(),
+                    ent.transform.scale,
+                )
+            })
+    };
+    let mut best_t = f32::MAX;
+    for ent in entities {
+        if !ent.active || ent.mesh.is_none() {
+            continue;
+        }
+        let world = world_of(ent);
+        let (lo, hi) = entity_local_bounds(ent, bounds);
+        let mut wmin = [f32::INFINITY; 3];
+        let mut wmax = [f32::NEG_INFINITY; 3];
+        for c in aabb_corners(lo, hi) {
+            let w = glass_core::mat4_transform_point(world, c);
+            for a in 0..3 {
+                wmin[a] = wmin[a].min(w[a]);
+                wmax[a] = wmax[a].max(w[a]);
+            }
+        }
+        if let Some(t) = ray_aabb_hit(ray_origin, ray_dir, wmin, wmax) {
+            if t < best_t {
+                best_t = t;
+            }
+        }
+    }
+    if best_t == f32::MAX {
+        None
+    } else {
+        Some([
+            ray_origin[0] + ray_dir[0] * best_t,
+            ray_origin[1] + ray_dir[1] * best_t,
+            ray_origin[2] + ray_dir[2] * best_t,
+        ])
+    }
+}
+
 /// Dibuja la caja delimitadora 3D orientada (12 aristas con halo y esquinas) estilo Unity
 /// para el GameObject seleccionado en la ventana de escena.
 pub fn draw_selection_bounding_box(
@@ -1291,6 +1348,23 @@ mod tests_picking {
         let s = world_to_screen(p, &vp_prueba(rect), rect).expect("el punto debe proyectarse");
         assert!(rect.contains(s), "el punto proyectado {s:?} cae fuera del viewport");
         s
+    }
+
+    #[test]
+    fn punto_aterrizaje_golpea_cara_del_cubo_y_none_si_falla() {
+        let ents = vec![entidad_malla(1, "Cubo", "cubo", [0.0, 0.0, 0.0], [1.0, 1.0, 1.0])];
+        let mut cotas = Cotas::new();
+        cotas.insert("cubo".into(), ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]));
+        let mats = mundos(&ents);
+
+        let p = punto_aterrizaje(&ents, &mats, [0.0, 0.0, 10.0], [0.0, 0.0, -1.0], &cotas)
+            .expect("el rayo debe golpear el cubo");
+        assert!(p[0].abs() < 1e-4, "x = {}", p[0]);
+        assert!(p[1].abs() < 1e-4, "y = {}", p[1]);
+        assert!((p[2] - 1.0).abs() < 1e-4, "z = {}", p[2]);
+
+        let fallo = punto_aterrizaje(&ents, &mats, [5.0, 0.0, 10.0], [0.0, 0.0, -1.0], &cotas);
+        assert!(fallo.is_none(), "un rayo que no toca nada debe dar None: {fallo:?}");
     }
 
     #[test]

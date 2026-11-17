@@ -717,3 +717,96 @@ En los tres casos los otros dos ejes quedan intactos.
 
 **Consumo: Opus 0 · DeepSeek 0 · Kimi 0** (diagnóstico, reproducción,
 arreglo, tests y verificación directos de Rayo).
+
+## ARRASTRE .BLEND — «el objeto no carga, solo carga un cubo» y «se separa de la punta» (reporte de D3m3tr10, 2026-11-17, probando la v0.10.17.1-beta)
+
+Reporte suyo con su archivo `campfire_voxel_v3.blend` (hoguera voxel,
+8,8 MB): «ya arrastro los modelos .blend a la escena y pasan 2 cosas.
+1 cuando lo selecciono el objeto en el mouse se separa de la punta y es
+incomodo. 2 el objeto del .blend no carga, solo carga un cubo y es una
+hoguera».
+
+**Diagnóstico (tres causas encadenadas para el punto 2):** el puente
+convierte el archivo sin problema (corrida manual: .glb de 1.638.184 B,
+954 mallas, 957 objetos), pero la vía de soltado solo crea la entidad con
+el stem del archivo: el modelo entra en el AssetCache únicamente cuando
+el AssetWatcher emite `MeshReloaded`, y (a) el vigía SOLO reaccionaba a
+eventos Create/Modify — un .blend copiado a la carpeta ANTES de abrir el
+editor nunca generaba evento ni conversión; (b) el vigía solo cubría el
+`assets/` del directorio de trabajo, nunca los assets del proyecto
+abierto; (c) si la conversión se disparaba sin `GLASS_BLENDER` en el
+entorno, el bridge no encontraba Blender (solo buscaba la variable o el
+PATH) y fallaba sin reintento hasta el próximo guardado. Reproducción
+exacta de su síntoma (Estado A): .blend preexistente sin .glb → entidad
+creada renderizando el cubo de respaldo. Con la cadena sana (Estado B,
+conversión disparada con el editor en marcha) la misma entidad pasó a
+dibujar la hoguera real: la cadena de recarga funciona; lo que faltaba
+era dispararla.
+
+**El punto 1 tiene dos mitades:** el arrastre con el gizmo que se separa
+de la punta es el mapeo fijo ya arreglado en el bloque anterior
+(`f44bcfb`); y el soltado aterrizaba SIEMPRE en el plano y=0, así que al
+soltar señalando una superficie elevada el objeto aparecía desplazado a
+lo largo del rayo hasta el suelo, lejos de la punta del ratón.
+
+**Arreglo:**
+- El vigía, al crearse, REGISTRA los modelos ya convertidos del árbol
+  (emite `MeshReloaded` por cada fuente con .glb al día), incluidos los
+  de fuera de `assets/models/`, que la precarga no cubre. NO convierte en
+  el escaneo (ver «lo que el escaneo masivo enseñó» más abajo).
+- Vigía por proyecto: la app mantiene un vigía por raíz de assets (el
+  inicial + uno por proyecto abierto, sin duplicados por reapertura), y
+  todos alimentan el mismo drenado de recargas. La ruta del bridge solo
+  se fija si el bridge existe en esa raíz (un proyecto de usuario no
+  trae `tools/` y no debe secuestrar la ruta del motor).
+- Conversión al soltar: si la fuente soltada no tiene .glb al día, el
+  panel (viewport o jerarquía) anota la petición y la app la reenvía al
+  vigía dueño de la carpeta; al terminar, el modelo real sustituye al
+  cubo en la misma entidad. Cerrojo global: como mucho UN Blender a la
+  vez en todo el proceso.
+- El bridge localiza Blender también en las rutas de instalación
+  habituales (Program Files y Steam en Windows, /usr/bin, /usr/local/bin,
+  snap y /opt en Linux, /Applications en macOS) si ni `GLASS_BLENDER` ni
+  el PATH lo dan. Verificado con el entorno vacío: encuentra
+  /usr/local/bin/blender y convierte el campfire entero.
+- Aterrizaje sobre la superficie: `gizmo_3d::punto_aterrizaje` (la misma
+  pasada de mallas del picking, con las cotas reales) da el punto de
+  impacto del rayo de soltado; si no golpea nada se cae al plano y=0 de
+  siempre. Test nuevo de regresión en `tests_picking`.
+
+**Lo que el escaneo masivo enseñó (dos defectos del primer diseño,
+cazados en la verificación física y corregidos antes de cerrar):** la
+primera versión del escaneo CONVERTÍA toda fuente sin .glb al arrancar:
+en este repo son 493 .fbx del paquete polygon-prototype — 493 procesos
+de Blender a la vez agotaron la memoria y mataron el editor. Y aun
+registrando sin convertir, emitir los modelos de `assets/models/` en el
+arranque los subía a GPU dos veces (la precarga diferida los sube
+también) y el proceso moría en el rasterizador por software (segfault
+en llvmpipe, reproducido 3 veces y confirmado por bisección contra el
+binario sin el cambio). Por eso el escaneo registra sin convertir y el
+vigía inicial salta la carpeta `models/` (territorio de la precarga);
+los vigías de proyecto sí la incluyen (ninguna precarga cubre un
+proyecto abierto).
+
+**Verificación física (editor lanzado SIN `GLASS_BLENDER`, con Blender
+solo en una ruta estándar):** arranque limpio, cero conversiones y cero
+fallos al iniciar (el tormentón anterior desapareció). Soltado del
+campfire (preexistente, sin .glb) sobre el suelo: entidad creada y
+«Conversión solicitada al soltar»; ~25 s después la hoguera real (anillo
+de piedras voxel, troncos y penacho) sustituía al cubo, posada en
+[2,69 · 0,50 · −13,89] (la superficie del suelo bajo el cursor, no el
+plano y=0). Segundo soltado sobre Platform Tier 1 (medida con
+grounding, no a ojo): aterrizó en [3,02 · **1,50** · 1,75] — la cara
+superior exacta de la plataforma — y la hoguera se ve posada sobre ella.
+Suite del editor: 103/103 (1 test nuevo). Pipeline local 5/5.
+
+**Nota sobre el defecto 6 del probador («arrastrar un .blend congela el
+motor»):** es la misma familia — el .blend que no carga — con síntoma
+distinto (congelación frente a cubo). Una conversión lanzada sin control
+de concurrencia ni de memoria encaja con una congelación en una máquina
+ajustada; con los datos que faltan de su amigo se cruzará.
+
+**Consumo: Opus 34.503** (el paquete de diseño: escaneo, vigía por
+proyecto, descubrimiento de Blender y aterrizaje; la corrección del
+escaneo tras la verificación física y las integraciones finas son de
+Rayo) · DeepSeek 0 · Kimi 0.

@@ -54,6 +54,9 @@ pub struct HierarchyPanel {
     /// Ancho de la fila agarrada (el fantasma lo conserva).
     pub drag_row_width: f32,
     pub hovered_drop: Option<(u64, DropPosition)>,
+    /// Fuente .blend/.fbx soltada cuyo .glb falta o está desactualizado:
+    /// la app pide su conversión al vigía que corresponda y la vacía.
+    pub pending_conversion: Option<std::path::PathBuf>,
 }
 
 impl Default for HierarchyPanel {
@@ -66,6 +69,7 @@ impl Default for HierarchyPanel {
             drag_grab_offset: egui::Vec2::ZERO,
             drag_row_width: 0.0,
             hovered_drop: None,
+            pending_conversion: None,
         }
     }
 }
@@ -658,6 +662,12 @@ impl HierarchyPanel {
                     match super::project::instanciar_asset(&mut scene, &ruta, [0.0, 0.0, 0.0]) {
                         Ok(id) => {
                             self.selected_entity = Some(id);
+                            // Como en el viewport: si el .glb no está al
+                            // día, se pide la conversión y el modelo real
+                            // sustituye al cubo de respaldo al llegar.
+                            if glass_renderer::watcher::necesita_conversion(&ruta) {
+                                self.pending_conversion = Some(ruta.clone());
+                            }
                             log::info!(
                                 "Asset '{}' instanciado como entidad {} en el origen",
                                 ruta.display(),
