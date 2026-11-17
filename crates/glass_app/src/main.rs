@@ -6686,55 +6686,6 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                         );
                     }
                 }
-                // Overlay de frametime (Fase 0): se lee del registro global
-                // en cada repaint, sin estado nuevo en la app. Solo editor.
-                if app_mode == AppMode::Editor {
-                    let snap = glass_core::profiling::frame_timing_snapshot();
-                    egui::Window::new("Frametime")
-                        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 8.0))
-                        .resizable(false)
-                        .show(ui.ctx(), |ui| {
-                            for (nombre, fase) in [
-                                ("Total", &snap.total),
-                                ("Update", &snap.update),
-                                ("Physics", &snap.physics),
-                                ("Render", &snap.render),
-                                ("Present", &snap.present),
-                            ] {
-                                ui.monospace(format!(
-                                    "{:<8} avg {:6.2} ms  p95 {:6.2} ms",
-                                    nombre,
-                                    fase.avg_us / 1000.0,
-                                    fase.p95_us / 1000.0,
-                                ));
-                            }
-                            if snap.gpu_samples > 0 {
-                                ui.monospace(format!(
-                                    "{:<8} avg {:6.2} ms  p95 {:6.2} ms",
-                                    "GPU",
-                                    snap.gpu_render.avg_us / 1000.0,
-                                    snap.gpu_render.p95_us / 1000.0,
-                                ));
-                            } else {
-                                ui.monospace("GPU      sin datos");
-                            }
-                            let mem = glass_core::profiling::process_memory_snapshot();
-                            let rss_txt = match mem.rss_bytes {
-                                Some(b) => format!("RSS {:.1} MiB", b as f64 / 1_048_576.0),
-                                None => "RSS n/d".to_string(),
-                            };
-                            let linea = match glass_core::profiling::gpu_memory_snapshot() {
-                                Some(g) => format!(
-                                    "{} · GPU {:.0}/{:.0} MiB",
-                                    rss_txt,
-                                    g.allocated_bytes as f64 / 1_048_576.0,
-                                    g.capacity_bytes as f64 / 1_048_576.0,
-                                ),
-                                None => rss_txt,
-                            };
-                            ui.monospace(linea);
-                        });
-                }
             });
             egui_winit.handle_platform_output(&window.inner, full_output.platform_output);
 

@@ -487,3 +487,49 @@ Rayo con round-trip exacto del JSON). `cargo test -p glass_core
 
 **Consumo B11-13: Opus 12.001** (la edición de escena, el diagnóstico
 de la falsa alarma y el test físico, de Rayo: 0 tokens de API).
+
+## B14 — Frametime dentro del editor como ventana propia — CERRADO
+
+**Reporte**: el Frametime era un overlay flotante dibujado desde
+main.rs por fuera del editor, siempre visible y sin forma de
+quitarlo; debía ser una ventana propia del editor, mucho más pequeña
+y solo con datos relevantes, ocultable y recuperable desde el menú
+de ventanas.
+
+**Arreglo**: el overlay se elimina de main.rs (−49 líneas) y el
+Frametime pasa a ser una pestaña más del dock (`EditorTab::Frametime`,
+título «⏱ Frametime»), oculta por defecto. El menú Window gana la
+casilla «⏱ Frametime» que la muestra/oculta
+(`set_frametime_visible`, idempotente: añade con
+`push_to_focused_leaf`, quita con `find_tab` + `remove_tab`);
+`apply_preset` la repone si estaba visible, porque reconstruye el
+dock. Contenido compacto (6 líneas, sin p95 ni Present): `FPS ·
+Total ms`, Update, Physics, Render, GPU y la línea de memoria
+`RSS · GPU a/b MiB`, leídos del mismo registro de profiling que
+usaba el overlay.
+
+**Paquete**: Opus 16.472 tokens (9 pares, todos en docking.rs;
+integración 9/9; el borrado del overlay en main.rs lo hizo Rayo).
+Tests: `cargo test -p glass_editor` **96/96** (94 + 2 nuevos:
+mostrar/ocultar sin duplicar y supervivencia a apply_preset).
+
+**Test físico PASS (editor en vivo, SampleScene)**: al entrar no hay
+overlay ni pestaña de Frametime; Window → «⏱ Frametime» abre la
+pestaña con datos reales de esta VM (`FPS 4 · Total 248.47 ms`,
+Render 161.48, GPU 114.60, `RSS 644.9 MiB · GPU 160/256 MiB`) y los
+valores se refrescan en vivo (Total 248.47 → 245.44 s segundos
+después); desmarcar la casilla quita la pestaña del dock.
+
+**Consumo B14: Opus 16.472** (el borrado del overlay y el test
+físico, de Rayo: 0 tokens de API).
+
+---
+
+**BLOQUE DE 14 PUNTOS COMPLETO** (B1, B2, B3, B4-6, B7-8+10, B9,
+B11-13, B14 cerrados; la auditoría de actualizaciones, conforme sin
+cambios). Quedan fuera del bloque, como ya estaban: el veredicto
+personal de D3m3tr10 sobre la navegación (defecto 1 del probador) y
+los datos del probador para el .blend que congela (defecto 6).
+Consumo total del bloque en Opus: 23.781 (B1) + 59.284 (B2) + 23.881
+(B3) + 48.673 (B4-6) + 21.065 (B7-8+10) + 39.441 (B9) + 12.001
+(B11-13) + 16.472 (B14) = **244.598 tokens**.

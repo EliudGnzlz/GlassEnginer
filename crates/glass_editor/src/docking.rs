@@ -17,6 +17,49 @@ pub enum EditorTab {
     Project,
     ShaderGraph,
     MeshTool,
+    Frametime,
+}
+
+/// Contenido compacto de la pestaña «Frametime»: FPS, fases principales, GPU y memoria.
+fn render_frametime(ui: &mut egui::Ui) {
+    const MIB: f64 = 1024.0 * 1024.0;
+
+    let snap = glass_core::profiling::frame_timing_snapshot();
+    let total_ms = snap.total.avg_us / 1000.0;
+    let fps = if snap.total.avg_us > 0.0 { 1_000_000.0 / snap.total.avg_us } else { 0.0 };
+    ui.monospace(format!("FPS {fps:.0} · Total {total_ms:.2} ms"));
+
+    for (nombre, avg_us) in [
+        ("Update", snap.update.avg_us),
+        ("Physics", snap.physics.avg_us),
+        ("Render", snap.render.avg_us),
+    ] {
+        let avg_ms = avg_us / 1000.0;
+        ui.monospace(format!("{nombre:<8} {avg_ms:6.2} ms"));
+    }
+
+    if snap.gpu_samples > 0 {
+        let gpu_ms = snap.gpu_render.avg_us / 1000.0;
+        let nombre = "GPU";
+        ui.monospace(format!("{nombre:<8} {gpu_ms:6.2} ms"));
+    } else {
+        ui.monospace("GPU      sin datos");
+    }
+
+    let mem = glass_core::profiling::process_memory_snapshot();
+    let mut linea = match mem.rss_bytes {
+        Some(bytes) => {
+            let rss_mib = bytes as f64 / MIB;
+            format!("RSS {rss_mib:.1} MiB")
+        }
+        None => "RSS n/d".to_owned(),
+    };
+    if let Some(gpu) = glass_core::profiling::gpu_memory_snapshot() {
+        let usado = gpu.allocated_bytes as f64 / MIB;
+        let capacidad = gpu.capacity_bytes as f64 / MIB;
+        linea.push_str(&format!(" · GPU {usado:.0}/{capacidad:.0} MiB"));
+    }
+    ui.monospace(linea);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +107,8 @@ pub input_axes_edit: Option<Vec<glass_scripting::input_axes::InputAxisDef>>,
     pub autosave_minutos: u32,
     /// Ventana «Preferencias del editor».
     pub show_preferences_dialog: bool,
+    /// Pestaña «Frametime». Oculta por defecto; se muestra desde Window → Frametime.
+    pub show_frametime: bool,
     /// Diálogo «cambios sin guardar» abierto (lo pide la app al cerrar).
     pub dialogo_guardar_cierre: bool,
     /// Decisión del usuario en ese diálogo; la consume la app.
@@ -95,6 +140,26 @@ impl EditorDockingLayout {
         self.apply_preset(p);
     }
 
+    /// Muestra u oculta la pestaña «Frametime». Idempotente.
+    pub fn set_frametime_visible(&mut self, on: bool) {
+        self.show_frametime = on;
+        let actual = self.dock_state.find_tab(&EditorTab::Frametime);
+        match (on, actual) {
+            (true, None) => self.dock_state.push_to_focused_leaf(EditorTab::Frametime),
+            (false, Some(path)) => {
+                let _ = self.dock_state.remove_tab(path);
+            }
+            _ => {}
+        }
+    }
+
+    /// Repone la pestaña «Frametime» tras reconstruir el `dock_state` si debe estar visible.
+    fn restaurar_frametime(&mut self) {
+        if self.show_frametime && self.dock_state.find_tab(&EditorTab::Frametime).is_none() {
+            self.dock_state.push_to_focused_leaf(EditorTab::Frametime);
+        }
+    }
+
     pub fn new() -> Self {
         let mut slf = Self {
             hierarchy: HierarchyPanel::new(),
@@ -118,6 +183,7 @@ impl EditorDockingLayout {
             cambio_escena: None,
             autosave_minutos: crate::updates::LauncherStore::load().autosave_minutes,
             show_preferences_dialog: false,
+            show_frametime: false,
             dialogo_guardar_cierre: false,
             decision_cierre: None,
             undo_history: crate::undo::UndoHistory::new(),
@@ -212,6 +278,7 @@ impl EditorDockingLayout {
                 self.dock_state = state;
             }
         }
+        self.restaurar_frametime();
     }
 
     /// Aplica un paso de deshacer (`redo = false`) o rehacer
@@ -862,6 +929,11 @@ impl EditorDockingLayout {
                     if ui.button("4 Split").clicked() { self.apply_preset(LayoutPreset::FourSplit); ui.close(); }
                     if ui.button("Wide").clicked() { self.apply_preset(LayoutPreset::Wide); ui.close(); }
                 });
+                let mut ver_frametime = self.show_frametime;
+                if ui.checkbox(&mut ver_frametime, "⏱ Frametime").changed() {
+                    self.set_frametime_visible(ver_frametime);
+                    ui.close();
+                }
             });
 
             ui.menu_button("Help", |ui| {
@@ -1492,6 +1564,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             EditorTab::Project => "📁 Proyecto / Assets".into(),
             EditorTab::ShaderGraph => "🎨 Grafo de Shaders".into(),
             EditorTab::MeshTool => "🧊 MeshForge".into(),
+            EditorTab::Frametime => "⏱ Frametime".into(),
         }
     }
 
@@ -1511,6 +1584,9 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             }
             EditorTab::Console => {
                 self.console.render_console_only(ui);
+            }
+            EditorTab::Frametime => {
+                render_frametime(ui);
             }
             EditorTab::Project => {
                 // El panel gestiona su propio estado de navegación; sólo deja
@@ -1533,6 +1609,31 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
 
 #[cfg(test)]
 mod tests_puerta_herramienta_3d {
+    #[test]
+    fn frametime_se_muestra_y_se_oculta() {
+        let mut layout = super::EditorDockingLayout::new();
+        assert!(layout.dock_state.find_tab(&super::EditorTab::Frametime).is_none());
+
+        layout.set_frametime_visible(true);
+        assert!(layout.show_frametime);
+        assert!(layout.dock_state.find_tab(&super::EditorTab::Frametime).is_some());
+
+        layout.set_frametime_visible(true);
+        assert!(layout.dock_state.find_tab(&super::EditorTab::Frametime).is_some());
+
+        // Un único remove deja el dock sin la pestaña: no se había duplicado.
+        layout.set_frametime_visible(false);
+        assert!(!layout.show_frametime);
+        assert!(layout.dock_state.find_tab(&super::EditorTab::Frametime).is_none());
+    }
+
+    #[test]
+    fn frametime_sobrevive_a_apply_preset() {
+        let mut layout = super::EditorDockingLayout::new();
+        layout.set_frametime_visible(true);
+        layout.apply_preset(super::LayoutPreset::Default);
+        assert!(layout.dock_state.find_tab(&super::EditorTab::Frametime).is_some());
+    }
     use super::*;
 
     #[test]
