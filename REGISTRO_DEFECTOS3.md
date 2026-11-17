@@ -1068,3 +1068,38 @@ escribió de memoria en el prompt y no coincidía; clippy cazó además un
   desregistró y dejó la ruta en `ocultos` con la carpeta intacta;
   «Eliminar del disco…» pidió confirmación con la ruta y borró la carpeta
   y el registro.
+
+## PUNTO 8 — LA RUTA DE LA ESCENA FUERA DE LA BARRA SUPERIOR (CERRADO)
+
+**Defecto** (captura del probador en Windows): el selector 🎬 de la barra
+superior mostraba la ruta entera de la escena
+(`\\?\C:\Users\...\SampleScene`) entre File y Edit.
+
+**Causa raíz**: `glass_core::scenes::short_scene_name` cortaba el nombre
+solo por `/`. Con una clave de escena con barras invertidas (la ruta
+canonizada de Windows) no hay `/` que cortar y el «nombre corto» era la
+ruta completa. La función alimenta el nombre activo del SceneManager, el
+guardado y el selector de la barra: un solo arreglo los cura todos.
+
+**Arreglo** (paquete **DeepSeek V4 Flash**, 4.268 tokens, integrado sin
+rescates):
+- `short_scene_name` corta por `/` y por `\` (`rsplit(['/', '\\'])`), con
+  dos tests nuevos de rutas Windows (normal y verbatim `\\?\`).
+- El menú **File** gana **«Abrir carpeta contenedora de la escena»** y
+  **«Copiar ruta de la escena»**, tras Open Scene. Como la ruta vive en la
+  app (`ruta_escena_actual`), el layout anota la petición
+  (`request_abrir_contenedora_escena` / `request_copiar_ruta_escena`,
+  patrón de `request_build_settings`) y la app la resuelve: contenedora
+  con el helper del punto 7 y copiar con `copy_text`; sin archivo, aviso
+  «La escena aún no tiene archivo (guárdala primero)».
+
+**Verificación**:
+- glass_core 212 tests (incl. los de rutas Windows); pipeline local 5/5.
+- **Test físico PASS** (editor con la escena Escaparate): el selector 🎬
+  muestra «Fase9Escaparate»; File trae las dos acciones en su sitio;
+  «Abrir carpeta contenedora» lanzó el explorador sobre `assets/scenes`
+  (verificado con xdg-open instrumentado); «Copiar ruta» dejó su aviso
+  «Ruta de la escena copiada al portapapeles» en la barra. (La lectura del
+  portapapeles X11 no se verificó: la VM no tiene xclip/xsel; el copiado
+  usa el mecanismo estándar de egui.) El caso Windows del nombre queda
+  cubierto por los tests unitarios con rutas reales.

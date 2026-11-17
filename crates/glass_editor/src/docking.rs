@@ -88,6 +88,11 @@ pub struct EditorDockingLayout {
     pub request_launcher: bool,
     pub request_build_and_run: bool,
     pub request_build_settings: bool,
+    /// File → «Abrir carpeta contenedora de la escena»: lo resuelve la app,
+    /// que es quien conoce la ruta de la escena abierta.
+    pub request_abrir_contenedora_escena: bool,
+    /// File → «Copiar ruta de la escena»: lo resuelve la app (misma razón).
+    pub request_copiar_ruta_escena: bool,
     pub show_project_settings_dialog: bool,
 /// Copia editable de los ejes del Input Manager; None = aún no cargada en este diálogo.
 pub input_axes_edit: Option<Vec<glass_scripting::input_axes::InputAxisDef>>,
@@ -173,6 +178,8 @@ impl EditorDockingLayout {
             current_preset: LayoutPreset::Default,
             mesh_tool_enabled: true,
             request_launcher: false,
+            request_abrir_contenedora_escena: false,
+            request_copiar_ruta_escena: false,
             request_build_and_run: false,
             request_build_settings: false,
             show_project_settings_dialog: false,
@@ -592,6 +599,14 @@ impl EditorDockingLayout {
                     self.scene_switcher_menu(ui, scene_manager);
                 });
                 ui.separator();
+                if ui.button("📂 Abrir carpeta contenedora de la escena").clicked() {
+                    self.request_abrir_contenedora_escena = true;
+                    ui.close();
+                }
+                if ui.button("📋 Copiar ruta de la escena").clicked() {
+                    self.request_copiar_ruta_escena = true;
+                    ui.close();
+                }
                 if ui.button("⚙ Build Settings...\tCtrl+Shift+B").clicked() {
                     self.request_build_settings = true;
                     ui.close();

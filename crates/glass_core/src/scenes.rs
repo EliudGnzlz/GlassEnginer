@@ -302,9 +302,11 @@ pub fn scene_key_for_name(name: &str) -> String {
     format!("{}/{}.scene.json", crate::vfs::SCENES_DIR, safe)
 }
 
-/// `"assets/scenes/Nivel1.scene.json"` → `"Nivel1"`.
+/// `"assets/scenes/Nivel1.scene.json"` → `"Nivel1"`. Corta por `/` y por
+/// `\`: en Windows la clave puede ser una ruta con barras invertidas (o
+/// verbatim `\\?\C:\...`) y el nombre corto debe salir igual.
 pub fn short_scene_name(asset_key: &str) -> String {
-    let file = asset_key.rsplit('/').next().unwrap_or(asset_key);
+    let file = asset_key.rsplit(['/', '\\']).next().unwrap_or(asset_key);
     let stem = file.strip_suffix(".scene.json").unwrap_or(file);
     stem.to_string()
 }
@@ -353,6 +355,8 @@ mod tests {
     fn nombre_corto_quita_ruta_y_doble_extension() {
         assert_eq!(short_scene_name("assets/scenes/Nivel1.scene.json"), "Nivel1");
         assert_eq!(short_scene_name("Nivel1.scene.json"), "Nivel1");
+        assert_eq!(short_scene_name("C:\\Proyectos\\Juego\\Assets\\Scenes\\Nivel1.scene.json"), "Nivel1");
+        assert_eq!(short_scene_name("\\\\?\\C:\\Users\\Diseno\\GlassProjects\\MiJuego\\Assets\\Scenes\\SampleScene.scene.json"), "SampleScene");
         assert_eq!(short_scene_name("Suelto"), "Suelto");
     }
 

@@ -6785,6 +6785,38 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 self.egui_ctx.request_repaint();
             }
 
+            if editor_layout.request_abrir_contenedora_escena {
+                editor_layout.request_abrir_contenedora_escena = false;
+                match &self.ruta_escena_actual {
+                    Some(ruta) => glass_editor::launcher::abrir_carpeta_contenedora(ruta),
+                    None => {
+                        editor_layout.status_message = Some((
+                            "La escena aún no tiene archivo (guárdala primero)".to_string(),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                }
+            }
+
+            if editor_layout.request_copiar_ruta_escena {
+                editor_layout.request_copiar_ruta_escena = false;
+                match &self.ruta_escena_actual {
+                    Some(ruta) => {
+                        self.egui_ctx.copy_text(ruta.to_string_lossy().into_owned());
+                        editor_layout.status_message = Some((
+                            "Ruta de la escena copiada al portapapeles".to_string(),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                    None => {
+                        editor_layout.status_message = Some((
+                            "La escena aún no tiene archivo (guárdala primero)".to_string(),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                }
+            }
+
             // --- Guardado (B2): cambios de escena, decisión y autoguardado ---
             if editor_layout
                 .cambio_escena
