@@ -4257,7 +4257,6 @@ let resueltos = colliders_resueltos(body, shape);
                             | LauncherAction::CreateProject { .. }
                             | LauncherAction::OpenProject(..)
                             | LauncherAction::OpenSceneFile(..)
-                            | LauncherAction::OpenDefaultScene
                     ) =>
             {
                 self.launcher.mostrar_carga = true;
@@ -4273,10 +4272,6 @@ let resueltos = colliders_resueltos(body, shape);
         #[cfg(feature = "editor")]
         if let Some(action) = accion_lista {
             match action {
-                LauncherAction::OpenDefaultScene => {
-                    self.ruta_escena_actual = None;
-                    self.app_mode = AppMode::Editor;
-                }
                 LauncherAction::LoadSampleScene(preset) => {
                     self.ruta_escena_actual = None;
                     match preset {

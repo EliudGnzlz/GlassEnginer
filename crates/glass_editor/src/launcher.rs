@@ -75,7 +75,6 @@ pub enum LauncherAction {
         template: ProjectTemplate,
     },
     LoadSampleScene(SampleScenePreset),
-    OpenDefaultScene,
     /// Abre una escena desde su archivo .scene.json (demos de archivo).
     OpenSceneFile(PathBuf),
 }
@@ -142,6 +141,10 @@ pub struct LauncherPanel {
     /// usará la integrada habiendo una dedicada inutilizable); lo fija
     /// main.rs y se muestra como banda sobre el contenido del Hub.
     pub gpu_aviso: Option<String>,
+    /// Error del último intento de abrir un proyecto con el selector de
+    /// carpetas (p. ej. la carpeta no contiene project.glass); se pinta
+    /// sobre la lista de proyectos hasta el siguiente intento.
+    pub error_abrir: Option<String>,
     /// Pantalla de carga a pantalla completa (precarga diferida del motor).
     pub mostrar_carga: bool,
     /// La pantalla de carga ya se dibujó al menos un frame: main.rs solo
@@ -208,6 +211,24 @@ fn nombre_proyecto(dir: &Path) -> String {
         .unwrap_or_else(|| "Proyecto".to_string())
 }
 
+/// Valida la carpeta elegida con el selector del sistema y la registra
+/// en el almacén: si contiene `project.glass` devuelve la acción de
+/// apertura; si no, un mensaje de error para el usuario. NO guarda el
+/// almacén en disco (lo hace el llamante tras un Ok) ni abre nada.
+pub fn abrir_carpeta_proyecto(
+    store: &mut crate::updates::LauncherStore,
+    dir: &std::path::Path,
+) -> Result<LauncherAction, String> {
+    if !dir.join("project.glass").is_file() {
+        return Err(format!(
+            "La carpeta «{}» no contiene un proyecto de GlassEnginer (falta project.glass).",
+            dir.display()
+        ));
+    }
+    let nombre = nombre_proyecto(dir);
+    store.register_project(&nombre, dir);
+    Ok(LauncherAction::OpenProject(dir.to_path_buf()))
+}
 /// Lista de proyectos del Hub: primero el CWD, pero SOLO si contiene un
 /// `project.glass` (como un proyecto más, con su nombre real); después los
 /// registrados (más recientes primero, solo si siguen teniendo project.glass)
@@ -300,6 +321,7 @@ impl Default for LauncherPanel {
             plugin_state: PluginUiState::Idle,
             plugin_rx: None,
             gpu_aviso: None,
+            error_abrir: None,
             mostrar_carga: false,
             carga_dibujada: false,
         }
@@ -759,11 +781,36 @@ impl LauncherPanel {
                     self.creating_project = true;
                 }
                 if ui.add_sized(Vec2::new(110.0, 30.0), egui::Button::new(RichText::new("📂 Abrir").size(13.0))).clicked() {
-                    *action = Some(LauncherAction::OpenDefaultScene);
+                    // Selector de carpetas del sistema (como el «Open» del
+                    // Hub de Unity): validar, registrar y abrir.
+                    self.error_abrir = None;
+                    if let Some(dir) = rfd::FileDialog::new()
+                        .set_title("Abrir proyecto de GlassEnginer")
+                        .pick_folder()
+                    {
+                        match abrir_carpeta_proyecto(&mut self.update_store, &dir) {
+                            Ok(apertura) => {
+                                if let Err(e) = self.update_store.save() {
+                                    log::warn!("No se pudo guardar el registro de proyectos: {e}");
+                                }
+                                *action = Some(apertura);
+                            }
+                            Err(mensaje) => self.error_abrir = Some(mensaje),
+                        }
+                    }
                 }
             });
         });
         ui.add_space(10.0);
+
+        if let Some(error) = &self.error_abrir {
+            ui.label(
+                RichText::new(format!("⚠ {error}"))
+                    .size(12.5)
+                    .color(Color32::from_rgb(176, 60, 40)),
+            );
+            ui.add_space(6.0);
+        }
 
         // Buscador (como en el Hub viejo: filtra la lista al escribir).
         ui.horizontal(|ui| {
@@ -1383,7 +1430,7 @@ impl LauncherPanel {
 
 #[cfg(test)]
 mod tests_descubrimiento {
-    use super::{canon, descubrir_proyectos};
+    use super::{abrir_carpeta_proyecto, canon, descubrir_proyectos, LauncherAction};
     use crate::updates::ProjectEntry;
     use std::path::PathBuf;
 
@@ -1480,4 +1527,30 @@ mod tests_descubrimiento {
 
         let _ = std::fs::remove_dir_all(&raiz);
     }
+    #[test]
+    fn abrir_carpeta_sin_project_glass_da_error_y_no_registra() {
+        let dir = std::env::temp_dir().join("glass_p6_sin_proyecto");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut store = crate::updates::LauncherStore::default();
+        let resultado = abrir_carpeta_proyecto(&mut store, &dir);
+        assert!(resultado.is_err());
+        assert!(store.projects.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn abrir_carpeta_con_project_glass_registra_y_abre() {
+        let dir = std::env::temp_dir().join("glass_p6_con_proyecto");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("project.glass"), r#"{"name": "ProyectoSeis"}"#).unwrap();
+        let mut store = crate::updates::LauncherStore::default();
+        let resultado = abrir_carpeta_proyecto(&mut store, &dir);
+        assert!(matches!(resultado, Ok(LauncherAction::OpenProject(_))));
+        assert_eq!(store.projects.len(), 1);
+        assert_eq!(store.projects[0].name, "ProyectoSeis");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

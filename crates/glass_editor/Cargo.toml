@@ -26,5 +26,10 @@ egui_dock = "0.21.1"
 # `updates`): cliente HTTP con TLS, lectura de .zip, SHA-256 y
 # comparación de versiones propia (3 o 4 componentes, ver updates.rs).
 ureq = "3"
+# Diálogos nativos del sistema (selector de carpetas del botón «Abrir»
+# del Hub). En Linux el backend por defecto es xdg-portal (sin
+# dependencias nativas de compilación); en Windows y macOS, el diálogo
+# nativo de cada sistema.
+rfd = "0.15"
 zip = "8"
 sha2.workspace = true

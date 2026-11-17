@@ -984,3 +984,45 @@ codificación real.
 
 **Consumo: Opus 73.209** (AB 26.578 · C intento vacío 11.450 ·
 C 35.181) · DeepSeek 0 · Kimi 0.
+
+## PUNTO 6 — EL BOTÓN «ABRIR» DEL HUB ABRE EL SELECTOR DE CARPETAS (CERRADO)
+
+**Defecto (del análisis Hub/Proyecto)**: el botón «📂 Abrir» no abría ningún
+selector: disparaba `OpenDefaultScene`, la misma acción que una tarjeta.
+
+**Arreglo** (paquete **Sonnet 5**, 10.337 tokens; integración con dos rescates
+de Rayo, ver abajo):
+- Nueva dependencia **`rfd = "0.15"`** en glass_editor (portal XDG en Linux,
+  diálogo nativo en Windows; sin dependencias nativas de compilación).
+- El clic en «Abrir» llama a `rfd::FileDialog::pick_folder()` con el título
+  «Abrir proyecto de GlassEnginer». Si el usuario cancela, no pasa nada.
+- La decisión vive en la función libre testeable
+  **`abrir_carpeta_proyecto(store, dir)`**: sin `project.glass` devuelve el
+  error «La carpeta «…» no contiene un proyecto de GlassEnginer (falta
+  project.glass).»; con él, registra el proyecto (`nombre_proyecto` +
+  `register_project`) y devuelve `OpenProject(dir)`. El guardado lo hace el
+  handler del clic tras el Ok; el error se pinta en rojo bajo la cabecera
+  (campo nuevo `error_abrir`).
+- **`OpenDefaultScene` retirado del todo** (variante del enum, su patrón en
+  las acciones diferidas de main.rs y su brazo manejador).
+
+**Rescates de integración (patrones conocidos)**: el par de la función libre
+no ancló en silencio y el de los tests supuso un módulo inexistente; la
+función se insertó extrayéndola de la respuesta y los 2 tests se añadieron a
+mano al módulo `tests_descubrimiento`, ampliando sus imports selectivos.
+
+**Verificación**:
+- Suite glass_editor **107/107** (2 nuevos: carpeta sin project.glass → error
+  y no registra; con project.glass → registra y devuelve OpenProject).
+- Pipeline local completo 5/5 a 0; CI verificado tras el push.
+- **Test físico PASS por el camino real completo** (con el portal XDG y el
+  backend GTK instalados en la VM y una sesión D-Bus propia): clic en
+  «Abrir» → se abre el diálogo nativo del sistema con el título previsto →
+  navegando hasta un proyecto externo y eligiendo su carpeta, el proyecto
+  quedó **registrado en launcher.json** y **se abrió en el editor** (escena
+  vacía, sin escena por defecto en su project.glass). Segunda vuelta:
+  eligiendo una carpeta sin project.glass, el Hub muestra el **error en rojo
+  con la ruta** y no registra nada; la tarjeta del proyecto bueno sigue en la
+  lista. Extra verificado de paso: sin servicio de portal, `pick_folder`
+  devuelve None y la app sigue viva sin hacer nada (degradación limpia,
+  registrada por rfd en glass.log).
