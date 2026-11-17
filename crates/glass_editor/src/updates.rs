@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::Digest;
 
-pub const ENGINE_VERSION: &str = "0.10.16.3-beta";
+pub const ENGINE_VERSION: &str = "0.10.17.1-beta";
 pub const DEFAULT_REPO: &str = "EliudGnzlz/GlassEnginer";
 pub const DEFAULT_API: &str = "https://api.github.com";
 
