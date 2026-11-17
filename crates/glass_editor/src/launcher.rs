@@ -138,6 +138,10 @@ pub struct LauncherPanel {
     pub plugin_catalog: Option<crate::plugins::PluginCatalog>,
     /// Estado de la descarga/instalación de complementos en curso.
     pub plugin_state: PluginUiState,
+    /// Aviso de GPU calculado al crear el contexto Vulkan (p. ej. se
+    /// usará la integrada habiendo una dedicada inutilizable); lo fija
+    /// main.rs y se muestra como banda sobre el contenido del Hub.
+    pub gpu_aviso: Option<String>,
     /// Pantalla de carga a pantalla completa (precarga diferida del motor).
     pub mostrar_carga: bool,
     /// La pantalla de carga ya se dibujó al menos un frame: main.rs solo
@@ -278,6 +282,7 @@ impl Default for LauncherPanel {
             plugin_catalog: None,
             plugin_state: PluginUiState::Idle,
             plugin_rx: None,
+            gpu_aviso: None,
             mostrar_carga: false,
             carga_dibujada: false,
         }
@@ -484,6 +489,18 @@ impl LauncherPanel {
             .frame(egui::Frame::new().fill(CONTENT_BG))
             .show(ui, |ui| {
                 ui.add_space(16.0);
+                if let Some(aviso) = &self.gpu_aviso {
+                    ui.horizontal(|ui| {
+                        ui.add_space(24.0);
+                        ui.label(
+                            RichText::new(format!("⚠ {}", aviso))
+                                .size(12.5)
+                                .color(Color32::from_rgb(176, 124, 0)),
+                        );
+                        ui.add_space(24.0);
+                    });
+                    ui.add_space(10.0);
+                }
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.add_space(24.0);

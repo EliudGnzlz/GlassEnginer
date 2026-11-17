@@ -94,13 +94,108 @@ pub struct VulkanContext {
     pub graphics_queue: vk::Queue,
     pub present_queue: vk::Queue,
     pub queue_families: QueueFamilyIndices,
+    /// Aviso para el usuario cuando la GPU elegida no es la dedicada
+    /// habiendo una dedicada enumerada (ver `aviso_gpu`); la app lo
+    /// muestra en el Hub. None si no hay nada que avisar.
+    pub gpu_aviso: Option<String>,
 }
 
-struct GpuCandidate {
-    device: vk::PhysicalDevice,
-    properties: vk::PhysicalDeviceProperties,
-    indices: QueueFamilyIndices,
-    score: u32,
+/// Datos de un dispositivo físico ya consultados al ICD, en forma plana
+/// para que la selección de GPU sea una función pura y testeable con
+/// listas simuladas (en un equipo híbrido real no hay forma de probar
+/// aquí la enumeración: la VM solo ofrece lavapipe).
+#[derive(Debug, Clone)]
+pub struct GpuDeviceInfo {
+    pub name: String,
+    pub device_type: vk::PhysicalDeviceType,
+    pub vendor_id: u32,
+    pub driver_version: u32,
+    pub local_vram_mb: u64,
+    pub graphics_family: Option<u32>,
+    pub present_family: Option<u32>,
+    pub swapchain_supported: bool,
+}
+
+impl GpuDeviceInfo {
+    pub fn es_discreta(&self) -> bool {
+        self.device_type == vk::PhysicalDeviceType::DISCRETE_GPU
+    }
+
+    /// Por qué el dispositivo no puede ser candidato (None = puede).
+    pub fn motivo_rechazo(&self) -> Option<&'static str> {
+        if self.graphics_family.is_none() {
+            Some("sin cola de gráficos")
+        } else if self.present_family.is_none() {
+            Some("sin cola de presentación para la superficie")
+        } else if !self.swapchain_supported {
+            Some("sin la extensión VK_KHR_swapchain")
+        } else {
+            None
+        }
+    }
+}
+
+/// Puntuación de preferencia de una GPU candidata (None si no lo es).
+/// Orden de tipos: discreta → integrada → virtual → CPU/software, como
+/// en Unity y demás motores; dentro del tipo manda la VRAM local, y el
+/// nombre preferido (GLASS_GPU_NAME) se impone a todo. La escala hace
+/// imposible que una integrada (máx. 5000+3000) supere a una discreta
+/// (mín. 10000).
+pub fn gpu_score(info: &GpuDeviceInfo, preferred_gpu_name: Option<&str>) -> Option<u32> {
+    if info.motivo_rechazo().is_some() {
+        return None;
+    }
+    let mut score = match info.device_type {
+        vk::PhysicalDeviceType::DISCRETE_GPU => 10000,
+        vk::PhysicalDeviceType::INTEGRATED_GPU => 5000,
+        vk::PhysicalDeviceType::VIRTUAL_GPU => 2000,
+        vk::PhysicalDeviceType::CPU => 1000,
+        _ => 500,
+    };
+    if let Some(pref) = preferred_gpu_name {
+        if info.name.to_lowercase().contains(&pref.to_lowercase()) {
+            score += 50000;
+        }
+    }
+    score += (info.local_vram_mb / 100).min(3000) as u32;
+    Some(score)
+}
+
+/// Índice de la GPU elegida entre las enumeradas (None si ninguna es
+/// candidata). Empate: gana la primera enumerada (sort estable).
+pub fn select_gpu(devices: &[GpuDeviceInfo], preferred_gpu_name: Option<&str>) -> Option<usize> {
+    let mut best: Option<(usize, u32)> = None;
+    for (idx, info) in devices.iter().enumerate() {
+        if let Some(score) = gpu_score(info, preferred_gpu_name) {
+            if best.is_none_or(|(_, s)| score > s) {
+                best = Some((idx, score));
+            }
+        }
+    }
+    best.map(|(idx, _)| idx)
+}
+
+/// Aviso para el usuario cuando se va a trabajar con una GPU que no es
+/// la dedicada habiendo una dedicada enumerada: en un portátil híbrido
+/// la dedicada puede no reportar salida de pantalla y la integrada se
+/// queda el trabajo — con un driver viejo eso ha cerrado el motor sin
+/// mensaje (igvk64.dll, 2026-11-17). None si no hay nada que avisar.
+pub fn aviso_gpu(devices: &[GpuDeviceInfo], elegida: usize) -> Option<String> {
+    let ganadora = devices.get(elegida)?;
+    if ganadora.es_discreta() {
+        return None;
+    }
+    let discreta = devices.iter().find(|d| d.es_discreta())?;
+    let motivo = discreta
+        .motivo_rechazo()
+        .unwrap_or("quedó por debajo en la puntuación");
+    Some(format!(
+        "Se usará la gráfica «{}» y no la dedicada «{}»: la dedicada no puede usarse ({}). \
+         Si el motor se cierra sin aviso o va lento, fuerza la dedicada en la configuración \
+         de gráficos de Windows (Configuración > Sistema > Pantalla > Gráficos) o actualiza \
+         el driver de la integrada: un driver antiguo puede fallar con Vulkan.",
+        ganadora.name, discreta.name, motivo
+    ))
 }
 
 impl VulkanContext {
@@ -195,10 +290,18 @@ impl VulkanContext {
         };
         let surface_loader = ash::khr::surface::Instance::new(&entry, &instance);
 
-        // 4. Selección Universal de GPU Física (Agnóstica de fabricante y tipo)
-        log::info!("Enumerando y puntuando dispositivos físicos (NVIDIA, AMD, Intel, Integradas, Dedicadas)...");
+        // 4. Selección de GPU física: se enumeran TODOS los dispositivos
+        // y se anota el veredicto de cada uno — una dedicada descartada
+        // en silencio dejó sin diagnóstico el cierre en un equipo
+        // híbrido (2026-11-17) — y la elección la hace `select_gpu`,
+        // función pura cubierta por tests con listas simuladas.
+        log::info!("Enumerando dispositivos físicos Vulkan...");
         let physical_devices = unsafe { instance.enumerate_physical_devices()? };
-        let mut candidates: Vec<GpuCandidate> = Vec::new();
+        let mut dispositivos: Vec<(
+            vk::PhysicalDevice,
+            vk::PhysicalDeviceProperties,
+            GpuDeviceInfo,
+        )> = Vec::new();
 
         for pdevice in physical_devices {
             let properties = unsafe { instance.get_physical_device_properties(pdevice) };
@@ -234,85 +337,82 @@ impl VulkanContext {
                 name == ash::khr::swapchain::NAME
             });
 
-            if let (Some(g_idx), Some(p_idx)) = (graphics_index, present_index) {
-                if supports_swapchain {
-                    let device_name = unsafe { CStr::from_ptr(properties.device_name.as_ptr()) }
-                        .to_string_lossy()
-                        .to_string();
-
-                    // Puntuación heurística:
-                    // 1. Dedicada (Discrete GPU): NVIDIA, AMD Radeon, Intel Arc -> Base 10000
-                    // 2. Integrada (Integrated GPU): Intel Iris/UHD, AMD Vega/RDNA APU -> Base 5000
-                    // 3. Virtual GPU (VM, Cloud) -> Base 2000
-                    // 4. CPU (Software rasterizer, llvmpipe, lavapipe) -> Base 1000
-                    let mut score = match properties.device_type {
-                        vk::PhysicalDeviceType::DISCRETE_GPU => 10000,
-                        vk::PhysicalDeviceType::INTEGRATED_GPU => 5000,
-                        vk::PhysicalDeviceType::VIRTUAL_GPU => 2000,
-                        vk::PhysicalDeviceType::CPU => 1000,
-                        _ => 500,
-                    };
-
-                    // Bonus si coincide con el nombre preferido por el usuario en configuración o variable de entorno
-                    if let Some(pref) = &config.preferred_gpu_name {
-                        if device_name.to_lowercase().contains(&pref.to_lowercase()) {
-                            score += 50000;
-                        }
-                    }
-
-                    // Bonus por memoria VRAM local disponible
-                    let mem_props = unsafe { instance.get_physical_device_memory_properties(pdevice) };
-                    let mut local_vram_mb = 0u64;
-                    for heap in mem_props
-                        .memory_heaps
-                        .iter()
-                        .take(mem_props.memory_heap_count as usize)
-                    {
-                        if heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL) {
-                            local_vram_mb += heap.size / (1024 * 1024);
-                        }
-                    }
-                    score += (local_vram_mb / 100).min(3000) as u32;
-
-                    log::info!(
-                        "GPU detectada: '{}' | Tipo: {:?} | VRAM: {} MB | Score: {} | Colas [G:{}, P:{}]",
-                        device_name,
-                        properties.device_type,
-                        local_vram_mb,
-                        score,
-                        g_idx,
-                        p_idx
-                    );
-
-                    candidates.push(GpuCandidate {
-                        device: pdevice,
-                        properties,
-                        indices: QueueFamilyIndices {
-                            graphics_family: g_idx,
-                            present_family: p_idx,
-                        },
-                        score,
-                    });
+            // Memoria VRAM local disponible
+            let mem_props = unsafe { instance.get_physical_device_memory_properties(pdevice) };
+            let mut local_vram_mb = 0u64;
+            for heap in mem_props
+                .memory_heaps
+                .iter()
+                .take(mem_props.memory_heap_count as usize)
+            {
+                if heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL) {
+                    local_vram_mb += heap.size / (1024 * 1024);
                 }
             }
+
+            let device_name = unsafe { CStr::from_ptr(properties.device_name.as_ptr()) }
+                .to_string_lossy()
+                .to_string();
+            let info = GpuDeviceInfo {
+                name: device_name,
+                device_type: properties.device_type,
+                vendor_id: properties.vendor_id,
+                driver_version: properties.driver_version,
+                local_vram_mb,
+                graphics_family: graphics_index,
+                present_family: present_index,
+                swapchain_supported: supports_swapchain,
+            };
+            match info.motivo_rechazo() {
+                None => log::info!(
+                    "GPU enumerada: '{}' | Tipo: {:?} | Vendor: {:#06x} | Driver: {} ({:#010x}) | VRAM local: {} MB | candidata (score {})",
+                    info.name,
+                    info.device_type,
+                    info.vendor_id,
+                    info.driver_version,
+                    info.driver_version,
+                    info.local_vram_mb,
+                    gpu_score(&info, config.preferred_gpu_name.as_deref()).unwrap_or(0)
+                ),
+                Some(motivo) => log::info!(
+                    "GPU enumerada: '{}' | Tipo: {:?} | Vendor: {:#06x} | Driver: {} ({:#010x}) | VRAM local: {} MB | NO candidata: {}",
+                    info.name,
+                    info.device_type,
+                    info.vendor_id,
+                    info.driver_version,
+                    info.driver_version,
+                    info.local_vram_mb,
+                    motivo
+                ),
+            }
+            dispositivos.push((pdevice, properties, info));
         }
 
-        if candidates.is_empty() {
-            return Err(VulkanError::NoSuitableGpu);
+        let infos: Vec<GpuDeviceInfo> =
+            dispositivos.iter().map(|(_, _, i)| i.clone()).collect();
+        let elegida = select_gpu(&infos, config.preferred_gpu_name.as_deref())
+            .ok_or(VulkanError::NoSuitableGpu)?;
+        let gpu_aviso = aviso_gpu(&infos, elegida);
+        if let Some(aviso) = &gpu_aviso {
+            log::warn!("{}", aviso);
         }
+        let info_elegida = infos[elegida].clone();
+        log::info!(
+            "GPU seleccionada: '{}' | Tipo: {:?} | Vendor: {:#06x} | Driver: {} ({:#010x}) | Score: {}",
+            info_elegida.name,
+            info_elegida.device_type,
+            info_elegida.vendor_id,
+            info_elegida.driver_version,
+            info_elegida.driver_version,
+            gpu_score(&info_elegida, config.preferred_gpu_name.as_deref()).unwrap_or(0)
+        );
 
-        // Ordenar candidatos de mayor a menor puntuación
-        candidates.sort_by_key(|c| std::cmp::Reverse(c.score));
-        let best_gpu = candidates.remove(0);
-
-        let chosen_name =
-            unsafe { CStr::from_ptr(best_gpu.properties.device_name.as_ptr()) }
-                .to_string_lossy();
-        log::info!("GPU seleccionada (Score máximo {}): {}", best_gpu.score, chosen_name);
-
-        let physical_device = best_gpu.device;
-        let physical_device_properties = best_gpu.properties;
-        let queue_families = best_gpu.indices;
+        let (physical_device, physical_device_properties, _) =
+            dispositivos.into_iter().nth(elegida).unwrap();
+        let queue_families = QueueFamilyIndices {
+            graphics_family: info_elegida.graphics_family.unwrap(),
+            present_family: info_elegida.present_family.unwrap(),
+        };
 
         // 4.b Verificación de capacidad de push constants.
         // El pipeline declara MESH_PUSH_CONSTANTS_SIZE bytes; si el dispositivo
@@ -402,6 +502,7 @@ impl VulkanContext {
             graphics_queue,
             present_queue,
             queue_families,
+            gpu_aviso,
         })
     }
 }
@@ -421,5 +522,133 @@ impl Drop for VulkanContext {
             self.instance.destroy_instance(None);
             log::info!("Contexto Vulkan liberado correctamente.");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gpu(
+        nombre: &str,
+        tipo: vk::PhysicalDeviceType,
+        vram_mb: u64,
+        present: bool,
+    ) -> GpuDeviceInfo {
+        GpuDeviceInfo {
+            name: nombre.to_string(),
+            device_type: tipo,
+            vendor_id: 0,
+            driver_version: 0,
+            local_vram_mb: vram_mb,
+            graphics_family: Some(0),
+            present_family: if present { Some(0) } else { None },
+            swapchain_supported: true,
+        }
+    }
+
+    fn intel() -> GpuDeviceInfo {
+        gpu(
+            "Intel(R) UHD Graphics",
+            vk::PhysicalDeviceType::INTEGRATED_GPU,
+            8192,
+            true,
+        )
+    }
+
+    fn nvidia() -> GpuDeviceInfo {
+        gpu(
+            "NVIDIA GeForce RTX 3060",
+            vk::PhysicalDeviceType::DISCRETE_GPU,
+            8192,
+            true,
+        )
+    }
+
+    #[test]
+    fn hibrido_elige_la_discreta_en_ambos_ordenes() {
+        assert_eq!(select_gpu(&[intel(), nvidia()], None), Some(1));
+        assert_eq!(select_gpu(&[nvidia(), intel()], None), Some(0));
+    }
+
+    #[test]
+    fn discreta_sin_vram_gana_a_integrada_con_mucha() {
+        // La escala lo garantiza: discreta mín. 10000 > integrada máx. 8000.
+        let discreta_pobre = gpu(
+            "NVIDIA GeForce GTX 1050",
+            vk::PhysicalDeviceType::DISCRETE_GPU,
+            0,
+            true,
+        );
+        let integrada_rica = gpu(
+            "Intel(R) Iris Xe",
+            vk::PhysicalDeviceType::INTEGRATED_GPU,
+            16384,
+            true,
+        );
+        assert_eq!(select_gpu(&[integrada_rica, discreta_pobre], None), Some(1));
+    }
+
+    #[test]
+    fn discreta_sin_presentacion_no_es_candidata_y_hay_aviso() {
+        // El caso del equipo híbrido real: la dedicada no reporta cola de
+        // presentación, gana la integrada y el aviso nombra a ambas.
+        let mut discreta_sorda = nvidia();
+        discreta_sorda.present_family = None;
+        let devices = vec![intel(), discreta_sorda];
+        let elegida = select_gpu(&devices, None).unwrap();
+        assert_eq!(elegida, 0);
+        let aviso = aviso_gpu(&devices, elegida).expect("debe haber aviso");
+        assert!(aviso.contains("Intel(R) UHD Graphics"));
+        assert!(aviso.contains("NVIDIA GeForce RTX 3060"));
+        assert!(aviso.contains("sin cola de presentación"));
+    }
+
+    #[test]
+    fn hibrido_sano_no_avisa() {
+        let devices = vec![intel(), nvidia()];
+        let elegida = select_gpu(&devices, None).unwrap();
+        assert_eq!(aviso_gpu(&devices, elegida), None);
+    }
+
+    #[test]
+    fn orden_integrada_antes_que_virtual_y_cpu() {
+        let cpu = gpu("llvmpipe", vk::PhysicalDeviceType::CPU, 0, true);
+        let virtual_gpu = gpu(
+            "VirtualBox Graphics",
+            vk::PhysicalDeviceType::VIRTUAL_GPU,
+            0,
+            true,
+        );
+        assert_eq!(select_gpu(&[cpu.clone(), virtual_gpu], None), Some(1));
+        assert_eq!(select_gpu(&[cpu, intel()], None), Some(1));
+    }
+
+    #[test]
+    fn solo_cpu_se_elige_y_lista_vacia_no() {
+        let cpu = gpu("llvmpipe", vk::PhysicalDeviceType::CPU, 0, true);
+        assert_eq!(select_gpu(&[cpu], None), Some(0));
+        assert_eq!(select_gpu(&[], None), None);
+    }
+
+    #[test]
+    fn sin_cola_de_graficos_no_es_candidata() {
+        let mut rota = nvidia();
+        rota.graphics_family = None;
+        assert_eq!(select_gpu(&[rota], None), None);
+    }
+
+    #[test]
+    fn sin_swapchain_no_es_candidata() {
+        let mut sin_swap = nvidia();
+        sin_swap.swapchain_supported = false;
+        assert_eq!(select_gpu(&[sin_swap], None), None);
+    }
+
+    #[test]
+    fn nombre_preferido_se_impone_a_la_discreta() {
+        let devices = vec![intel(), nvidia()];
+        assert_eq!(select_gpu(&devices, Some("intel")), Some(0));
+        assert_eq!(select_gpu(&devices, Some("geforce")), Some(1));
     }
 }

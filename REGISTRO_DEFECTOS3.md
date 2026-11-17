@@ -810,3 +810,67 @@ ajustada; con los datos que faltan de su amigo se cruzará.
 proyecto, descubrimiento de Blender y aterrizaje; la corrección del
 escaneo tras la verificación física y las integraciones finas son de
 Rayo) · DeepSeek 0 · Kimi 0.
+
+---
+
+## SELECCIÓN DE GPU EN EQUIPOS HÍBRIDOS — CERRADO (2026-11-17)
+
+**Caso**: al amigo probador (Windows, v0.10.17.1-beta) se le cerraba el
+motor al abrir el proyecto, sin mensaje y sin log. Su Visor de eventos
+lo zanjó: access violation (c0000005) dentro de `igvk64.dll`
+27.20.100.9415, el ICD Vulkan de su Intel integrada (driver de 2021).
+Corrección clave de D3m3tr10: el amigo SÍ tiene una NVIDIA dedicada
+con el driver actualizado — el motor estaba corriendo sobre la
+integrada, cuyo driver murió compilando los pipelines de grafo de la
+precarga diferida.
+
+**Diagnóstico de la selección (context.rs)**: la puntuación ya prefería
+la discreta (base 10000 frente a un máximo de 8000 de la integrada) y
+es idéntica en el tag v0.10.17.1-beta y en main; el contexto se crea
+UNA vez al arrancar (no al abrir). Por tanto la NVIDIA nunca llegó a
+puntuar: el filtro previo (cola de gráficos + cola de presentación
+sobre la superficie + extensión swapchain) la dejó fuera en silencio —
+en un portátil híbrido la dedicada puede no reportar presentación
+sobre la superficie de la ventana — o ni siquiera fue enumerada. El
+defecto de fondo: el filtro no dejaba NINGÚN rastro (la línea «GPU
+detectada» solo se imprimía para las que ya habían pasado), así que el
+caso era indiagnosticable desde el log.
+
+**Arreglo** (crates/glass_renderer/src/context.rs):
+- La selección se extrae a funciones puras: `GpuDeviceInfo` (datos
+  planos ya consultados), `gpu_score` (misma escala histórica:
+  discreta 10000 → integrada 5000 → virtual 2000 → CPU 1000, bonus
+  VRAM/100 capado a 3000, nombre preferido +50000) y `select_gpu`.
+- Se anota TODA GPU enumerada con nombre, tipo, vendor, **versión de
+  driver** (cruda y en hex) y VRAM, y el veredicto: candidata con su
+  score o el motivo de rechazo («sin cola de presentación para la
+  superficie», etc.). La elegida se anota con su driver y su score.
+- `aviso_gpu`: si la elegida no es la dedicada habiendo una dedicada
+  enumerada, se genera un aviso que nombra a ambas y el motivo; va al
+  log (warn) y a una **banda visible en el Hub** (campo `gpu_aviso` de
+  VulkanContext → LauncherPanel), con la salida práctica: forzar la
+  dedicada en la configuración de gráficos de Windows o actualizar el
+  driver de la integrada.
+- La política de fondo no cambia: una GPU que no puede presentar no
+  se elige a ciegas (la creación de la swapchain fallaría al arrancar,
+  peor que avisar). Promoverla con reintento y repliegue queda como
+  paso opcional si se pide, con su coste dicho.
+
+**Verificación**: 9 tests nuevos de selección con listas simuladas
+(híbrido en ambos órdenes, discreta sin VRAM contra integrada con
+mucha, discreta sin presentación + aviso con ambos nombres, orden
+integrada→virtual→CPU, solo CPU, lista vacía, sin gráficos, sin
+swapchain, nombre preferido) — 9/9 en verde. Pipeline local 5/5 a 0.
+Test físico: el editor arranca y el log trae las líneas nuevas con la
+llvmpipe de la VM («GPU enumerada: 'llvmpipe (LLVM 20.1.2, 256 bits)'
+| Tipo: CPU | Vendor: 0x10005 | Driver: 104865800 (0x06402008) |
+candidata (score 1079)» y «GPU seleccionada: … | Score: 1079»); el
+Hub pinta normal y sin banda (aquí no hay dedicada: el aviso no
+aplica). El caso híbrido real no es reproducible en esta VM (solo
+lavapipe): la parte de enumeración en un híbrido queda cubierta por
+los tests simulados y se confirmará con el log del amigo en la
+siguiente release.
+
+**Consumo: Opus 0 · DeepSeek 0 · Kimi 0** (auditoría, arreglo y tests
+de Rayo, en la clase de arreglos quirúrgicos directos con precedente:
+dock, B7, gizmo).

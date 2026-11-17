@@ -7196,6 +7196,11 @@ impl ApplicationHandler for GlassEngineApp {
         }
 
         self.renderer = Some(renderer);
+        #[cfg(feature = "editor")]
+        {
+            // El aviso de GPU (si lo hay) se muestra como banda en el Hub.
+            self.launcher.gpu_aviso = vk_ctx.gpu_aviso.clone();
+        }
         self.vulkan_context = Some(vk_ctx);
         self.window = Some(window);
         #[cfg(feature = "editor")]
