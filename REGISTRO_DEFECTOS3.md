@@ -533,3 +533,72 @@ los datos del probador para el .blend que congela (defecto 6).
 Consumo total del bloque en Opus: 23.781 (B1) + 59.284 (B2) + 23.881
 (B3) + 48.673 (B4-6) + 21.065 (B7-8+10) + 39.441 (B9) + 12.001
 (B11-13) + 16.472 (B14) = **244.598 tokens**.
+
+---
+
+## DEFECTO DEL DOCK INFERIOR — las pestañas «abrían el panel equivocado» (2026-11-17)
+
+**Reporte** (pasada física de MeshForge, sobre `32bdd81`): las
+etiquetas del dock inferior no coincidían con sus zonas clicables —
+«Proyecto / Assets» (centro) abría Grafo de Shaders, «Grafo de
+Shaders» abría MeshForge y «MeshForge» no hacía nada. Hipótesis
+sugerida: una pestaña invisible (la Frametime oculta de B14)
+ocupando un hueco de hit-test tras «Consola».
+
+**Investigación (la hipótesis NO se confirmó)**: la construcción del
+DockState está limpia (ningún preset mete pestañas extra; Frametime
+solo entra con `show_frametime`) y en egui_dock 0.21.1 cada pestaña
+se dibuja y se clica con el MISMO widget (`tabs()` en
+`widgets/dock_area/show/leaf.rs`: `response.clicked()` →
+`leaf.active = tab_index`), así que no existe vía de código para un
+desfase etiqueta↔zona. Verificación física previa al arreglo, con
+las etiquetas medidas por grounding y clic en cada centro: **las
+cuatro pestañas abrían su panel** en los tres estados (sin
+Frametime, con Frametime en la hoja inferior y con Frametime en la
+hoja central).
+
+**Causa raíz confirmada en código y medida en vivo**: egui 0.36.2
+trae `InputOptions::max_click_duration = 0,8 s` por defecto
+(`input_state/mod.rs:114`): si una pulsación dura más de 0,8 s,
+`could_any_button_be_click()` pasa a false y la pulsación **deja de
+ser un clic**. En las pestañas del dock (sentido `click_and_drag`)
+la pulsación larga se convierte en **arrastre de pestaña**: no
+activa nada y, si el puntero se mueve, **reordena las pestañas en
+silencio**. Medido en la VM (~4-5 fps): pulsación de 0,05/0,3/0,7 s
+→ la pestaña se activa; 0,9/1,0/2,0 s → no se activa (la frontera
+cae exactamente en los 0,8 s de la constante); un arrastre de 68 px
+llevó «Proyecto» del 2º al último puesto sin ningún aviso. La
+pasada que reportó el defecto clicaba con pulsaciones largas
+(patrón de agente a bajo fps), así que sus clics o no existían o
+arrastraban pestañas entre medición y medición: de ahí el mapa
+«desplazado» observado. En un equipo lento, una pulsación
+deliberada de un usuario real puede superar igualmente los 0,8 s.
+
+**Arreglo de raíz** (main.rs, al crear el contexto egui):
+`input_options.max_click_duration = f64::INFINITY` — los clics no
+caducan por duración; el arrastre sigue naciendo solo del
+movimiento (`max_click_dist`, intacto), así que arrastrar
+pestañas para reordenar sigue funcionando igual que en Unity.
+
+**Test físico PASS tras el arreglo** (editor en vivo, HEAD con el
+arreglo, MeshForge activo): estado 1 sin Frametime — barrido
+rápido Consola/Proyecto/Grafo/MeshForge, cada una abre su panel, y
+pulsaciones lentas de 2 s (Grafo) y 1,5 s (MeshForge) activan su
+pestaña (antes: nada). Estado 2 con Frametime visible desde
+Window — barrido correcto y pulsación lenta de 2 s en Proyecto
+activa Proyecto. Estado 3 con Frametime oculta de nuevo — la
+pestaña desaparece de su hoja, barrido correcto y pulsación lenta
+de 2 s en MeshForge activa MeshForge.
+
+**Consumo: Opus 0** (investigación y arreglo mecánico de una línea,
+de Rayo).
+
+## NOTA MENOR REGISTRADA (sin arreglar, 2026-11-17)
+
+Tras responder «Sí, adaptar» a un mesh collider en MeshForge, el
+Inspector muestra «⚠ Ese modelo no está en assets/: al dibujar se
+usará el cubo» aunque el .glb horneado está en `assets/models/`, el
+AssetWatcher lo registra en el AssetCache y el viewport dibuja la
+forma correcta. La comprobación del Inspector usa otra lista que
+no incluye el modelo recién horneado. Queda registrada a la espera
+de que D3m3tr10 decida si entra en un bloque.

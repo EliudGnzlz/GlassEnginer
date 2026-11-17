@@ -2172,6 +2172,18 @@ impl GlassEngineApp {
         #[cfg(feature = "editor")]
         let egui_ctx = egui::Context::default();
         #[cfg(feature = "editor")]
+        {
+            // Los clics no caducan por duración. Con el defecto de egui
+            // (max_click_duration = 0,8 s), una pulsación mantenida más de
+            // 0,8 s deja de ser un clic: en las pestañas del dock (sentido
+            // click_and_drag) se convierte en un arrastre que no activa la
+            // pestaña y puede reordenarlas en silencio si el puntero se
+            // mueve. En equipos lentos o con frames pesados eso hacía que
+            // las pestañas «no respondieran». El arrastre sigue naciendo
+            // del movimiento (max_click_dist), no del tiempo.
+            egui_ctx.options_mut(|o| o.input_options.max_click_duration = f64::INFINITY);
+        }
+        #[cfg(feature = "editor")]
         glass_editor::setup_editor_fonts(&egui_ctx);
 
         #[cfg(feature = "editor")]
