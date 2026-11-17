@@ -737,6 +737,32 @@ pub fn draw_selection_bounding_box(
     }
 }
 
+/// Base de una cámara para el dibujo del frustum: posición y ejes de mundo.
+pub struct BaseFrustum {
+    pub pos: [f32; 3],
+    pub fwd: [f32; 3],
+    pub right: [f32; 3],
+    pub up: [f32; 3],
+}
+
+/// Esquina de un plano del frustum: `pos + fwd*d + right*(sr*w) + up*(su*h)`,
+/// calculada componente a componente con un único bucle indexado.
+///
+/// Existe como helper porque la versión escrita a mano, componente a
+/// componente, llevaba dos índices cambiados en la Y de las esquinas derechas
+/// del plano lejano (`right[0]`/`up[0]` en vez de `right[1]`/`up[1]`): con la
+/// cámara mirando a −Z, la Y de esas esquinas recibía `+w_far` y el rectángulo
+/// lejano salía torcido hacia arriba a la derecha (el «frustum deformado» de
+/// B7, reabierto el 2026-11-17). Con el bucle, esa clase de error no puede
+/// volver a colarse en una sola componente.
+pub fn esquina_frustum(base: &BaseFrustum, d: f32, w: f32, h: f32, sr: f32, su: f32) -> [f32; 3] {
+    let mut p = [0.0f32; 3];
+    for i in 0..3 {
+        p[i] = base.pos[i] + base.fwd[i] * d + base.right[i] * (sr * w) + base.up[i] * (su * h);
+    }
+    p
+}
+
 /// Dibuja el Gizmo 3D de una Cámara: Icono 2D flotante, Frustum piramidal wireframe y vector de visión
 pub fn draw_camera_gizmo(
     painter: &Painter,
@@ -783,17 +809,18 @@ pub fn draw_camera_gizmo(
     let h_far = d_far * (fov_rad * 0.5).tan();
     let w_far = h_far * aspect;
 
-    // Esquinas del plano cercano
-    let n_tl = [pos[0] + fwd[0]*d_near - right[0]*w_near + up[0]*h_near, pos[1] + fwd[1]*d_near - right[1]*w_near + up[1]*h_near, pos[2] + fwd[2]*d_near - right[2]*w_near + up[2]*h_near];
-    let n_tr = [pos[0] + fwd[0]*d_near + right[0]*w_near + up[0]*h_near, pos[1] + fwd[1]*d_near + right[1]*w_near + up[1]*h_near, pos[2] + fwd[2]*d_near + right[2]*w_near + up[2]*h_near];
-    let n_br = [pos[0] + fwd[0]*d_near + right[0]*w_near - up[0]*h_near, pos[1] + fwd[1]*d_near + right[1]*w_near - up[1]*h_near, pos[2] + fwd[2]*d_near + right[2]*w_near - up[2]*h_near];
-    let n_bl = [pos[0] + fwd[0]*d_near - right[0]*w_near - up[0]*h_near, pos[1] + fwd[1]*d_near - right[1]*w_near - up[1]*h_near, pos[2] + fwd[2]*d_near - right[2]*w_near - up[2]*h_near];
+    // Esquinas de los planos cercano y lejano, calculadas con el helper
+    // componente a componente (ver `esquina_frustum`).
+    let base = BaseFrustum { pos, fwd, right, up };
+    let n_tl = esquina_frustum(&base, d_near, w_near, h_near, -1.0, 1.0);
+    let n_tr = esquina_frustum(&base, d_near, w_near, h_near, 1.0, 1.0);
+    let n_br = esquina_frustum(&base, d_near, w_near, h_near, 1.0, -1.0);
+    let n_bl = esquina_frustum(&base, d_near, w_near, h_near, -1.0, -1.0);
 
-    // Esquinas del plano lejano
-    let f_tl = [pos[0] + fwd[0]*d_far - right[0]*w_far + up[0]*h_far, pos[1] + fwd[1]*d_far - right[1]*w_far + up[1]*h_far, pos[2] + fwd[2]*d_far - right[2]*w_far + up[2]*h_far];
-    let f_tr = [pos[0] + fwd[0]*d_far + right[0]*w_far + up[0]*h_far, pos[1] + fwd[1]*d_far + right[0]*w_far + up[1]*h_far, pos[2] + fwd[2]*d_far + right[2]*w_far + up[2]*h_far];
-    let f_br = [pos[0] + fwd[0]*d_far + right[0]*w_far - up[0]*h_far, pos[1] + fwd[1]*d_far + right[0]*w_far - up[0]*h_far, pos[2] + fwd[2]*d_far + right[2]*w_far - up[2]*h_far];
-    let f_bl = [pos[0] + fwd[0]*d_far - right[0]*w_far - up[0]*h_far, pos[1] + fwd[1]*d_far - right[1]*w_far - up[1]*h_far, pos[2] + fwd[2]*d_far - right[2]*w_far - up[2]*h_far];
+    let f_tl = esquina_frustum(&base, d_far, w_far, h_far, -1.0, 1.0);
+    let f_tr = esquina_frustum(&base, d_far, w_far, h_far, 1.0, 1.0);
+    let f_br = esquina_frustum(&base, d_far, w_far, h_far, 1.0, -1.0);
+    let f_bl = esquina_frustum(&base, d_far, w_far, h_far, -1.0, -1.0);
 
     // Centros de los planos para la línea de mira central (Eje óptico)
     let c_near = [pos[0] + fwd[0]*d_near, pos[1] + fwd[1]*d_near, pos[2] + fwd[2]*d_near];
@@ -1296,5 +1323,61 @@ mod tests_picking {
             entity_local_bounds(&vacio, &cotas_cube),
             ([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5])
         );
+    }
+
+    /// Regresión del «frustum deformado» (B7 reabierto, 2026-11-17): la Y de
+    /// las esquinas derechas del plano lejano usaba `right[0]`/`up[0]` en vez
+    /// de `right[1]`/`up[1]`, y con la cámara mirando a −Z recibía `+w_far`
+    /// (aquí daría y = 9.445 / 6.766 en vez de 4.679 / −0.679). Valores
+    /// exactos del caso medido en vivo con la sonda de diagnóstico.
+    #[test]
+    fn esquinas_frustum_eje_alineado_valores_exactos() {
+        let base = BaseFrustum {
+            pos: [0.0, 2.0, 12.0],
+            fwd: [0.0, 0.0, -1.0],
+            right: [1.0, 0.0, 0.0],
+            up: [0.0, 1.0, 0.0],
+        };
+        let (d, w, h) = (10.0, 4.766, 2.679);
+        let eps = 1e-3;
+        let tl = esquina_frustum(&base, d, w, h, -1.0, 1.0);
+        let tr = esquina_frustum(&base, d, w, h, 1.0, 1.0);
+        let br = esquina_frustum(&base, d, w, h, 1.0, -1.0);
+        let bl = esquina_frustum(&base, d, w, h, -1.0, -1.0);
+        assert!((tl[1] - 4.679).abs() < eps && (tr[1] - 4.679).abs() < eps, "arriba: {tl:?} {tr:?}");
+        assert!((br[1] + 0.679).abs() < eps && (bl[1] + 0.679).abs() < eps, "abajo: {br:?} {bl:?}");
+        assert!((tl[0] + 4.766).abs() < eps && (tr[0] - 4.766).abs() < eps);
+        assert!((br[0] - 4.766).abs() < eps && (bl[0] + 4.766).abs() < eps);
+        for c in [tl, tr, br, bl] {
+            assert!((c[2] - 2.0).abs() < eps, "todas en el plano z=2: {c:?}");
+        }
+    }
+
+    /// Con una base rotada (yaw 90°: la cámara mira a −X), las cuatro esquinas
+    /// de un plano deben quedar centradas en el eje óptico, en el plano
+    /// perpendicular a `fwd` y a la distancia `sqrt(w² + h²)` del centro.
+    #[test]
+    fn esquinas_frustum_base_rotada_perpendiculares_y_centradas() {
+        let base = BaseFrustum {
+            pos: [1.0, 2.0, 3.0],
+            fwd: [-1.0, 0.0, 0.0],
+            right: [0.0, 0.0, -1.0],
+            up: [0.0, 1.0, 0.0],
+        };
+        let (d, w, h): (f32, f32, f32) = (8.0, 3.0, 1.5);
+        let centro = [
+            base.pos[0] + base.fwd[0] * d,
+            base.pos[1] + base.fwd[1] * d,
+            base.pos[2] + base.fwd[2] * d,
+        ];
+        let dist_esperada = (w * w + h * h).sqrt();
+        for (sr, su) in [(-1.0, 1.0), (1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
+            let c = esquina_frustum(&base, d, w, h, sr, su);
+            let rel = [c[0] - centro[0], c[1] - centro[1], c[2] - centro[2]];
+            let perp = rel[0] * base.fwd[0] + rel[1] * base.fwd[1] + rel[2] * base.fwd[2];
+            assert!(perp.abs() < 1e-5, "la esquina no está en el plano: {c:?}");
+            let dist = (rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]).sqrt();
+            assert!((dist - dist_esperada).abs() < 1e-4, "distancia al centro: {dist}");
+        }
     }
 }

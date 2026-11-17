@@ -602,3 +602,55 @@ AssetWatcher lo registra en el AssetCache y el viewport dibuja la
 forma correcta. La comprobación del Inspector usa otra lista que
 no incluye el modelo recién horneado. Queda registrada a la espera
 de que D3m3tr10 decida si entra en un bloque.
+
+## B7 REABIERTO — el frustum seguía torcido (2026-11-17)
+
+**Reporte de D3m3tr10** probando la v0.10.17.1-beta, con captura: con la Main
+Camera seleccionada, el frustum (líneas cian) salía deformado, con el
+rectángulo lejano disparado hacia la esquina superior derecha, fuera de la
+vista de escena, y apuntando a un lado distinto del que muestra la Camera
+Preview. La corrección de plantillas de B7 no era la causa: el fallo estaba
+en el dibujo del frustum mismo. **Tenía razón en todo.**
+
+**Causa raíz (confirmada numéricamente, no a ojo):** en `draw_camera_gizmo`
+(gizmo_3d.rs), las esquinas del frustum se calculaban a mano, componente a
+componente, y la **componente Y de las dos esquinas derechas del plano
+lejano llevaba los índices cambiados**: `f_tr` usaba `right[0]` en vez de
+`right[1]`, y `f_br` usaba `right[0]` y `up[0]` en vez de `right[1]` y
+`up[1]`. Con la cámara mirando a −Z (`right = (1,0,0)`), la Y de esas
+esquinas recibía `+w_far` (≈ +25,7 m con fov 60 y el tope de 25 m): el
+rectángulo lejano se levantaba por la derecha y la pirámide entera se leía
+torcida hacia arriba a la derecha. Las demás componentes y las esquinas del
+plano cercano estaban bien; por eso el frustum «casi» se reconocía.
+
+**Diagnóstico:** sonda temporal de diagnóstico dentro de `draw_camera_gizmo`
+que imprimía base, esquinas proyectadas y VP; las esquinas izquierdas
+coincidían al píxel con el modelo analítico y las derechas no; las cifras de
+la sonda reproducen exactamente el error de índices (p. ej. f_tr proyectada
+a ndc_y −2,851 frente a −0,858 correcta). La sonda se retiró antes del
+cierre. Nota: la verificación física de B7 en su día miró el frustum a ojo
+desde un punto donde dominaba el ápex y no midió las esquinas lejanas; por
+eso el defecto sobrevivió al primer cierre.
+
+**Arreglo de raíz:** las 8 esquinas se calculan ahora con un único helper
+`esquina_frustum(...)` que aplica `pos + fwd*d + right*(sr*w) + up*(su*h)`
+componente a componente con un solo bucle indexado: la clase de error
+(índice cambiado en una componente) ya no puede colarse en una esquina
+suelta. Tests de regresión nuevos con los valores exactos del caso medido
+en vivo y con una base rotada (yaw 90°: perpendicularidad y centrado).
+
+**Verificación física (antes/después desde la misma cámara de escena):**
+(1) escena de control con frustum pequeño (fov 30, far 10): antes, una sola
+diagonal torcida cruzando la vista; después, el rectángulo lejano cae al
+píxel donde lo predice el modelo (cobertura medida sobre la captura:
+arriba 60/65, derecha 81/81, abajo 69/74). (2) La configuración de su
+captura (cámara [0, 3.5, 9], rotación −14°, fov 60): antes, la diagonal
+torcida; después, la banda superior nivelada del rectángulo lejano y la
+pirámide apuntando hacia delante y abajo sobre el suelo, de acuerdo con la
+Camera Preview. (3) SampleScene: antes, dos diagonales gigantes cruzando
+el cielo; después, las aristas laterales simétricas convergiendo sobre el
+eje de la cámara. El tope del plano lejano dibujado (25 m) se mantiene: con
+las esquinas correctas es el tamaño de siempre del gizmo; si se quiere más
+corto, es decisión aparte.
+
+**Consumo: Opus 0** (diagnóstico, arreglo y tests directos de Rayo).
