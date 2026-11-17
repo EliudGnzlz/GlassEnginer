@@ -233,6 +233,55 @@ red completo (updates.rs, plugins.rs, launcher.rs y llamantes en la app):
   llamadas de red (AssetWatcher = archivos locales, MCP = stdio local).
 
 **Veredicto: no existe ningún canal que descargue o instale sin su clic;
-no hubo nada que eliminar.** Los cambios que vio «aparecer» llegaron dentro
-de la instalación manual de la v0.10.16.3-beta, que ya traía los cambios
-del sistema de actualizaciones de los defectos 8 y 9.
+no hubo nada que eliminar.**
+
+### Auditoría afinada, canal por canal (corrección suya del 2026-11-16 21:59)
+
+Su precisión: los cambios aparecieron en la versión nueva DESPUÉS de
+instalarla, no venían «acumulados» en el paquete; su lista de 14 salió de
+ir usándola. Se re-auditó buscando TODO canal por el que la copia
+instalada pueda cambiar sin un clic suyo, incluidos los datos remotos en
+vivo. Barrido global: el ÚNICO código de red de todo el producto está en
+`updates.rs` y `plugins.rs` (ni el C# ni el resto de crates abren red).
+
+**Canales remotos (la petición nace SOLO de su clic; el contenido es el
+del repo en ese instante):**
+1. **Lista de releases de GitHub** → la oferta de actualización de
+   Instalaciones. Solo se pide con «⬇ Buscar actualizaciones». Lo que se
+   ofrece depende del estado del repo al clicar: publicar una release o
+   marcarla «Latest» cambia la próxima oferta sin tocar su copia.
+2. **Catálogo de complementos**, leído en vivo de
+   `raw.githubusercontent.com/{repo}/main/plugins/catalog.json` al pulsar
+   «🔄 Buscar complementos». Su contenido es el de la rama main en ese
+   momento: así apareció «MeshForge» v1.0.1 en su copia instalada cuando
+   se publicó el renombrado, sin que su copia cambiara.
+3. **Las descargas** (paquete del motor y de cada complemento): solo tras
+   su clic de instalar, con SHA-256 verificado antes de extraer.
+
+Las ofertas y el catálogo viven SOLO en memoria durante la sesión: el
+store persistido (`launcher.json`) guarda repo, instalaciones, proyectos
+y el intervalo de autoguardado — ninguna oferta ni catálogo se guarda ni
+se muestra al arrancar. Al abrir el Launcher no se lanza ningún hilo de
+red, no hay temporizadores ni polling, y ningún chequeo de arranque muta
+el store ni la vista (los únicos guardados del store nacen de sus clics:
+instalar, crear/abrir proyecto, «Guardar» del repo).
+
+**Canales locales sin clic en el momento (sin red):**
+4. El Hub re-escanea el disco en cada frame: un proyecto que aparezca en
+   `~/GlassProjects` o en una ruta registrada se lista solo.
+5. El AssetWatcher del editor convierte .blend/.fbx a .glb y recarga
+   mallas/shaders en caliente cuando un archivo cambia en el disco.
+6. El autoguardado del editor (B2, pedido por él): escribe su escena cada
+   N minutos solo si hay cambios sin guardar.
+7. La caché de render expulsa modelos ociosos de VRAM (interno, sin
+   cambio de contenido).
+
+**Conclusión frente a su regla** («la release lista solo se ofrece; nada
+se aplica ni cambia sin mi acción»): nada se APLICA sin su clic en ningún
+canal, y en reposo su copia solo muestra estado local. Lo que «fue
+apareciendo» con el tiempo se explica por (a) comportamientos de la
+build .3 que solo se ejercen al usarla — su lista de 14 salió de ahí — y
+(b) el contenido en vivo de los canales 1 y 2, que cambió porque el repo
+cambió (releases publicadas/marcadas y el catálogo del renombrado)
+mientras su copia seguía intacta. La explicación anterior de este
+registro («la .3 traía todo acumulado») queda corregida por esta sección.
