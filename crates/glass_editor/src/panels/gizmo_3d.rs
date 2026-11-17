@@ -119,6 +119,26 @@ fn draw_scale_axis(painter: &Painter, start: Pos2, end: Pos2, color: Color32, th
     painter.rect_filled(cube_rect, 1.5, color);
 }
 
+/// Puntos de un anillo de rotación de radio `radio` centrado en `origin`, en el plano
+/// perpendicular al eje `eje` (0=X → plano YZ, 1=Y → plano XZ, 2=Z → plano XY).
+/// Empieza en el primer eje del plano y no repite el primer punto al final.
+pub fn anillo_rotacion_puntos(origin: [f32; 3], eje: usize, radio: f32, segmentos: usize) -> Vec<[f32; 3]> {
+    let (a, b) = match eje {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    };
+    (0..segmentos)
+        .map(|i| {
+            let t = i as f32 / segmentos as f32 * std::f32::consts::TAU;
+            let mut p = origin;
+            p[a] += radio * t.cos();
+            p[b] += radio * t.sin();
+            p
+        })
+        .collect()
+}
+
 /// Dibuja el Gizmo 3D interactivo estilo Unity sobre la posición proyectada del objeto.
 /// Retorna el eje que el ratón está apuntando (hover).
 pub fn render_3d_transform_gizmo(
@@ -155,6 +175,26 @@ pub fn render_3d_transform_gizmo(
     let col_blue = Color32::from_rgb(70, 140, 245);
     let col_yellow = Color32::from_rgb(255, 230, 40);
 
+    // Anillos de rotación 3D reales (solo en modo Rotate), radio en pantalla ≈ 45 px
+    let anillos_2d: Option<[Vec<Option<Pos2>>; 3]> = if matches!(mode, crate::panels::viewport::GizmoMode::Rotate) {
+        let mut px_por_unidad = [
+            (tip_x - center_2d).length() / 1.4,
+            (tip_y - center_2d).length() / 1.4,
+            (tip_z - center_2d).length() / 1.4,
+        ];
+        px_por_unidad.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mediana = px_por_unidad[1];
+        let radio_mundo = if mediana.is_finite() && mediana > 1e-3 { 45.0 / mediana } else { 1.4 };
+        Some([0usize, 1, 2].map(|eje| {
+            anillo_rotacion_puntos(origin_3d, eje, radio_mundo, 64)
+                .into_iter()
+                .map(|p| world_to_screen(p, vp, rect))
+                .collect()
+        }))
+    } else {
+        None
+    };
+
     // Hit-testing con el cursor del ratón
     let mut hovered_axis = GizmoAxis::None;
 
@@ -164,21 +204,29 @@ pub fn render_3d_transform_gizmo(
         } else {
             match mode {
                 crate::panels::viewport::GizmoMode::Rotate => {
-                    let dist = (mouse - center_2d).length();
-                    // Anillo X (radio ~38px), Anillo Y (radio ~45px), Anillo Z (radio ~52px)
-                    if (dist - 38.0).abs() < 5.0 {
-                        hovered_axis = GizmoAxis::X;
-                    } else if (dist - 45.0).abs() < 5.0 {
-                        hovered_axis = GizmoAxis::Y;
-                    } else if (dist - 52.0).abs() < 5.0 {
-                        hovered_axis = GizmoAxis::Z;
-                    } else if (32.0..=58.0).contains(&dist) {
-                        if dist < 41.5 {
-                            hovered_axis = GizmoAxis::X;
-                        } else if dist < 48.5 {
-                            hovered_axis = GizmoAxis::Y;
-                        } else {
-                            hovered_axis = GizmoAxis::Z;
+                    // Distancia mínima del ratón a la polilínea proyectada de cada anillo
+                    if let Some(anillos) = &anillos_2d {
+                        let mut mejor_d = f32::INFINITY;
+                        let mut mejor_eje = usize::MAX;
+                        for (i, anillo) in anillos.iter().enumerate() {
+                            let n = anillo.len();
+                            for k in 0..n {
+                                if let (Some(a), Some(b)) = (anillo[k], anillo[(k + 1) % n]) {
+                                    let d = point_to_segment_distance(mouse, a, b);
+                                    if d < mejor_d {
+                                        mejor_d = d;
+                                        mejor_eje = i;
+                                    }
+                                }
+                            }
+                        }
+                        if mejor_d < 7.0 {
+                            hovered_axis = match mejor_eje {
+                                0 => GizmoAxis::X,
+                                1 => GizmoAxis::Y,
+                                2 => GizmoAxis::Z,
+                                _ => GizmoAxis::None,
+                            };
                         }
                     }
                 }
@@ -241,12 +289,24 @@ pub fn render_3d_transform_gizmo(
             let is_y = hovered_axis == GizmoAxis::Y;
             let is_z = hovered_axis == GizmoAxis::Z;
 
-            // Anillo X (Rojo / Amarillo al hover)
-            painter.circle_stroke(center_2d, r * 0.85, Stroke::new(if is_x { 4.0 } else { 2.0 }, if is_x { col_yellow } else { col_red }));
-            // Anillo Y (Verde / Amarillo al hover)
-            painter.circle_stroke(center_2d, r, Stroke::new(if is_y { 4.0 } else { 2.0 }, if is_y { col_yellow } else { col_green }));
-            // Anillo Z (Azul / Amarillo al hover)
-            painter.circle_stroke(center_2d, r * 1.15, Stroke::new(if is_z { 4.0 } else { 2.0 }, if is_z { col_yellow } else { col_blue }));
+            // Anillos 3D reales: X en plano YZ (rojo), Y en plano XZ (verde), Z en plano XY (azul).
+            // Amarillo y más grueso al hover.
+            if let Some(anillos) = &anillos_2d {
+                for (i, anillo) in anillos.iter().enumerate() {
+                    let (hover, col) = match i {
+                        0 => (is_x, col_red),
+                        1 => (is_y, col_green),
+                        _ => (is_z, col_blue),
+                    };
+                    let stroke = Stroke::new(if hover { 4.0 } else { 2.0 }, if hover { col_yellow } else { col });
+                    let n = anillo.len();
+                    for k in 0..n {
+                        if let (Some(a), Some(b)) = (anillo[k], anillo[(k + 1) % n]) {
+                            painter.line_segment([a, b], stroke);
+                        }
+                    }
+                }
+            }
 
             let label = match hovered_axis {
                 GizmoAxis::X => "⟳ Rotar X (Pitch)",
@@ -616,10 +676,10 @@ pub fn draw_selection_bounding_box(
         (0, 4), (1, 5), (2, 6), (3, 7), // Pilares verticales
     ];
 
-    // Colores estilo Unity para la selección (Línea de selección naranja)
-    let halo_stroke = Stroke::new(3.5, Color32::from_rgba_unmultiplied(255, 255, 255, 120));
-    let main_stroke = Stroke::new(2.0, Color32::from_rgb(255, 149, 0)); // Naranja brillante Unity
-    let corner_fill = Color32::from_rgb(255, 215, 60);
+    // Colores de la selección: blanco a petición del usuario (en lugar del naranja de Unity), líneas un 25% más finas
+    let halo_stroke = Stroke::new(2.6, Color32::from_rgba_unmultiplied(255, 255, 255, 120));
+    let main_stroke = Stroke::new(1.5, Color32::WHITE);
+    let corner_fill = Color32::WHITE;
 
     // Dibujar las 12 aristas
     for &(a, b) in &EDGES {
@@ -632,8 +692,8 @@ pub fn draw_selection_bounding_box(
     // Dibujar pequeños vértices ancla en las esquinas visibles
     for opt_pt in &corners_screen {
         if let Some(pt) = *opt_pt {
-            painter.circle_filled(pt, 3.0, corner_fill);
-            painter.circle_stroke(pt, 3.0, Stroke::new(1.0, Color32::BLACK));
+            painter.circle_filled(pt, 2.25, corner_fill);
+            painter.circle_stroke(pt, 2.25, Stroke::new(0.75, Color32::BLACK));
         }
     }
 
@@ -670,7 +730,7 @@ pub fn draw_selection_bounding_box(
             badge_rect,
             4.0,
             bg_color,
-            Stroke::new(1.0, Color32::from_rgb(255, 149, 0)),
+            Stroke::new(1.0, Color32::WHITE),
             egui::StrokeKind::Inside,
         );
         painter.galley(badge_pos - text_size * 0.5, galley, text_color);
@@ -1057,6 +1117,37 @@ pub fn draw_light_gizmo(
 
 #[cfg(test)]
 mod tests_picking {
+    #[test]
+    fn anillo_x_esta_en_el_plano_yz() {
+        let origin = [1.0_f32, -2.0, 3.5];
+        let radio = 2.0_f32;
+        let pts = super::anillo_rotacion_puntos(origin, 0, radio, 64);
+        for p in &pts {
+            assert!((p[0] - origin[0]).abs() < 1e-5, "x fuera del plano YZ: {:?}", p);
+            let d = ((p[0] - origin[0]).powi(2) + (p[1] - origin[1]).powi(2) + (p[2] - origin[2]).powi(2)).sqrt();
+            assert!((d - radio).abs() < 1e-4, "radio incorrecto: {}", d);
+        }
+    }
+
+    #[test]
+    fn anillos_son_perpendiculares_entre_si() {
+        let origin = [0.5_f32, 1.5, -3.0];
+        for eje in 0..3 {
+            let mut n = [0.0_f32; 3];
+            n[eje] = 1.0;
+            for p in super::anillo_rotacion_puntos(origin, eje, 1.7, 64) {
+                let dot = (p[0] - origin[0]) * n[0] + (p[1] - origin[1]) * n[1] + (p[2] - origin[2]) * n[2];
+                assert!(dot.abs() < 1e-5, "eje {} no perpendicular: dot={}", eje, dot);
+            }
+        }
+    }
+
+    #[test]
+    fn anillo_tiene_los_segmentos_pedidos() {
+        for seg in [3usize, 16, 64] {
+            assert_eq!(super::anillo_rotacion_puntos([0.0; 3], 1, 1.0, seg).len(), seg);
+        }
+    }
     use super::*;
     use std::collections::HashMap;
 

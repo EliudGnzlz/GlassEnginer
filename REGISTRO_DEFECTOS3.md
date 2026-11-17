@@ -285,3 +285,73 @@ build .3 que solo se ejercen al usarla — su lista de 14 salió de ahí — y
 cambió (releases publicadas/marcadas y el catálogo del renombrado)
 mientras su copia seguía intacta. La explicación anterior de este
 registro («la .3 traía todo acumulado») queda corregida por esta sección.
+
+## B7-8+10 — Gizmo de cámara «desorientado», anillos de rotación en un plano, selección blanca y líneas −25% — CERRADO
+
+**Reportes**: (7) el frustum de la cámara se dibuja hacia otro lado (ya
+reportado antes y seguía igual); (8) los tres anillos de rotación están
+en el mismo plano; (10) la selección debe ser blanca y sus líneas un
+25% más finas.
+
+**B7 — causa raíz demostrada (el gizmo NO era el culpable)**: `draw_camera_gizmo`
+extrae right/up/back de las columnas de la matriz de mundo, la misma
+convención que `camera_view_matrix` (fwd = −columna 2); verificado
+numéricamente con `mat4_from_trs_euler` y en vivo (una cámara con yaw
++90° dibuja su frustum hacia −X, que ES el forward del motor: los signos
+Euler del motor son el espejo de Unity en pitch y en yaw). Lo que sí
+estaba sin migrar eran las DOS funciones que crean la escena por
+defecto/plantilla: `setup_empty_scene` y `setup_audio_lighting_scene`
+conservaban las rotaciones de ANTES de la migración de signos
+documentada en `camera_view_matrix` — cámara `[14, 0, 0]` (con la
+convención actual mira ARRIBA 14°) y sol `[55, −40, 0]` (forward
+(0.37, +0.82, −0.44): el sol apuntaba hacia arriba, luz desde abajo).
+Demostrado en vivo con la configuración exacta de plantilla: la vista
+de la cámara mostraba un cubo situado ARRIBA centrado y el suelo
+reducido a una franja inferior. Todas las escenas .scene.json del repo
+ya estaban migradas; solo quedaban las plantillas en código.
+**Arreglo**: en ambos sitios, cámara → `[−14, 0, 0]` y sol →
+`[−55, 40, 0]` (el sol migrado da forward (−0.37, −0.82, −0.44), hacia
+abajo). Notas laterales NO incluidas en este sub-bloque: el PiP
+«Camera Preview» pinta la textura de la cámara principal con el nombre
+de la seleccionada; la tapa lejana del frustum se clampa a [10, 25] m
+(geométricamente correcta, visualmente grande).
+
+**B8 — causa raíz**: en `render_3d_transform_gizmo` los «anillos» eran
+tres círculos 2D de pantalla concéntricos (radios 0.85/1.0/1.15 × 45 px)
+con hit-test por bandas de distancia al centro (38/45/52 px).
+**Arreglo**: anillos 3D reales — helper `anillo_rotacion_puntos` que
+genera cada anillo en el plano perpendicular a su eje (X→YZ, Y→XZ,
+Z→XY), radio de mundo calculado para ≈45 px de pantalla (mediana de
+px/unidad de las puntas de eje), 64 segmentos proyectados con
+`world_to_screen`; hit-test por distancia mínima a las polilíneas
+(<7 px). El arrastre de rotación no depende de la geometría dibujada
+(sigue usando `active_drag_axis` + delta de ratón, sin cambios).
+
+**B10 — arreglo** en `draw_selection_bounding_box`: línea principal
+naranja 2.0 → **blanca 1.5**; halo 3.5 → 2.6; esquinas doradas radio
+3.0 → **blancas radio 2.25** (borde 1.0 → 0.75); borde de la etiqueta
+naranja → blanco.
+
+**Paquete**: Opus 21.065 tokens (12 pares; correcciones de integración
+de Rayo: nombres reales de parámetros `vp`/`origin_3d` en el par de
+polilíneas, ruta completa de `GizmoMode`, y el helper recolocado antes
+del doc-comment de la función). Tests: `cargo test -p glass_editor`
+**91/91** (88 + 3 nuevos de anillos: plano YZ del anillo X,
+perpendicularidad entre anillos, nº de segmentos).
+
+**Test físico PASS (VM, binario de editor reconstruido)**:
+- B10: suelo y plataforma seleccionados muestran la caja **blanca** y
+  fina, sin rastro de naranja.
+- B8: con una plataforma en modo Rotar (E), los tres anillos se ven
+  como elipses en **tres planos distintos** que se cruzan en 3D
+  (verde horizontal, rojo vertical de canto, azul de frente); el hover
+  sobre el anillo X lo pinta **amarillo y grueso** con la etiqueta
+  «Rotar X (Pitch)»; el arrastre sobre ese anillo llevó la Rotación X
+  del Inspector de 0.0° a **57.6°**.
+- B7: proyecto sin escena (cae a `setup_empty_scene`, log «cargada:
+  false») → Main Camera con **Rotación X = −14.0°** en el Inspector y
+  Sun con **Rotación [−55.0°, 40.0°]**, con las flechas del gizmo de
+  luz apuntando hacia abajo.
+
+**Consumo B7-8+10: Opus 21.065** (las correcciones de integración y el
+test físico, de Rayo: 0 tokens de API).

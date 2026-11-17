@@ -2869,13 +2869,13 @@ impl GlassEngineApp {
                 "Main Camera".into(),
                 vec!["Transform".into(), "Camera".into()],
             );
-            state.modify_transform(cam_id, Some([0.0, 3.5, 9.0]), Some([14.0, 0.0, 0.0]), Some([1.0, 1.0, 1.0]));
+            state.modify_transform(cam_id, Some([0.0, 3.5, 9.0]), Some([-14.0, 0.0, 0.0]), Some([1.0, 1.0, 1.0]));
 
             let sun_id = state.create_entity(
                 "Sun (Directional Light)".into(),
                 vec!["Transform".into(), "Light".into()],
             );
-            state.modify_transform(sun_id, Some([0.0, 8.0, 0.0]), Some([55.0, -40.0, 0.0]), Some([1.0, 1.0, 1.0]));
+            state.modify_transform(sun_id, Some([0.0, 8.0, 0.0]), Some([-55.0, 40.0, 0.0]), Some([1.0, 1.0, 1.0]));
 
             let red_light = state.create_entity(
                 "Point Light (Red)".into(),
@@ -3068,12 +3068,12 @@ impl GlassEngineApp {
             "Main Camera".into(),
             vec!["Transform".into(), "Camera".into()],
         );
-        state.modify_transform(cam_id, Some([0.0, 3.5, 9.0]), Some([14.0, 0.0, 0.0]), Some([1.0, 1.0, 1.0]));
+        state.modify_transform(cam_id, Some([0.0, 3.5, 9.0]), Some([-14.0, 0.0, 0.0]), Some([1.0, 1.0, 1.0]));
         let sun_id = state.create_entity(
             "Sun (Directional Light)".into(),
             vec!["Transform".into(), "Light".into()],
         );
-        state.modify_transform(sun_id, Some([0.0, 8.0, 0.0]), Some([55.0, -40.0, 0.0]), Some([1.0, 1.0, 1.0]));
+        state.modify_transform(sun_id, Some([0.0, 8.0, 0.0]), Some([-55.0, 40.0, 0.0]), Some([1.0, 1.0, 1.0]));
     }
 
     /// Si el modelo importado trae piel, sube también su malla gemela con
