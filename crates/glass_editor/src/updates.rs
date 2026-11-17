@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::Digest;
 
-pub const ENGINE_VERSION: &str = "0.10.16.2-beta";
+pub const ENGINE_VERSION: &str = "0.10.16.3-beta";
 pub const DEFAULT_REPO: &str = "EliudGnzlz/GlassEnginer";
 pub const DEFAULT_API: &str = "https://api.github.com";
 
@@ -285,24 +285,72 @@ pub fn sha256_hex(data: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-pub(crate) fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
+/// Tope de lectura para las respuestas que se cargan en memoria (el
+/// JSON de releases, los checksums, los manifiestos de complementos).
+///
+/// ureq capa `read_to_vec`/`read_to_string` a 10 MiB por defecto: el
+/// tope se hace explícito y amplio para no depender de ese defecto.
+/// Los PAQUETES no pasan por aquí: se descargan en streaming a disco
+/// con `get_to_file` (defecto 8c — con el tope por defecto de ureq,
+/// toda descarga de actualización moría con «the response body is
+/// larger than request limit: 10485760», porque el paquete del motor
+/// pesa ~26 MB y hasta el binario solo ocupa 13,2 MB comprimido).
+const LIMITE_LECTURA_HTTP: u64 = 512 * 1024 * 1024;
+
+fn peticion_get(url: &str) -> Result<ureq::http::Response<ureq::Body>, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(300)))
         .build()
         .into();
-    let mut resp = match agent
+    match agent
         .get(url)
         .header("User-Agent", "GlassEnginer-Launcher")
         .call()
     {
-        Ok(r) => r,
+        Ok(r) => Ok(r),
         Err(ureq::Error::StatusCode(404)) => {
-            return Err("HTTP 404: el recurso no existe o no es público.".to_string());
+            Err("HTTP 404: el recurso no existe o no es público.".to_string())
         }
-        Err(ureq::Error::StatusCode(n)) => return Err(format!("HTTP {n}")),
-        Err(e) => return Err(e.to_string()),
-    };
-    resp.body_mut().read_to_vec().map_err(|e| e.to_string())
+        Err(ureq::Error::StatusCode(n)) => Err(format!("HTTP {n}")),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+pub(crate) fn get_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let mut resp = peticion_get(url)?;
+    resp.body_mut()
+        .with_config()
+        .limit(LIMITE_LECTURA_HTTP)
+        .read_to_vec()
+        .map_err(|e| e.to_string())
+}
+
+/// Descarga `url` a `dest` en streaming: el cuerpo se copia por
+/// trozos a disco, sin cargarlo entero en memoria y sin ningún tope
+/// de tamaño (`as_reader()` no impone el límite de 10 MiB de
+/// `read_to_vec`). Devuelve los bytes escritos. Es la vía de los
+/// paquetes de actualización (defecto 8c).
+pub(crate) fn get_to_file(url: &str, dest: &std::path::Path) -> Result<u64, String> {
+    let mut resp = peticion_get(url)?;
+    let mut file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
+    std::io::copy(&mut resp.body_mut().as_reader(), &mut file).map_err(|e| e.to_string())
+}
+
+/// SHA-256 de un archivo, leído por trozos (para verificar un paquete
+/// descargado en streaming sin cargarlo en memoria).
+pub fn sha256_hex_file(path: &std::path::Path) -> Result<String, String> {
+    use std::io::Read as _;
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// Devuelve la release del motor más reciente publicada en `repo`.
@@ -334,6 +382,8 @@ pub fn fetch_latest(api_base: &str, repo: &str) -> Result<ReleaseInfo, String> {
     };
     let body = resp
         .body_mut()
+        .with_config()
+        .limit(LIMITE_LECTURA_HTTP)
         .read_to_string()
         .map_err(|e| e.to_string())?;
     let releases: Vec<ReleaseInfo> = serde_json::from_str(&body).map_err(|e| e.to_string())?;
@@ -412,10 +462,23 @@ pub fn check_update(api_base: &str, repo: &str) -> Result<UpdateCheck, String> {
 }
 
 pub fn extract_zip(data: &[u8], dest: &std::path::Path) -> Result<usize, String> {
+    extract_zip_reader(std::io::Cursor::new(data), dest)
+}
+
+/// Extrae el .zip que hay en `path` (la vía de los paquetes
+/// descargados en streaming: el archivo no se carga en memoria).
+pub fn extract_zip_file(path: &std::path::Path, dest: &std::path::Path) -> Result<usize, String> {
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    extract_zip_reader(file, dest)
+}
+
+fn extract_zip_reader<R: std::io::Read + std::io::Seek>(
+    reader: R,
+    dest: &std::path::Path,
+) -> Result<usize, String> {
     std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
 
-    let mut ar = zip::ZipArchive::new(std::io::Cursor::new(data.to_vec()))
-        .map_err(|e| e.to_string())?;
+    let mut ar = zip::ZipArchive::new(reader).map_err(|e| e.to_string())?;
 
     let mut count = 0usize;
 
@@ -462,29 +525,51 @@ pub fn install_release(
         )
     })?;
 
-    let data = get_bytes(&asset.browser_download_url)?;
-    let esperado = expected_sha256(release, asset)?;
-
-    if sha256_hex(&data) != esperado {
-        return Err("El SHA-256 no coincide: la descarga no es íntegra o no es el archivo publicado. No se instaló nada.".to_string());
-    }
-
     let version = release
         .tag_name
         .strip_prefix('v')
         .unwrap_or(&release.tag_name)
         .to_string();
 
-    let destino = versions_dir().join(&version);
+    // Descarga en streaming a un archivo temporal (defecto 8c): el
+    // paquete (~26 MB) se copia por trozos a disco, sin cargarlo en
+    // RAM y sin el tope de 10 MiB de `read_to_vec`. El SHA-256 se
+    // verifica sobre el archivo ANTES de extraer: si no coincide, no
+    // se instala nada. El temporal se borra siempre al salir.
+    let tmp = std::env::temp_dir().join(format!(
+        "glassenginer_update_{}_{}.zip",
+        version,
+        std::process::id()
+    ));
+    let instalacion = descargar_e_instalar(release, asset, &version, &tmp, store);
+    let _ = std::fs::remove_file(&tmp);
+    instalacion
+}
+
+fn descargar_e_instalar(
+    release: &ReleaseInfo,
+    asset: &AssetInfo,
+    version: &str,
+    tmp: &std::path::Path,
+    store: &mut LauncherStore,
+) -> Result<Installation, String> {
+    get_to_file(&asset.browser_download_url, tmp)?;
+    let esperado = expected_sha256(release, asset)?;
+
+    if sha256_hex_file(tmp)? != esperado {
+        return Err("El SHA-256 no coincide: la descarga no es íntegra o no es el archivo publicado. No se instaló nada.".to_string());
+    }
+
+    let destino = versions_dir().join(version);
 
     if destino.exists() {
         std::fs::remove_dir_all(&destino).map_err(|e| e.to_string())?;
     }
 
-    extract_zip(&data, &destino)?;
+    extract_zip_file(tmp, &destino)?;
 
     let installation = Installation {
-        version: version.clone(),
+        version: version.to_string(),
         path: destino.to_string_lossy().to_string(),
         installed_unix: now_unix(),
     };
@@ -743,6 +828,75 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *glass.zip
 
         let sin_repo: LauncherStore = serde_json::from_str(r#"{"installations":[]}"#).unwrap();
         assert_eq!(sin_repo.repo, DEFAULT_REPO);
+    }
+
+    /// Servidor HTTP mínimo en localhost que responde `cuerpo` a la
+    /// primera petición y termina. Devuelve (puerto, hilo).
+    fn servidor_local(cuerpo: Vec<u8>) -> (u16, std::thread::JoinHandle<()>) {
+        use std::io::{Read as _, Write as _};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let puerto = listener.local_addr().unwrap().port();
+        let hilo = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let mut leido = Vec::new();
+            while !leido.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = sock.read(&mut buf).unwrap();
+                assert!(n > 0, "el cliente cerró antes de pedir");
+                leido.extend_from_slice(&buf[..n]);
+            }
+            let cabecera = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                cuerpo.len()
+            );
+            sock.write_all(cabecera.as_bytes()).unwrap();
+            sock.write_all(&cuerpo).unwrap();
+        });
+        (puerto, hilo)
+    }
+
+    /// Regresión del defecto 8c: ureq capa la lectura del cuerpo a
+    /// 10 MiB por defecto y el paquete del motor pesa ~26 MB, así que
+    /// las lecturas en memoria deben llevar el límite explícito. Con
+    /// el tope por defecto de ureq este test muere con «the response
+    /// body is larger than request limit: 10485760».
+    #[test]
+    fn get_bytes_descarga_mas_de_10_mib() {
+        let cuerpo = vec![0xABu8; 11 * 1024 * 1024];
+        let esperado = cuerpo.len();
+        let (puerto, servidor) = servidor_local(cuerpo);
+
+        let datos = get_bytes(&format!("http://127.0.0.1:{puerto}/paquete.zip")).unwrap();
+        servidor.join().unwrap();
+        assert_eq!(datos.len(), esperado);
+        assert!(datos.iter().all(|&b| b == 0xAB));
+    }
+
+    /// Regresión del defecto 8c por el camino REAL de instalación: la
+    /// descarga de paquetes va en streaming a archivo (`get_to_file`)
+    /// y su SHA-256 se calcula sobre el archivo (`sha256_hex_file`).
+    /// Un cuerpo de 11 MiB —más que el tope de ureq— debe llegar
+    /// entero y con el hash correcto.
+    #[test]
+    fn get_to_file_streaming_mas_de_10_mib_y_hash() {
+        let cuerpo: Vec<u8> = (0..11 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+        let hash_esperado = sha256_hex(&cuerpo);
+        let (puerto, servidor) = servidor_local(cuerpo);
+
+        let tmp = std::env::temp_dir().join(format!(
+            "glass_test_stream_{}.zip",
+            std::process::id()
+        ));
+        let n = get_to_file(
+            &format!("http://127.0.0.1:{puerto}/paquete.zip"),
+            &tmp,
+        )
+        .unwrap();
+        servidor.join().unwrap();
+        assert_eq!(n, 11 * 1024 * 1024);
+        assert_eq!(sha256_hex_file(&tmp).unwrap(), hash_esperado);
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]

@@ -211,3 +211,56 @@ pestaña Instalaciones ofreció «⬆ Hay una versión nueva:
 v0.10.16.2-beta (esta copia es v0.10.14.1-beta)» con su botón
 «Descargar e instalar». Las instalaciones viejas actualizan por el
 Launcher; no hace falta descarga manual.
+
+**Addenda 8c (2026-11-16, ~19:41): la DESCARGA también estaba
+rota — el tope de 10 MiB de ureq.** D3m3tr10 le dio a actualizar en
+su Launcher (v0.10.14.1) y le salió en rojo: «the response body is
+larger than request limit: 10485760». La addenda anterior queda
+corregida en su última frase: las instalaciones viejas SÍ ven la
+oferta por el Launcher, pero NO pueden completar la descarga.
+
+Causa raíz, demostrada en tres planos: (1) código — `get_bytes()`
+descargaba el paquete con `read_to_vec()` de ureq 3.5.0, cuyo
+`MAX_BODY_SIZE` por defecto es 10 MiB; el .zip de Linux pesa
+25,6 MB y hasta el binario `glass_app` solo ocupa 13,2 MB
+comprimido dentro del .zip, así que NINGÚN paquete actual cabía por
+esa vía (la descarga de actualizaciones nunca pudo funcionar con
+assets de este tamaño; el arreglo de la .2 solo corrigió la
+selección de la release, no la descarga, y el mismo `get_bytes`
+estaba también en la .2). (2) Reproducción en la VM por el camino
+real: el binario original del tag v0.10.14.1-beta, contra un stub
+local (`GLASS_UPDATE_API`) que sirve el JSON real de
+`/releases/latest` con la URL del asset apuntando al .zip real de
+la v0.10.16.2-beta, ofreció la actualización y al pulsar «Descargar
+e instalar» mostró el error idéntico, byte a byte, al de la captura
+de D3m3tr10 (captura `def8c_6.png`). (3) El JSON de la API pesa
+10.754 bytes: la búsqueda nunca estuvo afectada; el fallo es solo
+de la descarga del paquete.
+
+Arreglo de raíz en `updates.rs`: la descarga de paquetes va ahora
+en STREAMING a un archivo temporal — `get_to_file()` copia el
+cuerpo por trozos con `as_reader()` + `io::copy` (ese lector no
+impone tope), sin cargar los ~26 MB en RAM; el SHA-256 se verifica
+sobre el archivo (`sha256_hex_file()`, lectura por trozos) ANTES de
+extraer, y la extracción lee el .zip desde disco
+(`extract_zip_file()` sobre un `extract_zip_reader()` genérico; la
+garantía «nada se instala si el hash no coincide» no cambia). El
+temporal se borra siempre al salir de `install_release`. Las
+lecturas que sí quedan en memoria son cuerpos pequeños (el JSON de
+la lista de releases en `fetch_latest`, checksums y manifiestos en
+`get_bytes`, también usado por los complementos): ahí `read_to_vec`/
+`read_to_string` quedan con el límite EXPLÍCITO de
+`LIMITE_LECTURA_HTTP` (512 MiB) en vez del defecto de ureq — ningún
+`read_to_*` del flujo de actualización conserva el tope por
+defecto. Tests nuevos por el camino real (servidor HTTP local):
+`get_bytes_descarga_mas_de_10_mib` y
+`get_to_file_streaming_mas_de_10_mib_y_hash` (11 MiB servidos,
+descarga completa y hash correcto). `ENGINE_VERSION` sube a
+0.10.16.3-beta.
+
+Consecuencia para las instalaciones viejas (≤ .2): su descargador
+instalado tiene el tope compilado dentro y no hay publicación que
+lo cambie — este salto exige UNA instalación manual de la .3
+(AppImage en Linux). Desde la .3, las actualizaciones por el
+Launcher descargan e instalan enteras, verificado en la VM de
+punta a punta contra el paquete real.
