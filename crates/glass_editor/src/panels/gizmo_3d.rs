@@ -313,6 +313,109 @@ pub fn render_3d_transform_gizmo(
     hovered_axis
 }
 
+/// Cotas locales (min, max) de la geometría de una entidad: las reales de
+/// su malla según el mapa que la app llena desde el AssetCache. Con
+/// `model == ""` el render usa la malla "cube" de respaldo, así que se
+/// consultan sus cotas. Sin malla conocida, el cubo unidad de siempre.
+pub fn entity_local_bounds(
+    ent: &EntityData,
+    bounds: &std::collections::HashMap<String, ([f32; 3], [f32; 3])>,
+) -> ([f32; 3], [f32; 3]) {
+    if let Some(mesh) = &ent.mesh {
+        let key = if mesh.model.is_empty() { "cube" } else { mesh.model.as_str() };
+        if let Some(b) = bounds.get(key) {
+            return *b;
+        }
+    }
+    ([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5])
+}
+
+/// Inversa general 4×4 (adjunta), en el mismo orden column-major que el
+/// resto del motor. `glass_core::mat4_inverse_affine` NO sirve para un
+/// view-projection: solo invierte la parte afín 3×3 y un VP con
+/// perspectiva queda mal invertido (el picking salía desviado).
+fn mat4_inverse_full(m: [f32; 16]) -> Option<[f32; 16]> {
+    let mut inv = [0.0f32; 16];
+    inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15]
+        + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
+    inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15]
+        - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
+    inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15]
+        + m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
+    inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14]
+        - m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
+    inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15]
+        - m[9] * m[3] * m[14] - m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
+    inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15]
+        + m[8] * m[3] * m[14] + m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
+    inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15]
+        - m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
+    inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14]
+        + m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
+    inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15]
+        + m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
+    inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15]
+        - m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
+    inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15]
+        + m[4] * m[3] * m[13] + m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
+    inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14]
+        - m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
+    inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11]
+        - m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
+    inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11]
+        + m[4] * m[3] * m[10] + m[12] * m[2] * m[7] - m[12] * m[3] * m[6];
+    inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11]
+        - m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
+    inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10]
+        + m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
+    let det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+    if det.abs() < 1.0e-12 {
+        return None;
+    }
+    let inv_det = 1.0 / det;
+    for v in &mut inv {
+        *v *= inv_det;
+    }
+    Some(inv)
+}
+
+/// Rayo de mundo que sale de un punto de pantalla: (origen, dirección
+/// normalizada). Es la inversa exacta de `world_to_screen` sobre el
+/// mismo `vp`; devuelve None si el vp no es invertible o el rayo es
+/// degenerado. La desproyección es homogénea (divide por w) con la
+/// inversa general: la inversa afín de glass_core no invierte la
+/// perspectiva. El NDC de esta proyección usa z ∈ [0, 1].
+pub fn screen_ray(
+    pos: Pos2,
+    vp: &[f32; 16],
+    rect: Rect,
+) -> Option<([f32; 3], [f32; 3])> {
+    let inv = mat4_inverse_full(*vp)?;
+    // La Y sigue la convención de `world_to_screen` (la proyección lleva
+    // la Y invertida para Vulkan): ndc_y crece hacia ABAJO en pantalla.
+    let nx = ((pos.x - rect.min.x) / rect.width()) * 2.0 - 1.0;
+    let ny = ((pos.y - rect.min.y) / rect.height()) * 2.0 - 1.0;
+    let desproyectar = |nz: f32| -> Option<[f32; 3]> {
+        let v = [nx, ny, nz, 1.0];
+        let mut o = [0.0f32; 4];
+        for (row, out) in o.iter_mut().enumerate() {
+            *out = inv[row] * v[0] + inv[4 + row] * v[1] + inv[8 + row] * v[2] + inv[12 + row] * v[3];
+        }
+        if o[3].abs() < 1.0e-9 {
+            return None;
+        }
+        Some([o[0] / o[3], o[1] / o[3], o[2] / o[3]])
+    };
+    let p0 = desproyectar(0.0)?;
+    let p1 = desproyectar(1.0)?;
+    let dir = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+    if len < 1.0e-9 {
+        return None;
+    }
+    Some((p0, [dir[0] / len, dir[1] / len, dir[2] / len]))
+}
+
 /// Raycasting 3D sobre la escena: Encuentra la entidad más cercana al rayo cuando el usuario hace clic.
 /// Convierte un punto de pantalla en un punto del mundo sobre el plano
 /// horizontal `plane_y` (por defecto el suelo Y=0).
@@ -326,31 +429,73 @@ pub fn screen_to_world_on_plane(
     rect: Rect,
     plane_y: f32,
 ) -> Option<[f32; 3]> {
-    let inv = glass_core::mat4_inverse_affine(*vp)?;
-
-    let to_ndc = |p: Pos2, depth: f32| -> [f32; 4] {
-        let nx = ((p.x - rect.min.x) / rect.width()) * 2.0 - 1.0;
-        let ny = 1.0 - ((p.y - rect.min.y) / rect.height()) * 2.0;
-        [nx, ny, depth, 1.0]
-    };
-
-    // Extremos del rayo en NDC (OpenGL: -1 cercano, +1 lejano).
-    let near = to_ndc(pos, -1.0);
-    let far = to_ndc(pos, 1.0);
-    let p0 = glass_core::mat4_transform_point(inv, [near[0], near[1], near[2]]);
-    let p1 = glass_core::mat4_transform_point(inv, [far[0], far[1], far[2]]);
-
-    let dir = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+    let (origin, dir) = screen_ray(pos, vp, rect)?;
     if dir[1].abs() < 1.0e-6 {
         return None;
     }
-    let t = (plane_y - p0[1]) / dir[1];
+    let t = (plane_y - origin[1]) / dir[1];
     if t < 0.0 {
         return None;
     }
-    Some([p0[0] + dir[0] * t, plane_y, p0[2] + dir[2] * t])
+    Some([origin[0] + dir[0] * t, plane_y, origin[2] + dir[2] * t])
 }
 
+/// Las 8 esquinas de una caja (min, max) en el orden que esperan las
+/// aristas de la caja de selección: cara min-Z (0..4) y cara max-Z (4..8),
+/// ambas recorridas (min,min) → (max,min) → (max,max) → (min,max) en XY.
+fn aabb_corners(lo: [f32; 3], hi: [f32; 3]) -> [[f32; 3]; 8] {
+    [
+        [lo[0], lo[1], lo[2]],
+        [hi[0], lo[1], lo[2]],
+        [hi[0], hi[1], lo[2]],
+        [lo[0], hi[1], lo[2]],
+        [lo[0], lo[1], hi[2]],
+        [hi[0], lo[1], hi[2]],
+        [hi[0], hi[1], hi[2]],
+        [lo[0], hi[1], hi[2]],
+    ]
+}
+
+/// Intersección rayo-AABB por slabs. Devuelve el t ≥ 0 de entrada (0 si el
+/// origen ya está dentro) o None si no hay impacto delante del origen.
+fn ray_aabb_hit(origin: [f32; 3], dir: [f32; 3], min: [f32; 3], max: [f32; 3]) -> Option<f32> {
+    let mut t_near = f32::NEG_INFINITY;
+    let mut t_far = f32::INFINITY;
+    for a in 0..3 {
+        if dir[a].abs() < 1.0e-9 {
+            // Paralelo a este eje: solo hay impacto si el origen está
+            // dentro del slab.
+            if origin[a] < min[a] || origin[a] > max[a] {
+                return None;
+            }
+        } else {
+            let inv = 1.0 / dir[a];
+            let mut t0 = (min[a] - origin[a]) * inv;
+            let mut t1 = (max[a] - origin[a]) * inv;
+            if t0 > t1 {
+                std::mem::swap(&mut t0, &mut t1);
+            }
+            t_near = t_near.max(t0);
+            t_far = t_far.min(t1);
+            if t_near > t_far {
+                return None;
+            }
+        }
+    }
+    if t_far < 0.0 {
+        return None;
+    }
+    Some(t_near.max(0.0))
+}
+
+/// Devuelve la entidad que el usuario clica en el Scene View.
+///
+/// Primero los iconos de cámara y luz: si el clic cae a ≤ 24 px de la
+/// posición proyectada de alguno, gana el más cercano a `cam_pos`. Si no,
+/// se lanza un rayo desde el punto de pantalla contra la AABB de mundo de
+/// la geometría real de cada entidad (cotas locales de su malla en
+/// `bounds`, llevadas a mundo con su matriz completa) y gana el impacto
+/// más cercano al origen del rayo.
 pub fn pick_entity_at_screen(
     click_pos: Pos2,
     entities: &[EntityData],
@@ -358,92 +503,74 @@ pub fn pick_entity_at_screen(
     vp: &[f32; 16],
     rect: Rect,
     cam_pos: [f32; 3],
+    bounds: &std::collections::HashMap<String, ([f32; 3], [f32; 3])>,
 ) -> Option<u64> {
-    let mut best_id = None;
-    let mut min_dist_to_cam = f32::MAX;
+    let (origin, dir) = screen_ray(click_pos, vp, rect)?;
 
-    for ent in entities {
-        if !ent.active {
-            continue;
-        }
-
-        // El picking debe ocurrir donde la geometría se dibuja de verdad:
-        // en espacio de mundo, no en el local de la entidad. Sobre un hijo,
-        // el local ignora el transform del padre y el clic no cae donde el ojo
-        // ve la caja.
-        let world = world_matrices
+    // El picking debe ocurrir donde la geometría se dibuja de verdad: en
+    // espacio de mundo. Sobre un hijo, el local ignora el transform del
+    // padre y el clic no cae donde el ojo ve la malla.
+    let world_of = |ent: &EntityData| -> [f32; 16] {
+        world_matrices
             .get(&ent.id)
             .copied()
             .unwrap_or_else(|| glass_core::mat4_from_trs_euler(
                 ent.transform.position,
                 ent.transform.rotation(),
                 ent.transform.scale,
-            ));
-        let pos = glass_core::mat4_translation(world);
-        let scale = glass_core::mat4_scale(world);
+            ))
+    };
 
-        // Distancia euclídea del centro a la cámara
+    // Pasada de iconos: cámaras y luces tienen prioridad.
+    let mut best_icon = None;
+    let mut best_icon_dist = f32::MAX;
+    for ent in entities {
+        if !ent.active || (ent.camera.is_none() && ent.light.is_none()) {
+            continue;
+        }
+        let pos = glass_core::mat4_translation(world_of(ent));
+        let Some(center) = world_to_screen(pos, vp, rect) else {
+            continue;
+        };
+        if (click_pos - center).length() > 24.0 {
+            continue;
+        }
         let dx = pos[0] - cam_pos[0];
         let dy = pos[1] - cam_pos[1];
         let dz = pos[2] - cam_pos[2];
-        let dist_cam = (dx * dx + dy * dy + dz * dz).sqrt().max(0.1);
+        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+        if dist < best_icon_dist {
+            best_icon_dist = dist;
+            best_icon = Some(ent.id);
+        }
+    }
+    if best_icon.is_some() {
+        return best_icon;
+    }
 
-        // Medias extensiones para el Bounding Box de picking
-        let hx = (scale[0].abs() * 0.5).max(0.2);
-        let hy = (scale[1].abs() * 0.5).max(0.2);
-        let hz = (scale[2].abs() * 0.5).max(0.2);
-
-        let corners_local = [
-            [-hx, -hy, -hz],
-            [ hx, -hy, -hz],
-            [ hx,  hy, -hz],
-            [-hx,  hy, -hz],
-            [-hx, -hy,  hz],
-            [ hx, -hy,  hz],
-            [ hx,  hy,  hz],
-            [-hx,  hy,  hz],
-        ];
-
-        let mut min_sx = f32::MAX;
-        let mut max_sx = f32::MIN;
-        let mut min_sy = f32::MAX;
-        let mut max_sy = f32::MIN;
-        let mut valid_corners = 0;
-
-        // Las esquinas se llevan a mundo con la matriz completa: hereda la
-        // rotación del padre, que la recomposición Euler local ignoraba.
-        for c in &corners_local {
-            let wpos = glass_core::mat4_transform_point(world, *c);
-            if let Some(spt) = world_to_screen(wpos, vp, rect) {
-                valid_corners += 1;
-                min_sx = min_sx.min(spt.x);
-                max_sx = max_sx.max(spt.x);
-                min_sy = min_sy.min(spt.y);
-                max_sy = max_sy.max(spt.y);
+    // Pasada de mallas: rayo contra la AABB de mundo de la geometría real.
+    let mut best_id = None;
+    let mut best_t = f32::MAX;
+    for ent in entities {
+        if !ent.active {
+            continue;
+        }
+        let world = world_of(ent);
+        let (lo, hi) = entity_local_bounds(ent, bounds);
+        let mut wmin = [f32::INFINITY; 3];
+        let mut wmax = [f32::NEG_INFINITY; 3];
+        for c in aabb_corners(lo, hi) {
+            let w = glass_core::mat4_transform_point(world, c);
+            for a in 0..3 {
+                wmin[a] = wmin[a].min(w[a]);
+                wmax[a] = wmax[a].max(w[a]);
             }
         }
-
-        let center_2d = world_to_screen(pos, vp, rect);
-        let icon_clicked = (ent.camera.is_some() || ent.light.is_some())
-            && center_2d.is_some_and(|c| (click_pos - c).length() <= 24.0);
-
-        let pad = 6.0_f32;
-        let is_hit = icon_clicked || if valid_corners >= 2 {
-            click_pos.x >= (min_sx - pad)
-                && click_pos.x <= (max_sx + pad)
-                && click_pos.y >= (min_sy - pad)
-                && click_pos.y <= (max_sy + pad)
-        } else if let Some(c) = center_2d {
-            (click_pos - c).length() <= 35.0
-        } else {
-            false
-        };
-
-        // Si se hizo clic directo sobre el icono 2D de cámara o luz, le damos prioridad de picking
-        let effective_dist = if icon_clicked { 0.0 } else { dist_cam };
-        if is_hit && effective_dist < min_dist_to_cam {
-            min_dist_to_cam = effective_dist;
-            best_id = Some(ent.id);
+        if let Some(t) = ray_aabb_hit(origin, dir, wmin, wmax) {
+            if t < best_t {
+                best_t = t;
+                best_id = Some(ent.id);
+            }
         }
     }
 
@@ -458,27 +585,15 @@ pub fn draw_selection_bounding_box(
     world: &[f32; 16],
     vp: &[f32; 16],
     rect: Rect,
+    bounds: &std::collections::HashMap<String, ([f32; 3], [f32; 3])>,
 ) {
-    // La caja vive en espacio de mundo: hereda rotación y escala del padre,
-    // igual que la malla que envuelve.
-    let scale = glass_core::mat4_scale(*world);
-
-    // Calcular las medias extensiones (half-extents) locales directamente adaptadas a la malla y escala del GameObject
-    let hx = (scale[0].abs() * 0.5).max(0.05);
-    let hy = (scale[1].abs() * 0.5).max(0.05);
-    let hz = (scale[2].abs() * 0.5).max(0.05);
+    // La caja envuelve la geometría real de la malla (sus cotas locales).
+    // Al transformarla por `world` hereda la rotación, la escala y la
+    // traslación del padre, igual que la malla que envuelve.
+    let (lo, hi) = entity_local_bounds(entity, bounds);
 
     // 8 esquinas en espacio local
-    let corners_local = [
-        [-hx, -hy, -hz],
-        [ hx, -hy, -hz],
-        [ hx,  hy, -hz],
-        [-hx,  hy, -hz],
-        [-hx, -hy,  hz],
-        [ hx, -hy,  hz],
-        [ hx,  hy,  hz],
-        [-hx,  hy,  hz],
-    ];
+    let corners_local = aabb_corners(lo, hi);
 
     // Transformar cada esquina a coordenadas de mundo con la matriz ya
     // resuelta (incluye la rotación del cuaternión autoritativo y la escala
@@ -937,5 +1052,158 @@ pub fn draw_light_gizmo(
         Some(badge_rect)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests_picking {
+    use super::*;
+    use std::collections::HashMap;
+
+    type Cotas = HashMap<String, ([f32; 3], [f32; 3])>;
+
+    const EYE: [f32; 3] = [0.0, 6.0, 10.0];
+
+    fn rect_prueba() -> Rect {
+        Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(800.0, 600.0))
+    }
+
+    fn vp_prueba(rect: Rect) -> [f32; 16] {
+        let view = look_at(EYE, [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+        let proj = perspective_matrix(
+            45.0_f32.to_radians(),
+            rect.width() / rect.height(),
+            0.1,
+            1000.0,
+        );
+        matmul(&proj, &view)
+    }
+
+    fn entidad_malla(id: u64, nombre: &str, modelo: &str, pos: [f32; 3], escala: [f32; 3]) -> EntityData {
+        let mut ent = EntityData::new(
+            id,
+            nombre.into(),
+            vec!["Transform".into(), "MeshRenderer".into()],
+        );
+        ent.transform.position = pos;
+        ent.transform.scale = escala;
+        ent.mesh.as_mut().unwrap().model = modelo.into();
+        ent
+    }
+
+    fn plano() -> EntityData {
+        entidad_malla(1, "Plane", "plane", [0.0, 0.0, 0.0], [10.0, 1.0, 10.0])
+    }
+
+    fn cotas_plano() -> Cotas {
+        let mut m = Cotas::new();
+        m.insert("plane".into(), ([-0.5, 0.0, -0.5], [0.5, 0.0, 0.5]));
+        m
+    }
+
+    fn mundos(ents: &[EntityData]) -> HashMap<u64, [f32; 16]> {
+        ents.iter()
+            .map(|e| {
+                (
+                    e.id,
+                    glass_core::mat4_from_trs_euler(
+                        e.transform.position,
+                        e.transform.rotation(),
+                        e.transform.scale,
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    fn clic(ents: &[EntityData], cotas: &Cotas, pos: Pos2) -> Option<u64> {
+        let rect = rect_prueba();
+        let vp = vp_prueba(rect);
+        pick_entity_at_screen(pos, ents, &mundos(ents), &vp, rect, EYE, cotas)
+    }
+
+    fn proyectar(p: [f32; 3]) -> Pos2 {
+        let rect = rect_prueba();
+        let s = world_to_screen(p, &vp_prueba(rect), rect).expect("el punto debe proyectarse");
+        assert!(rect.contains(s), "el punto proyectado {s:?} cae fuera del viewport");
+        s
+    }
+
+    #[test]
+    fn plano_escalado_se_clica_en_su_superficie() {
+        let ents = vec![plano()];
+        let cotas = cotas_plano();
+        assert_eq!(clic(&ents, &cotas, rect_prueba().center()), Some(1));
+        assert_eq!(clic(&ents, &cotas, proyectar([3.0, 0.0, 3.0])), Some(1));
+    }
+
+    #[test]
+    fn modelo_con_origen_en_los_pies_se_clica_en_el_torso() {
+        let ents = vec![entidad_malla(2, "Hero", "hero", [0.0, 0.0, -6.0], [1.0, 1.0, 1.0])];
+        let mut cotas = Cotas::new();
+        cotas.insert("hero".into(), ([-0.4, 0.0, -0.3], [0.4, 1.8, 0.3]));
+        assert_eq!(clic(&ents, &cotas, proyectar([0.0, 1.2, -6.0])), Some(2));
+    }
+
+    #[test]
+    fn gana_el_mas_cercano_al_rayo() {
+        let ents = vec![
+            plano(),
+            entidad_malla(2, "Cube", "", [0.0, 0.5, 0.0], [1.0, 1.0, 1.0]),
+        ];
+        let cotas = cotas_plano();
+        assert_eq!(clic(&ents, &cotas, rect_prueba().center()), Some(2));
+    }
+
+    #[test]
+    fn clic_en_vacio_no_selecciona() {
+        let ents = vec![plano()];
+        let cotas = cotas_plano();
+        assert_eq!(clic(&ents, &cotas, Pos2::new(5.0, 5.0)), None);
+    }
+
+    #[test]
+    fn screen_ray_pasa_por_el_punto_proyectado() {
+        // Invariante: proyectar un punto de mundo y lanzar el rayo por el
+        // píxel resultante debe dar un rayo que pasa por el punto.
+        let rect = rect_prueba();
+        let vp = vp_prueba(rect);
+        for p in [[0.0, 1.2, -6.0], [3.0, 0.0, 3.0], [-2.0, 0.5, -2.0], [0.0, 0.0, 0.0]] {
+            let s = world_to_screen(p, &vp, rect).expect("proyección");
+            let (origin, dir) = screen_ray(s, &vp, rect).expect("rayo");
+            let rel = [p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]];
+            let t = rel[0] * dir[0] + rel[1] * dir[1] + rel[2] * dir[2];
+            let cerca = [
+                origin[0] + dir[0] * t,
+                origin[1] + dir[1] * t,
+                origin[2] + dir[2] * t,
+            ];
+            let dist = ((p[0] - cerca[0]).powi(2)
+                + (p[1] - cerca[1]).powi(2)
+                + (p[2] - cerca[2]).powi(2))
+            .sqrt();
+            assert!(dist < 0.05, "el rayo no pasa por {p:?}: dist {dist}");
+        }
+    }
+
+    #[test]
+    fn caja_de_seleccion_usa_las_cotas_reales() {
+        let hero_cotas = ([-0.4, 0.0, -0.3], [0.4, 1.8, 0.3]);
+        let mut cotas_hero = Cotas::new();
+        cotas_hero.insert("hero".into(), hero_cotas);
+        let hero = entidad_malla(1, "Hero", "hero", [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+        assert_eq!(entity_local_bounds(&hero, &cotas_hero), hero_cotas);
+
+        let cube_cotas = ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]);
+        let mut cotas_cube = Cotas::new();
+        cotas_cube.insert("cube".into(), cube_cotas);
+        let cubo = entidad_malla(2, "Cube", "", [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+        assert_eq!(entity_local_bounds(&cubo, &cotas_cube), cube_cotas);
+
+        let vacio = EntityData::new(3, "Empty".into(), vec!["Transform".into()]);
+        assert_eq!(
+            entity_local_bounds(&vacio, &cotas_cube),
+            ([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5])
+        );
     }
 }

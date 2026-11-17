@@ -130,6 +130,11 @@ pub struct ViewportPanel {
     // Vuelo en curso: derecho pulsado sobre el viewport y aún no soltado.
     // Sobrevive a que el cursor salga del rect.
     pub fly_active: bool,
+    // Cotas locales de las mallas (clave → (min, max)) que la app
+    // refresca desde el AssetCache antes de cada render: las usan el
+    // picking y la caja de selección para trabajar con la geometría
+    // real en vez de un cubo unidad supuesto.
+    pub mesh_bounds: std::collections::HashMap<String, ([f32; 3], [f32; 3])>,
 }
 
 impl Default for ViewportPanel {
@@ -156,6 +161,7 @@ impl Default for ViewportPanel {
             game_view_rect: None,
             fly_speed: 10.0,
             fly_active: false,
+            mesh_bounds: std::collections::HashMap::new(),
         }
     }
 }
@@ -316,6 +322,7 @@ impl ViewportPanel {
                                 &world,
                                 &view_proj,
                                 rect,
+                                &self.mesh_bounds,
                             );
                         }
                     }
@@ -422,7 +429,7 @@ impl ViewportPanel {
                 if let Some(pos) = mouse_pos {
                     if let Ok(state) = scene_state.lock() {
                         let world_matrices = state.compute_world_matrices();
-                        if let Some(hit_id) = gizmo_3d::pick_entity_at_screen(pos, &state.entities, &world_matrices, &view_proj, rect, eye) {
+                        if let Some(hit_id) = gizmo_3d::pick_entity_at_screen(pos, &state.entities, &world_matrices, &view_proj, rect, eye, &self.mesh_bounds) {
                             *selected_entity_id = Some(hit_id);
                             log::info!("Objeto seleccionado en Scene View por Raycasting: #{}", hit_id);
                             ui.ctx().request_repaint();

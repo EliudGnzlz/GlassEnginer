@@ -783,13 +783,35 @@ impl HierarchyPanel {
                     // 1×1 subdividida (sin grosor que escalar en Y, así
                     // que la escala Y queda en 1 y un desplazamiento de
                     // vértices futuro no se encoge). Huella de suelo
-                    // 10×10 m como antes; el StaticCollider sale de
-                    // box_extents y no depende de esta escala.
+                    // 10×10 m como antes. El collider no depende de esta
+                    // escala: su forma sale de box_extents (abajo).
                     ent.transform.scale = [10.0, 1.0, 10.0];
                     if let Some(m) = &mut ent.mesh {
                         m.model = "plane".into();
                         m.color = [0.5, 0.5, 0.5];
                     }
+                    // Física: EntityData::new no crea PhysicsData sin
+                    // "RigidBody" en los componentes, así que el
+                    // StaticCollider del preset quedaba sin cuerpo: el
+                    // suelo no colisionaba con nada. Se materializa
+                    // aquí, estático y con las extensiones de la huella
+                    // 10×10. El collider explícito va desplazado −0,5
+                    // en Y para que su cara superior quede en y = 0,
+                    // la superficie visible del plano: sin el
+                    // desplazamiento la caja quedaría centrada en el
+                    // origen y los objetos reposarían flotando 0,5 m
+                    // por encima del suelo.
+                    ent.physics = Some(glass_core::PhysicsData {
+                        body_type: "Static".into(),
+                        box_extents: [5.0, 0.5, 5.0],
+                        colliders: vec![glass_core::ColliderSpec {
+                            shape: "Box".into(),
+                            size: [5.0, 0.5, 5.0],
+                            offset: [0.0, -0.5, 0.0],
+                            is_trigger: false,
+                        }],
+                        ..Default::default()
+                    });
                 }
                 id
             }

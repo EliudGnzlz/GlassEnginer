@@ -6642,6 +6642,11 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
 
             // 2. Ejecutar lógica y UI de egui (Docking estilo Unity sincronizado con SceneState o Hub / Lanzador)
             let raw_input = egui_winit.take_egui_input(&window.inner);
+            // Cotas reales de las mallas para el picking y la caja de
+            // selección del editor (la caché las registra al cargar).
+            if let Ok(cache) = self.asset_cache.read() {
+                self.editor_layout.viewport.mesh_bounds = cache.bounds_snapshot();
+            }
             let editor_layout = &mut self.editor_layout;
             let launcher = &mut self.launcher;
             let app_mode = self.app_mode;

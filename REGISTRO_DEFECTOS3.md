@@ -145,3 +145,94 @@ arrastrables.
 **Consumo:** Opus 23.881 (paquete de 6 pares). La corrección del origen
 del arrastre (de `dnd_drag_source` a observación del puntero con
 `press_origin`) la escribió Rayo directamente tras cazarla el test físico.
+
+## B4-6 — Picking y colliders: plano no seleccionable, collider del plano enorme, enemigo no seleccionable — CERRADO
+
+**Reportes:** (B4) el plano no se puede seleccionar clicando en la escena ·
+(B5) el «collider» del plano se ve enorme, mucho más grande que el plano ·
+(B6) el enemigo de la demo FPS no se selecciona al clicarlo.
+
+**Causa raíz única (picking y caja de selección):** `pick_entity_at_screen` y
+`draw_selection_bounding_box` (gizmo_3d.rs) suponían que toda malla es un cubo
+unidad centrado en el origen, con medias extensiones = escala × 0,5, y DESPUÉS
+transformaban esas esquinas por la matriz de mundo completa: la escala se
+aplicaba DOS VECES y se ignoraba la geometría real. Plano a escala [10,1,10] →
+caja de picking de 100×100 m imposible de clicar en su superficie (B4) y caja
+de selección dibujada 10× más grande (B5: el «contorno enorme» de la captura
+era la caja de selección). Enemigo xbot (escala 1): la caja supuesta era un
+cubo de 1 m en los pies, pero el modelo mide ~1,8 m con el origen en los pies
+→ el torso y la cabeza quedaban fuera (B6). El picking además era una prueba
+de AABB en pantalla con desempate por distancia del CENTRO, no por superficie.
+
+**Causa raíz adicional (lectura literal de B5):** el preset «Plano / Suelo»
+de la jerarquía no creaba física alguna: `EntityData::new` solo materializa
+`PhysicsData` si los componentes incluyen "RigidBody", y el preset trae
+[Transform, MeshRenderer, StaticCollider] → el suelo no colisionaba con nada.
+
+**Hallazgo al integrar (raíz segunda):** el primer `screen_ray` de Opus
+reutilizaba `mat4_inverse_affine` de glass_core, que solo invierte la parte
+afín 3×3 — no invierte la perspectiva de un view-projection — y
+`mat4_transform_point` no divide por w. Los tests de picking lo cazaron
+(fallaban torso y vacío; centro y plano pasaban por simetría). Arreglo de
+raíz: inversa general 4×4 por adjunta y desproyección homogénea dentro de
+gizmo_3d, con la Y en la convención de `world_to_screen` (la proyección
+invierte Y para Vulkan) y NDC z ∈ [0,1]; test de invariante nuevo
+(proyectar → lanzar el rayo → el rayo pasa por el punto). De propina, la
+misma corrección arregla la precisión de `screen_to_world_on_plane`
+(menú Crear y drops de B3), que usaba la misma inversa afín.
+
+**Arreglo:**
+- `AssetCache::bounds_snapshot()`; el panel de viewport guarda las cotas
+  locales reales de cada malla (la app las refresca desde la caché cada
+  frame antes de renderizar el layout).
+- Picking nuevo: pasada de iconos de cámara/luz (≤24 px, prioridad absoluta,
+  como antes) y después rayo contra la AABB de mundo de las cotas REALES de
+  cada malla; gana el impacto más cercano al rayo. La caja de selección
+  dibuja las esquinas de esas mismas cotas. Entidad sin malla conocida →
+  cubo unidad de respaldo; `model == ""` → cotas de "cube" (el respaldo del
+  render).
+- Preset Plano: materializa `PhysicsData` estática con `box_extents`
+  [5, 0.5, 5] y un collider explícito con `offset [0, −0.5, 0]`, para que la
+  cara superior del collider quede en y = 0, la superficie visible (sin el
+  desplazamiento los objetos reposarían flotando 0,5 m).
+- 6 tests nuevos en gizmo_3d (plano escalado clicable en su superficie,
+  modelo con origen en los pies clicable en el torso, gana el más cercano
+  al rayo, clic en vacío, invariante del rayo, cotas reales).
+
+**Test físico (VM, escena de prueba con el Plane del preset y el Enemigo
+clonado de DemoFpsPolygon):** clic en la superficie del plano lejos del
+centro → selecciona Plane (en la reproducción previa NO seleccionaba en
+ningún punto); la caja naranja abraza el quad 10×10 exacto; clic en el
+torso del enemigo → selecciona Enemigo y la caja envuelve la figura entera;
+clic en el cielo → deselecciona; el log confirma «Objeto seleccionado en
+Scene View por Raycasting: #1 / #2». Preset nuevo creado en vivo: el
+Inspector muestra RigidBody Static con half-extents 5,00 / 0,50 / 5,00.
+Regresión B3: arrastrar Gold_Coin al viewport cae en [4.41, 0, 1.36], el
+punto del suelo bajo el cursor (con la matemática vieja habría caído
+reflejado al otro lado).
+
+**Consumo:** Opus 48.673 (paquete de 14 pares). Las correcciones de
+integración (campo de cotas en el panel en vez de parámetro, por los dos
+llamantes internos; inversa general y test de invariante; offset del
+collider del preset) las escribió Rayo directamente.
+
+## AUDITORÍA DE ACTUALIZACIONES (orden de D3m3tr10, 2026-11-16) — SIN APLICACIÓN AUTOMÁTICA
+
+Regla suya: nada de actualizaciones automáticas; la release se ofrece y
+solo se descarga/instala con su acción explícita. Auditoría del código de
+red completo (updates.rs, plugins.rs, launcher.rs y llamantes en la app):
+
+- Comprobar actualizaciones del motor: SOLO el botón «⬇ Buscar
+  actualizaciones» de Instalaciones.
+- Instalar una versión: SOLO el botón «⬇ Descargar e instalar {versión}».
+- Catálogo de complementos: SOLO el botón «🔄 Buscar complementos».
+- Instalar/actualizar un complemento: SOLO sus botones «⬇ Instalar» /
+  «⬆ Actualizar a v…».
+- Al arrancar no se lanza ningún hilo de red; no hay temporizadores ni
+  polling; la pestaña Comunidad es texto estático; el editor no hace
+  llamadas de red (AssetWatcher = archivos locales, MCP = stdio local).
+
+**Veredicto: no existe ningún canal que descargue o instale sin su clic;
+no hubo nada que eliminar.** Los cambios que vio «aparecer» llegaron dentro
+de la instalación manual de la v0.10.16.3-beta, que ya traía los cambios
+del sistema de actualizaciones de los defectos 8 y 9.

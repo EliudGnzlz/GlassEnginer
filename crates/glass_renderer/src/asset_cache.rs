@@ -141,6 +141,13 @@ impl AssetCache {
         self.bounds.get(name).copied()
     }
 
+    /// Copia de todas las cotas locales registradas (clave → (min, max)).
+    /// La consume el editor para picking y caja de selección: es un mapa
+    /// pequeño (una entrada por malla distinta) y se refresca por frame.
+    pub fn bounds_snapshot(&self) -> std::collections::HashMap<String, ([f32; 3], [f32; 3])> {
+        self.bounds.clone()
+    }
+
     pub fn insert_mesh(
         &mut self,
         device: &ash::Device,
