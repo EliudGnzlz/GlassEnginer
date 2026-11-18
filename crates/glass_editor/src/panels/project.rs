@@ -639,6 +639,77 @@ pub fn icono_para(nombre: &str, es_dir: bool) -> &'static str {
     }
 }
 
+/// Accesos rápidos de «Favoritos»: búsquedas por tipo sobre todo el árbol
+/// de assets, como las búsquedas guardadas de la ventana Proyecto de Unity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TipoRapido {
+    Escenas,
+    Materiales,
+    Modelos,
+    Prefabs,
+    Scripts,
+}
+
+impl TipoRapido {
+    pub const TODOS: [TipoRapido; 5] = [
+        TipoRapido::Escenas,
+        TipoRapido::Materiales,
+        TipoRapido::Modelos,
+        TipoRapido::Prefabs,
+        TipoRapido::Scripts,
+    ];
+
+    pub fn etiqueta(&self) -> &'static str {
+        match self {
+            TipoRapido::Escenas => "🎬 Escenas",
+            TipoRapido::Materiales => "🖌 Materiales",
+            TipoRapido::Modelos => "🗿 Modelos",
+            TipoRapido::Prefabs => "🧩 Prefabs",
+            TipoRapido::Scripts => "📜 Scripts",
+        }
+    }
+
+    pub fn coincide(&self, nombre: &str) -> bool {
+        match self {
+            TipoRapido::Escenas => es_escena(nombre),
+            TipoRapido::Materiales => nombre.ends_with(".material.json"),
+            TipoRapido::Modelos => es_modelo(nombre),
+            TipoRapido::Prefabs => es_prefab(nombre),
+            TipoRapido::Scripts => nombre.ends_with(".cs"),
+        }
+    }
+}
+
+/// Búsqueda recursiva por tipo desde `raiz`: devuelve las rutas completas
+/// de los archivos que coinciden, en orden de recorrido (carpetas primero
+/// en cada nivel, como `listar_directorio`, que además ya oculta los
+/// `.meta.json` y los nombres con punto inicial). Tope de profundidad 32.
+pub fn buscar_por_tipo(raiz: &std::path::Path, tipo: TipoRapido) -> Vec<std::path::PathBuf> {
+    let mut salida = Vec::new();
+    let mut pila: Vec<(std::path::PathBuf, usize)> = vec![(raiz.to_path_buf(), 0)];
+    while let Some((dir, profundidad)) = pila.pop() {
+        let Ok(entradas) = listar_directorio(&dir) else {
+            continue;
+        };
+        let mut subcarpetas = Vec::new();
+        for entrada in entradas {
+            let ruta = dir.join(&entrada.nombre);
+            if entrada.es_dir {
+                subcarpetas.push(ruta);
+            } else if tipo.coincide(&entrada.nombre) {
+                salida.push(ruta);
+            }
+        }
+        if profundidad < 32 {
+            // Al apilar al revés, el recorrido visita las carpetas en orden.
+            for sub in subcarpetas.into_iter().rev() {
+                pila.push((sub, profundidad + 1));
+            }
+        }
+    }
+    salida
+}
+
 // ---------------------------------------------------------------------------
 // Panel
 // ---------------------------------------------------------------------------
@@ -723,6 +794,16 @@ pub struct ProjectPanel {
     pub busqueda: String,
     /// Árbol de carpetas cacheado (raíz primero); se renueva en `refrescar`.
     pub arbol_carpetas: Vec<PathBuf>,
+    /// Vista rápida activa (Favoritos): búsqueda por tipo en todo el árbol.
+    pub vista_rapida: Option<TipoRapido>,
+    /// Resultados cacheados de la vista rápida (rutas completas).
+    pub entradas_rapidas: Vec<PathBuf>,
+    /// Tamaño de iconos de la barra inferior: 0 = lista; >0 = rejilla.
+    pub tamano_iconos: f32,
+    /// Caché de miniaturas de imágenes (clave: ruta del archivo).
+    miniaturas: std::collections::HashMap<PathBuf, Option<egui::TextureHandle>>,
+    /// Caché de colores de material ya leídos (clave: ruta del .material.json).
+    colores_material: std::collections::HashMap<PathBuf, Option<egui::Color32>>,
 }
 
 impl Default for ProjectPanel {
@@ -750,6 +831,11 @@ impl ProjectPanel {
             arrastre_asset: None,
             busqueda: String::new(),
             arbol_carpetas: Vec::new(),
+            vista_rapida: None,
+            entradas_rapidas: Vec::new(),
+            tamano_iconos: 0.0,
+            miniaturas: std::collections::HashMap::new(),
+            colores_material: std::collections::HashMap::new(),
         };
         panel.refrescar();
         panel
@@ -804,6 +890,10 @@ impl ProjectPanel {
             }
         }
         self.arbol_carpetas = listar_carpetas(&self.assets_root);
+        self.entradas_rapidas = match self.vista_rapida {
+            Some(tipo) => buscar_por_tipo(&self.assets_root, tipo),
+            None => Vec::new(),
+        };
     }
 
     /// Importa los archivos soltados desde el SO al directorio
@@ -846,6 +936,7 @@ impl ProjectPanel {
             return;
         }
         self.current_dir = dir;
+        self.vista_rapida = None;
         self.seleccion = None;
         self.rename_target = None;
         self.rename_focus = false;
@@ -862,6 +953,7 @@ impl ProjectPanel {
             _ => self.assets_root.clone(),
         };
         self.current_dir = destino;
+        self.vista_rapida = None;
         self.seleccion = None;
         self.rename_target = None;
         self.refrescar();
@@ -1017,6 +1109,10 @@ impl ProjectPanel {
                     ui.label("›");
                 }
             }
+            if let Some(tipo) = self.vista_rapida {
+                ui.label("›");
+                ui.label(egui::RichText::new(tipo.etiqueta()).strong());
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("🔄 Refrescar").clicked() {
                     pedir_refresco = true;
@@ -1038,6 +1134,7 @@ impl ProjectPanel {
         }
         if let Some(dir) = navegar_cabecera {
             self.current_dir = dir;
+            self.vista_rapida = None;
             self.seleccion = None;
             self.refrescar();
         }
@@ -1109,17 +1206,35 @@ impl ProjectPanel {
         // de una pestaña del dock, esos paneles acaban robando la primera
         // fila del contenido (la cabecera queda bajo la barra de pestañas).
         // Verificado en vivo el 2026-11-17.
-        let altura_zonas = ui.available_height();
+        // La barra inferior (seleccionado + slider) reserva 28 px. La altura
+        // se mide contra el fondo del área visible y el cursor actual:
+        // `available_height()` aquí devuelve la altura total de la hoja del
+        // dock sin descontar lo ya dibujado, y la barra quedaba fuera de la
+        // vista en paneles cortos (comprobado en vivo).
+        let altura_zonas = (ui.clip_rect().bottom() - ui.cursor().top() - 26.0).max(8.0);
         let mut navegar_arbol: Option<PathBuf> = None;
+        let mut vista_click: Option<TipoRapido> = None;
         ui.horizontal_top(|ui| {
             ui.allocate_ui_with_layout(
                 egui::vec2(180.0, altura_zonas),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
+                    // Favoritos y árbol comparten UNA ScrollArea: fuera de
+                    // ella, las etiquetas de Favoritos se desbordaban de la
+                    // asignación de altura y empujaban la barra inferior
+                    // fuera de la hoja en paneles cortos (comprobado en vivo).
                     egui::ScrollArea::vertical()
                         .id_salt("arbol_carpetas_scroll")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
+                            ui.label(egui::RichText::new("⭐ Favoritos").strong());
+                            for tipo in TipoRapido::TODOS {
+                                let activa = self.vista_rapida == Some(tipo);
+                                if ui.selectable_label(activa, tipo.etiqueta()).clicked() {
+                                    vista_click = Some(tipo);
+                                }
+                            }
+                            ui.separator();
                             let raiz = self.assets_root.clone();
                             for dir in self.arbol_carpetas.clone() {
                                 let profundidad = dir
@@ -1150,8 +1265,26 @@ impl ProjectPanel {
                 },
             );
             ui.separator();
-            ui.vertical(|ui| {
+            // La columna derecha también va en una asignación de altura
+            // fija: dentro de un `vertical` sin cota, su ScrollArea reclamaba
+            // más altura de la que quedaba y empujaba la barra inferior
+            // fuera de la hoja (comprobado en vivo).
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), altura_zonas),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+        if self.vista_rapida.is_some() {
+            self.render_vista_rapida(ui);
+        } else if self.tamano_iconos > 0.01 {
+            self.render_rejilla(ui);
+        } else {
         // --- Lista de assets --------------------------------------------------
+        // La ventana visible de la columna: el fondo clicable se limita a
+        // ella. Con `ui.clip_rect()` el fondo se extendía a todo el ancho
+        // de la hoja (el clip heredado no se estrecha a la columna) y,
+        // registrado después que la columna izquierda, le robaba los clics
+        // a favoritos y árbol (comprobado en vivo).
+        let viewport_lista = ui.max_rect();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -1159,7 +1292,7 @@ impl ProjectPanel {
                 // elementos para que estos queden encima y conserven su propio
                 // menú contextual; el clic derecho en hueco vacío cae aquí.
                 let fondo = ui.interact(
-                    ui.clip_rect(),
+                    viewport_lista,
                     ui.make_persistent_id("fondo_lista_assets"),
                     egui::Sense::click(),
                 );
@@ -1520,13 +1653,728 @@ impl ProjectPanel {
                     }
                 }
             });
+        }
             });
         });
         if let Some(dir) = navegar_arbol {
             self.current_dir = dir;
+            self.vista_rapida = None;
             self.seleccion = None;
             self.refrescar();
         }
+        if let Some(tipo) = vista_click {
+            self.vista_rapida = Some(tipo);
+            self.seleccion = None;
+            self.refrescar();
+        }
+
+        // --- Barra inferior: seleccionado + slider de tamaño -----------------
+        // Se pinta en un rect absoluto al fondo de la hoja, con fondo opaco
+        // y DESPUÉS de las zonas: en hojas cortas el espacio restante es
+        // menor que la altura mínima que egui concede a las columnas
+        // (~64 px) y su contenido se desborda hacia abajo; la barra queda
+        // por encima como una barra de estado (comprobado en vivo).
+        let clip = ui.clip_rect();
+        let bar_rect = egui::Rect::from_min_size(
+            egui::pos2(clip.left() + 6.0, clip.bottom() - 24.0),
+            egui::vec2(clip.width() - 12.0, 24.0),
+        );
+        let pintor = ui.painter();
+        pintor.rect_filled(bar_rect, 0.0, ui.visuals().panel_fill);
+        pintor.line_segment(
+            [bar_rect.left_top(), bar_rect.right_top()],
+            egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+        );
+        let mut bar_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(bar_rect.shrink2(egui::vec2(2.0, 0.0)))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        match self.seleccion.clone() {
+            Some(ruta) => {
+                let nombre = ruta
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                bar_ui.label(format!(
+                    "{} {} — {}",
+                    icono_para(&nombre, ruta.is_dir()),
+                    nombre,
+                    ruta_legible(&self.assets_root, &ruta)
+                ));
+            }
+            None => {
+                let texto = match self.vista_rapida {
+                    Some(tipo) => format!(
+                        "{} · {} elementos",
+                        tipo.etiqueta(),
+                        self.entradas_rapidas.len()
+                    ),
+                    None => self.ruta_actual_legible(),
+                };
+                bar_ui.label(texto);
+            }
+        }
+        bar_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add(
+                egui::Slider::new(&mut self.tamano_iconos, 0.0..=1.0).show_value(false),
+            );
+            ui.label("Tamaño:");
+        });
+    }
+
+    /// Obtiene (con caché) la textura de miniatura de una imagen; `None` si
+    /// el archivo no es una imagen legible.
+    fn miniatura(&mut self, ui: &egui::Ui, ruta: &Path) -> Option<egui::TextureHandle> {
+        if !self.miniaturas.contains_key(ruta) {
+            let textura = std::fs::read(ruta).ok().and_then(|bytes| {
+                image::load_from_memory(&bytes).ok().map(|img| {
+                    let img = img.thumbnail(128, 128);
+                    let rgba = img.to_rgba8();
+                    let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+                    let color =
+                        egui::ColorImage::from_rgba_unmultiplied([w, h], rgba.as_raw());
+                    ui.ctx().load_texture(
+                        format!("asset_thumb_{}", ruta.display()),
+                        color,
+                        egui::TextureOptions::LINEAR,
+                    )
+                })
+            });
+            self.miniaturas.insert(ruta.to_path_buf(), textura);
+        }
+        self.miniaturas.get(ruta).cloned().flatten()
+    }
+
+    /// Obtiene (con caché) el color `albedo` de un `.material.json`; `None`
+    /// si no se puede leer o parsear.
+    fn color_material(&mut self, ruta: &Path) -> Option<egui::Color32> {
+        if !self.colores_material.contains_key(ruta) {
+            let color = std::fs::read_to_string(ruta).ok().and_then(|texto| {
+                serde_json::from_str::<serde_json::Value>(&texto)
+                    .ok()
+                    .map(|valor| {
+                        let albedo = valor
+                            .get("albedo")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| {
+                                let get = |i: usize| {
+                                    arr.get(i).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32
+                                };
+                                [get(0), get(1), get(2), get(3)]
+                            })
+                            .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                        egui::Color32::from_rgba_unmultiplied(
+                            (albedo[0] * 255.0) as u8,
+                            (albedo[1] * 255.0) as u8,
+                            (albedo[2] * 255.0) as u8,
+                            (albedo[3] * 255.0) as u8,
+                        )
+                    })
+            });
+            self.colores_material.insert(ruta.to_path_buf(), color);
+        }
+        self.colores_material.get(ruta).cloned().flatten()
+    }
+
+    /// Renderiza la vista rápida de Favoritos: resultados de búsqueda
+    /// recursiva por tipo, con el mismo repertorio de interacciones (menor)
+    /// que la lista normal.
+    /// Publica la carga útil del arrastre en curso y dibuja su fantasma
+    /// junto al cursor. Es el mismo bloque que la lista aplica en línea;
+    /// la vista rápida y la rejilla lo comparten desde aquí.
+    fn publicar_fantasma_arrastre(&mut self, ui: &mut Ui) {
+        if self.arrastre_asset.is_some() {
+            if ui.input(|i| i.pointer.any_released()) {
+                self.arrastre_asset = None;
+            } else if let Some(ruta_arrastre) = self.arrastre_asset.clone() {
+                egui::DragAndDrop::set_payload(
+                    ui.ctx(),
+                    ArrastreAsset {
+                        ruta: ruta_arrastre.clone(),
+                    },
+                );
+                if let Some(mp) = ui.input(|i| i.pointer.interact_pos()) {
+                    let nombre_arrastre = ruta_arrastre
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let texto = format!(
+                        "{} {}",
+                        icono_para(&nombre_arrastre, false),
+                        nombre_arrastre
+                    );
+                    let pintor = ui.ctx().layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new("fantasma_asset"),
+                    ));
+                    let ancho = (texto.chars().count() as f32 * 7.0 + 24.0).max(90.0);
+                    let rect_fantasma = egui::Rect::from_min_size(
+                        mp + egui::vec2(12.0, 10.0),
+                        egui::vec2(ancho, 22.0),
+                    );
+                    let sel = ui.visuals().selection.bg_fill;
+                    pintor.rect_filled(
+                        rect_fantasma,
+                        2.0,
+                        egui::Color32::from_rgba_unmultiplied(sel.r(), sel.g(), sel.b(), 225),
+                    );
+                    pintor.rect_stroke(
+                        rect_fantasma,
+                        2.0,
+                        egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 160, 255)),
+                        egui::StrokeKind::Inside,
+                    );
+                    pintor.text(
+                        rect_fantasma.min + egui::vec2(10.0, 11.0),
+                        egui::Align2::LEFT_CENTER,
+                        texto,
+                        egui::FontId::proportional(12.0),
+                        egui::Color32::WHITE,
+                    );
+                }
+            }
+        }
+    }
+
+    fn render_vista_rapida(&mut self, ui: &mut Ui) {
+        let filtro = self.busqueda.trim().to_lowercase();
+        let entradas: Vec<PathBuf> = self
+            .entradas_rapidas
+            .iter()
+            .filter(|ruta| {
+                if filtro.is_empty() {
+                    return true;
+                }
+                ruta.file_name()
+                    .map(|n| n.to_string_lossy().to_lowercase().contains(&filtro))
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+
+        let mut a_seleccionar: Option<PathBuf> = None;
+        let mut abrir_escena: Option<PathBuf> = None;
+        let mut instanciar_prefab: Option<PathBuf> = None;
+        let mut info: Option<String> = None;
+        let mut empezar_renombrado: Option<PathBuf> = None;
+        let mut a_eliminar: Option<PathBuf> = None;
+        let mut abrir_explorador: Option<PathBuf> = None;
+        let mut nuevo_arrastre: Option<PathBuf> = None;
+        let mut confirmar: bool = false;
+        let mut cancelar: bool = false;
+
+        egui::ScrollArea::vertical()
+            .id_salt("vista_rapida_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if entradas.is_empty() {
+                    ui.label(egui::RichText::new("(sin resultados)").weak().italics());
+                    return;
+                }
+                for ruta in &entradas {
+                    let nombre = ruta
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let padre = ruta.parent().unwrap_or(ruta);
+
+                    if self.rename_target.as_deref() == Some(ruta.as_path()) {
+                        ui.horizontal(|ui| {
+                            let resp = ui.text_edit_singleline(&mut self.rename_buffer);
+                            resp.request_focus();
+                            if resp.lost_focus()
+                                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                            {
+                                confirmar = true;
+                            }
+                            if ui.button("✔").clicked() {
+                                confirmar = true;
+                            }
+                            if ui.button("✖").clicked() {
+                                cancelar = true;
+                            }
+                        });
+                        continue;
+                    }
+
+                    let seleccionada = self
+                        .seleccion
+                        .as_ref()
+                        .map(|s| rutas_iguales(s, ruta))
+                        .unwrap_or(false);
+                    let icono = icono_para(&nombre, false);
+
+                    ui.horizontal(|ui| {
+                        let resp =
+                            ui.selectable_label(seleccionada, format!("{icono} {nombre}"));
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.label(
+                                    egui::RichText::new(ruta_legible(&self.assets_root, padre))
+                                        .weak(),
+                                );
+                            },
+                        );
+
+                        if resp.clicked() {
+                            a_seleccionar = Some(ruta.clone());
+                        }
+                        if resp.double_clicked() {
+                            if es_escena(&nombre) {
+                                abrir_escena = Some(ruta.clone());
+                            } else if es_prefab(&nombre) {
+                                instanciar_prefab = Some(ruta.clone());
+                            } else {
+                                info = Some(format!("Archivo seleccionado: {}", ruta.display()));
+                            }
+                        }
+
+                        // Mismo patrón probado de la lista: origen de la
+                        // pulsación dentro de la fila + arrastre decidido.
+                        let origen_en_fila = ui
+                            .input(|i| i.pointer.press_origin())
+                            .is_some_and(|o| resp.rect.contains(o));
+                        if es_instanciable(&nombre, false)
+                            && origen_en_fila
+                            && ui.input(|i| i.pointer.is_decidedly_dragging())
+                        {
+                            nuevo_arrastre = Some(ruta.clone());
+                        }
+
+                        resp.context_menu(|ui| {
+                            ui.label(egui::RichText::new(&nombre).strong());
+                            ui.separator();
+                            if ui.button("✏ Renombrar").clicked() {
+                                empezar_renombrado = Some(ruta.clone());
+                                ui.close();
+                            }
+                            if ui.button("📂 Abrir en el explorador").clicked() {
+                                abrir_explorador = Some(ruta.clone());
+                                ui.close();
+                            }
+                            if ui.button("📋 Copiar ruta").clicked() {
+                                ui.ctx().copy_text(ruta.to_string_lossy().into_owned());
+                                info = Some("Ruta copiada al portapapeles".to_string());
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("🗑 Eliminar").clicked() {
+                                a_eliminar = Some(ruta.clone());
+                                ui.close();
+                            }
+                        });
+                    });
+                }
+            });
+
+        if confirmar {
+            self.confirmar_renombrado();
+        }
+        if cancelar {
+            self.rename_target = None;
+        }
+        if let Some(ruta) = a_seleccionar {
+            self.seleccion = Some(ruta);
+        }
+        if let Some(ruta) = abrir_escena {
+            self.seleccion = Some(ruta.clone());
+            self.set_info(format!("Carga de escena encolada: {}", ruta.display()));
+            self.pending_scene_load = Some(ruta);
+        }
+        if let Some(ruta) = instanciar_prefab {
+            self.seleccion = Some(ruta.clone());
+            self.set_info(format!(
+                "Instanciación de prefab encolada: {}",
+                ruta.display()
+            ));
+            self.pending_prefab_instantiate = Some(ruta);
+        }
+        if let Some(ruta) = empezar_renombrado {
+            self.iniciar_renombrado(ruta);
+        }
+        if let Some(ruta) = a_eliminar {
+            self.eliminar(ruta);
+        }
+        if let Some(ruta) = abrir_explorador {
+            crate::launcher::abrir_en_explorador(&ruta);
+        }
+        if let Some(ruta) = nuevo_arrastre {
+            self.arrastre_asset = Some(ruta);
+        }
+        if let Some(texto) = info {
+            self.set_info(texto);
+        }
+        self.publicar_fantasma_arrastre(ui);
+    }
+
+    /// Renderiza la zona derecha como rejilla de miniaturas cuando el
+    /// slider de tamaño de iconos está por encima del mínimo.
+    fn render_rejilla(&mut self, ui: &mut Ui) {
+        let celda = 40.0 + self.tamano_iconos * 88.0;
+        let entradas = self.entradas.clone();
+        let filtro = self.busqueda.trim().to_lowercase();
+        let entradas: Vec<Entrada> = entradas
+            .into_iter()
+            .filter(|e| filtro.is_empty() || e.nombre.to_lowercase().contains(&filtro))
+            .collect();
+
+        let mut navegar: Option<PathBuf> = None;
+        let mut a_seleccionar: Option<PathBuf> = None;
+        let mut abrir_escena: Option<PathBuf> = None;
+        let mut instanciar_prefab: Option<PathBuf> = None;
+        let mut info: Option<String> = None;
+        let mut empezar_renombrado: Option<PathBuf> = None;
+        let mut a_eliminar: Option<PathBuf> = None;
+        let mut abrir_explorador: Option<PathBuf> = None;
+        let mut nuevo_arrastre: Option<PathBuf> = None;
+        let mut crear_contextual: Option<(TipoCreacion, PathBuf)> = None;
+        let mut accion_mover: Option<(PathBuf, PathBuf)> = None;
+        let mut reconvertir: Option<PathBuf> = None;
+        let mut importar: bool = false;
+        let mut refrescar_click: bool = false;
+        let mut confirmar: bool = false;
+        let mut cancelar: bool = false;
+
+        // La ventana visible de la columna, para limitar el fondo como en
+        // la lista (con el clip heredado robaba los clics de la izquierda).
+        let viewport_rejilla = ui.max_rect();
+        egui::ScrollArea::vertical()
+            .id_salt("rejilla_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                // Fondo clicable como el de la lista: se registra ANTES que
+                // las celdas para que conserven su propio menú contextual.
+                let fondo = ui.interact(
+                    viewport_rejilla,
+                    ui.make_persistent_id("fondo_rejilla_assets"),
+                    egui::Sense::click(),
+                );
+                fondo.context_menu(|ui| {
+                    if let Some(tipo) = submenu_crear(ui) {
+                        crear_contextual = Some((tipo, self.current_dir.clone()));
+                    }
+                    ui.separator();
+                    if ui.button("📥 Importar asset…").clicked() {
+                        importar = true;
+                        ui.close();
+                    }
+                    if ui.button("↻ Refrescar").clicked() {
+                        refrescar_click = true;
+                        ui.close();
+                    }
+                });
+
+                if entradas.is_empty() {
+                    ui.label(egui::RichText::new("(carpeta vacía)").weak().italics());
+                    return;
+                }
+
+                for entrada in &entradas {
+                    let ruta = self.current_dir.join(&entrada.nombre);
+                    if self.rename_target.as_deref() == Some(ruta.as_path()) {
+                        ui.horizontal(|ui| {
+                            let resp = ui.text_edit_singleline(&mut self.rename_buffer);
+                            resp.request_focus();
+                            if resp.lost_focus()
+                                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                            {
+                                confirmar = true;
+                            }
+                            if ui.button("✔").clicked() {
+                                confirmar = true;
+                            }
+                            if ui.button("✖").clicked() {
+                                cancelar = true;
+                            }
+                        });
+                    }
+                }
+
+                ui.horizontal_wrapped(|ui| {
+                    for entrada in &entradas {
+                        let ruta = self.current_dir.join(&entrada.nombre);
+                        if self.rename_target.as_deref() == Some(ruta.as_path()) {
+                            continue;
+                        }
+                        let nombre = entrada.nombre.clone();
+                        let es_dir = entrada.es_dir;
+                        let seleccionada = self
+                            .seleccion
+                            .as_ref()
+                            .map(|s| rutas_iguales(s, &ruta))
+                            .unwrap_or(false);
+
+                        let (rect, resp) = ui.allocate_exact_size(
+                            egui::vec2(celda, celda + 24.0),
+                            egui::Sense::click(),
+                        );
+                        if ui.is_rect_visible(rect) {
+                            if seleccionada {
+                                ui.painter().rect_filled(
+                                    rect,
+                                    4.0,
+                                    ui.visuals().selection.bg_fill,
+                                );
+                            }
+                            let zona =
+                                egui::Rect::from_min_size(rect.min, egui::vec2(celda, celda))
+                                    .shrink(4.0);
+                            let es_imagen = nombre.to_lowercase().ends_with(".png")
+                                || nombre.to_lowercase().ends_with(".jpg")
+                                || nombre.to_lowercase().ends_with(".jpeg");
+                            let es_material = nombre.ends_with(".material.json");
+                            let text_color = ui.visuals().text_color();
+
+                            if !es_dir && es_imagen {
+                                if let Some(tex) = self.miniatura(ui, &ruta) {
+                                    ui.painter().image(
+                                        tex.id(),
+                                        zona,
+                                        egui::Rect::from_min_max(
+                                            egui::pos2(0.0, 0.0),
+                                            egui::pos2(1.0, 1.0),
+                                        ),
+                                        egui::Color32::WHITE,
+                                    );
+                                } else {
+                                    ui.painter().text(
+                                        zona.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        icono_para(&nombre, es_dir),
+                                        egui::FontId::proportional(celda * 0.45),
+                                        text_color,
+                                    );
+                                }
+                            } else if !es_dir && es_material {
+                                if let Some(color) = self.color_material(&ruta) {
+                                    ui.painter().rect_filled(zona, 6.0, color);
+                                    ui.painter().rect_stroke(
+                                        zona,
+                                        6.0,
+                                        egui::Stroke::new(1.0, egui::Color32::GRAY),
+                                        egui::StrokeKind::Outside,
+                                    );
+                                } else {
+                                    ui.painter().text(
+                                        zona.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        icono_para(&nombre, es_dir),
+                                        egui::FontId::proportional(celda * 0.45),
+                                        text_color,
+                                    );
+                                }
+                            } else {
+                                ui.painter().text(
+                                    zona.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    icono_para(&nombre, es_dir),
+                                    egui::FontId::proportional(celda * 0.45),
+                                    text_color,
+                                );
+                            }
+
+                            let max_chars = (celda / 6.5) as usize;
+                            let nombre_corto = if nombre.chars().count() > max_chars
+                                && max_chars > 1
+                            {
+                                let recorte: String =
+                                    nombre.chars().take(max_chars - 1).collect();
+                                format!("{recorte}…")
+                            } else {
+                                nombre.clone()
+                            };
+                            ui.painter().text(
+                                rect.min + egui::vec2(celda / 2.0, celda + 4.0),
+                                egui::Align2::CENTER_TOP,
+                                nombre_corto,
+                                egui::FontId::proportional(11.0),
+                                text_color,
+                            );
+                        }
+
+                        let pista = if es_dir {
+                            format!("Carpeta: {}", ruta.display())
+                        } else {
+                            format!("{} — {} bytes", ruta.display(), entrada.bytes)
+                        };
+                        let resp = resp.on_hover_text(pista);
+
+                        if resp.clicked() {
+                            a_seleccionar = Some(ruta.clone());
+                        }
+                        if resp.double_clicked() {
+                            if es_dir {
+                                navegar = Some(ruta.clone());
+                            } else if es_escena(&nombre) {
+                                abrir_escena = Some(ruta.clone());
+                            } else if es_prefab(&nombre) {
+                                instanciar_prefab = Some(ruta.clone());
+                            } else {
+                                info = Some(format!("Archivo seleccionado: {}", ruta.display()));
+                            }
+                        }
+
+                        let origen_en_celda = ui
+                            .input(|i| i.pointer.press_origin())
+                            .is_some_and(|o| resp.rect.contains(o));
+                        if es_instanciable(&nombre, es_dir)
+                            && origen_en_celda
+                            && ui.input(|i| i.pointer.is_decidedly_dragging())
+                        {
+                            nuevo_arrastre = Some(ruta.clone());
+                        }
+
+                        resp.context_menu(|ui| {
+                            ui.label(egui::RichText::new(&nombre).strong());
+                            ui.separator();
+
+                            if let Some(tipo) = submenu_crear(ui) {
+                                let destino = if es_dir {
+                                    ruta.clone()
+                                } else {
+                                    self.current_dir.clone()
+                                };
+                                crear_contextual = Some((tipo, destino));
+                            }
+                            ui.separator();
+
+                            if ui.button("✏ Renombrar").clicked() {
+                                empezar_renombrado = Some(ruta.clone());
+                                ui.close();
+                            }
+
+                            ui.menu_button("📦 Mover a…", |ui| {
+                                let destinos = listar_carpetas(&self.assets_root);
+                                if destinos.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new("(sin carpetas)")
+                                            .italics()
+                                            .weak(),
+                                    );
+                                }
+                                for destino in destinos {
+                                    if rutas_iguales(&destino, &self.current_dir) {
+                                        continue;
+                                    }
+                                    if es_dir && es_ancestro_o_igual(&ruta, &destino) {
+                                        continue;
+                                    }
+                                    let etiqueta =
+                                        ruta_legible(&self.assets_root, &destino);
+                                    if ui.button(etiqueta).clicked() {
+                                        accion_mover = Some((ruta.clone(), destino.clone()));
+                                        ui.close();
+                                    }
+                                }
+                            });
+
+                            if ui.button("📂 Abrir en el explorador").clicked() {
+                                abrir_explorador = Some(ruta.clone());
+                                ui.close();
+                            }
+                            if ui.button("📋 Copiar ruta").clicked() {
+                                ui.ctx().copy_text(ruta.to_string_lossy().into_owned());
+                                info = Some("Ruta copiada al portapapeles".to_string());
+                                ui.close();
+                            }
+                            let nombre_min = nombre.to_lowercase();
+                            if (nombre_min.ends_with(".blend")
+                                || nombre_min.ends_with(".fbx"))
+                                && ui.button("🔄 Reconvertir").clicked()
+                            {
+                                reconvertir = Some(ruta.clone());
+                                ui.close();
+                            }
+                            if ui.button("📥 Importar asset…").clicked() {
+                                importar = true;
+                                ui.close();
+                            }
+                            if ui.button("↻ Refrescar").clicked() {
+                                refrescar_click = true;
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button("🗑 Eliminar").clicked() {
+                                a_eliminar = Some(ruta.clone());
+                                ui.close();
+                            }
+                        });
+                    }
+                });
+            });
+
+        if confirmar {
+            self.confirmar_renombrado();
+        }
+        if cancelar {
+            self.rename_target = None;
+        }
+        if let Some(dir) = navegar {
+            self.entrar_en(dir);
+        }
+        if let Some(ruta) = a_seleccionar {
+            self.seleccion = Some(ruta);
+        }
+        if let Some(ruta) = abrir_escena {
+            self.seleccion = Some(ruta.clone());
+            self.set_info(format!("Carga de escena encolada: {}", ruta.display()));
+            self.pending_scene_load = Some(ruta);
+        }
+        if let Some(ruta) = instanciar_prefab {
+            self.seleccion = Some(ruta.clone());
+            self.set_info(format!(
+                "Instanciación de prefab encolada: {}",
+                ruta.display()
+            ));
+            self.pending_prefab_instantiate = Some(ruta);
+        }
+        if let Some(ruta) = empezar_renombrado {
+            self.iniciar_renombrado(ruta);
+        }
+        if let Some(ruta) = a_eliminar {
+            self.eliminar(ruta);
+        }
+        if let Some(ruta) = abrir_explorador {
+            crate::launcher::abrir_en_explorador(&ruta);
+        }
+        if let Some(ruta) = nuevo_arrastre {
+            self.arrastre_asset = Some(ruta);
+        }
+        if let Some((tipo, destino)) = crear_contextual {
+            let nombre = self.nombre_para_creacion(tipo);
+            self.ejecutar_creacion_con(tipo, nombre, Some(destino));
+        }
+        if let Some((item, destino)) = accion_mover {
+            self.ejecutar_movimiento(item, destino);
+        }
+        if let Some(ruta) = reconvertir {
+            self.pending_conversion = Some(ruta.clone());
+            self.set_info(format!("Conversión solicitada: {}", ruta.display()));
+        }
+        if importar {
+            if let Some(origen) = rfd::FileDialog::new()
+                .set_title("Importar asset")
+                .pick_file()
+            {
+                match importar_archivo(&origen, &self.current_dir.clone()) {
+                    Ok(destino) => {
+                        self.seleccion = Some(destino.clone());
+                        self.refrescar();
+                        self.set_info(format!("Importado: {}", destino.display()));
+                    }
+                    Err(e) => self.set_error(e),
+                }
+            }
+        }
+        if refrescar_click {
+            self.refrescar();
+        }
+        if let Some(texto) = info {
+            self.set_info(texto);
+        }
+        self.publicar_fantasma_arrastre(ui);
     }
 }
 
@@ -1937,5 +2785,52 @@ mod tests {
         assert!(!nombres.contains(&"a.glb.meta.json".to_string()));
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn buscar_por_tipo_recursivo_y_sin_meta() {
+        let raiz = dir_temporal_creacion("rapido");
+        std::fs::write(raiz.join("a.material.json"), "{}").unwrap();
+
+        let scenes = raiz.join("scenes");
+        std::fs::create_dir_all(&scenes).unwrap();
+        std::fs::write(scenes.join("b.scene.json"), "{}").unwrap();
+
+        let deep = raiz.join("models").join("deep");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("c.glb"), b"glb").unwrap();
+        std::fs::write(deep.join("c.glb.meta.json"), "{}").unwrap();
+
+        assert_eq!(
+            super::buscar_por_tipo(&raiz, super::TipoRapido::Escenas),
+            vec![scenes.join("b.scene.json")]
+        );
+        assert_eq!(
+            super::buscar_por_tipo(&raiz, super::TipoRapido::Materiales),
+            vec![raiz.join("a.material.json")]
+        );
+        assert_eq!(
+            super::buscar_por_tipo(&raiz, super::TipoRapido::Modelos),
+            vec![deep.join("c.glb")]
+        );
+        assert!(super::buscar_por_tipo(&raiz, super::TipoRapido::Scripts).is_empty());
+
+        std::fs::remove_dir_all(&raiz).unwrap();
+    }
+
+    #[test]
+    fn tipo_rapido_coincide() {
+        use super::TipoRapido;
+        assert!(TipoRapido::Escenas.coincide("nivel1.scene.json"));
+        assert!(!TipoRapido::Escenas.coincide("textura.png"));
+        assert!(TipoRapido::Materiales.coincide("rojo.material.json"));
+        assert!(!TipoRapido::Materiales.coincide("rojo.json"));
+        assert!(TipoRapido::Modelos.coincide("arbol.glb"));
+        assert!(TipoRapido::Modelos.coincide("arbol.blend"));
+        assert!(!TipoRapido::Modelos.coincide("arbol.scene.json"));
+        assert!(TipoRapido::Prefabs.coincide("caja.prefab.json"));
+        assert!(!TipoRapido::Prefabs.coincide("arbol.scene.json"));
+        assert!(TipoRapido::Scripts.coincide("Jugador.cs"));
+        assert!(!TipoRapido::Scripts.coincide("Jugador.rs"));
     }
 }
