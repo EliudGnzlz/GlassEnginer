@@ -224,48 +224,10 @@ impl ViewportPanel {
             });
         }
 
-        ui.horizontal(|ui| {
-            let btn_size = vec2(26.0, 22.0);
-            let mut tool_btn = |ui: &mut Ui, mode: GizmoMode, icon: &str, tip: &str| {
-                let selected = self.gizmo_mode == mode;
-                let resp = ui.add_sized(
-                    btn_size,
-                    egui::Button::new(RichText::new(icon).size(13.0)).selected(selected),
-                );
-                if resp.clicked() {
-                    self.gizmo_mode = mode;
-                }
-                resp.on_hover_text(tip);
-            };
-
-            tool_btn(ui, GizmoMode::View, "✋", "Mano [Q] - Pan de cámara");
-            tool_btn(ui, GizmoMode::Translate, "✥", "Mover [W] - Trasladar");
-            tool_btn(ui, GizmoMode::Rotate, "🔄", "Rotar [E] - Rotar");
-            tool_btn(ui, GizmoMode::Scale, "⤢", "Escalar [R] - Escalar");
-            tool_btn(ui, GizmoMode::Rect, "⊡", "Rect [T] - Rectángulo 2D");
-            tool_btn(ui, GizmoMode::Transform, "✦", "Transform [Y] - Universal");
-
-            ui.separator();
-
-            if ui.button("⌖ Centrar").on_hover_text("Centrar cámara de escena").clicked() {
-                self.editor_cam_center = [3.5, 1.5, 0.0];
-                self.editor_cam_dist = 10.0;
-                self.editor_cam_pitch = 0.25;
-                self.editor_cam_yaw = 0.0;
-            }
-
-            let btn_rejilla = egui::Button::new(RichText::new("# Rejilla").size(13.0))
-                .selected(self.show_grid);
-            if ui.add(btn_rejilla).on_hover_text("Rejilla del suelo: lineas de 1 m y de 10 m").clicked() {
-                self.show_grid = !self.show_grid;
-            }
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(format!("⎚ {:.0}x{:.0}", self.scene_width, self.scene_height));
-            });
-        });
-
-        ui.separator();
+        // Sin barra propia: los botones de herramienta duplicaban los
+        // de la barra principal superior, y «Centrar»/«# Rejilla»
+        // viven ahora también allí (orden del usuario, 2026-11-18).
+        // La vista gana la franja entera para la escena.
 
         let available = ui.available_size();
         self.scene_width = available.x.max(64.0);
@@ -302,11 +264,9 @@ impl ViewportPanel {
 
             let painter = ui.painter();
 
-            // Rejilla del editor sobre el suelo: capa del editor, como los
-            // gizmos, proyectada con la misma view_proj; va debajo de todo.
-            if self.show_grid {
-                gizmo_3d::draw_editor_grid(painter, &view_proj, rect, self.editor_cam_center, self.editor_cam_dist);
-            }
+            // La rejilla ya no se pinta aquí: la dibuja el renderer en
+            // el pase 3D de la escena (con profundidad), subida por la
+            // app con set_editor_grid_lines.
 
             // Dibujar Gizmos de Cámaras y Luces de la escena (estilo Unity Scene View).
             // Las matrices de mundo se resuelven una sola vez por frame: los
@@ -1007,53 +967,6 @@ impl ViewportPanel {
                 ui.ctx().request_repaint();
             }
 
-            let ent_name = selected_entity_id
-                .and_then(|id| {
-                    scene_state.lock().ok().and_then(|s| {
-                        s.entities.iter().find(|e| e.id == id).map(|e| e.name.clone())
-                    })
-                })
-                .unwrap_or_else(|| "Ninguno".into());
-
-            let (hint_text, hint_color) = match self.gizmo_mode {
-                GizmoMode::Translate => (
-                    format!("✥ [W] Mover: Arrastra la cruz 3D sobre '{}' (Ejes: X Rojo, Y Verde, Z Azul)", ent_name),
-                    Color32::from_rgb(255, 110, 110),
-                ),
-                GizmoMode::Rotate => (
-                    format!("🔄 [E] Rotar: Arrastra los anillos de rotación sobre '{}'", ent_name),
-                    Color32::from_rgb(110, 240, 130),
-                ),
-                GizmoMode::Scale => (
-                    format!("⤢ [R] Escalar: Arrastra los cubos de escala sobre '{}'", ent_name),
-                    Color32::from_rgb(110, 190, 255),
-                ),
-                GizmoMode::Rect => (
-                    format!("⊡ [T] Rect: Modifica dimensiones 2D sobre '{}'", ent_name),
-                    Color32::from_rgb(255, 180, 100),
-                ),
-                GizmoMode::Transform => (
-                    format!("✦ [Y] Transform: Mover, rotar y escalar sobre '{}'", ent_name),
-                    Color32::from_rgb(200, 130, 255),
-                ),
-                GizmoMode::View => (
-                    "✋ [Q] Mano: Clic Izquierdo arrastra la vista libremente (Pan) | Clic Derecho: mirar (arrastrar) y volar con WASD/QE".to_string(),
-                    Color32::from_rgb(240, 220, 110),
-                ),
-            };
-
-            let banner_rect = egui::Rect::from_min_size(
-                rect.left_bottom() + vec2(12.0, -36.0),
-                vec2(720.0, 24.0),
-            );
-            painter.rect_filled(banner_rect, 4.0, Color32::from_black_alpha(200));
-            painter.text(
-                banner_rect.min + vec2(8.0, 4.0),
-                egui::Align2::LEFT_TOP,
-                hint_text,
-                egui::FontId::proportional(12.0),
-                hint_color,
-            );
 
             // PiP Preview flotante en la esquina inferior derecha si el GameObject seleccionado tiene Camera (estilo Unity Camera Preview)
             if let Some(sel_id) = *selected_entity_id {

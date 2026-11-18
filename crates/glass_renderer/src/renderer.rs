@@ -26,6 +26,8 @@ const PORTAL_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/portal.ve
 const PORTAL_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/portal.frag.spv");
 const PARTICLE_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/particles.vert.spv");
 const PARTICLE_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/particles.frag.spv");
+const EDITOR_LINE_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/editor_line.vert.spv");
+const EDITOR_LINE_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/editor_line.frag.spv");
 const PBR_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/pbr.frag.spv");
 const PBR_SKINNED_VERT_SPV: &[u8] =
     include_bytes!("../../../assets/shaders/pbr_skinned.vert.spv");
@@ -180,6 +182,36 @@ impl Default for ParticleBuffers {
             index_count: 0,
             vertex_capacity: 0,
             index_capacity: 0,
+        }
+    }
+}
+
+/// Vértice de las líneas del editor (rejilla): posición en mundo
+/// y color RGBA (el alfa trae el desvanecido por distancia).
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct EditorLineVertex {
+    pub position: [f32; 3],
+    pub color: [f32; 4],
+}
+
+/// Buffer dinámico de las líneas del editor: sin índices
+/// (LINE_LIST), se reescribe cada frame por memoria mapeada
+/// y crece por duplicación, como el de partículas.
+pub struct EditorLineBuffers {
+    pub vertex_buffer: vk::Buffer,
+    pub vertex_allocation: Option<Allocation>,
+    pub vertex_count: u32,
+    pub vertex_capacity: usize,
+}
+
+impl Default for EditorLineBuffers {
+    fn default() -> Self {
+        Self {
+            vertex_buffer: vk::Buffer::null(),
+            vertex_allocation: None,
+            vertex_count: 0,
+            vertex_capacity: 0,
         }
     }
 }
@@ -685,6 +717,12 @@ pub struct GlassRenderer {
     /// Geometría de partículas del frame, por vista.
     pub particle_scene: ParticleBuffers,
     pub particle_game: ParticleBuffers,
+    /// Pipeline de líneas del editor (rejilla) y su gemelo legacy,
+    /// con el buffer de vértices del frame y su view-proj.
+    pub editor_line_pipeline: GraphicsPipeline,
+    pub editor_line_pipeline_legacy: GraphicsPipeline,
+    pub editor_line_buffers: EditorLineBuffers,
+    pub editor_grid_vp: [f32; 16],
     /// Draws de partículas grabados en el último render_views.
     pub particle_draws: std::cell::Cell<u32>,
     pub mesh_pipeline_legacy: GraphicsPipeline,
@@ -1053,6 +1091,8 @@ impl GlassRenderer {
         let triangle_pipeline_legacy = GraphicsPipeline::new(device.clone(), final_offscreen.render_pass, VERT_SPV, FRAG_SPV)?;
         let particle_pipeline = GraphicsPipeline::new_particle_pipeline(device.clone(), offscreen.render_pass, PARTICLE_VERT_SPV, PARTICLE_FRAG_SPV)?;
         let particle_pipeline_legacy = GraphicsPipeline::new_particle_pipeline(device.clone(), final_offscreen.render_pass, PARTICLE_VERT_SPV, PARTICLE_FRAG_SPV)?;
+        let editor_line_pipeline = GraphicsPipeline::new_editor_line_pipeline(device.clone(), offscreen.render_pass, EDITOR_LINE_VERT_SPV, EDITOR_LINE_FRAG_SPV)?;
+        let editor_line_pipeline_legacy = GraphicsPipeline::new_editor_line_pipeline(device.clone(), final_offscreen.render_pass, EDITOR_LINE_VERT_SPV, EDITOR_LINE_FRAG_SPV)?;
         // Layout del set 3 (luces puntuales): lo comparten los pipelines
         // PBR y de piel, en sus dos variantes de pase.
         let point_lights_layout = create_point_lights_set_layout(&device)?;
@@ -1781,6 +1821,10 @@ impl GlassRenderer {
             particle_pipeline_legacy,
             particle_scene: ParticleBuffers::default(),
             particle_game: ParticleBuffers::default(),
+            editor_line_pipeline,
+            editor_line_pipeline_legacy,
+            editor_line_buffers: EditorLineBuffers::default(),
+            editor_grid_vp: [0.0; 16],
             particle_draws: std::cell::Cell::new(0),
             mesh_pipeline_legacy,
             pbr_pipeline_legacy,
@@ -3057,6 +3101,93 @@ impl GlassRenderer {
         }
     }
 
+    /// Sube la geometría de las líneas del editor (la rejilla de la
+    /// vista de escena) y su view-proj. Espejo de `set_particle_frame`
+    /// sin índices: buffer mapeado que crece por duplicación; la
+    /// escritura es segura porque la app llama entre frames, con el
+    /// fence del frame anterior ya esperado. Con `verts` vacío el
+    /// contador queda a cero y el pase no dibuja nada.
+    pub fn set_editor_grid_lines(&mut self, vp: [f32; 16], verts: &[EditorLineVertex]) {
+        self.editor_grid_vp = vp;
+        let device = self.device.clone();
+        let allocator = self.allocator.clone();
+        let buffers = &mut self.editor_line_buffers;
+        // El contador solo se publica al final, tras la copia: si algo
+        // falla a mitad, la rejilla no se dibuja este frame y el
+        // crecimiento se reintenta en el siguiente.
+        buffers.vertex_count = 0;
+        if verts.is_empty() {
+            return;
+        }
+        unsafe {
+            if verts.len() > buffers.vertex_capacity {
+                // Crecer: crear el buffer nuevo en variables locales y
+                // confirmar el intercambio solo cuando está listo.
+                let nueva_capacidad = verts.len().next_power_of_two().max(1024);
+                let size = (nueva_capacidad * std::mem::size_of::<EditorLineVertex>()) as u64;
+                let info = vk::BufferCreateInfo::default()
+                    .size(size)
+                    .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE);
+                let mut nuevo: Option<(vk::Buffer, Allocation)> = None;
+                if let Ok(buffer) = device.create_buffer(&info, None) {
+                    let mem_reqs = device.get_buffer_memory_requirements(buffer);
+                    let allocation = allocator.lock().unwrap().allocate(&AllocationCreateDesc {
+                        name: "editor_line_vertices",
+                        requirements: mem_reqs,
+                        location: MemoryLocation::CpuToGpu,
+                        linear: true,
+                        allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+                    });
+                    match allocation {
+                        Ok(allocation)
+                            if device
+                                .bind_buffer_memory(
+                                    buffer,
+                                    allocation.memory(),
+                                    allocation.offset(),
+                                )
+                                .is_ok() =>
+                        {
+                            nuevo = Some((buffer, allocation));
+                        }
+                        Ok(allocation) => {
+                            let _ = allocator.lock().unwrap().free(allocation);
+                            device.destroy_buffer(buffer, None);
+                        }
+                        Err(_) => {
+                            device.destroy_buffer(buffer, None);
+                        }
+                    }
+                }
+                match nuevo {
+                    Some((buffer, allocation)) => {
+                        if buffers.vertex_buffer != vk::Buffer::null() {
+                            device.destroy_buffer(buffers.vertex_buffer, None);
+                        }
+                        if let Some(a) = buffers.vertex_allocation.take() {
+                            let _ = allocator.lock().unwrap().free(a);
+                        }
+                        buffers.vertex_buffer = buffer;
+                        buffers.vertex_allocation = Some(allocation);
+                        buffers.vertex_capacity = nueva_capacidad;
+                    }
+                    None => return,
+                }
+            }
+            if let Some(alloc) = &buffers.vertex_allocation {
+                if let Some(ptr) = alloc.mapped_ptr() {
+                    std::ptr::copy_nonoverlapping(
+                        verts.as_ptr() as *const u8,
+                        ptr.as_ptr() as *mut u8,
+                        std::mem::size_of_val(verts),
+                    );
+                    buffers.vertex_count = verts.len() as u32;
+                }
+            }
+        }
+    }
+
     /// Graba UNA vista de la escena en un objetivo (Scene, Game o
     /// una vista de portal): pase de color+profundidad con las
     /// mallas, las superficies de portal y la piel. Extraído de
@@ -3079,6 +3210,7 @@ impl GlassRenderer {
         _legacy: bool,
         _fallback_triangle: bool,
         particle_vp: Option<([f32; 16], bool)>,
+        es_escena: bool,
     ) {
         unsafe {
             // Con post: el 3D va al objetivo HDR y los pipelines son
@@ -3294,6 +3426,37 @@ impl GlassRenderer {
                 }
             }
 
+            // Rejilla del editor: solo en la vista de escena, al final
+            // del pase y con depth test (sin escribir profundidad):
+            // los modelos la tapan, como en Unity. La geometría la
+            // subió la app con set_editor_grid_lines.
+            if es_escena {
+                let lineas = &self.editor_line_buffers;
+                if lineas.vertex_count > 0 && lineas.vertex_buffer != vk::Buffer::null() {
+                    let pipe = if legacy {
+                        &self.editor_line_pipeline_legacy
+                    } else {
+                        &self.editor_line_pipeline
+                    };
+                    let push = MeshPushConstants::new(self.editor_grid_vp);
+                    self.device.cmd_bind_pipeline(
+                        cmd,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        pipe.pipeline,
+                    );
+                    self.device.cmd_push_constants(
+                        cmd,
+                        pipe.layout,
+                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                        0,
+                        bytemuck::bytes_of(&push),
+                    );
+                    self.device
+                        .cmd_bind_vertex_buffers(cmd, 0, &[lineas.vertex_buffer], &[0]);
+                    self.device.cmd_draw(cmd, lineas.vertex_count, 1, 0, 0);
+                }
+            }
+
             self.device.cmd_end_render_pass(cmd);
         }
     }
@@ -3489,6 +3652,7 @@ impl GlassRenderer {
                     legacy,
                     true,
                     particle_vps.map(|(vp, _)| (vp, false)),
+                    true,
                 );
             }
 
@@ -3508,6 +3672,7 @@ impl GlassRenderer {
                     legacy,
                     false,
                     particle_vps.map(|(_, vp)| (vp, true)),
+                    false,
                 );
             }
 
@@ -3564,9 +3729,9 @@ impl GlassRenderer {
             // Se clona la referencia al objetivo para no pelear
             // con el préstamo de &self de record_view_pass.
             let target_a = &self.portal_targets[0];
-            self.record_view_pass(cmd, target_a, clear, view_a.0, view_a.1, &[], false, false, None);
+            self.record_view_pass(cmd, target_a, clear, view_a.0, view_a.1, &[], false, false, None, false);
             let target_b = &self.portal_targets[1];
-            self.record_view_pass(cmd, target_b, clear, view_b.0, view_b.1, &[], false, false, None);
+            self.record_view_pass(cmd, target_b, clear, view_b.0, view_b.1, &[], false, false, None, false);
 
             self.device.end_command_buffer(cmd)?;
             let command_buffers = [cmd];
@@ -3982,6 +4147,15 @@ impl Drop for GlassRenderer {
             }
             self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_descriptor_pool(self.joints_pool, None);
+            // Buffer de líneas del editor (rejilla).
+            if self.editor_line_buffers.vertex_buffer != vk::Buffer::null() {
+                self.device
+                    .destroy_buffer(self.editor_line_buffers.vertex_buffer, None);
+                self.editor_line_buffers.vertex_buffer = vk::Buffer::null();
+            }
+            if let Some(a) = self.editor_line_buffers.vertex_allocation.take() {
+                let _ = self.allocator.lock().unwrap().free(a);
+            }
             for buffers in [&mut self.particle_scene, &mut self.particle_game] {
                 if buffers.vertex_buffer != vk::Buffer::null() {
                     self.device.destroy_buffer(buffers.vertex_buffer, None);

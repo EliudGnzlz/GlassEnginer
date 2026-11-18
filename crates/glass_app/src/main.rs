@@ -6703,6 +6703,22 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                     centro_editor: None,
                 },
             );
+            // Rejilla del editor: se dibuja dentro del pase 3D de la
+            // vista de escena, con depth test (los modelos la tapan).
+            // Sin rejilla se sube vacía para dejar el contador a cero.
+            #[cfg(feature = "editor")]
+            {
+                let viewport = &self.editor_layout.viewport;
+                if viewport.show_grid {
+                    let verts = glass_editor::panels::gizmo_3d::vertices_rejilla(
+                        viewport.editor_cam_center,
+                        viewport.editor_cam_dist,
+                    );
+                    renderer.set_editor_grid_lines(vp_scene, &verts);
+                } else {
+                    renderer.set_editor_grid_lines(vp_scene, &[]);
+                }
+            }
             let particle_vps = particle_out.as_ref().map(|o| {
                 renderer.set_particle_frame(false, &o.scene.0, &o.scene.1);
                 renderer.set_particle_frame(true, &o.game.0, &o.game.1);
@@ -7452,6 +7468,15 @@ impl ApplicationHandler for GlassEngineApp {
         // Hub, que no usa ningún modelo, aparezca en seguida.
         #[cfg(not(feature = "editor"))]
         self.preparar_assets(&mut renderer, &vk_ctx);
+
+        // La ruta del bridge de Blender se fija desde la raíz del MOTOR
+        // (la release lo instala en <raíz>/tools/): sin esto, en la build
+        // instalada el bridge se buscaba relativo al directorio de
+        // trabajo del proceso y la conversión .blend/.fbx al soltar en
+        // la escena nunca ocurría (regresión de la separación, 2026-11-18).
+        if !self.es_hub {
+            glass_renderer::fijar_bridge_desde_raiz(&raiz_motor_actual());
+        }
 
         // 6. Iniciar AssetWatcher en segundo plano sobre assets/
         // (en modo Hub no: este proceso no vigila assets de nadie).

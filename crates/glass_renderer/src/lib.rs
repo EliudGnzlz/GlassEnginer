@@ -27,6 +27,7 @@ pub use renderer::{
     FrameDraws, GlassRenderer, GraphCaster, MeshDrawItem, MeshPushConstants, PointLightsUbo,
     PointShadowLight, PortalDrawItem, PortalPushConstants, PostView, ShadowCasters, SkinnedDrawItem,
     StaticCaster, MAX_POINT_LIGHTS, ParticleBuffers, ParticleVertex,
+    EditorLineBuffers, EditorLineVertex,
 };
 pub use skin::{AnimationClip, JointBuffer, SkinData};
 pub use swapchain::SwapchainContext;
@@ -34,4 +35,4 @@ pub use ui::{
     pack_ui_image_atlas, FontAtlas, UiAtlasKind, UiBatch, UiImageAtlas, UiRenderer, UiSegment,
     UiVertex,
 };
-pub use watcher::{AssetReloadEvent, AssetWatcher};
+pub use watcher::{fijar_bridge_desde_raiz, ruta_bridge_en_raiz, AssetReloadEvent, AssetWatcher};

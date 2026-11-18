@@ -83,6 +83,12 @@ jobs:
             $proto = "$payload/assets/polygon-prototype"
             if (Test-Path $proto) { Remove-Item $proto -Recurse -Force }
 
+            # El bridge de conversión .blend/.fbx -> .glb: sin él en el
+            # payload, la build instalada no puede convertir modelos al
+            # soltarlos en la escena (regresión detectada el 2026-11-18).
+            New-Item -ItemType Directory -Force -Path "$payload/tools" | Out-Null
+            Copy-Item 'tools/headless_blender_bridge.py' -Destination "$payload/tools"
+
             if (-not (Test-Path "$payload/managed/GlassEngine.Core/bin/Debug/net8.0/GlassEngine.Core.dll")) {
               throw "Falta GlassEngine.Core.dll en el payload $payload"
             }
@@ -175,6 +181,12 @@ jobs:
             # Recursos de runtime, sin las fuentes crudas del pack
             cp -a assets "$payload/assets"
             rm -rf "$payload/assets/polygon-prototype"
+
+            # El bridge de conversión .blend/.fbx -> .glb: sin él en el
+            # payload, la build instalada no puede convertir modelos al
+            # soltarlos en la escena (regresión detectada el 2026-11-18).
+            mkdir -p "$payload/tools"
+            cp tools/headless_blender_bridge.py "$payload/tools/"
 
             test -f "$payload/managed/GlassEngine.Core/bin/Debug/net8.0/GlassEngine.Core.dll"
           done

@@ -84,6 +84,30 @@ pub fn setup_editor_fonts(ctx: &egui::Context) {
         }
     }
 
+    // 4. Fuentes INCRUSTADAS en el binario: la interfaz usa símbolos y
+    // emoji (📁 🎬 ⬆ ♻ ▶…) que las fuentes del sistema no siempre
+    // traen — en Windows salían como cuadrados vacíos. Noto Emoji
+    // (monocroma, rasterizable por egui) y Noto Sans Symbols 2 viajan
+    // con el editor y cierran la cadena de respaldo en cualquier
+    // plataforma. Licencia OFL 1.1 en assets/fonts/OFL.txt.
+    fonts.font_data.insert(
+        "noto_emoji_incrustada".to_owned(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/NotoEmoji.ttf"
+        ))),
+    );
+    fonts.font_data.insert(
+        "noto_symbols2_incrustada".to_owned(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/NotoSansSymbols2-Regular.ttf"
+        ))),
+    );
+    for familia in [FontFamily::Proportional, FontFamily::Monospace] {
+        let lista = fonts.families.entry(familia).or_default();
+        lista.push("noto_symbols2_incrustada".to_owned());
+        lista.push("noto_emoji_incrustada".to_owned());
+    }
+
     ctx.set_fonts(fonts);
 }
 

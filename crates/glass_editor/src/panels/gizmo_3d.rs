@@ -802,98 +802,79 @@ pub fn lineas_rejilla(
     lineas
 }
 
-/// Dibuja la rejilla del suelo del editor estilo Unity (plano y = 0) como segmentos 2D
-/// proyectados con la misma `view_proj` que los gizmos. Es una capa del editor: solo se
-/// usa en la vista de escena, nunca en la vista de juego ni en el runtime.
-///
-/// - Líneas menores cada 1 m, mayores cada 10 m, eje X (z = 0) en rojo y eje Z (x = 0) en azul.
-/// - La rejilla sigue a `centro` con radio `(distancia_cam * 2.5).clamp(10, 100)`, así nunca
-///   se acaba al desplazar la vista.
-/// - Cada línea se desvanece con la distancia en XZ al centro; las menores se desvanecen
-///   además al alejar la cámara (a tope hasta 25 m, invisibles desde 60 m).
-/// - Si algún extremo de una línea queda detrás de la cámara (`world_to_screen` da `None`),
-///   la línea se parte en trozos de 5 m y solo se dibujan los trozos con ambos extremos
-///   proyectables.
-pub fn draw_editor_grid(
-    painter: &Painter,
-    vp: &[f32; 16],
-    rect: Rect,
+/// Vértices de la rejilla del suelo (y = 0) para el pase 3D del editor:
+/// las líneas de `lineas_rejilla` troceadas en tramos de 2 m, con el
+/// color de su clase y el alfa desvanecido por la distancia al centro
+/// EN CADA VÉRTICE (el troceo es lo que hace posible el degradado: los
+/// extremos de una línea entera quedan siempre fuera del radio). El
+/// renderer la dibuja con depth test: los modelos la tapan, como en
+/// Unity. Sustituye al antiguo dibujo 2D con el Painter de egui, que
+/// quedaba sobre los modelos al no tener profundidad.
+pub fn vertices_rejilla(
     centro: [f32; 3],
     distancia_cam: f32,
-) {
-    const LARGO_TROZO: f32 = 5.0;
-    const ALFA_MINIMO: f32 = 0.02;
-
+) -> Vec<glass_renderer::EditorLineVertex> {
+    // Un tramo se descarta solo si ambos extremos caen por debajo de 1/255.
+    const ALFA_MINIMO: f32 = 1.0 / 255.0;
+    const LARGO_TRAMO: f32 = 2.0;
     let radio = (distancia_cam * 2.5).clamp(10.0, 100.0);
     let factor_menor = (1.0 - (distancia_cam - 25.0) / 35.0).clamp(0.0, 1.0);
-
     // Atenuación por distancia en XZ al centro, acotada a [0, 1].
     let atenuacion = |p: [f32; 3]| -> f32 {
         let dx = p[0] - centro[0];
         let dz = p[2] - centro[2];
         (1.0 - (dx * dx + dz * dz).sqrt() / radio).clamp(0.0, 1.0)
     };
-
+    let mut vertices = Vec::new();
     for (a, b, clase) in lineas_rejilla(centro, radio) {
-        let (base, (r, g, bl), grosor) = match clase {
-            ClaseLineaRejilla::Menor => (60.0 * factor_menor, (200, 205, 215), 1.0),
-            ClaseLineaRejilla::Mayor => (110.0, (200, 205, 215), 1.0),
-            ClaseLineaRejilla::EjeX => (200.0, (225, 90, 90), 1.25),
-            ClaseLineaRejilla::EjeZ => (200.0, (90, 130, 235), 1.25),
+        // `base` en escala 0-255; sin grosor: las líneas 3D son de 1 px.
+        let (base, (r, g, bl)) = match clase {
+            ClaseLineaRejilla::Menor => (60.0 * factor_menor, (200, 205, 215)),
+            ClaseLineaRejilla::Mayor => (110.0, (200, 205, 215)),
+            ClaseLineaRejilla::EjeX => (200.0, (225, 90, 90)),
+            ClaseLineaRejilla::EjeZ => (200.0, (90, 130, 235)),
         };
         if base <= 0.0 {
             continue;
         }
-
-        let trazar = |pa: Pos2, pb: Pos2, medio: [f32; 3]| {
-            let alfa = base * atenuacion(medio);
-            if alfa < ALFA_MINIMO {
-                return;
-            }
-            let alfa_u8 = alfa.round().clamp(0.0, 255.0) as u8;
-            painter.line_segment(
-                [pa, pb],
-                egui::Stroke::new(
-                    grosor,
-                    egui::Color32::from_rgba_unmultiplied(r, g, bl, alfa_u8),
-                ),
-            );
-        };
-
-        let punto = |t: f32| -> [f32; 3] {
+        let color = |alfa: f32| {
             [
-                a[0] + (b[0] - a[0]) * t,
-                a[1] + (b[1] - a[1]) * t,
-                a[2] + (b[2] - a[2]) * t,
+                r as f32 / 255.0,
+                g as f32 / 255.0,
+                bl as f32 / 255.0,
+                alfa,
             ]
         };
-
-        match (world_to_screen(a, vp, rect), world_to_screen(b, vp, rect)) {
-            (Some(pa), Some(pb)) => trazar(pa, pb, punto(0.5)),
-            _ => {
-                // Algún extremo queda detrás de la cámara: trocear en tramos de 5 m.
-                let dx = b[0] - a[0];
-                let dy = b[1] - a[1];
-                let dz = b[2] - a[2];
-                let largo = (dx * dx + dy * dy + dz * dz).sqrt();
-                if largo <= f32::EPSILON {
-                    continue;
-                }
-                let mut s = 0.0;
-                while s < largo {
-                    let e = (s + LARGO_TROZO).min(largo);
-                    let (t0, t1) = (s / largo, e / largo);
-                    let (q0, q1) = (punto(t0), punto(t1));
-                    if let (Some(p0), Some(p1)) =
-                        (world_to_screen(q0, vp, rect), world_to_screen(q1, vp, rect))
-                    {
-                        trazar(p0, p1, punto((t0 + t1) * 0.5));
-                    }
-                    s = e;
-                }
+        // Trocear la línea: cada tramo aporta sus dos vértices con el
+        // alfa de su propio extremo.
+        let dx = b[0] - a[0];
+        let dz = b[2] - a[2];
+        let largo = (dx * dx + dz * dz).sqrt();
+        if largo <= f32::EPSILON {
+            continue;
+        }
+        let mut s = 0.0;
+        while s < largo {
+            let e = (s + LARGO_TRAMO).min(largo);
+            let (t0, t1) = (s / largo, e / largo);
+            let q0 = [a[0] + dx * t0, 0.0, a[2] + dz * t0];
+            let q1 = [a[0] + dx * t1, 0.0, a[2] + dz * t1];
+            let alfa0 = base * atenuacion(q0) / 255.0;
+            let alfa1 = base * atenuacion(q1) / 255.0;
+            if alfa0 >= ALFA_MINIMO || alfa1 >= ALFA_MINIMO {
+                vertices.push(glass_renderer::EditorLineVertex {
+                    position: q0,
+                    color: color(alfa0),
+                });
+                vertices.push(glass_renderer::EditorLineVertex {
+                    position: q1,
+                    color: color(alfa1),
+                });
             }
+            s = e;
         }
     }
+    vertices
 }
 
 /// Dibuja la caja delimitadora 3D orientada (12 aristas con halo y esquinas) estilo Unity
@@ -1757,6 +1738,64 @@ mod tests_picking {
     /// Una línea de x constante tiene la misma x en ambos extremos.
     fn es_x_constante(l: &LineaRejilla) -> bool {
         l.0[0] == l.1[0]
+    }
+
+    /// ¿El color del vértice es el de la clase (tolerancia 0.01)?
+    fn es_color(c: [f32; 4], r: u8, g: u8, b: u8) -> bool {
+        (c[0] - r as f32 / 255.0).abs() < 0.01
+            && (c[1] - g as f32 / 255.0).abs() < 0.01
+            && (c[2] - b as f32 / 255.0).abs() < 0.01
+    }
+
+    #[test]
+    fn vertices_rejilla_pares_sobre_el_suelo() {
+        let v = super::vertices_rejilla([0.0, 0.0, 0.0], 10.0);
+        assert!(!v.is_empty());
+        assert_eq!(v.len() % 2, 0);
+        assert!(v.iter().all(|vert| vert.position[1] == 0.0));
+    }
+
+    #[test]
+    fn vertices_rejilla_colores_de_los_ejes() {
+        let v = super::vertices_rejilla([0.0, 0.0, 0.0], 10.0);
+        assert!(v.iter().any(|vert| es_color(vert.color, 225, 90, 90)));
+        assert!(v.iter().any(|vert| es_color(vert.color, 90, 130, 235)));
+    }
+
+    #[test]
+    fn vertices_rejilla_sin_menores_a_distancia_grande() {
+        // La línea x = 1 es solo menor (no es múltiplo de 10 ni eje):
+        // sus tramos son pares de vértices con x == 1 en ambos extremos.
+        let tiene_linea_x1 = |dist: f32| {
+            let v = super::vertices_rejilla([0.0, 0.0, 0.0], dist);
+            v.as_chunks::<2>()
+                .0
+                .iter()
+                .any(|par| par[0].position[0] == 1.0 && par[1].position[0] == 1.0)
+        };
+        assert!(tiene_linea_x1(10.0));
+        assert!(!tiene_linea_x1(60.0));
+    }
+
+    #[test]
+    fn vertices_rejilla_alfa_cae_con_la_distancia_en_el_eje_x() {
+        let v = super::vertices_rejilla([0.0, 0.0, 0.0], 10.0);
+        let rojos: Vec<_> = v
+            .iter()
+            .filter(|vert| es_color(vert.color, 225, 90, 90))
+            .collect();
+        let alfa_centro = rojos
+            .iter()
+            .filter(|vert| vert.position[0].abs() <= 2.0)
+            .map(|vert| vert.color[3])
+            .fold(0.0f32, f32::max);
+        let alfa_lejos = rojos
+            .iter()
+            .filter(|vert| vert.position[0].abs() >= 20.0)
+            .map(|vert| vert.color[3])
+            .fold(f32::MAX, f32::min);
+        assert!(alfa_centro > 0.5, "el eje junto al centro es casi opaco");
+        assert!(alfa_lejos < alfa_centro, "y se desvanece al alejarse");
     }
 
     #[test]

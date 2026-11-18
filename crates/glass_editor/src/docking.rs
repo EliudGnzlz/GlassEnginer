@@ -1168,6 +1168,24 @@ impl EditorDockingLayout {
 
             ui.separator();
 
+            // 2b. Cámara de escena y rejilla (vivían en la barra propia
+            // de la vista de escena; se movieron aquí el 2026-11-18 y
+            // la barra duplicada de la vista se retiró).
+            if ui.button("⌖ Centrar").on_hover_text("Centrar cámara de escena").clicked() {
+                self.viewport.editor_cam_center = [3.5, 1.5, 0.0];
+                self.viewport.editor_cam_dist = 10.0;
+                self.viewport.editor_cam_pitch = 0.25;
+                self.viewport.editor_cam_yaw = 0.0;
+            }
+
+            let btn_rejilla = egui::Button::new(egui::RichText::new("# Rejilla").size(13.0))
+                .selected(self.viewport.show_grid);
+            if ui.add(btn_rejilla).on_hover_text("Rejilla del suelo: lineas de 1 m y de 10 m").clicked() {
+                self.viewport.show_grid = !self.viewport.show_grid;
+            }
+
+            ui.separator();
+
             // 3. Controles de Play / Pause / Stop en el centro
             let is_playing = self.viewport.play_state == PlayState::Playing;
             let is_paused = self.viewport.play_state == PlayState::Paused;

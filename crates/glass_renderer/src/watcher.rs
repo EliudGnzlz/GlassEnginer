@@ -325,6 +325,28 @@ fn bridge_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("tools/headless_blender_bridge.py"))
 }
 
+/// Ruta del bridge de Blender bajo una raíz dada
+/// (`<raiz>/tools/headless_blender_bridge.py`) si el archivo existe;
+/// `None` en otro caso. Función pura: la decisión es comprobable sin
+/// tocar el estado global.
+pub fn ruta_bridge_en_raiz(raiz: &Path) -> Option<PathBuf> {
+    let candidato = raiz.join("tools").join("headless_blender_bridge.py");
+    candidato.is_file().then_some(candidato)
+}
+
+/// Fija la ruta global del bridge a partir de una raíz (la del motor o
+/// la del proyecto vigilado): solo si el bridge EXISTE ahí — una raíz
+/// sin `tools/` no debe secuestrar la ruta. La primera raíz válida
+/// manda (OnceLock). Sin esta fijación desde la raíz del motor, en la
+/// build instalada el bridge se buscaba relativo al directorio de
+/// trabajo del proceso hijo y la conversión .blend/.fbx nunca ocurría
+/// (regresión de la separación Hub/motor, 2026-11-18).
+pub fn fijar_bridge_desde_raiz(raiz: &Path) {
+    if let Some(candidato) = ruta_bridge_en_raiz(raiz) {
+        let _ = BRIDGE_PATH.set(candidato);
+    }
+}
+
 impl AssetWatcher {
     pub fn new(
         assets_dir: impl AsRef<Path>,
@@ -342,10 +364,7 @@ impl AssetWatcher {
             // Solo fijar la ruta si el bridge EXISTE ahí: un vigía creado
             // para la carpeta de un proyecto de usuario (que no trae
             // `tools/`) no debe secuestrar la ruta del bridge del motor.
-            let candidato = raiz.join("tools").join("headless_blender_bridge.py");
-            if candidato.is_file() {
-                let _ = BRIDGE_PATH.set(candidato);
-            }
+            fijar_bridge_desde_raiz(raiz);
         }
 
         let mut watcher = RecommendedWatcher::new(
@@ -425,5 +444,59 @@ impl AssetWatcher {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ruta_bridge_en_raiz;
+    use std::path::PathBuf;
+
+    fn raiz_temporal(nombre: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ge_bridge_test_{}_{}",
+            nombre,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn sin_tools_no_hay_bridge() {
+        let raiz = raiz_temporal("sin_tools");
+        assert_eq!(ruta_bridge_en_raiz(&raiz), None);
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn tools_sin_el_archivo_no_hay_bridge() {
+        let raiz = raiz_temporal("tools_vacia");
+        std::fs::create_dir_all(raiz.join("tools")).unwrap();
+        assert_eq!(ruta_bridge_en_raiz(&raiz), None);
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn con_el_archivo_devuelve_su_ruta() {
+        let raiz = raiz_temporal("con_bridge");
+        let tools = raiz.join("tools");
+        std::fs::create_dir_all(&tools).unwrap();
+        let bridge = tools.join("headless_blender_bridge.py");
+        std::fs::write(&bridge, b"# bridge").unwrap();
+        assert_eq!(ruta_bridge_en_raiz(&raiz), Some(bridge));
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn un_directorio_con_el_nombre_no_cuenta() {
+        let raiz = raiz_temporal("bridge_es_dir");
+        std::fs::create_dir_all(
+            raiz.join("tools").join("headless_blender_bridge.py"),
+        )
+        .unwrap();
+        assert_eq!(ruta_bridge_en_raiz(&raiz), None);
+        let _ = std::fs::remove_dir_all(&raiz);
     }
 }

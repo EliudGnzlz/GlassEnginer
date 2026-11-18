@@ -608,6 +608,25 @@ pub fn instanciar_asset(
     Err(format!("El asset '{nombre}' no se puede instanciar en la escena"))
 }
 
+/// Ruta del .glb que alimenta la miniatura de un modelo: el propio
+/// archivo si es .glb; el .glb hermano si es .blend/.fbx y existe;
+/// None en otro caso. El .gltf (JSON) queda fuera: el cargador solo
+/// acepta GLB binario y un .gltf puede depender de recursos externos.
+pub fn ruta_glb_miniatura(ruta: &Path) -> Option<PathBuf> {
+    let ext = ruta
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "glb" => Some(ruta.to_path_buf()),
+        "blend" | "fbx" => {
+            let hermano = ruta.with_extension("glb");
+            hermano.exists().then_some(hermano)
+        }
+        _ => None,
+    }
+}
+
 /// Icono por extensión (mismo criterio que el explorador clásico).
 pub fn icono_para(nombre: &str, es_dir: bool) -> &'static str {
     if es_dir {
@@ -773,8 +792,6 @@ pub struct ProjectPanel {
     pub entradas: Vec<Entrada>,
     /// Elemento seleccionado.
     pub seleccion: Option<PathBuf>,
-    /// Buffer del campo «Nombre» de la barra de creación.
-    pub nuevo_nombre: String,
     /// Elemento en edición inline y su buffer.
     pub rename_target: Option<PathBuf>,
     pub rename_buffer: String,
@@ -802,6 +819,15 @@ pub struct ProjectPanel {
     pub tamano_iconos: f32,
     /// Caché de miniaturas de imágenes (clave: ruta del archivo).
     miniaturas: std::collections::HashMap<PathBuf, Option<egui::TextureHandle>>,
+    /// Caché de miniaturas de modelos 3D renderizadas (clave: ruta del
+    /// archivo; valor: textura y mtime del .glb fuente al calcularla —
+    /// si el .glb cambia o aparece, la miniatura se rehace).
+    miniaturas_modelo:
+        std::collections::HashMap<PathBuf, (Option<egui::TextureHandle>, Option<std::time::SystemTime>)>,
+    /// Miniaturas de modelo que aún se pueden generar en este frame:
+    /// la carga y el rasterizado son síncronos y no deben congelar la
+    /// UI cuando una carpeta trae muchos modelos.
+    presupuesto_miniaturas_modelo: usize,
     /// Caché de colores de material ya leídos (clave: ruta del .material.json).
     colores_material: std::collections::HashMap<PathBuf, Option<egui::Color32>>,
 }
@@ -820,7 +846,6 @@ impl ProjectPanel {
             assets_root,
             entradas: Vec::new(),
             seleccion: None,
-            nuevo_nombre: String::new(),
             rename_target: None,
             rename_buffer: String::new(),
             rename_focus: false,
@@ -835,6 +860,8 @@ impl ProjectPanel {
             entradas_rapidas: Vec::new(),
             tamano_iconos: 0.0,
             miniaturas: std::collections::HashMap::new(),
+            miniaturas_modelo: std::collections::HashMap::new(),
+            presupuesto_miniaturas_modelo: 0,
             colores_material: std::collections::HashMap::new(),
         };
         panel.refrescar();
@@ -857,11 +884,17 @@ impl ProjectPanel {
     // --- utilidades internas -------------------------------------------------
 
     fn set_info(&mut self, msg: impl Into<String>) {
-        self.status = Some((msg.into(), false));
+        let msg = msg.into();
+        // La línea de estado permanente se retiró de la UI a petición
+        // del usuario (2026-11-18): los mensajes viven en la Consola.
+        log::info!("Proyecto: {}", msg);
+        self.status = Some((msg, false));
     }
 
     fn set_error(&mut self, msg: impl Into<String>) {
-        self.status = Some((msg.into(), true));
+        let msg = msg.into();
+        log::error!("Proyecto: {}", msg);
+        self.status = Some((msg, true));
     }
 
     /// Raíz del proyecto: carpeta hermana de `assets/`.
@@ -1023,17 +1056,6 @@ impl ProjectPanel {
         }
     }
 
-    fn ejecutar_creacion(&mut self, tipo: TipoCreacion) {
-        let nombre = self.nuevo_nombre.trim().to_string();
-        if nombre.is_empty() {
-            self.set_error("Escribe un nombre antes de crear el asset");
-            return;
-        }
-        if self.ejecutar_creacion_con(tipo, nombre, None) {
-            self.nuevo_nombre.clear();
-        }
-    }
-
     /// Crea el asset `tipo` con `nombre` (ya validado como no vacío).
     /// `destino` solo se aplica a carpetas y escenas: materiales, grafos y
     /// scripts viven en su carpeta canónica. Selecciona el resultado,
@@ -1076,15 +1098,12 @@ impl ProjectPanel {
         }
     }
 
-    /// Nombre para una creación desde menú contextual: el del campo
-    /// «Nombre:» si hay algo escrito; si no, el nombre por defecto del tipo.
+    /// Nombre para una creación desde menú contextual: el nombre por
+    /// defecto del tipo (la antigua fila de creación con el campo
+    /// «Nombre:» se retiró a petición del usuario el 2026-11-18; el
+    /// asset se renombra después desde el mismo menú contextual).
     fn nombre_para_creacion(&self, tipo: TipoCreacion) -> String {
-        let escrito = self.nuevo_nombre.trim();
-        if escrito.is_empty() {
-            tipo.nombre_por_defecto().to_string()
-        } else {
-            escrito.to_string()
-        }
+        tipo.nombre_por_defecto().to_string()
     }
 
     // --- dibujo --------------------------------------------------------------
@@ -1139,54 +1158,6 @@ impl ProjectPanel {
             self.refrescar();
         }
 
-        // --- Barra de creación ------------------------------------------------
-        let mut accion_crear: Option<TipoCreacion> = None;
-        ui.horizontal(|ui| {
-            ui.label("Nombre:");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.nuevo_nombre)
-                    .desired_width(180.0)
-                    .hint_text("Nuevo asset…"),
-            );
-            if ui.button("📁 Carpeta").clicked() {
-                accion_crear = Some(TipoCreacion::Carpeta);
-            }
-            if ui.button("📜 Script C#").clicked() {
-                accion_crear = Some(TipoCreacion::Script);
-            }
-            if ui.button("🎨 Grafo").clicked() {
-                accion_crear = Some(TipoCreacion::Grafo);
-            }
-            if ui.button("🎬 Escena").clicked() {
-                accion_crear = Some(TipoCreacion::Escena);
-            }
-            if ui.button("🖌 Material").clicked() {
-                accion_crear = Some(TipoCreacion::Material);
-            }
-            if ui.button("🧩 Prefab").clicked() {
-                accion_crear = Some(TipoCreacion::Prefab);
-            }
-        });
-        if let Some(tipo) = accion_crear {
-            self.ejecutar_creacion(tipo);
-        }
-
-        ui.separator();
-
-        // --- Línea de estado --------------------------------------------------
-        match &self.status {
-            Some((msg, true)) => {
-                ui.colored_label(egui::Color32::from_rgb(255, 110, 110), format!("⛔ {msg}"));
-            }
-            Some((msg, false)) => {
-                ui.colored_label(egui::Color32::from_rgb(150, 200, 255), format!("ℹ {msg}"));
-            }
-            None => {
-                ui.label(egui::RichText::new("Listo").italics().weak());
-            }
-        }
-
-        ui.separator();
 
         // --- Buscador ---------------------------------------------------------
         ui.horizontal(|ui| {
@@ -1746,6 +1717,57 @@ impl ProjectPanel {
         self.miniaturas.get(ruta).cloned().flatten()
     }
 
+    /// Obtiene (con caché) la miniatura renderizada de un modelo 3D;
+    /// `None` si no hay .glb disponible, no se pudo cargar o el
+    /// render salió vacío (todo transparente). La caché se invalida
+    /// cuando cambia el mtime del .glb fuente (un .blend cuyo .glb
+    /// aparece tras la conversión, o un modelo sustituido, refrescan
+    /// su miniatura). La generación está racionada por frame
+    /// (`presupuesto_miniaturas_modelo`): sin presupuesto se devuelve
+    /// lo cacheado aunque esté caducado, y se rehace en otro frame.
+    fn miniatura_modelo(&mut self, ui: &egui::Ui, ruta: &Path) -> Option<egui::TextureHandle> {
+        let fuente = ruta_glb_miniatura(ruta);
+        let mtime = fuente
+            .as_ref()
+            .and_then(|f| std::fs::metadata(f).ok())
+            .and_then(|m| m.modified().ok());
+        if let Some((tex, m)) = self.miniaturas_modelo.get(ruta) {
+            if *m == mtime {
+                return tex.clone();
+            }
+        }
+        if self.presupuesto_miniaturas_modelo == 0 {
+            return self
+                .miniaturas_modelo
+                .get(ruta)
+                .and_then(|(t, _)| t.clone());
+        }
+        self.presupuesto_miniaturas_modelo -= 1;
+        let textura = fuente
+            .and_then(|glb| std::fs::read(glb).ok())
+            .and_then(|bytes| {
+                glass_renderer::MeshLoader::load_model_from_glb_bytes(&bytes).ok()
+            })
+            .and_then(|modelo| {
+                let rgba = crate::panels::miniatura_modelo::renderizar_miniatura_modelo(
+                    &modelo, 192,
+                );
+                if rgba.iter().skip(3).step_by(4).all(|&a| a == 0) {
+                    None
+                } else {
+                    let color = egui::ColorImage::from_rgba_unmultiplied([192, 192], &rgba);
+                    Some(ui.ctx().load_texture(
+                        format!("asset_model_thumb_{}", ruta.display()),
+                        color,
+                        egui::TextureOptions::LINEAR,
+                    ))
+                }
+            });
+        self.miniaturas_modelo
+            .insert(ruta.to_path_buf(), (textura.clone(), mtime));
+        textura
+    }
+
     /// Obtiene (con caché) el color `albedo` de un `.material.json`; `None`
     /// si no se puede leer o parsear.
     fn color_material(&mut self, ruta: &Path) -> Option<egui::Color32> {
@@ -2012,6 +2034,9 @@ impl ProjectPanel {
     /// Renderiza la zona derecha como rejilla de miniaturas cuando el
     /// slider de tamaño de iconos está por encima del mínimo.
     fn render_rejilla(&mut self, ui: &mut Ui) {
+        // Presupuesto por frame para generar miniaturas de modelos
+        // nuevas (carga + rasterizado síncronos; ver miniatura_modelo).
+        self.presupuesto_miniaturas_modelo = 2;
         let celda = 40.0 + self.tamano_iconos * 88.0;
         let entradas = self.entradas.clone();
         let filtro = self.busqueda.trim().to_lowercase();
@@ -2125,10 +2150,31 @@ impl ProjectPanel {
                                 || nombre.to_lowercase().ends_with(".jpg")
                                 || nombre.to_lowercase().ends_with(".jpeg");
                             let es_material = nombre.ends_with(".material.json");
+                            let es_modelo_3d = es_modelo(&nombre);
                             let text_color = ui.visuals().text_color();
 
                             if !es_dir && es_imagen {
                                 if let Some(tex) = self.miniatura(ui, &ruta) {
+                                    ui.painter().image(
+                                        tex.id(),
+                                        zona,
+                                        egui::Rect::from_min_max(
+                                            egui::pos2(0.0, 0.0),
+                                            egui::pos2(1.0, 1.0),
+                                        ),
+                                        egui::Color32::WHITE,
+                                    );
+                                } else {
+                                    ui.painter().text(
+                                        zona.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        icono_para(&nombre, es_dir),
+                                        egui::FontId::proportional(celda * 0.45),
+                                        text_color,
+                                    );
+                                }
+                            } else if !es_dir && es_modelo_3d {
+                                if let Some(tex) = self.miniatura_modelo(ui, &ruta) {
                                     ui.painter().image(
                                         tex.id(),
                                         zona,
@@ -2384,6 +2430,34 @@ impl ProjectPanel {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn es_modelo_acepta_extensiones_de_modelo() {
+        assert!(es_modelo("a.GLB"));
+        assert!(es_modelo("a.blend"));
+        assert!(es_modelo("a.fbx"));
+        assert!(es_modelo("a.gltf"));
+        assert!(!es_modelo("a.png"));
+        assert!(!es_modelo("a.material.json"));
+        assert!(!es_modelo("carpeta"));
+    }
+
+    #[test]
+    fn ruta_glb_miniatura_resuelve_el_hermano() {
+        let dir = std::env::temp_dir().join(format!("ge_thumb_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let blend = dir.join("m.blend");
+        std::fs::write(&blend, b"blend").unwrap();
+        assert_eq!(ruta_glb_miniatura(&blend), None);
+        let glb = dir.join("m.glb");
+        std::fs::write(&glb, b"glb").unwrap();
+        assert_eq!(ruta_glb_miniatura(&glb), Some(glb.clone()));
+        assert_eq!(ruta_glb_miniatura(&blend), Some(glb.clone()));
+        let fbx = dir.join("o.fbx");
+        std::fs::write(&fbx, b"fbx").unwrap();
+        assert_eq!(ruta_glb_miniatura(&fbx), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     /// Carpeta temporal única por test (proceso + instante).
     fn dir_temporal_creacion(etiqueta: &str) -> std::path::PathBuf {
         let nanos = std::time::SystemTime::now()
