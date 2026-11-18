@@ -776,10 +776,116 @@ fn extract_zip_reader<R: std::io::Read + std::io::Seek>(
     }
 }
 
+/// Resumen de una instalacion del motor gestionado.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumenInstalacionMotor {
+    pub version: String,
+    pub proyectos_migrados: usize,
+    pub retiradas: Vec<String>,
+    pub diferidas: Vec<String>,
+    pub conservada: Option<String>,
+}
+
+/// Instala el motor `version` desde un .zip ya descargado (y con el
+/// SHA-256 ya verificado por el llamante) bajo la raiz de datos
+/// `root`: extrae a engines/.staging-<version>, valida que el paquete
+/// trae el ejecutable en su raiz, lo renombra a engines/<version>,
+/// aplica el plan de retirada sobre el EngineStore (lo que no se
+/// pueda borrar queda en pendientes_borrar, sin fallar) y sella los
+/// proyectos dados con la version nueva. Devuelve el resumen.
+pub fn instalar_motor_desde_zip(
+    root: &std::path::Path,
+    zip: &std::path::Path,
+    version: &str,
+    proyectos: &[std::path::PathBuf],
+) -> Result<ResumenInstalacionMotor, String> {
+    let engines = engines_dir_in(root);
+    std::fs::create_dir_all(&engines).map_err(|e| e.to_string())?;
+    let staging = engines.join(format!(".staging-{}", version));
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging).map_err(|e| e.to_string())?;
+    }
+    let resultado = (|| -> Result<(), String> {
+        extract_zip_file(zip, &staging)?;
+        let exe = if cfg!(windows) { "glass_app.exe" } else { "glass_app" };
+        if !staging.join(exe).is_file() {
+            return Err(format!(
+                "El paquete de la versión {} no contiene {} en su raíz: no es un paquete del motor.",
+                version, exe
+            ));
+        }
+        let destino = engines.join(version);
+        if destino.exists() {
+            std::fs::remove_dir_all(&destino).map_err(|e| e.to_string())?;
+        }
+        std::fs::rename(&staging, &destino).map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+    if let Err(e) = resultado {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(e);
+    }
+    let mut store = EngineStore::load_in(root);
+    let plan = plan_retirada(store.en_uso.as_deref(), store.conservada.as_deref(), version);
+    let mut retiradas = Vec::new();
+    let mut diferidas = Vec::new();
+    for v in &plan.borrar {
+        match std::fs::remove_dir_all(engines.join(v)) {
+            Ok(()) => retiradas.push(v.clone()),
+            Err(_) => {
+                diferidas.push(v.clone());
+                if !store.pendientes_borrar.contains(v) {
+                    store.pendientes_borrar.push(v.clone());
+                }
+            }
+        }
+    }
+    store.en_uso = Some(version.to_string());
+    store.conservada = plan.conservada.clone();
+    store.save_in(root)?;
+    let mut migrados = 0;
+    for dir in proyectos {
+        if let Ok(true) = sellar_proyecto(dir, version) {
+            migrados += 1;
+        }
+    }
+    Ok(ResumenInstalacionMotor {
+        version: version.to_string(),
+        proyectos_migrados: migrados,
+        retiradas,
+        diferidas,
+        conservada: plan.conservada,
+    })
+}
+
+/// Barre los residuos de instalaciones interrumpidas bajo `root`:
+/// temporales de descarga (`.descarga-*`) y carpetas de staging
+/// (`.staging-*`) dentro de engines/. Lo que no se pueda borrar se
+/// deja: barrer nunca impide instalar.
+pub fn limpiar_residuos_instalacion(root: &std::path::Path) {
+    let engines = engines_dir_in(root);
+    let Ok(entradas) = std::fs::read_dir(&engines) else {
+        return;
+    };
+    for entrada in entradas.flatten() {
+        let nombre = entrada.file_name();
+        let nombre = nombre.to_string_lossy();
+        if nombre.starts_with(".descarga-") || nombre.starts_with(".staging-") {
+            let ruta = entrada.path();
+            if ruta.is_dir() {
+                let _ = std::fs::remove_dir_all(&ruta);
+            } else {
+                let _ = std::fs::remove_file(&ruta);
+            }
+        }
+    }
+}
+
 pub fn install_release(
     release: &ReleaseInfo,
     store: &mut LauncherStore,
-) -> Result<Installation, String> {
+) -> Result<ResumenInstalacionMotor, String> {
+    limpiar_residuos_instalacion(&data_root());
     let asset = pick_asset(release).ok_or_else(|| {
         format!(
             "El release {} no trae un .zip para esta plataforma ({}).",
@@ -794,59 +900,38 @@ pub fn install_release(
         .unwrap_or(&release.tag_name)
         .to_string();
 
-    // Descarga en streaming a un archivo temporal (defecto 8c): el
-    // paquete (~26 MB) se copia por trozos a disco, sin cargarlo en
-    // RAM y sin el tope de 10 MiB de `read_to_vec`. El SHA-256 se
-    // verifica sobre el archivo ANTES de extraer: si no coincide, no
-    // se instala nada. El temporal se borra siempre al salir.
-    let tmp = std::env::temp_dir().join(format!(
-        "glassenginer_update_{}_{}.zip",
+    // Descarga en streaming a un temporal DENTRO de engines/ (mismo
+    // disco que el destino: la instalacion renombra, no copia). El
+    // SHA-256 se verifica sobre el archivo ANTES de extraer nada. El
+    // temporal se borra siempre al salir.
+    let root = data_root();
+    let engines = engines_dir_in(&root);
+    std::fs::create_dir_all(&engines).map_err(|e| e.to_string())?;
+    let tmp = engines.join(format!(
+        ".descarga-{}-{}.zip",
         version,
         std::process::id()
     ));
-    let instalacion = descargar_e_instalar(release, asset, &version, &tmp, store);
+    let resultado = (|| -> Result<ResumenInstalacionMotor, String> {
+        get_to_file(&asset.browser_download_url, &tmp)?;
+        let esperado = expected_sha256(release, asset)?;
+        if sha256_hex_file(&tmp)? != esperado {
+            return Err("El SHA-256 no coincide: la descarga no es íntegra o no es el archivo publicado. No se instaló nada.".to_string());
+        }
+        let proyectos: Vec<std::path::PathBuf> = store
+            .projects
+            .iter()
+            .map(|p| std::path::PathBuf::from(&p.path))
+            .collect();
+        instalar_motor_desde_zip(&root, &tmp, &version, &proyectos)
+    })();
     let _ = std::fs::remove_file(&tmp);
-    instalacion
+    resultado
 }
 
-fn descargar_e_instalar(
-    release: &ReleaseInfo,
-    asset: &AssetInfo,
-    version: &str,
-    tmp: &std::path::Path,
-    store: &mut LauncherStore,
-) -> Result<Installation, String> {
-    get_to_file(&asset.browser_download_url, tmp)?;
-    let esperado = expected_sha256(release, asset)?;
-
-    if sha256_hex_file(tmp)? != esperado {
-        return Err("El SHA-256 no coincide: la descarga no es íntegra o no es el archivo publicado. No se instaló nada.".to_string());
-    }
-
-    let destino = versions_dir().join(version);
-
-    if destino.exists() {
-        std::fs::remove_dir_all(&destino).map_err(|e| e.to_string())?;
-    }
-
-    extract_zip_file(tmp, &destino)?;
-
-    let installation = Installation {
-        version: version.to_string(),
-        path: destino.to_string_lossy().to_string(),
-        installed_unix: now_unix(),
-    };
-
-    store.installations.retain(|i| i.version != version);
-    store.installations.push(installation.clone());
-    store.save()?;
-
-    Ok(installation)
-}
-
-pub fn is_installed(store: &LauncherStore, tag: &str) -> bool {
+pub fn is_installed(_store: &LauncherStore, tag: &str) -> bool {
     let version = tag.strip_prefix('v').unwrap_or(tag);
-    store.installations.iter().any(|i| i.version == version)
+    motor_exe_in(&data_root(), version).is_file()
 }
 
 #[cfg(test)]
@@ -1202,6 +1287,166 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *glass.zip
             otro_slug()
         ))]);
         assert!(pick_engine_asset(&release).is_none());
+    }
+
+    fn dir_prueba_s3(nombre: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("glass_s3_{}_{}", nombre, std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn zip_con_entrada(dir: &std::path::Path, archivo: &str, entrada: &str) -> std::path::PathBuf {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+
+        let ruta = dir.join(archivo);
+        let f = std::fs::File::create(&ruta).unwrap();
+        let mut zw = zip::ZipWriter::new(f);
+        zw.start_file(entrada, SimpleFileOptions::default()).unwrap();
+        zw.write_all(b"bin").unwrap();
+        zw.finish().unwrap();
+        ruta
+    }
+
+    fn zip_con_exe(dir: &std::path::Path) -> std::path::PathBuf {
+        let exe = if cfg!(windows) { "glass_app.exe" } else { "glass_app" };
+        zip_con_entrada(dir, "motor.zip", exe)
+    }
+
+    fn zip_sin_exe(dir: &std::path::Path) -> std::path::PathBuf {
+        zip_con_entrada(dir, "sin_exe.zip", "leeme.txt")
+    }
+
+    fn sin_staging_residual(root: &std::path::Path) -> bool {
+        std::fs::read_dir(engines_dir_in(root))
+            .map(|rd| {
+                rd.flatten()
+                    .all(|e| !e.file_name().to_string_lossy().starts_with(".staging-"))
+            })
+            .unwrap_or(true)
+    }
+
+    #[test]
+    fn instala_en_vacio_y_queda_en_uso() {
+        let dir = dir_prueba_s3("vacio");
+        let root = dir.join("datos");
+        let zip = zip_con_exe(&dir);
+
+        let r = instalar_motor_desde_zip(&root, &zip, "0.10.0", &[]).expect("instalacion ok");
+        assert_eq!(r.version, "0.10.0");
+        assert!(motor_exe_in(&root, "0.10.0").is_file());
+        assert_eq!(EngineStore::load_in(&root).en_uso.as_deref(), Some("0.10.0"));
+        assert!(sin_staging_residual(&root));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cambio_ligero_retira_la_anterior() {
+        let dir = dir_prueba_s3("ligero");
+        let root = dir.join("datos");
+        let zip = zip_con_exe(&dir);
+
+        instalar_motor_desde_zip(&root, &zip, "0.10.0", &[]).expect("primera ok");
+        let r = instalar_motor_desde_zip(&root, &zip, "0.10.1", &[]).expect("segunda ok");
+        assert!(!engines_dir_in(&root).join("0.10.0").exists());
+        assert_eq!(r.retiradas, vec!["0.10.0".to_string()]);
+        let s = EngineStore::load_in(&root);
+        assert_eq!(s.en_uso.as_deref(), Some("0.10.1"));
+        assert_eq!(s.conservada, None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cambio_pesado_conserva_la_anterior() {
+        let dir = dir_prueba_s3("pesado");
+        let root = dir.join("datos");
+        let zip = zip_con_exe(&dir);
+
+        instalar_motor_desde_zip(&root, &zip, "0.10.9", &[]).expect("primera ok");
+        let r = instalar_motor_desde_zip(&root, &zip, "0.11.0", &[]).expect("segunda ok");
+        assert!(engines_dir_in(&root).join("0.10.9").is_dir());
+        assert_eq!(r.conservada.as_deref(), Some("0.10.9"));
+        assert!(r.retiradas.is_empty());
+        assert_eq!(EngineStore::load_in(&root).conservada.as_deref(), Some("0.10.9"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reinstalar_la_conservada_la_pasa_a_en_uso() {
+        let dir = dir_prueba_s3("conservada");
+        let root = dir.join("datos");
+        let zip = zip_con_exe(&dir);
+        instalar_motor_desde_zip(&root, &zip, "0.10.9", &[]).expect("primera");
+        instalar_motor_desde_zip(&root, &zip, "0.11.0", &[]).expect("pesada");
+        // Estado: en uso 0.11.0, conservada 0.10.9. Reinstalar la
+        // conservada la devuelve a en uso y conserva la otra: el plan
+        // no borra ninguna de las dos carpetas.
+        let r = instalar_motor_desde_zip(&root, &zip, "0.10.9", &[]).expect("reinstalacion");
+        let store = EngineStore::load_in(&root);
+        assert_eq!(store.en_uso.as_deref(), Some("0.10.9"));
+        assert_eq!(store.conservada.as_deref(), Some("0.11.0"));
+        assert_eq!(r.conservada.as_deref(), Some("0.11.0"));
+        assert!(r.retiradas.is_empty());
+        assert!(motor_exe_in(&root, "0.10.9").is_file());
+        assert!(motor_exe_in(&root, "0.11.0").is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn barrido_de_residuos_de_instalacion() {
+        let dir = dir_prueba_s3("barrido");
+        let root = dir.join("datos");
+        let engines = engines_dir_in(&root);
+        std::fs::create_dir_all(engines.join(".staging-0.9.0")).unwrap();
+        std::fs::write(engines.join(".descarga-0.9.0-123.zip"), b"x").unwrap();
+        std::fs::create_dir_all(engines.join("0.10.0")).unwrap();
+        limpiar_residuos_instalacion(&root);
+        assert!(!engines.join(".staging-0.9.0").exists());
+        assert!(!engines.join(".descarga-0.9.0-123.zip").exists());
+        assert!(engines.join("0.10.0").is_dir(), "una version real no se toca");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn paquete_sin_ejecutable_no_instala_nada() {
+        let dir = dir_prueba_s3("sin_exe");
+        let root = dir.join("datos");
+        let zip = zip_sin_exe(&dir);
+
+        assert!(instalar_motor_desde_zip(&root, &zip, "0.10.0", &[]).is_err());
+        assert!(!engines_dir_in(&root).join("0.10.0").exists());
+        assert!(sin_staging_residual(&root));
+        assert!(EngineStore::load_in(&root).en_uso.is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sella_los_proyectos_al_instalar() {
+        let dir = dir_prueba_s3("sellado");
+        let root = dir.join("datos");
+        let zip = zip_con_exe(&dir);
+
+        let viejo = dir.join("proyecto_viejo");
+        let mayor = dir.join("proyecto_mayor");
+        std::fs::create_dir_all(&viejo).unwrap();
+        std::fs::create_dir_all(&mayor).unwrap();
+        std::fs::write(viejo.join("project.glass"), r#"{"name": "X", "engine": "0.9.0"}"#).unwrap();
+        std::fs::write(mayor.join("project.glass"), r#"{"name": "X", "engine": "9.9.9"}"#).unwrap();
+
+        let r = instalar_motor_desde_zip(&root, &zip, "0.10.0", &[viejo.clone(), mayor.clone()])
+            .expect("instalacion ok");
+        assert_eq!(r.proyectos_migrados, 1);
+
+        let txt = std::fs::read_to_string(mayor.join("project.glass")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&txt).unwrap();
+        assert_eq!(v["engine"].as_str(), Some("9.9.9"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]

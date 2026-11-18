@@ -183,7 +183,7 @@ pub enum UpdateUiState {
 /// Mensajes del hilo de red al Launcher.
 pub enum UpdateMsg {
     Checked(Result<crate::updates::UpdateCheck, String>),
-    Installed(Result<crate::updates::Installation, String>),
+    Installed(Result<crate::updates::ResumenInstalacionMotor, String>),
 }
 
 /// Estado visible de la pestaña Complementos.
@@ -1365,11 +1365,27 @@ impl LauncherPanel {
                     self.update_state = UpdateUiState::Error(e);
                     self.update_rx = None;
                 }
-                Ok(UpdateMsg::Installed(Ok(inst))) => {
+                Ok(UpdateMsg::Installed(Ok(res))) => {
                     self.update_store = crate::updates::LauncherStore::load();
                     self.update_state = UpdateUiState::Idle;
                     self.update_rx = None;
-                    self.status_message = Some(format!("✅ GlassEnginer v{} descargado e instalado.", inst.version));
+                    let mut msg = format!(
+                        "✅ Motor v{} instalado y en uso.",
+                        res.version
+                    );
+                    if res.proyectos_migrados > 0 {
+                        msg += &format!(" {} proyectos sellados con la version nueva.", res.proyectos_migrados);
+                    }
+                    if !res.retiradas.is_empty() {
+                        msg += &format!(" Versiones retiradas: {}.", res.retiradas.join(", "));
+                    }
+                    if let Some(c) = &res.conservada {
+                        msg += &format!(" La anterior (v{}) se conserva por ser un cambio pesado.", c);
+                    }
+                    if !res.diferidas.is_empty() {
+                        msg += &format!(" Pendientes de borrar (ciérralas si están abiertas): {}.", res.diferidas.join(", "));
+                    }
+                    self.status_message = Some(msg);
                 }
                 Ok(UpdateMsg::Installed(Err(e))) => {
                     self.update_state = UpdateUiState::Error(e);
@@ -1441,7 +1457,7 @@ impl LauncherPanel {
             ui.label(RichText::new(format!("⚠ {e}")).size(12.5).color(Color32::from_rgb(176, 42, 42)));
         }
         ui.add_space(8.0);
-        ui.label(RichText::new("Cada versión se instala en su propia carpeta y queda registrada: las anteriores no se borran y los proyectos no se tocan. Una descarga solo se instala si su SHA-256 coincide con el publicado.").size(12.0).color(TEXT_DIM));
+            ui.label(RichText::new("Al instalar una versión nueva, pasa a ser la que está en uso: la anterior se borra —si el cambio es pesado (primer o segundo número distinto) se conserva, marcada— y los proyectos se sellan con la versión nueva. Nada se instala si su SHA-256 no coincide con el publicado.").size(12.0).color(TEXT_DIM));
     }
 
 
