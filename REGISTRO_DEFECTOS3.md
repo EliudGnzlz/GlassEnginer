@@ -1387,3 +1387,47 @@ Primero de los sub-bloques S0–S10 del diseño en `fase1/diseno_separacion.md` 
   pidió (D3: incompatible, no se activa).
 - Pipeline local exacto: 5/5 a 0, **764 tests** (glass_editor 164).
   Consumo: **Opus 9.285 · DeepSeek flash 14.725 · Kimi k3.1-pro 2.987**.
+
+## Separación S8 — releases e instalador (2026-11-18)
+
+- **release.yml**: dos familias de tags — motor `v*` y Hub `hub-v*` (la
+  versión se desnuda quitando el prefijo que toque, en pwsh, bash y en el
+  publish). Cada job monta **dos stagings** con el contenido del payload de
+  siempre: `dist/hub` (setup, AppImage y zip del Launcher) y `dist/engine`
+  (payload del motor gestionado). Nuevos artefactos: los zips del motor
+  `GlassEnginer-Engine-<versión>-windows-x64.zip` y `…-linux-x64.zip` con el
+  payload **en la raíz** (contrato exacto de `pick_engine_asset`; ambos jobs
+  verifican que el ejecutable queda en la raíz del zip). El zip del Launcher
+  de Windows sigue sin existir: manda el setup.
+- **Publicación separada por familia** (contaminación cazada en la
+  auditoría): un release del Hub publica SOLO el setup y el AppImage — los
+  zips del motor llevarían la versión del Hub y el selector del motor
+  podría confundirlos con un motor de verdad — y su setup se compila **sin
+  semilla** (la carpeta sembrada llevaría también la versión equivocada).
+  El release del motor publica todo, como hasta ahora más los dos zips.
+  `checksums.txt` cubre exactamente lo publicado en cada familia.
+- **GlassEnginer.iss**: define opcional `EngineSeedDir`; con él, el setup
+  copia el payload del motor a `%USERPROFILE%\GlassEnginer\engines\<versión>\`
+  (la `data_root()` real de Windows, vía `GetEnv('USERPROFILE')`) con
+  `uninsneveruninstall` (desinstalar el Hub no toca la zona de datos) y
+  escribe `engines.json` con `{"en_uso": "<versión>"}` SOLO si no existe
+  (una reinstalación no cambia el motor en uso), avisando con un error
+  visible si la escritura falla. Sin el define, compila y se comporta como
+  siempre.
+- **Verificación**: YAML validado; los pasos de zip de Linux ejecutados tal
+  cual contra un payload de prueba — ejecutable en la raíz y nombre que
+  `pick_engine_asset` acepta para Linux y rechaza para la otra plataforma.
+  **Pendiente declarado** (como fijaba el diseño): la compilación de ISCC
+  con los parámetros nuevos y la instalación real en Windows se verifican
+  en el job de Windows de la primera release que se lance con este
+  workflow; el comportamiento de `workflow_dispatch` (compila el ref desde
+  el que se lanza y etiqueta ese commit) es el histórico de todas las
+  releases y no se ha cambiado.
+- Consumo: **Opus 19.436 · DeepSeek flash 7.966 · Kimi k3.1-pro 9.714**.
+  Nota: la reescritura completa de Opus no se pudo usar tal cual (su
+  prompt no incluía el release.yml real y lo reconstruyó con rutas y
+  comandos inventados); aportó la resolución por familias y el aviso de
+  contaminación entre familias, y la integración final se hizo a mano
+  sobre el archivo real. La auditoría de Kimi (NO APTO sobre el borrador)
+  dejó dos correcciones aplicadas: sin semilla en releases del Hub y el
+  fallo al escribir `engines.json` ya no es silencioso.

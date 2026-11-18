@@ -5,7 +5,7 @@
   #define AppVersion "0.1.1-alpha"
 #endif
 #ifndef PayloadDir
-  #define PayloadDir "..\dist\payload"
+  #define PayloadDir "..\dist\hub"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\dist"
@@ -29,7 +29,6 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
-; Instalación por usuario por defecto; el diálogo permite elegir instalar para todos (admin).
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 UninstallDisplayIcon={app}\glass_app.exe
@@ -37,8 +36,6 @@ UninstallDisplayIcon={app}\glass_app.exe
 SetupIconFile={#IconFile}
 #endif
 
-; Solo el idioma por defecto: Spanish.isl no está garantizado en todos los runners
-; y su ausencia haría fallar la compilación.
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
@@ -46,10 +43,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-; Todo el payload: binario, managed\... y assets\...
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+#ifdef EngineSeedDir
+Source: "{#EngineSeedDir}\*"; DestDir: "{code:GetDataRoot}\engines\{#AppVersion}"; Flags: ignoreversion recursesubdirs createallsubdirs uninsneveruninstall
+#endif
 
-; WorkingDir={app} es imprescindible: la app resuelve managed\ y assets\ desde el directorio de trabajo.
 [Icons]
 Name: "{group}\GlassEnginer"; Filename: "{app}\glass_app.exe"; WorkingDir: "{app}"
 Name: "{group}\{cm:UninstallProgram,GlassEnginer}"; Filename: "{uninstallexe}"
@@ -57,3 +55,39 @@ Name: "{autodesktop}\GlassEnginer"; Filename: "{app}\glass_app.exe"; WorkingDir:
 
 [Run]
 Filename: "{app}\glass_app.exe"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,GlassEnginer}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function GetDataRoot(Param: String): String;
+var
+  UserProfile: String;
+begin
+  UserProfile := GetEnv('USERPROFILE');
+  if UserProfile <> '' then
+    Result := UserProfile + '\GlassEnginer'
+  else
+    Result := ExpandConstant('{localappdata}') + '\GlassEnginer';
+end;
+
+#ifdef EngineSeedDir
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  EngineDir: String;
+  EnginesJson: String;
+  Json: String;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    EngineDir := GetDataRoot('') + '\engines\{#AppVersion}';
+    EnginesJson := GetDataRoot('') + '\engines.json';
+
+    if DirExists(EngineDir) and not FileExists(EnginesJson) then
+    begin
+      Json := Chr(123) + '"en_uso": "' + '{#AppVersion}' + '"' + Chr(125);
+      if not SaveStringToFile(EnginesJson, Json, False) then
+        MsgBox('No se pudo escribir el registro del motor (' + EnginesJson + '). ' +
+               'El Hub está instalado, pero el motor sembrado no quedará marcado como «en uso».',
+               mbError, MB_OK);
+    end;
+  end;
+end;
+#endif
