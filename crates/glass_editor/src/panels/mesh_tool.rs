@@ -14,7 +14,7 @@ use glass_mesh_edit::{
 use crate::panels::mesh_keymap::{action_for, help_text, plane_point, MeshKeyAction};
 use crate::tool_prefs::{ShortcutScheme, ToolPrefs};
 
-const VIEWPORT_HEIGHT: f32 = 320.0;
+
 const FOV_DEG: f32 = 60.0;
 const QUANT: f32 = 1e-4;
 
@@ -488,242 +488,126 @@ impl MeshToolPanel {
     }
 
     /// Fila de elección/cambio del esquema de atajos (visible haya o no sesión).
-    fn render_scheme_prefs(&mut self, ui: &mut egui::Ui) {
-        let mut elegido: Option<ShortcutScheme> = None;
-        match self.prefs.scheme {
-            None => {
-                ui.label(egui::RichText::new("Primera vez en MeshForge").strong());
-                ui.label("¿Qué atajos quieres usar mientras editas la malla? En el resto del editor mandan los de Unity, como siempre.");
-                ui.horizontal(|ui| {
-                    if ui.button("Esquema Blender").clicked() {
-                        elegido = Some(ShortcutScheme::Blender);
-                    }
-                    if ui.button("Esquema Unity").clicked() {
-                        elegido = Some(ShortcutScheme::Unity);
-                    }
-                });
-            }
-            Some(actual) => {
-                let mut scheme_local = actual;
-                ui.horizontal(|ui| {
-                    ui.label("Atajos de malla:");
-                    ui.selectable_value(&mut scheme_local, ShortcutScheme::Blender, "Blender");
-                    ui.selectable_value(&mut scheme_local, ShortcutScheme::Unity, "Unity");
-                });
-                ui.label(egui::RichText::new(help_text(scheme_local)).weak());
-                if scheme_local != actual {
-                    elegido = Some(scheme_local);
-                }
-            }
-        }
-        if let Some(esquema) = elegido {
-            self.set_scheme(esquema);
+    /// Zona de apertura (sin sesión): la fila «Ruta .glb / Abrir .glb».
+    fn zona_abrir(&mut self, ui: &mut egui::Ui, action: &mut Option<Action>) {
+        ui.label("Ruta .glb:");
+        ui.text_edit_singleline(&mut self.path_input);
+        if ui.button("Abrir .glb").clicked() {
+            *action = Some(Action::Open);
         }
     }
 
-    /// Lee como mucho una acción de teclado por frame. Con «agarrar» activo,
-    /// solo Esc (cancelar) tiene efecto; sin el ratón sobre el panel, ninguna
-    /// tecla es de la malla (son del resto del editor).
-    fn read_mesh_key(&mut self, ui: &egui::Ui) -> Option<MeshKeyAction> {
-        let scheme = self.prefs.scheme?;
-        if self.session.is_none() || ui.ctx().egui_wants_keyboard_input() {
-            return None;
-        }
-        if self.grab.is_some() {
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.grab = None;
-                self.grab_requested = false;
-                self.status = "Movimiento cancelado.".to_string();
-            }
-            // Durante el movimiento no se aceptan otras acciones (cambiarían los índices).
-            return None;
-        }
-        if !self.panel_hovered {
-            return None;
-        }
-        const CANDIDATAS: [egui::Key; 10] = [
-            egui::Key::Z,
-            egui::Key::Y,
-            egui::Key::S,
-            egui::Key::M,
-            egui::Key::G,
-            egui::Key::X,
-            egui::Key::W,
-            egui::Key::Delete,
-            egui::Key::Num1,
-            egui::Key::Num2,
-        ];
-        ui.input(|i| {
-            CANDIDATAS
-                .iter()
-                .copied()
-                .filter(|k| i.key_pressed(*k))
-                .find_map(|k| action_for(scheme, k, i.modifiers))
-        })
+    /// Zona de sesión (barra lateral): nombre y acciones de la sesión abierta.
+    fn zona_sesion(
+        &mut self,
+        ui: &mut egui::Ui,
+        nombre: &str,
+        action: &mut Option<Action>,
+        close_requested: &mut bool,
+    ) {
+            ui.horizontal_wrapped(|ui| {
+                ui.strong(nombre);
+                if ui.button("Deshacer").clicked() {
+                    *action = Some(Action::Undo);
+                }
+                if ui.button("Rehacer").clicked() {
+                    *action = Some(Action::Redo);
+                }
+                if ui.button("Cerrar").clicked() {
+                    *close_requested = true;
+                }
+                if ui.button("Hornear (.glb + receta)").clicked() {
+                    *action = Some(Action::Bake);
+                }
+            });
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, scene_state: &Arc<Mutex<SceneState>>) {
-        // Hover determinista: rect del panel en el frame anterior.
-        self.panel_hovered = ui
-            .input(|i| i.pointer.hover_pos())
-            .zip(self.last_rect)
-            .is_some_and(|(p, r)| r.contains(p));
-        self.render_scheme_prefs(ui);
-        let mut key_action = self.read_mesh_key(ui);
-        if key_action == Some(MeshKeyAction::Grab) {
-            // «Agarrar» solo pone la bandera: el viewport debe verla en este mismo frame.
-            self.run_key_action(MeshKeyAction::Grab);
-            key_action = None;
-        }
-        let mut action: Option<Action> = None;
-        let mut close_requested = false;
-        let mut collider_answer: Option<bool> = None;
+    /// Zona de operadores (columna derecha): Dimensiones y Operadores.
+    fn zona_operadores(&mut self, ui: &mut egui::Ui, action: &mut Option<Action>, num_verts: usize) {
+            ui.separator();
+            ui.label("Dimensiones");
+            ui.horizontal_wrapped(|ui| {
+                drag_vec3(ui, &mut self.dims, 0.05);
+                if ui.button("Aplicar dimensiones").clicked() {
+                    *action = Some(Action::SetDims);
+                }
+            });
 
-        match self.session.as_mut() {
-            None => {
-                ui.horizontal(|ui| {
-                    ui.label("Ruta .glb:");
-                    ui.text_edit_singleline(&mut self.path_input);
-                    if ui.button("Abrir .glb").clicked() {
-                        action = Some(Action::Open);
-                    }
-                });
+            ui.separator();
+            ui.label("Operadores");
+            if ui.button("Subdividir").clicked() {
+                *action = Some(Action::Cmd(MeshCommand::Subdivide { levels: 1 }));
             }
-            Some(session) => {
-                let (stats, report) = session.stats();
-
-                ui.horizontal(|ui| {
-                    ui.strong(session.name.as_str());
-                    if ui.button("Deshacer").clicked() {
-                        action = Some(Action::Undo);
-                    }
-                    if ui.button("Rehacer").clicked() {
-                        action = Some(Action::Redo);
-                    }
-                    if ui.button("Cerrar").clicked() {
-                        close_requested = true;
-                    }
-                    if ui.button("Hornear (.glb + receta)").clicked() {
-                        action = Some(Action::Bake);
-                    }
-                });
-
-                ui.label(format!(
-                    "Vértices: {} · Caras: {} · Aristas: {} · bbox [{:.3}, {:.3}, {:.3}] – [{:.3}, {:.3}, {:.3}] · Área: {:.3} · Manifold: {} · Receta: {} comandos",
-                    stats.verts,
-                    stats.faces,
-                    stats.edges,
-                    stats.bbox_min[0],
-                    stats.bbox_min[1],
-                    stats.bbox_min[2],
-                    stats.bbox_max[0],
-                    stats.bbox_max[1],
-                    stats.bbox_max[2],
-                    stats.surface_area,
-                    if report.is_closed_manifold { "sí" } else { "no" },
-                    session.recipe.commands.len(),
-                ));
-
-                // Pregunta del Mesh Collider pendiente de respuesta.
-                if self.collider_prompt.is_some() {
-                    ui.group(|ui| {
-                        ui.label(
-                            egui::RichText::new(
-                                "¿Quieres adaptar el mesh collider al nuevo modelo?",
-                            )
-                            .strong(),
-                        );
-                        ui.checkbox(&mut self.collider_prompt_no_ask, "No volver a preguntar");
-                        ui.horizontal(|ui| {
-                            if ui.button("Sí, adaptar").clicked() {
-                                collider_answer = Some(true);
-                            }
-                            if ui.button("No").clicked() {
-                                collider_answer = Some(false);
-                            }
-                        });
-                    });
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.mirror_axis, MirrorAxis::X, "X");
+                ui.selectable_value(&mut self.mirror_axis, MirrorAxis::Y, "Y");
+                ui.selectable_value(&mut self.mirror_axis, MirrorAxis::Z, "Z");
+                if ui.button("Espejo").clicked() {
+                    *action = Some(Action::Cmd(MeshCommand::Mirror {
+                        axis: self.mirror_axis,
+                    }));
                 }
-
-                ui.separator();
-                ui.label("Dimensiones");
-                ui.horizontal(|ui| {
-                    drag_vec3(ui, &mut self.dims, 0.05);
-                    if ui.button("Aplicar dimensiones").clicked() {
-                        action = Some(Action::SetDims);
-                    }
-                });
-
-                ui.separator();
-                ui.label("Operadores");
-                if ui.button("Subdividir").clicked() {
-                    action = Some(Action::Cmd(MeshCommand::Subdivide { levels: 1 }));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Tolerancia");
+                ui.add(
+                    egui::DragValue::new(&mut self.weld_tolerance)
+                        .speed(1e-5)
+                        .max_decimals(6),
+                );
+                if ui.button("Soldar").clicked() {
+                    *action = Some(Action::Cmd(MeshCommand::Weld {
+                        tolerance: self.weld_tolerance.max(0.0),
+                    }));
                 }
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.mirror_axis, MirrorAxis::X, "X");
-                    ui.selectable_value(&mut self.mirror_axis, MirrorAxis::Y, "Y");
-                    ui.selectable_value(&mut self.mirror_axis, MirrorAxis::Z, "Z");
-                    if ui.button("Espejo").clicked() {
-                        action = Some(Action::Cmd(MeshCommand::Mirror {
-                            axis: self.mirror_axis,
-                        }));
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Tolerancia");
-                    ui.add(
-                        egui::DragValue::new(&mut self.weld_tolerance)
-                            .speed(1e-5)
-                            .max_decimals(6),
-                    );
-                    if ui.button("Soldar").clicked() {
-                        action = Some(Action::Cmd(MeshCommand::Weld {
-                            tolerance: self.weld_tolerance.max(0.0),
-                        }));
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Copias");
-                    ui.add(egui::DragValue::new(&mut self.array_count).speed(0.1));
-                    ui.label("Offset");
-                    drag_vec3(ui, &mut self.array_offset, 0.05);
-                    if ui.button("Array").clicked() {
-                        action = Some(Action::Cmd(MeshCommand::Array {
-                            count: self.array_count,
-                            offset: self.array_offset,
-                        }));
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Delta");
-                    drag_vec3(ui, &mut self.move_delta, 0.05);
-                    if ui.button("Mover todos").clicked() {
-                        let indices = (0..session.mesh.verts.len())
-                            .filter_map(|i| u32::try_from(i).ok())
-                            .collect();
-                        action = Some(Action::Cmd(MeshCommand::MoveVerts {
-                            indices,
-                            delta: self.move_delta,
-                        }));
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Otro .glb:");
-                    ui.text_edit_singleline(&mut self.boolean_path);
-                });
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.boolean_op, BooleanOp::Union, "Unión");
-                    ui.selectable_value(&mut self.boolean_op, BooleanOp::Difference, "Resta");
-                    ui.selectable_value(
-                        &mut self.boolean_op,
-                        BooleanOp::Intersection,
-                        "Intersección",
-                    );
-                    if ui.button("Booleana").clicked() {
-                        action = Some(Action::Boolean);
-                    }
-                });
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Copias");
+                ui.add(egui::DragValue::new(&mut self.array_count).speed(0.1));
+                ui.label("Offset");
+                drag_vec3(ui, &mut self.array_offset, 0.05);
+                if ui.button("Array").clicked() {
+                    *action = Some(Action::Cmd(MeshCommand::Array {
+                        count: self.array_count,
+                        offset: self.array_offset,
+                    }));
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Delta");
+                drag_vec3(ui, &mut self.move_delta, 0.05);
+                if ui.button("Mover todos").clicked() {
+                    let indices = (0..num_verts)
+                        .filter_map(|i| u32::try_from(i).ok())
+                        .collect();
+                    *action = Some(Action::Cmd(MeshCommand::MoveVerts {
+                        indices,
+                        delta: self.move_delta,
+                    }));
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Otro .glb:");
+                ui.text_edit_singleline(&mut self.boolean_path);
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.selectable_value(&mut self.boolean_op, BooleanOp::Union, "Unión");
+                ui.selectable_value(&mut self.boolean_op, BooleanOp::Difference, "Resta");
+                ui.selectable_value(
+                    &mut self.boolean_op,
+                    BooleanOp::Intersection,
+                    "Intersección",
+                );
+                if ui.button("Booleana").clicked() {
+                    *action = Some(Action::Boolean);
+                }
+            });
+    }
 
+    /// Zona de vista (centro): franja de selección/snap y la vista previa
+    /// wireframe con su picking, su arrastre y su gizmo.
+    fn zona_vista(&mut self, ui: &mut egui::Ui) {
+        if let Some(session) = self.session.as_mut() {
                 ui.separator();
                 ui.checkbox(&mut self.show_vertices, "Vértices");
                 let selection_text = match self.selection_mode {
@@ -759,7 +643,7 @@ impl MeshToolPanel {
                 });
                 self.snap_step = self.snap_step.clamp(0.01, 2.0);
 
-                let size = egui::vec2(ui.available_width().max(1.0), VIEWPORT_HEIGHT);
+                let size = egui::vec2(ui.available_width().max(1.0), ui.available_height().max(1.0));
                 let (response, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
                 let rect = response.rect;
                 painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(24, 24, 28));
@@ -935,6 +819,236 @@ impl MeshToolPanel {
                         }
                     }
                 }
+        }
+    }
+
+    /// Zona de identidad (barra lateral): la herramienta activa del espacio.
+    fn zona_identidad(&mut self, ui: &mut egui::Ui) {
+        ui.strong("🧊 MeshForge");
+        ui.weak("Editor de mallas (.glb)");
+        ui.separator();
+        ui.weak("Herramientas");
+        let _ = ui.selectable_label(true, "🧊 MeshForge");
+        ui.weak("Más herramientas en camino");
+    }
+
+    /// Zona central sin sesión: el aviso de que hay que abrir un .glb.
+    fn zona_sin_sesion(&mut self, ui: &mut egui::Ui) {
+        let alto = ui.available_height();
+        let _ = ui.allocate_space(egui::vec2(1.0, (alto - 40.0) / 2.0));
+        ui.vertical_centered(|ui| {
+            ui.label(egui::RichText::new("🧊").size(44.0));
+            ui.strong("Sin sesión");
+            ui.weak("Abre un .glb de assets/ desde la barra lateral para empezar a editar.");
+        });
+    }
+
+    fn render_scheme_prefs(&mut self, ui: &mut egui::Ui) {
+        let mut elegido: Option<ShortcutScheme> = None;
+        match self.prefs.scheme {
+            None => {
+                ui.label(egui::RichText::new("Primera vez en MeshForge").strong());
+                ui.label("¿Qué atajos quieres usar mientras editas la malla? En el resto del editor mandan los de Unity, como siempre.");
+                ui.horizontal(|ui| {
+                    if ui.button("Esquema Blender").clicked() {
+                        elegido = Some(ShortcutScheme::Blender);
+                    }
+                    if ui.button("Esquema Unity").clicked() {
+                        elegido = Some(ShortcutScheme::Unity);
+                    }
+                });
+            }
+            Some(actual) => {
+                let mut scheme_local = actual;
+                ui.horizontal(|ui| {
+                    ui.label("Atajos de malla:");
+                    ui.selectable_value(&mut scheme_local, ShortcutScheme::Blender, "Blender");
+                    ui.selectable_value(&mut scheme_local, ShortcutScheme::Unity, "Unity");
+                });
+                ui.label(egui::RichText::new(help_text(scheme_local)).weak());
+                if scheme_local != actual {
+                    elegido = Some(scheme_local);
+                }
+            }
+        }
+        if let Some(esquema) = elegido {
+            self.set_scheme(esquema);
+        }
+    }
+
+    /// Lee como mucho una acción de teclado por frame. Con «agarrar» activo,
+    /// solo Esc (cancelar) tiene efecto; sin el ratón sobre el panel, ninguna
+    /// tecla es de la malla (son del resto del editor).
+    fn read_mesh_key(&mut self, ui: &egui::Ui) -> Option<MeshKeyAction> {
+        let scheme = self.prefs.scheme?;
+        if self.session.is_none() || ui.ctx().egui_wants_keyboard_input() {
+            return None;
+        }
+        if self.grab.is_some() {
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.grab = None;
+                self.grab_requested = false;
+                self.status = "Movimiento cancelado.".to_string();
+            }
+            // Durante el movimiento no se aceptan otras acciones (cambiarían los índices).
+            return None;
+        }
+        if !self.panel_hovered {
+            return None;
+        }
+        const CANDIDATAS: [egui::Key; 10] = [
+            egui::Key::Z,
+            egui::Key::Y,
+            egui::Key::S,
+            egui::Key::M,
+            egui::Key::G,
+            egui::Key::X,
+            egui::Key::W,
+            egui::Key::Delete,
+            egui::Key::Num1,
+            egui::Key::Num2,
+        ];
+        ui.input(|i| {
+            CANDIDATAS
+                .iter()
+                .copied()
+                .filter(|k| i.key_pressed(*k))
+                .find_map(|k| action_for(scheme, k, i.modifiers))
+        })
+    }
+
+    pub fn render(&mut self, ui: &mut egui::Ui, scene_state: &Arc<Mutex<SceneState>>) {
+        // Hover determinista: rect del panel en el frame anterior.
+        self.panel_hovered = ui
+            .input(|i| i.pointer.hover_pos())
+            .zip(self.last_rect)
+            .is_some_and(|(p, r)| r.contains(p));
+        self.render_scheme_prefs(ui);
+        let mut key_action = self.read_mesh_key(ui);
+        if key_action == Some(MeshKeyAction::Grab) {
+            // «Agarrar» solo pone la bandera: el viewport debe verla en este mismo frame.
+            self.run_key_action(MeshKeyAction::Grab);
+            key_action = None;
+        }
+        let mut action: Option<Action> = None;
+        let mut close_requested = false;
+        let mut collider_answer: Option<bool> = None;
+
+        // Foto de cabecera: stats() exige &mut, ámbito cerrado para soltar el préstamo.
+        let cabecera = self.session.as_mut().map(|s| {
+            let (stats, report) = s.stats();
+            (s.name.clone(), stats, report, s.recipe.commands.len(), s.mesh.verts.len())
+        });
+
+        if let Some((_, stats, report, receta_len, _)) = &cabecera {
+            ui.label(format!(
+                "Vértices: {} · Caras: {} · Aristas: {} · bbox [{:.3}, {:.3}, {:.3}] – [{:.3}, {:.3}, {:.3}] · Área: {:.3} · Manifold: {} · Receta: {} comandos",
+                stats.verts,
+                stats.faces,
+                stats.edges,
+                stats.bbox_min[0],
+                stats.bbox_min[1],
+                stats.bbox_min[2],
+                stats.bbox_max[0],
+                stats.bbox_max[1],
+                stats.bbox_max[2],
+                stats.surface_area,
+                if report.is_closed_manifold { "sí" } else { "no" },
+                receta_len,
+            ));
+
+            // Pregunta del Mesh Collider pendiente de respuesta.
+            if self.collider_prompt.is_some() {
+                ui.group(|ui| {
+                    ui.label(
+                        egui::RichText::new(
+                            "¿Quieres adaptar el mesh collider al nuevo modelo?",
+                        )
+                        .strong(),
+                    );
+                    ui.checkbox(&mut self.collider_prompt_no_ask, "No volver a preguntar");
+                    ui.horizontal(|ui| {
+                        if ui.button("Sí, adaptar").clicked() {
+                            collider_answer = Some(true);
+                        }
+                        if ui.button("No").clicked() {
+                            collider_answer = Some(false);
+                        }
+                    });
+                });
+            }
+        }
+
+        // Solo nombre y nº de vértices llegan a las zonas (préstamo de `cabecera`, no de `self`).
+        let sesion: Option<(&str, usize)> = cabecera
+            .as_ref()
+            .map(|(nombre, _, _, _, num_verts)| (nombre.as_str(), *num_verts));
+
+        // Tres zonas con rects absolutos sobre el espacio restante.
+        let resto = ui.available_rect_before_wrap();
+        let ancho_izq = 208.0_f32.min(resto.width() * 0.30);
+        let ancho_der = 264.0_f32.min(resto.width() * 0.30);
+        let gap = 6.0_f32;
+        let rect_izq = egui::Rect::from_min_size(resto.min, egui::vec2(ancho_izq, resto.height()));
+        let rect_der = egui::Rect::from_min_max(
+            egui::pos2(resto.max.x - ancho_der, resto.min.y),
+            resto.max,
+        );
+        let rect_centro = egui::Rect::from_min_max(
+            egui::pos2(rect_izq.max.x + gap, resto.min.y),
+            egui::pos2(rect_der.min.x - gap, resto.max.y),
+        );
+
+        let separador = ui.visuals().widgets.noninteractive.bg_stroke;
+        ui.painter().vline(
+            rect_izq.max.x + gap * 0.5,
+            resto.min.y..=resto.max.y,
+            separador,
+        );
+        ui.painter().vline(
+            rect_der.min.x - gap * 0.5,
+            resto.min.y..=resto.max.y,
+            separador,
+        );
+
+        let layout = egui::Layout::top_down(egui::Align::Min);
+
+        // Izquierda: herramienta + sesión + estado.
+        let mut ui_izq = ui.new_child(egui::UiBuilder::new().max_rect(rect_izq).layout(layout));
+        self.zona_identidad(&mut ui_izq);
+        ui_izq.separator();
+        match sesion {
+            Some((nombre, _)) => {
+                self.zona_sesion(&mut ui_izq, nombre, &mut action, &mut close_requested);
+            }
+            None => {
+                self.zona_abrir(&mut ui_izq, &mut action);
+            }
+        }
+        ui_izq.separator();
+        ui_izq.add(egui::Label::new(self.status.as_str()).wrap());
+
+        // Centro: vista wireframe.
+        let mut ui_centro =
+            ui.new_child(egui::UiBuilder::new().max_rect(rect_centro).layout(layout));
+        if sesion.is_some() {
+            self.zona_vista(&mut ui_centro);
+        } else {
+            self.zona_sin_sesion(&mut ui_centro);
+        }
+
+        // Derecha: operadores con scroll propio.
+        let mut ui_der = ui.new_child(egui::UiBuilder::new().max_rect(rect_der).layout(layout));
+        match sesion {
+            Some((_, num_verts)) => {
+                egui::ScrollArea::vertical()
+                    .id_salt("mesh_ops")
+                    .show(&mut ui_der, |ui| {
+                        self.zona_operadores(ui, &mut action, num_verts);
+                    });
+            }
+            None => {
+                ui_der.label(egui::RichText::new("Sin sesión").weak());
             }
         }
 
@@ -982,7 +1096,6 @@ impl MeshToolPanel {
             self.run_key_action(accion);
         }
         self.last_rect = Some(ui.max_rect());
-        ui.label(self.status.as_str());
     }
 }
 
