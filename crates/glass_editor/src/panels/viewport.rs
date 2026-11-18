@@ -117,6 +117,8 @@ pub struct ViewportPanel {
     pub editor_cam_pitch: f32,
     pub editor_cam_dist: f32,
     pub editor_cam_center: [f32; 3],
+    /// Rejilla del suelo en la vista de escena (capa del editor).
+    pub show_grid: bool,
     // Cámara activa seleccionada para Game View (multi-cámara)
     pub selected_camera_id: Option<u64>,
     // Eje activo actualmente arrastrado en el Gizmo 3D
@@ -165,6 +167,7 @@ impl Default for ViewportPanel {
             editor_cam_pitch: 0.25,
             editor_cam_dist: 10.0,
             editor_cam_center: [3.5, 1.5, 0.0],
+            show_grid: true,
             selected_camera_id: None,
             active_drag_axis: GizmoAxis::None,
             press_axis: GizmoAxis::None,
@@ -251,6 +254,12 @@ impl ViewportPanel {
                 self.editor_cam_yaw = 0.0;
             }
 
+            let btn_rejilla = egui::Button::new(RichText::new("# Rejilla").size(13.0))
+                .selected(self.show_grid);
+            if ui.add(btn_rejilla).on_hover_text("Rejilla del suelo: lineas de 1 m y de 10 m").clicked() {
+                self.show_grid = !self.show_grid;
+            }
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(format!("⎚ {:.0}x{:.0}", self.scene_width, self.scene_height));
             });
@@ -292,6 +301,12 @@ impl ViewportPanel {
             }
 
             let painter = ui.painter();
+
+            // Rejilla del editor sobre el suelo: capa del editor, como los
+            // gizmos, proyectada con la misma view_proj; va debajo de todo.
+            if self.show_grid {
+                gizmo_3d::draw_editor_grid(painter, &view_proj, rect, self.editor_cam_center, self.editor_cam_dist);
+            }
 
             // Dibujar Gizmos de Cámaras y Luces de la escena (estilo Unity Scene View).
             // Las matrices de mundo se resuelven una sola vez por frame: los

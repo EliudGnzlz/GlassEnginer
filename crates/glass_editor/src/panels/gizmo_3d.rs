@@ -740,6 +740,162 @@ pub fn punto_aterrizaje(
     }
 }
 
+/// Clase de una línea de la rejilla del editor. Decide color, alfa base y grosor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaseLineaRejilla {
+    Menor,
+    Mayor,
+    EjeX,
+    EjeZ,
+}
+
+/// Genera las líneas de la rejilla del suelo (plano y = 0) que cubren el cuadrado
+/// [centro.x - radio, centro.x + radio] x [centro.z - radio, centro.z + radio].
+///
+/// Hay una línea de x constante por cada entero k en [ceil(centro.x - radio), floor(centro.x + radio)]
+/// y una de z constante por cada entero k en [ceil(centro.z - radio), floor(centro.z + radio)].
+/// Los extremos se extienden a floor/ceil del borde del cuadrado.
+/// La línea z = 0 es `EjeX`, la línea x = 0 es `EjeZ`, los múltiplos de 10 son `Mayor`
+/// y el resto `Menor`.
+pub fn lineas_rejilla(
+    centro: [f32; 3],
+    radio: f32,
+) -> Vec<([f32; 3], [f32; 3], ClaseLineaRejilla)> {
+    let (x_lo, x_hi) = (centro[0] - radio, centro[0] + radio);
+    let (z_lo, z_hi) = (centro[2] - radio, centro[2] + radio);
+    let (x_min, x_max) = (x_lo.floor(), x_hi.ceil());
+    let (z_min, z_max) = (z_lo.floor(), z_hi.ceil());
+
+    let (kx0, kx1) = (x_lo.ceil() as i32, x_hi.floor() as i32);
+    let (kz0, kz1) = (z_lo.ceil() as i32, z_hi.floor() as i32);
+
+    let n_x = (kx1 - kx0 + 1).max(0) as usize;
+    let n_z = (kz1 - kz0 + 1).max(0) as usize;
+    let mut lineas = Vec::with_capacity(n_x + n_z);
+
+    // Líneas de x constante: corren a lo largo de Z. La de x = 0 es el eje Z.
+    for k in kx0..=kx1 {
+        let clase = if k == 0 {
+            ClaseLineaRejilla::EjeZ
+        } else if k % 10 == 0 {
+            ClaseLineaRejilla::Mayor
+        } else {
+            ClaseLineaRejilla::Menor
+        };
+        let kf = k as f32;
+        lineas.push(([kf, 0.0, z_min], [kf, 0.0, z_max], clase));
+    }
+
+    // Líneas de z constante: corren a lo largo de X. La de z = 0 es el eje X.
+    for k in kz0..=kz1 {
+        let clase = if k == 0 {
+            ClaseLineaRejilla::EjeX
+        } else if k % 10 == 0 {
+            ClaseLineaRejilla::Mayor
+        } else {
+            ClaseLineaRejilla::Menor
+        };
+        let kf = k as f32;
+        lineas.push(([x_min, 0.0, kf], [x_max, 0.0, kf], clase));
+    }
+
+    lineas
+}
+
+/// Dibuja la rejilla del suelo del editor estilo Unity (plano y = 0) como segmentos 2D
+/// proyectados con la misma `view_proj` que los gizmos. Es una capa del editor: solo se
+/// usa en la vista de escena, nunca en la vista de juego ni en el runtime.
+///
+/// - Líneas menores cada 1 m, mayores cada 10 m, eje X (z = 0) en rojo y eje Z (x = 0) en azul.
+/// - La rejilla sigue a `centro` con radio `(distancia_cam * 2.5).clamp(10, 100)`, así nunca
+///   se acaba al desplazar la vista.
+/// - Cada línea se desvanece con la distancia en XZ al centro; las menores se desvanecen
+///   además al alejar la cámara (a tope hasta 25 m, invisibles desde 60 m).
+/// - Si algún extremo de una línea queda detrás de la cámara (`world_to_screen` da `None`),
+///   la línea se parte en trozos de 5 m y solo se dibujan los trozos con ambos extremos
+///   proyectables.
+pub fn draw_editor_grid(
+    painter: &Painter,
+    vp: &[f32; 16],
+    rect: Rect,
+    centro: [f32; 3],
+    distancia_cam: f32,
+) {
+    const LARGO_TROZO: f32 = 5.0;
+    const ALFA_MINIMO: f32 = 0.02;
+
+    let radio = (distancia_cam * 2.5).clamp(10.0, 100.0);
+    let factor_menor = (1.0 - (distancia_cam - 25.0) / 35.0).clamp(0.0, 1.0);
+
+    // Atenuación por distancia en XZ al centro, acotada a [0, 1].
+    let atenuacion = |p: [f32; 3]| -> f32 {
+        let dx = p[0] - centro[0];
+        let dz = p[2] - centro[2];
+        (1.0 - (dx * dx + dz * dz).sqrt() / radio).clamp(0.0, 1.0)
+    };
+
+    for (a, b, clase) in lineas_rejilla(centro, radio) {
+        let (base, (r, g, bl), grosor) = match clase {
+            ClaseLineaRejilla::Menor => (60.0 * factor_menor, (200, 205, 215), 1.0),
+            ClaseLineaRejilla::Mayor => (110.0, (200, 205, 215), 1.0),
+            ClaseLineaRejilla::EjeX => (200.0, (225, 90, 90), 1.25),
+            ClaseLineaRejilla::EjeZ => (200.0, (90, 130, 235), 1.25),
+        };
+        if base <= 0.0 {
+            continue;
+        }
+
+        let trazar = |pa: Pos2, pb: Pos2, medio: [f32; 3]| {
+            let alfa = base * atenuacion(medio);
+            if alfa < ALFA_MINIMO {
+                return;
+            }
+            let alfa_u8 = alfa.round().clamp(0.0, 255.0) as u8;
+            painter.line_segment(
+                [pa, pb],
+                egui::Stroke::new(
+                    grosor,
+                    egui::Color32::from_rgba_unmultiplied(r, g, bl, alfa_u8),
+                ),
+            );
+        };
+
+        let punto = |t: f32| -> [f32; 3] {
+            [
+                a[0] + (b[0] - a[0]) * t,
+                a[1] + (b[1] - a[1]) * t,
+                a[2] + (b[2] - a[2]) * t,
+            ]
+        };
+
+        match (world_to_screen(a, vp, rect), world_to_screen(b, vp, rect)) {
+            (Some(pa), Some(pb)) => trazar(pa, pb, punto(0.5)),
+            _ => {
+                // Algún extremo queda detrás de la cámara: trocear en tramos de 5 m.
+                let dx = b[0] - a[0];
+                let dy = b[1] - a[1];
+                let dz = b[2] - a[2];
+                let largo = (dx * dx + dy * dy + dz * dz).sqrt();
+                if largo <= f32::EPSILON {
+                    continue;
+                }
+                let mut s = 0.0;
+                while s < largo {
+                    let e = (s + LARGO_TROZO).min(largo);
+                    let (t0, t1) = (s / largo, e / largo);
+                    let (q0, q1) = (punto(t0), punto(t1));
+                    if let (Some(p0), Some(p1)) =
+                        (world_to_screen(q0, vp, rect), world_to_screen(q1, vp, rect))
+                    {
+                        trazar(p0, p1, punto((t0 + t1) * 0.5));
+                    }
+                    s = e;
+                }
+            }
+        }
+    }
+}
+
 /// Dibuja la caja delimitadora 3D orientada (12 aristas con halo y esquinas) estilo Unity
 /// para el GameObject seleccionado en la ventana de escena.
 pub fn draw_selection_bounding_box(
@@ -1592,5 +1748,97 @@ mod tests_picking {
             egui::Vec2::new(120.0, 40.0),
         );
         assert!(a.abs() < 1e-6, "sin avance con el eje hacia la cámara: {a}");
+    }
+
+    // ---- Rejilla del editor ----
+
+    type LineaRejilla = ([f32; 3], [f32; 3], super::ClaseLineaRejilla);
+
+    /// Una línea de x constante tiene la misma x en ambos extremos.
+    fn es_x_constante(l: &LineaRejilla) -> bool {
+        l.0[0] == l.1[0]
+    }
+
+    #[test]
+    fn rejilla_centrada_radio_10_clases_y_conteo() {
+        use super::ClaseLineaRejilla as C;
+        let lineas = super::lineas_rejilla([0.0, 0.0, 0.0], 10.0);
+        assert_eq!(lineas.len(), 42, "21 líneas por dirección");
+
+        let n_x = lineas.iter().filter(|l| es_x_constante(l)).count();
+        assert_eq!(n_x, 21);
+        assert_eq!(lineas.len() - n_x, 21);
+
+        let contar = |c: C| lineas.iter().filter(|l| l.2 == c).count();
+        assert_eq!(contar(C::EjeX), 1);
+        assert_eq!(contar(C::EjeZ), 1);
+        assert_eq!(contar(C::Mayor), 4);
+        assert_eq!(contar(C::Menor), 36);
+
+        for l in &lineas {
+            let k = if es_x_constante(l) { l.0[0] } else { l.0[2] };
+            match l.2 {
+                C::EjeX => {
+                    assert!(!es_x_constante(l), "EjeX es la línea z = 0");
+                    assert_eq!(k, 0.0);
+                }
+                C::EjeZ => {
+                    assert!(es_x_constante(l), "EjeZ es la línea x = 0");
+                    assert_eq!(k, 0.0);
+                }
+                C::Mayor => assert_eq!(k.abs(), 10.0, "mayor fuera de ±10: {k}"),
+                C::Menor => assert!(k != 0.0 && k.abs() != 10.0, "menor con k = {k}"),
+            }
+        }
+
+        let mayores_x = lineas
+            .iter()
+            .filter(|l| l.2 == C::Mayor && es_x_constante(l))
+            .count();
+        assert_eq!(mayores_x, 2, "k = -10 y k = 10 en x");
+    }
+
+    #[test]
+    fn rejilla_descentrada_constantes_enteras_en_rango() {
+        let lineas = super::lineas_rejilla([3.4, 0.0, -2.2], 5.0);
+
+        let mut ks_x: Vec<i32> = Vec::new();
+        let mut ks_z: Vec<i32> = Vec::new();
+        for l in &lineas {
+            let k = if es_x_constante(l) { l.0[0] } else { l.0[2] };
+            assert_eq!(k.fract(), 0.0, "constante no entera: {k}");
+            if es_x_constante(l) {
+                assert!((-1.0..=8.0).contains(&k), "x fuera de rango: {k}");
+                ks_x.push(k as i32);
+            } else {
+                assert!((-7.0..=2.0).contains(&k), "z fuera de rango: {k}");
+                ks_z.push(k as i32);
+            }
+        }
+        ks_x.sort_unstable();
+        ks_z.sort_unstable();
+        assert_eq!(ks_x, (-1..=8).collect::<Vec<_>>());
+        assert_eq!(ks_z, (-7..=2).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn rejilla_lineas_en_plano_y_cero_con_constante_compartida() {
+        let casos = [
+            ([0.0, 0.0, 0.0], 10.0),
+            ([3.4, 0.0, -2.2], 5.0),
+            ([-57.3, 4.0, 81.9], 37.5),
+        ];
+        for (centro, radio) in casos {
+            for l in super::lineas_rejilla(centro, radio) {
+                assert_eq!(l.0[1], 0.0, "extremo a fuera de y = 0: {l:?}");
+                assert_eq!(l.1[1], 0.0, "extremo b fuera de y = 0: {l:?}");
+                let x_igual = l.0[0] == l.1[0];
+                let z_igual = l.0[2] == l.1[2];
+                assert!(
+                    x_igual ^ z_igual,
+                    "los extremos deben compartir exactamente una coordenada: {l:?}"
+                );
+            }
+        }
     }
 }

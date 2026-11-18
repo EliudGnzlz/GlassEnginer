@@ -1254,3 +1254,15 @@ Segunda mitad del punto 10 (la estructura, P3a, quedó cerrada en su sección). 
 **Verificación:** suite glass_editor 125/125; pipeline local exacto 5/5 a 0 (workspace: 717 tests, 0 fallos). **Test físico PASS completo por el camino real**: la identidad se dibuja desde el registro (cabecera, descripción, lista con la activa marcada y «Más herramientas en camino» con una sola herramienta); el clic en la fila de MeshForge ejercita la petición sin romper el espacio; **portón apagado en disco estando dentro → retorno automático al Editor y el botón «Herramientas» desaparece del conmutador; restaurado → el botón vuelve**.
 
 **Consumo:** Opus 17.855 · Kimi k3.1-pro 40.754 · DeepSeek flash 4.245 · Sonnet 0.
+
+## REJILLA DEL EDITOR ESTILO UNITY (2026-11-17)
+
+**Pedido:** la vista de escena no tenía rejilla propia (auditoría B: lo que se veía como suelo era geometría de la escena). La de Unity es capa del editor: líneas menores cada 1 m, mayores cada 10 m, ejes X/Z en color y desvanecido con la distancia, solo en la vista de escena.
+
+**Construcción (capa del editor, sin tocar el renderer):** la rejilla se dibuja con el painter de egui proyectando segmentos del plano XZ (y = 0) con la misma `view_proj` que los gizmos, debajo de todos ellos. En `gizmo_3d.rs`: `lineas_rejilla(centro, radio)` (pura, con tests) genera las líneas enteras del cuadrado que sigue al centro de la cámara del editor, clasificadas `Menor`/`Mayor`/`EjeX`/`EjeZ`; `draw_editor_grid(...)` las pinta con radio según la distancia de la cámara (2,5×, entre 10 y 100 m), desvanecido por distancia al centro y factor extra para las menores (desaparecen al alejar la cámara a 60 m); si un extremo queda detrás de la cámara, la línea se parte en trozos de 5 m y se pintan los que proyectan. En `viewport.rs`: campo `show_grid` (defecto visible) y botón conmutador «# Rejilla» en la barra de la vista de escena, junto a «Centrar». La vista de juego no la dibuja.
+
+**Paquetes en paralelo:** **Opus (17.356)** — las dos funciones y los 3 tests, 2 pares ×1; **DeepSeek flash (5.177)** — campo, conmutador y llamada de dibujo (3 de 4 pares ×1; la inicialización del campo la añadió Rayo porque el ancla suponía otro valor inicial); **Kimi k3.1-pro (41.044)** — auditoría: apto sin defectos bloqueantes (proyección alineada con los gizmos, troceo sin líneas espurias, coste acotado; su única condición, acotar el desvanecido a [0, 1], ya estaba en el código).
+
+**Verificación:** suite glass_editor 128/128; pipeline local exacto 5/5 a 0 (workspace: 720 tests, 0 fallos). **Test físico PASS por el camino real**: la rejilla se ve sobre el suelo del Escaparate alineada con la escena, con el eje X en rojo y el Z en azul cruzándose en el origen y el desvanecido hacia los bordes; el botón «# Rejilla» la apaga (suelo limpio) y la vuelve a encender.
+
+**Consumo:** Opus 17.356 · Kimi k3.1-pro 41.044 · DeepSeek flash 5.177 · Sonnet 0.
