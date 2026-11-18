@@ -1868,6 +1868,9 @@ struct GlassEngineApp {
     pub is_standalone_test: bool,
     pub scene_to_load: Option<String>,
     pub proyecto_directo: Option<String>,
+    /// Arranque en modo Hub (--hub): sin runtime de editor en este
+    /// proceso (S5); los proyectos se abriran en procesos hijo (S6).
+    pub es_hub: bool,
     /// Raiz del payload del motor (managed/ y assets del motor): la
     /// calcula resolver_raiz_motor al arrancar.
     pub raiz_motor: std::path::PathBuf,
@@ -2097,6 +2100,7 @@ impl GlassEngineApp {
         flags: LaunchFlags,
         scene_to_load: Option<String>,
         proyecto_directo: Option<String>,
+        es_hub: bool,
     ) -> Self {
         let _ = &proyecto_directo;
         let LaunchFlags {
@@ -2323,6 +2327,7 @@ impl GlassEngineApp {
             is_standalone_test,
             scene_to_load,
             proyecto_directo,
+            es_hub,
             raiz_motor: raiz_motor_actual(),
             player_script_handle: None,
             keys_pressed: HashSet::new(),
@@ -7266,8 +7271,9 @@ impl ApplicationHandler for GlassEngineApp {
         self.preparar_assets(&mut renderer, &vk_ctx);
 
         // 6. Iniciar AssetWatcher en segundo plano sobre assets/
-        log::info!("main: Iniciando AssetWatcher...");
-        if Path::new("assets").exists() {
+        // (en modo Hub no: este proceso no vigila assets de nadie).
+        if !self.es_hub && Path::new("assets").exists() {
+            log::info!("main: Iniciando AssetWatcher...");
             // Sin la carpeta models/: la registra la precarga diferida
             // (ver `escanear_fuentes` en el vigía).
             match AssetWatcher::new("assets", false) {
@@ -7329,7 +7335,9 @@ impl ApplicationHandler for GlassEngineApp {
         let managed_dir = self
             .raiz_motor
             .join("managed/GlassEngine.Core/bin/Debug/net8.0");
-        if managed_dir.exists() {
+        // En modo Hub (--hub) el ScriptHost NO se inicializa: este
+        // proceso no ejecuta scripts; los editores hijo lo haran.
+        if !self.es_hub && managed_dir.exists() {
             match self.script_host.initialize(&managed_dir) {
                 Ok(()) => {
                     log::info!("main: ScriptHost C# (.NET CoreCLR) inicializado exitosamente.");
@@ -7520,6 +7528,8 @@ impl ApplicationHandler for GlassEngineApp {
                     log::info!("Iniciando escena de juego por defecto en Standalone...");
                     self.setup_complete_sample_game_scene();
                 }
+            } else if self.es_hub {
+                log::info!("Arranque en modo Hub (--hub): sin escena demo ni runtime de editor.");
             } else if self.proyecto_directo.is_some() {
                 log::info!("Arranque con --project: sin escena demo; el proyecto se abre tras la precarga.");
             } else {
@@ -8995,13 +9005,20 @@ fn comprobar_sonda_gpu() -> Option<String> {
     let mut clave: Vec<(String, u32)> = gpus.iter().map(|g| (g.name.clone(), g.driver_version)).collect();
     clave.sort();
     let clave_json = serde_json::json!(clave);
+    // S5: el objetivo es el motor GESTIONADO, no este binario: su
+    // version manda en la cache y su exe es el que se lanza.
+    let objetivo = glass_editor::updates::objetivo_sonda();
+    let version_objetivo = objetivo
+        .as_ref()
+        .map(|(_, v)| v.clone())
+        .unwrap_or_else(|| glass_editor::updates::ENGINE_VERSION.to_string());
     let ruta_cache = glass_editor::updates::data_root().join("gpu_probe.json");
 
     if let Some(cache) = std::fs::read_to_string(&ruta_cache)
         .ok()
         .and_then(|texto| serde_json::from_str::<serde_json::Value>(&texto).ok())
     {
-        if cache["motor"].as_str() == Some(glass_editor::updates::ENGINE_VERSION) && cache["gpus"] == clave_json {
+        if cache["motor"].as_str() == Some(version_objetivo.as_str()) && cache["gpus"] == clave_json {
             match cache["resultado"].as_str() {
                 Some("ok") => {
                     log::info!("Sonda de GPU: resultado en caché correcto; no se repite.");
@@ -9017,12 +9034,15 @@ fn comprobar_sonda_gpu() -> Option<String> {
         }
     }
 
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(e) => {
-            log::warn!("Sonda de GPU: no se pudo localizar el ejecutable: {e}");
-            return None;
-        }
+    let exe = match objetivo {
+        Some((exe, _)) => exe,
+        None => match std::env::current_exe() {
+            Ok(exe) => exe,
+            Err(e) => {
+                log::warn!("Sonda de GPU: no se pudo localizar el ejecutable: {e}");
+                return None;
+            }
+        },
     };
     log::info!("Sonda de GPU: lanzando el proceso hijo de comprobación...");
     let mut hijo = match std::process::Command::new(&exe)
@@ -9103,7 +9123,7 @@ fn comprobar_sonda_gpu() -> Option<String> {
     }
 
     let cache = serde_json::json!({
-        "motor": glass_editor::updates::ENGINE_VERSION,
+        "motor": version_objetivo,
         "gpus": clave_json,
         "seleccionada": seleccionada,
         "resultado": if exito { "ok" } else { "fallo" },
@@ -9153,7 +9173,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scene_to_load = args.iter().position(|a| a == "--scene").and_then(|idx| args.get(idx + 1)).cloned();
     let es_hub = es_modo_hub(&args);
     let proyecto_directo = proyecto_de_args(&args);
-    let _ = es_hub;
+    // --hub y --project son modos excluyentes (S5): el Hub no abre
+    // proyectos en su propio proceso; eso es el modo hijo.
+    if es_hub && proyecto_directo.is_some() {
+        log::error!("Argumentos incompatibles: --hub con --project. El Hub lanza el motor como proceso hijo, no lo abre en el suyo.");
+        return Err("argumentos incompatibles: --hub con --project".into());
+    }
     let is_sample_game_test = args.iter().any(|arg| arg == "--test-sample-game");
     let is_platformer_test = args.iter().any(|arg| arg == "--test-platformer");
     if is_platformer_test || is_sample_game_test || is_standalone_test {
@@ -9219,12 +9244,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         scene_to_load,
         proyecto_directo,
+        es_hub,
     );
     // MCP sobre la escena viva: con la feature de editor, el servidor MCP
     // de la app sirve su stdio en un hilo dedicado (ver
     // `start_live_mcp_stdio` para la decisión de arranque y sus porqués).
     #[cfg(feature = "editor")]
-    app.start_live_mcp_stdio(args.iter().any(|arg| arg == "--mcp-live"));
+    app.start_live_mcp_stdio(args.iter().any(|arg| arg == "--mcp-live") && !es_hub);
     // S4: si este proceso es un motor gestionado (su exe vive en
     // engines/<version>/), toma el lock de sesion de su version: el
     // Hub no borrara esa version mientras este proceso viva. El

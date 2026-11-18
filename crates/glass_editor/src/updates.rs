@@ -877,6 +877,22 @@ pub struct LockSesion {
     _archivo: std::fs::File,
 }
 
+/// Objetivo de la sonda de GPU: el motor GESTIONADO en uso bajo
+/// `root` — su ejecutable y su version. None si no hay motor en uso
+/// o su ejecutable no esta en disco (el llamante sondea entonces el
+/// propio binario, como en el modo combinado).
+pub fn objetivo_sonda_en(root: &std::path::Path) -> Option<(std::path::PathBuf, String)> {
+    let store = EngineStore::load_in(root);
+    let version = store.en_uso?;
+    let exe = motor_exe_in(root, &version);
+    exe.is_file().then_some((exe, version))
+}
+
+/// Objetivo de la sonda de GPU en la raiz de datos real.
+pub fn objetivo_sonda() -> Option<(std::path::PathBuf, String)> {
+    objetivo_sonda_en(&data_root())
+}
+
 /// Ruta del archivo de lock de sesion de una version.
 pub fn lock_sesion_path_in(root: &std::path::Path, version: &str) -> std::path::PathBuf {
     engines_dir_in(root).join(version).join(".sesion.lock")
@@ -1450,6 +1466,43 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *glass.zip
                     .all(|e| !e.file_name().to_string_lossy().starts_with(".staging-"))
             })
             .unwrap_or(true)
+    }
+
+    #[test]
+    fn objetivo_sonda_sin_motor_en_uso() {
+        let dir = dir_prueba_s3("objetivo_sonda_sin_motor");
+        let root = dir.join("datos");
+        assert!(objetivo_sonda_en(&root).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn objetivo_sonda_en_uso_sin_exe() {
+        let dir = dir_prueba_s3("objetivo_sonda_sin_exe");
+        let root = dir.join("datos");
+        let store = EngineStore {
+            en_uso: Some("0.10.0".into()),
+            ..Default::default()
+        };
+        store.save_in(&root).unwrap();
+        assert!(objetivo_sonda_en(&root).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn objetivo_sonda_completo() {
+        let dir = dir_prueba_s3("objetivo_sonda_completo");
+        let root = dir.join("datos");
+        let store = EngineStore {
+            en_uso: Some("0.10.0".into()),
+            ..Default::default()
+        };
+        store.save_in(&root).unwrap();
+        let exe = motor_exe_in(&root, "0.10.0");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::File::create(&exe).unwrap();
+        assert_eq!(objetivo_sonda_en(&root), Some((exe, "0.10.0".to_string())));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
