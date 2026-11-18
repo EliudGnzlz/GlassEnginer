@@ -340,6 +340,48 @@ fn cmp_prerelease(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
+/// La version del sello "engine" de un project.glass: None si el campo
+/// no esta o no parsea como version (los sellos viejos tipo
+/// "GlassEngine 0.1.0" cuentan como sin sello).
+pub fn version_de_sello(meta: &serde_json::Value) -> Option<VersionKey> {
+    meta.get("engine")
+        .and_then(|v| v.as_str())
+        .and_then(|s| tag_version(s).ok())
+}
+
+/// Sella un proyecto con la version del motor indicada: reescribe el
+/// campo "engine" de su project.glass SOLO si el sello nuevo es MAYOR
+/// que el actual (o no hay sello legible); un sello nunca rebaja.
+/// Devuelve true si escribio. Preserva el resto de campos del JSON.
+pub fn sellar_proyecto(dir: &std::path::Path, version: &str) -> Result<bool, String> {
+    let ruta = dir.join("project.glass");
+    let texto = std::fs::read_to_string(&ruta)
+        .map_err(|e| format!("No se pudo leer {}: {}", ruta.display(), e))?;
+    let mut meta: serde_json::Value = serde_json::from_str(&texto)
+        .map_err(|e| format!("project.glass ilegible en {}: {}", ruta.display(), e))?;
+    let nueva = tag_version(version)
+        .map_err(|e| format!("Version de sello invalida '{}': {}", version, e))?;
+    if let Some(actual) = version_de_sello(&meta) {
+        if actual >= nueva {
+            return Ok(false);
+        }
+    }
+    let obj = meta
+        .as_object_mut()
+        .ok_or_else(|| "project.glass no es un objeto JSON".to_string())?;
+    obj.insert("engine".to_string(), serde_json::Value::String(version.to_string()));
+    let salida = serde_json::to_string_pretty(&meta)
+        .map_err(|e| format!("No se pudo serializar project.glass: {}", e))?;
+    // Escritura atomica (temporal + renombrado): un corte a mitad de la
+    // escritura no debe dejar el project.glass truncado.
+    let tmp = dir.join("project.glass.tmp");
+    std::fs::write(&tmp, salida)
+        .map_err(|e| format!("No se pudo escribir {}: {}", tmp.display(), e))?;
+    std::fs::rename(&tmp, &ruta)
+        .map_err(|e| format!("No se pudo renombrar {}: {}", tmp.display(), e))?;
+    Ok(true)
+}
+
 pub fn tag_version(tag: &str) -> Result<VersionKey, String> {
     let raw = tag.strip_prefix('v').unwrap_or(tag);
     let (core_str, pre) = match raw.split_once('-') {
@@ -1186,6 +1228,49 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *glass.zip
         let meta = std::fs::metadata(dir.join("glass_app")).unwrap();
         assert!(meta.permissions().mode() & 0o111 != 0, "falta el bit de ejecucion");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn version_de_sello_parsea_y_rechaza() {
+        let con_version: serde_json::Value =
+            serde_json::json!({"engine": "0.10.17.2-beta"});
+        assert!(version_de_sello(&con_version).is_some());
+        let sello_viejo: serde_json::Value =
+            serde_json::json!({"engine": "GlassEngine 0.1.0"});
+        assert!(version_de_sello(&sello_viejo).is_none());
+        let sin_campo: serde_json::Value = serde_json::json!({"name": "X"});
+        assert!(version_de_sello(&sin_campo).is_none());
+    }
+
+    #[test]
+    fn sellar_proyecto_sube_y_no_rebaja() {
+        let dir = std::env::temp_dir()
+            .join(format!("glass_sellar_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ruta = dir.join("project.glass");
+
+        std::fs::write(&ruta, r#"{"name": "X", "engine": "0.10.0"}"#).unwrap();
+        assert!(sellar_proyecto(&dir, "0.10.17.2-beta").unwrap());
+        let meta: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&ruta).unwrap()).unwrap();
+        assert_eq!(
+            meta.get("engine").and_then(|v| v.as_str()),
+            Some("0.10.17.2-beta")
+        );
+        assert_eq!(meta.get("name").and_then(|v| v.as_str()), Some("X"));
+
+        assert!(!sellar_proyecto(&dir, "0.9.0").unwrap());
+        let meta: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&ruta).unwrap()).unwrap();
+        assert_eq!(
+            meta.get("engine").and_then(|v| v.as_str()),
+            Some("0.10.17.2-beta")
+        );
+
+        std::fs::write(&ruta, r#"{"name": "Y", "engine": "GlassEngine 0.1.0"}"#).unwrap();
+        assert!(sellar_proyecto(&dir, "0.1.0").unwrap());
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

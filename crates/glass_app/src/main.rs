@@ -2434,80 +2434,90 @@ impl GlassEngineApp {
         }
     }
 
+    /// Construye en `state` las entidades de la plantilla Plataformas
+    /// 3D, SIN fisica ni scripts (eso lo anade el metodo del editor tras
+    /// construir, o el bootstrap al abrir la escena guardada). La usa
+    /// tambien la creacion de proyectos en disco. Devuelve
+    /// (suelo, escalon 1, escalon 2, jugador).
+    fn construir_escena_plataformas(state: &mut SceneState) -> (u64, u64, u64, u64) {
+        let initial_y = 0.5;
+    state.entities.clear();
+
+    // Instanciar Cámara Principal y Luz Direccional (Game View y Shading)
+    let cam_id = state.create_entity(
+        "Main Camera".into(),
+        vec!["Transform".into(), "Camera".into()],
+    );
+    state.modify_transform(cam_id, Some([3.5, 3.2, 9.5]), Some([10.0, 0.0, 0.0]), Some([1.0, 1.0, 1.0]));
+
+    let light_id = state.create_entity(
+        "Directional Light".into(),
+        vec!["Transform".into(), "Light".into()],
+    );
+    state.modify_transform(light_id, Some([0.0, 10.0, 0.0]), Some([-50.0, 30.0, 0.0]), Some([1.0, 1.0, 1.0]));
+
+    let floor_id = state.create_entity(
+        "Static Floor".into(),
+        vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
+    );
+    state.modify_transform(floor_id, Some([3.5, -0.5, 0.0]), None, Some([30.0, 1.0, 30.0]));
+    state.modify_material(floor_id, [0.2, 0.6, 0.2], Some(false));
+
+    let step1_id = state.create_entity(
+        "Low Platform Step 1".into(),
+        vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
+    );
+    state.modify_transform(step1_id, Some([3.0, 0.5, 0.0]), None, Some([2.0, 1.0, 2.0]));
+    state.modify_material(step1_id, [0.8, 0.6, 0.2], Some(false));
+
+    let step2_id = state.create_entity(
+        "High Platform Step 2".into(),
+        vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
+    );
+    state.modify_transform(step2_id, Some([6.0, 1.5, 0.0]), None, Some([2.0, 1.0, 2.0]));
+    state.modify_material(step2_id, [0.9, 0.3, 0.2], Some(false));
+
+    let player_id = state.create_entity(
+        "Player 3D Cube".into(),
+        vec![
+            "Transform".into(),
+            "MeshRenderer".into(),
+            "RigidBody".into(),
+            "Collider".into(),
+            "Script".into(),
+            "AudioSource".into(),
+        ],
+    );
+    state.modify_transform(player_id, Some([0.0, initial_y, 0.0]), None, Some([1.0, 1.0, 1.0]));
+    state.modify_material(player_id, [0.1, 0.8, 1.0], Some(false));
+    state.modify_script(player_id, Some("GlassEngine.Core.Scripts.PlayerController".into()));
+
+    if let Some(p) = state.entities.iter_mut().find(|e| e.id == player_id) {
+        p.script_data = Some(glass_core::ScriptComponentData {
+            class_name: "GlassEngine.Core.Scripts.PlayerController".into(),
+            move_speed: 3.8,
+            jump_velocity: 7.2,
+            auto_demo: false,
+        });
+        p.audio = Some(glass_core::AudioSourceData {
+            clip_name: "beep_880".into(),
+            volume: 1.0,
+            pitch: 1.0,
+            is_playing: false,
+            bus: "sfx".to_string(),
+        });
+    }
+
+        (floor_id, step1_id, step2_id, player_id)
+    }
+
     pub fn setup_interactive_platformer_scene(&mut self) {
         let initial_y = 0.5;
 
         // 1. Limpiar o configurar entidades en SceneState
         let (floor_id, step1_id, step2_id, player_id) = {
             let mut state = self.scene_state.lock().unwrap();
-            state.entities.clear();
-
-            // Instanciar Cámara Principal y Luz Direccional (Game View y Shading)
-            let cam_id = state.create_entity(
-                "Main Camera".into(),
-                vec!["Transform".into(), "Camera".into()],
-            );
-            state.modify_transform(cam_id, Some([3.5, 3.2, 9.5]), Some([10.0, 0.0, 0.0]), Some([1.0, 1.0, 1.0]));
-
-            let light_id = state.create_entity(
-                "Directional Light".into(),
-                vec!["Transform".into(), "Light".into()],
-            );
-            state.modify_transform(light_id, Some([0.0, 10.0, 0.0]), Some([-50.0, 30.0, 0.0]), Some([1.0, 1.0, 1.0]));
-
-            let floor_id = state.create_entity(
-                "Static Floor".into(),
-                vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
-            );
-            state.modify_transform(floor_id, Some([3.5, -0.5, 0.0]), None, Some([30.0, 1.0, 30.0]));
-            state.modify_material(floor_id, [0.2, 0.6, 0.2], Some(false));
-
-            let step1_id = state.create_entity(
-                "Low Platform Step 1".into(),
-                vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
-            );
-            state.modify_transform(step1_id, Some([3.0, 0.5, 0.0]), None, Some([2.0, 1.0, 2.0]));
-            state.modify_material(step1_id, [0.8, 0.6, 0.2], Some(false));
-
-            let step2_id = state.create_entity(
-                "High Platform Step 2".into(),
-                vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
-            );
-            state.modify_transform(step2_id, Some([6.0, 1.5, 0.0]), None, Some([2.0, 1.0, 2.0]));
-            state.modify_material(step2_id, [0.9, 0.3, 0.2], Some(false));
-
-            let player_id = state.create_entity(
-                "Player 3D Cube".into(),
-                vec![
-                    "Transform".into(),
-                    "MeshRenderer".into(),
-                    "RigidBody".into(),
-                    "Collider".into(),
-                    "Script".into(),
-                    "AudioSource".into(),
-                ],
-            );
-            state.modify_transform(player_id, Some([0.0, initial_y, 0.0]), None, Some([1.0, 1.0, 1.0]));
-            state.modify_material(player_id, [0.1, 0.8, 1.0], Some(false));
-            state.modify_script(player_id, Some("GlassEngine.Core.Scripts.PlayerController".into()));
-
-            if let Some(p) = state.entities.iter_mut().find(|e| e.id == player_id) {
-                p.script_data = Some(glass_core::ScriptComponentData {
-                    class_name: "GlassEngine.Core.Scripts.PlayerController".into(),
-                    move_speed: 3.8,
-                    jump_velocity: 7.2,
-                    auto_demo: false,
-                });
-                p.audio = Some(glass_core::AudioSourceData {
-                    clip_name: "beep_880".into(),
-                    volume: 1.0,
-                    pitch: 1.0,
-                    is_playing: false,
-                    bus: "sfx".to_string(),
-                });
-            }
-
-            (floor_id, step1_id, step2_id, player_id)
+            Self::construir_escena_plataformas(&mut state)
         };
 
         // 2. Configurar simulación física en Rapier3D
@@ -2806,64 +2816,71 @@ impl GlassEngineApp {
         }
     }
 
+    /// Construye en `state` las entidades de la plantilla Fisica
+    /// (suelo estatico y la piramide de cubos dinamicos), SIN registrar
+    /// cuerpos en el mundo fisico. Devuelve (suelo, cubos dinamicos).
+    fn construir_escena_fisica(state: &mut SceneState) -> (u64, Vec<(u64, [f32; 3])>) {
+    state.entities.clear();
+
+    let cam_id = state.create_entity(
+        "Main Camera".into(),
+        vec!["Transform".into(), "Camera".into()],
+    );
+    state.modify_transform(cam_id, Some([0.0, 4.5, 12.0]), Some([12.0, 0.0, 0.0]), Some([1.0, 1.0, 1.0]));
+
+    let light_id = state.create_entity(
+        "Directional Light".into(),
+        vec!["Transform".into(), "Light".into()],
+    );
+    state.modify_transform(light_id, Some([0.0, 10.0, 0.0]), Some([-45.0, 35.0, 0.0]), Some([1.0, 1.0, 1.0]));
+
+    let floor_id = state.create_entity(
+        "Static Floor".into(),
+        vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
+    );
+    state.modify_transform(floor_id, Some([0.0, -0.5, 0.0]), None, Some([30.0, 1.0, 30.0]));
+    state.modify_material(floor_id, [0.25, 0.55, 0.35], Some(false));
+
+    let mut dynamic_ids = Vec::new();
+    let colors = [
+        [0.9, 0.3, 0.2],
+        [0.2, 0.7, 0.9],
+        [0.9, 0.8, 0.2],
+        [0.7, 0.3, 0.9],
+        [0.2, 0.9, 0.4],
+        [0.95, 0.5, 0.1],
+    ];
+
+    // Apilamiento de 6 cubos físicos en pirámide
+    let positions = [
+        [-1.2, 0.5, 0.0],
+        [ 1.2, 0.5, 0.0],
+        [ 0.0, 0.5, 0.0],
+        [-0.6, 1.6, 0.0],
+        [ 0.6, 1.6, 0.0],
+        [ 0.0, 2.7, 0.0],
+    ];
+
+    for (i, pos) in positions.iter().enumerate() {
+        let id = state.create_entity(
+            format!("Physics Cube #{}", i + 1),
+            vec!["Transform".into(), "MeshRenderer".into(), "RigidBody".into(), "Collider".into()],
+        );
+        state.modify_transform(id, Some(*pos), None, Some([1.0, 1.0, 1.0]));
+        state.modify_material(id, colors[i % colors.len()], Some(false));
+        dynamic_ids.push((id, *pos));
+    }
+
+        (floor_id, dynamic_ids)
+    }
+
     // Solo se invoca desde el Launcher (feature editor); en el binario de
     // juego queda sin llamadores a propósito.
     #[cfg_attr(not(feature = "editor"), allow(dead_code))]
     pub fn setup_physics_playground_scene(&mut self) {
         let (floor_id, dynamic_ids) = {
             let mut state = self.scene_state.lock().unwrap();
-            state.entities.clear();
-
-            let cam_id = state.create_entity(
-                "Main Camera".into(),
-                vec!["Transform".into(), "Camera".into()],
-            );
-            state.modify_transform(cam_id, Some([0.0, 4.5, 12.0]), Some([12.0, 0.0, 0.0]), Some([1.0, 1.0, 1.0]));
-
-            let light_id = state.create_entity(
-                "Directional Light".into(),
-                vec!["Transform".into(), "Light".into()],
-            );
-            state.modify_transform(light_id, Some([0.0, 10.0, 0.0]), Some([-45.0, 35.0, 0.0]), Some([1.0, 1.0, 1.0]));
-
-            let floor_id = state.create_entity(
-                "Static Floor".into(),
-                vec!["Transform".into(), "MeshRenderer".into(), "StaticCollider".into()],
-            );
-            state.modify_transform(floor_id, Some([0.0, -0.5, 0.0]), None, Some([30.0, 1.0, 30.0]));
-            state.modify_material(floor_id, [0.25, 0.55, 0.35], Some(false));
-
-            let mut dynamic_ids = Vec::new();
-            let colors = [
-                [0.9, 0.3, 0.2],
-                [0.2, 0.7, 0.9],
-                [0.9, 0.8, 0.2],
-                [0.7, 0.3, 0.9],
-                [0.2, 0.9, 0.4],
-                [0.95, 0.5, 0.1],
-            ];
-
-            // Apilamiento de 6 cubos físicos en pirámide
-            let positions = [
-                [-1.2, 0.5, 0.0],
-                [ 1.2, 0.5, 0.0],
-                [ 0.0, 0.5, 0.0],
-                [-0.6, 1.6, 0.0],
-                [ 0.6, 1.6, 0.0],
-                [ 0.0, 2.7, 0.0],
-            ];
-
-            for (i, pos) in positions.iter().enumerate() {
-                let id = state.create_entity(
-                    format!("Physics Cube #{}", i + 1),
-                    vec!["Transform".into(), "MeshRenderer".into(), "RigidBody".into(), "Collider".into()],
-                );
-                state.modify_transform(id, Some(*pos), None, Some([1.0, 1.0, 1.0]));
-                state.modify_material(id, colors[i % colors.len()], Some(false));
-                dynamic_ids.push((id, *pos));
-            }
-
-            (floor_id, dynamic_ids)
+            Self::construir_escena_fisica(&mut state)
         };
 
         // Configurar simulación en Rapier3D
@@ -2973,8 +2990,18 @@ impl GlassEngineApp {
         self.player_script_handle = None;
     }
 
+    /// Crea un proyecto en disco SIN tocar el estado del editor ni el
+    /// runtime: carpetas, la escena de la plantilla serializada desde
+    /// un SceneState desechable y project.glass con el sello REAL del
+    /// motor (su ENGINE_VERSION, no un texto fijo). Devuelve la carpeta
+    /// del proyecto. La apertura posterior va por abrir_proyecto, la
+    /// misma vía que usa el Hub y --project.
     #[cfg(feature = "editor")]
-    pub fn create_project_and_open(&mut self, name: &str, path: &Path, template: ProjectTemplate) {
+    fn crear_proyecto_en_disco(
+        name: &str,
+        path: &Path,
+        template: ProjectTemplate,
+    ) -> Result<std::path::PathBuf, String> {
         // La Ubicación del Hub ya es la carpeta del proyecto (su texto lo
         // dice: «la carpeta del proyecto se crea en esa ubicación» y el
         // valor por defecto es GlassProjects/<nombre>). Unir el nombre
@@ -2996,69 +3023,54 @@ impl GlassEngineApp {
             "ProjectSettings",
             "Packages",
         ] {
-            if let Err(e) = std::fs::create_dir_all(project_dir.join(sub)) {
-                log::error!("No se pudo crear {:?}: {}", project_dir.join(sub), e);
-            }
+            std::fs::create_dir_all(project_dir.join(sub))
+                .map_err(|e| format!("No se pudo crear {:?}: {}", project_dir.join(sub), e))?;
         }
 
-        let meta = format!(
-            "{{\n  \"name\": \"{}\",\n  \"version\": \"1.0.0\",\n  \"engine\": \"GlassEngine 0.1.0\",\n  \"template\": \"{:?}\",\n  \"scene\": \"Assets/Scenes/SampleScene.scene.json\"\n}}\n",
-            name, template
-        );
-        let _ = std::fs::write(project_dir.join("project.glass"), meta);
-        // Registrar el proyecto en el almacén del Launcher: sin esto, un
-        // proyecto creado en una ubicación distinta de ~/GlassProjects
-        // nunca aparecía en la lista del Hub.
-        self.launcher.update_store.register_project(name, &project_dir);
-        if let Err(e) = self.launcher.update_store.save() {
-            log::error!("No se pudo guardar el registro de proyectos: {}", e);
-        }
-        // El panel de proyecto apunta desde el primer momento a los
-        // assets del proyecto recién creado.
-        let raiz_assets = project_dir.join("Assets");
-        // Asegurar la carpeta para que el vigía pueda registrarse aunque la
-        // plantilla la cree después.
-        let _ = std::fs::create_dir_all(&raiz_assets);
-        self.vigilar_assets(&raiz_assets);
-        self.editor_layout.project.set_assets_root(raiz_assets);
-
+        // Escena de la plantilla en un SceneState desechable: ni la escena
+        // viva ni el runtime se tocan. Assets/Scenes ya existe (save_to_json
+        // no crea carpetas).
+        let mut state = SceneState::new();
         match template {
             ProjectTemplate::Platformer3D => {
-                self.setup_interactive_platformer_scene();
+                Self::construir_escena_plataformas(&mut state);
             }
             ProjectTemplate::PhysicsSandbox => {
-                self.setup_physics_playground_scene();
+                Self::construir_escena_fisica(&mut state);
             }
-            ProjectTemplate::EmptyScene => {
-                self.setup_empty_scene();
-            }
+            ProjectTemplate::EmptyScene => Self::construir_escena_vacia(&mut state),
         }
-
-        // Guardar la escena de la plantilla en disco para poder reabrir el
-        // proyecto (Assets/Scenes ya existe: save_to_json no crea carpetas).
         let scene_path = project_dir.join("Assets/Scenes/SampleScene.scene.json");
-        let scene_str = scene_path.to_string_lossy().into_owned();
-        match self.scene_state.lock() {
-            Ok(sc) => {
-                if let Err(e) = sc.save_to_json(&scene_str) {
-                    log::error!("No se pudo guardar la escena del proyecto ({}): {}", scene_str, e);
-                }
+        state
+            .save_to_json(&scene_path.to_string_lossy())
+            .map_err(|e| {
+                format!(
+                    "No se pudo guardar la escena del proyecto ({}): {}",
+                    scene_path.display(),
+                    e
+                )
+            })?;
+
+        let meta = format!(
+            "{{\n  \"name\": \"{}\",\n  \"version\": \"1.0.0\",\n  \"engine\": \"{}\",\n  \"template\": \"{:?}\",\n  \"scene\": \"Assets/Scenes/SampleScene.scene.json\"\n}}\n",
+            name,
+            glass_editor::updates::ENGINE_VERSION,
+            template
+        );
+        std::fs::write(project_dir.join("project.glass"), meta)
+            .map_err(|e| format!("No se pudo escribir project.glass: {}", e))?;
+        Ok(project_dir)
+    }
+
+    #[cfg(feature = "editor")]
+    pub fn create_project_and_open(&mut self, name: &str, path: &Path, template: ProjectTemplate) {
+        match Self::crear_proyecto_en_disco(name, path, template) {
+            Ok(project_dir) => {
+                log::info!("Proyecto '{}' creado en disco: {:?}", name, project_dir);
+                self.abrir_proyecto(&project_dir);
             }
-            Err(_) => log::error!("No se pudo bloquear la escena para guardarla ({})", scene_str),
+            Err(e) => log::error!("No se pudo crear el proyecto '{}': {}", name, e),
         }
-        #[cfg(feature = "editor")]
-        {
-            self.ruta_escena_actual = Some(scene_path.clone());
-            self.nombre_escena_con_ruta = self
-                .scene_manager
-                .lock()
-                .map(|m| m.active_scene_name().to_string())
-                .unwrap_or_default();
-            if let Ok(sc) = self.scene_state.lock() {
-                self.editor_layout.marcar_guardada(&sc);
-            }
-        }
-        log::info!("Proyecto '{}' creado y cargado en el editor: {:?}", name, project_dir);
     }
 
     /// Abre una escena desde un archivo .scene.json por la misma vía
@@ -3093,21 +3105,28 @@ impl GlassEngineApp {
         cargada
     }
 
+    #[cfg(feature = "editor")]
+    /// Construye en `state` la escena vacia: camara principal y luz
+    /// solar. Sin suelo, fisica ni scripts.
+    fn construir_escena_vacia(state: &mut SceneState) {
+    state.entities.clear();
+    let cam_id = state.create_entity(
+        "Main Camera".into(),
+        vec!["Transform".into(), "Camera".into()],
+    );
+    state.modify_transform(cam_id, Some([0.0, 3.5, 9.0]), Some([-14.0, 0.0, 0.0]), Some([1.0, 1.0, 1.0]));
+    let sun_id = state.create_entity(
+        "Sun (Directional Light)".into(),
+        vec!["Transform".into(), "Light".into()],
+    );
+    state.modify_transform(sun_id, Some([0.0, 8.0, 0.0]), Some([-55.0, 40.0, 0.0]), Some([1.0, 1.0, 1.0]));
+    }
+
     /// Escena vacía: solo cámara principal y luz solar. Sin suelo, física ni scripts.
     #[cfg(feature = "editor")]
     pub fn setup_empty_scene(&mut self) {
         let mut state = self.scene_state.lock().unwrap();
-        state.entities.clear();
-        let cam_id = state.create_entity(
-            "Main Camera".into(),
-            vec!["Transform".into(), "Camera".into()],
-        );
-        state.modify_transform(cam_id, Some([0.0, 3.5, 9.0]), Some([-14.0, 0.0, 0.0]), Some([1.0, 1.0, 1.0]));
-        let sun_id = state.create_entity(
-            "Sun (Directional Light)".into(),
-            vec!["Transform".into(), "Light".into()],
-        );
-        state.modify_transform(sun_id, Some([0.0, 8.0, 0.0]), Some([-55.0, 40.0, 0.0]), Some([1.0, 1.0, 1.0]));
+        Self::construir_escena_vacia(&mut state);
     }
 
     /// Si el modelo importado trae piel, sube también su malla gemela con
@@ -9476,6 +9495,94 @@ mod standalone_launch_tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 }
+
+#[cfg(all(test, feature = "editor"))]
+mod crear_proyecto_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    const SUBCARPETAS: [&str; 7] = [
+        "Assets/Scenes",
+        "Assets/Scripts",
+        "Assets/Materials",
+        "Assets/Models",
+        "Assets/Textures",
+        "ProjectSettings",
+        "Packages",
+    ];
+
+    fn dir_temporal(etiqueta: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "glass_crear_{}_{}_{}",
+            etiqueta,
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn cargar(proyecto: &Path) -> SceneState {
+        let ruta = proyecto.join("Assets/Scenes/SampleScene.scene.json");
+        let mut state = SceneState::new();
+        state
+            .load_from_json(&ruta.to_string_lossy())
+            .expect("la escena guardada debe parsear");
+        state
+    }
+
+    #[test]
+    fn crear_en_disco_escribe_arbol_y_sello() {
+        let base = dir_temporal("arbol");
+        let proyecto =
+            GlassEngineApp::crear_proyecto_en_disco("Demo", &base, ProjectTemplate::EmptyScene)
+                .expect("crear debe funcionar");
+        assert_eq!(proyecto, base.join("Demo"));
+        for sub in SUBCARPETAS {
+            assert!(proyecto.join(sub).is_dir(), "falta {}", sub);
+        }
+        let meta = std::fs::read_to_string(proyecto.join("project.glass")).unwrap();
+        assert!(meta.contains(glass_editor::updates::ENGINE_VERSION));
+        assert!(!meta.contains("GlassEngine 0.1.0"));
+        assert!(meta.contains("\"scene\": \"Assets/Scenes/SampleScene.scene.json\""));
+        let escena = cargar(&proyecto);
+        assert_eq!(escena.entities.len(), 2, "vacia = camara + luz");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn crear_en_disco_ruta_que_ya_termina_en_el_nombre() {
+        let base = dir_temporal("nombre");
+        let ruta = base.join("Demo");
+        let proyecto =
+            GlassEngineApp::crear_proyecto_en_disco("Demo", &ruta, ProjectTemplate::EmptyScene)
+                .expect("crear debe funcionar");
+        assert_eq!(proyecto, ruta);
+        assert!(proyecto.join("project.glass").is_file());
+        assert!(!ruta.join("Demo").exists(), "no debe crear Demo/Demo");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn crear_en_disco_plantilla_plataformas() {
+        let base = dir_temporal("plataformas");
+        let proyecto =
+            GlassEngineApp::crear_proyecto_en_disco("Plat", &base, ProjectTemplate::Platformer3D)
+                .expect("crear debe funcionar");
+        let escena = cargar(&proyecto);
+        assert!(escena.entities.len() > 2);
+        assert!(
+            escena.entities.iter().any(|e| e.name == "Player 3D Cube"),
+            "falta el jugador"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
 
 /// Base (right/up/forward) de una matriz de mundo: columnas
 /// normalizadas (sin la escala).
