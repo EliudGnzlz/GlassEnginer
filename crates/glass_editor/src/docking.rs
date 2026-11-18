@@ -16,7 +16,6 @@ pub enum EditorTab {
     Console,
     Project,
     ShaderGraph,
-    MeshTool,
     Frametime,
 }
 
@@ -70,6 +69,15 @@ pub enum LayoutPreset {
     Wide,
 }
 
+/// Espacio de trabajo del editor: el de siempre («Editor», con su dock)
+/// o el de las herramientas («Herramientas»), donde la herramienta activa
+/// manda a cuerpo completo en vez de vivir en una pestaña del dock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EspacioTrabajo {
+    Editor,
+    Herramientas,
+}
+
 pub struct EditorDockingLayout {
     pub hierarchy: HierarchyPanel,
     pub viewport: ViewportPanel,
@@ -83,8 +91,8 @@ pub struct EditorDockingLayout {
     pub mesh_tool: MeshToolPanel,
     pub dock_state: DockState<EditorTab>,
     pub current_preset: LayoutPreset,
-    /// Si es false (complemento «herramienta-3d» ausente o desactivado), no se ofrece la pestaña MeshTool.
-    pub mesh_tool_enabled: bool,
+    /// Espacio de trabajo activo: el editor de siempre o el de herramientas.
+    pub espacio: EspacioTrabajo,
     pub request_launcher: bool,
     pub request_build_and_run: bool,
     pub request_build_settings: bool,
@@ -135,14 +143,15 @@ impl Default for EditorDockingLayout {
 }
 
 impl EditorDockingLayout {
-    /// Activa o desactiva la pestaña de la Herramienta 3D y reaplica el
-    /// preset actual para que aparezca o desaparezca al momento.
-    /// (Reaplicar el preset descarta la disposición que el usuario hubiera
-    /// movido a mano; se llama al arrancar, antes de que toque nada.)
-    pub fn set_mesh_tool_enabled(&mut self, on: bool) {
-        self.mesh_tool_enabled = on;
-        let p = self.current_preset;
-        self.apply_preset(p);
+    /// El espacio que manda de verdad: «Herramientas» solo existe con el
+    /// portón del complemento «herramienta-3d» activo; sin él, el espacio
+    /// efectivo es siempre «Editor» (la herramienta vive en su espacio
+    /// propio, ya no es una pestaña del dock).
+    pub fn espacio_efectivo(&self, porton_activo: bool) -> EspacioTrabajo {
+        match self.espacio {
+            EspacioTrabajo::Herramientas if !porton_activo => EspacioTrabajo::Editor,
+            e => e,
+        }
     }
 
     /// Muestra u oculta la pestaña «Frametime». Idempotente.
@@ -165,16 +174,11 @@ impl EditorDockingLayout {
 
     /// Muestra u oculta cualquier pestaña del dock. Idempotente, como la
     /// de Frametime (que se reutiliza para su pestaña, porque además
-    /// sincroniza el flag que la restaura tras los presets). La de
-    /// MeshForge sincroniza `mesh_tool_enabled` para que los presets
-    /// posteriores la sigan incluyendo, sin reaplicar ninguno ahora.
+    /// sincroniza el flag que la restaura tras los presets).
     pub fn set_tab_visible(&mut self, tab: EditorTab, on: bool) {
         if tab == EditorTab::Frametime {
             self.set_frametime_visible(on);
             return;
-        }
-        if tab == EditorTab::MeshTool {
-            self.mesh_tool_enabled = on;
         }
         let actual = self.dock_state.find_tab(&tab);
         match (on, actual) {
@@ -204,7 +208,7 @@ impl EditorDockingLayout {
             mesh_tool: MeshToolPanel::new(),
             dock_state: DockState::new(vec![EditorTab::SceneView, EditorTab::GameView]),
             current_preset: LayoutPreset::Default,
-            mesh_tool_enabled: true,
+            espacio: EspacioTrabajo::Editor,
             request_launcher: false,
             request_abrir_contenedora_escena: false,
             request_copiar_ruta_escena: false,
@@ -252,21 +256,13 @@ impl EditorDockingLayout {
                     0.20,
                     vec![EditorTab::Hierarchy],
                 );
-                // Sin el complemento «herramienta-3d» no se ofrece su pestaña.
-                let pestanas_abajo: Vec<EditorTab> = if self.mesh_tool_enabled {
-                    vec![
-                        EditorTab::Console,
-                        EditorTab::Project,
-                        EditorTab::ShaderGraph,
-                        EditorTab::MeshTool,
-                    ]
-                } else {
-                    vec![
-                        EditorTab::Console,
-                        EditorTab::Project,
-                        EditorTab::ShaderGraph,
-                    ]
-                };
+                // La Herramienta 3D ya no es una pestaña: vive en el
+                // espacio de trabajo «Herramientas».
+                let pestanas_abajo: Vec<EditorTab> = vec![
+                    EditorTab::Console,
+                    EditorTab::Project,
+                    EditorTab::ShaderGraph,
+                ];
                 surface.split_below(NodeIndex::root(), 0.72, pestanas_abajo);
                 surface.split_right(
                     NodeIndex::root(),
@@ -591,6 +587,16 @@ impl EditorDockingLayout {
                     }
                 }
             }
+        }
+
+        // --- ESPACIO DE TRABAJO ---
+        // El portón se lee en vivo (de disco, como hace el menú Window):
+        // si el complemento se apaga estando en «Herramientas», se vuelve
+        // solo al «Editor» en este mismo frame.
+        let porton_herramientas = crate::plugins::plugin_enabled("herramienta-3d");
+        let espacio = self.espacio_efectivo(porton_herramientas);
+        if espacio != self.espacio {
+            self.espacio = espacio;
         }
 
         // --- 1. BARRA DE MENÚS PRINCIPAL ESTILO UNITY / UNREAL ---
@@ -988,13 +994,6 @@ impl EditorDockingLayout {
                         ui.close();
                     }
                 }
-                if crate::plugins::plugin_enabled("herramienta-3d") {
-                    let mut ver = self.tab_visible(&EditorTab::MeshTool);
-                    if ui.checkbox(&mut ver, "🧊 MeshForge").changed() {
-                        self.set_tab_visible(EditorTab::MeshTool, ver);
-                        ui.close();
-                    }
-                }
                 let mut ver_frametime = self.show_frametime;
                 if ui.checkbox(&mut ver_frametime, "⏱ Frametime").changed() {
                     self.set_frametime_visible(ver_frametime);
@@ -1006,6 +1005,25 @@ impl EditorDockingLayout {
                 if ui.button("📖 GlassEngine Documentation").clicked() { ui.close(); }
                 if ui.button("ℹ About GlassEngine Beta").clicked() { ui.close(); }
             });
+
+            // --- CONMUTADOR DE ESPACIO DE TRABAJO ---
+            ui.separator();
+            ui.label("Espacio:");
+            if ui
+                .selectable_label(espacio == EspacioTrabajo::Editor, "🛠 Editor")
+                .on_hover_text("El editor de escenas de siempre")
+                .clicked()
+            {
+                self.espacio = EspacioTrabajo::Editor;
+            }
+            if porton_herramientas
+                && ui
+                    .selectable_label(espacio == EspacioTrabajo::Herramientas, "🧊 Herramientas")
+                    .on_hover_text("El espacio propio de las herramientas (MeshForge)")
+                    .clicked()
+            {
+                self.espacio = EspacioTrabajo::Herramientas;
+            }
 
             // Feedback de estado en la barra superior
             if let Some((msg, time)) = &self.status_message {
@@ -1019,6 +1037,9 @@ impl EditorDockingLayout {
         ui.separator();
 
         // --- BARRA SUPERIOR DE HERRAMIENTAS PRINCIPALES ESTILO UNITY ---
+        // Solo en el espacio Editor: en «Herramientas» esos controles
+        // (gizmo, pivote, reproducción) no tienen vista sobre la que actuar.
+        if espacio == EspacioTrabajo::Editor {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
 
@@ -1146,6 +1167,7 @@ impl EditorDockingLayout {
                 ui.label(format!("📐 {:.0}x{:.0}", self.viewport.width, self.viewport.height));
             });
         });
+        }
 
         ui.separator();
 
@@ -1157,15 +1179,23 @@ impl EditorDockingLayout {
             console: &mut self.console,
             project: &mut self.project,
             shader_graph: &mut self.shader_graph,
-            mesh_tool: &mut self.mesh_tool,
             scene_texture_id,
             game_texture_id,
             selected_entity_id: &mut selected_id,
             scene_state,
         };
 
-        DockArea::new(&mut self.dock_state)
-            .show_inside(ui, &mut tab_viewer);
+        if espacio == EspacioTrabajo::Herramientas {
+            // Espacio de herramientas: el panel manda a cuerpo completo y
+            // el dock del editor ni se dibuja (su estado queda intacto
+            // para la vuelta). Todo lo demás de este render (atajos,
+            // pendientes del panel Proyecto, adaptación del collider,
+            // diálogos) corre igual en los dos espacios.
+            self.mesh_tool.render(ui, scene_state);
+        } else {
+            DockArea::new(&mut self.dock_state)
+                .show_inside(ui, &mut tab_viewer);
+        }
 
         // --- PENDIENTES DEL PANEL «PROYECTO» ---
         // El ProjectPanel no carga escenas ni instancia prefabs por su
@@ -1605,7 +1635,6 @@ struct EditorTabViewer<'a> {
     console: &'a mut ConsolePanel,
     project: &'a mut ProjectPanel,
     shader_graph: &'a mut ShaderGraphEditorPanel,
-    mesh_tool: &'a mut MeshToolPanel,
     scene_texture_id: Option<egui::TextureId>,
     game_texture_id: Option<egui::TextureId>,
     selected_entity_id: &'a mut Option<u64>,
@@ -1629,7 +1658,6 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             EditorTab::Console => "📟 Consola".into(),
             EditorTab::Project => "📁 Proyecto / Assets".into(),
             EditorTab::ShaderGraph => "🎨 Grafo de Shaders".into(),
-            EditorTab::MeshTool => "🧊 MeshForge".into(),
             EditorTab::Frametime => "⏱ Frametime".into(),
         }
     }
@@ -1662,9 +1690,6 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             EditorTab::ShaderGraph => {
                 self.shader_graph.render(ui);
             }
-            EditorTab::MeshTool => {
-                self.mesh_tool.render(ui, self.scene_state);
-            }
         }
     }
 
@@ -1691,16 +1716,13 @@ mod tests_puerta_herramienta_3d {
     }
 
     #[test]
-    fn meshforge_desde_window_sincroniza_el_porton_sin_reaplicar_preset() {
+    fn espacio_herramientas_exige_porton() {
         let mut layout = super::EditorDockingLayout::new();
-        layout.set_mesh_tool_enabled(false);
-        assert!(!layout.tab_visible(&super::EditorTab::MeshTool));
-        layout.set_tab_visible(super::EditorTab::MeshTool, true);
-        assert!(layout.tab_visible(&super::EditorTab::MeshTool));
-        assert!(layout.mesh_tool_enabled, "el flag queda sincronizado para los presets");
-        layout.set_tab_visible(super::EditorTab::MeshTool, false);
-        assert!(!layout.tab_visible(&super::EditorTab::MeshTool));
-        assert!(!layout.mesh_tool_enabled);
+        assert_eq!(layout.espacio, super::EspacioTrabajo::Editor);
+        layout.espacio = super::EspacioTrabajo::Herramientas;
+        // Sin portón, el espacio efectivo cae al Editor; con portón, manda.
+        assert_eq!(layout.espacio_efectivo(false), super::EspacioTrabajo::Editor);
+        assert_eq!(layout.espacio_efectivo(true), super::EspacioTrabajo::Herramientas);
     }
 
     #[test]
@@ -1731,15 +1753,15 @@ mod tests_puerta_herramienta_3d {
     use super::*;
 
     #[test]
-    fn puerta_herramienta_3d_controla_pestana() {
+    fn cambiar_de_espacio_conserva_el_dock_del_editor() {
         let mut layout = EditorDockingLayout::new();
-        assert!(layout.dock_state.find_tab(&EditorTab::MeshTool).is_some());
-
-        layout.set_mesh_tool_enabled(false);
-        assert!(layout.dock_state.find_tab(&EditorTab::MeshTool).is_none());
-
-        layout.set_mesh_tool_enabled(true);
-        assert!(layout.dock_state.find_tab(&EditorTab::MeshTool).is_some());
+        assert!(layout.dock_state.find_tab(&EditorTab::Hierarchy).is_some());
+        layout.espacio = EspacioTrabajo::Herramientas;
+        layout.espacio = EspacioTrabajo::Editor;
+        // El dock del editor queda como estaba: ni se reaplicó el preset
+        // ni se perdió ninguna pestaña por el camino.
+        assert!(layout.dock_state.find_tab(&EditorTab::Hierarchy).is_some());
+        assert!(layout.dock_state.find_tab(&EditorTab::Project).is_some());
     }
 }
 

@@ -2233,14 +2233,7 @@ impl GlassEngineApp {
             #[cfg(feature = "editor")]
             game_viewport_texture_id: None,
             #[cfg(feature = "editor")]
-            editor_layout: {
-                let mut layout = EditorDockingLayout::new();
-                // Sin el complemento «herramienta-3d» no se ofrece su pestaña.
-                layout.set_mesh_tool_enabled(glass_editor::plugins::plugin_enabled(
-                    "herramienta-3d",
-                ));
-                layout
-            },
+            editor_layout: EditorDockingLayout::new(),
             #[cfg(feature = "editor")]
             play_snapshot: None,
             #[cfg(feature = "editor")]
