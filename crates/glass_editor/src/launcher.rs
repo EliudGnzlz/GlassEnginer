@@ -217,7 +217,7 @@ fn canon(p: &std::path::Path) -> PathBuf {
 /// Nombre visible de un proyecto: el campo "name" de su `project.glass` si
 /// es un string no vacío; si no, el nombre de la carpeta; y si tampoco hay,
 /// "Proyecto".
-fn nombre_proyecto(dir: &Path) -> String {
+pub fn nombre_proyecto(dir: &Path) -> String {
     std::fs::read_to_string(dir.join("project.glass"))
         .ok()
         .and_then(|texto| serde_json::from_str::<serde_json::Value>(&texto).ok())

@@ -1691,9 +1691,9 @@ fn key_name(code: KeyCode) -> Option<&'static str> {
 /// (`assets/input_axes.json`, formato `{ "axes": [ ... ] }`).
 /// Cualquier problema (no existe, JSON inválido) devuelve los
 /// ejes por defecto de Unity y lo anota en el log.
-fn load_input_axis_defs() -> Vec<glass_scripting::input_axes::InputAxisDef> {
+fn load_input_axis_defs(base: &std::path::Path) -> Vec<glass_scripting::input_axes::InputAxisDef> {
     let defaults = glass_scripting::input_axes::default_input_axes;
-    let text = match std::fs::read_to_string("assets/input_axes.json") {
+    let text = match std::fs::read_to_string(base.join("assets/input_axes.json")) {
         Ok(t) => t,
         Err(_) => {
             log::info!("Input v2: sin assets/input_axes.json; ejes por defecto.");
@@ -1863,6 +1863,10 @@ struct GlassEngineApp {
     is_sample_game_test: bool,
     pub is_standalone_test: bool,
     pub scene_to_load: Option<String>,
+    pub proyecto_directo: Option<String>,
+    /// Raiz del payload del motor (managed/ y assets del motor): la
+    /// calcula resolver_raiz_motor al arrancar.
+    pub raiz_motor: std::path::PathBuf,
     player_script_handle: Option<i32>,
     /// Teclas WASD/Espacio actualmente presionadas (para movimiento del jugador).
     keys_pressed: HashSet<PhysicalKey>,
@@ -2088,7 +2092,9 @@ impl GlassEngineApp {
     pub fn new(
         flags: LaunchFlags,
         scene_to_load: Option<String>,
+        proyecto_directo: Option<String>,
     ) -> Self {
+        let _ = &proyecto_directo;
         let LaunchFlags {
             is_standalone,
             is_headless_test,
@@ -2250,7 +2256,15 @@ impl GlassEngineApp {
             },
             start_instant: std::time::Instant::now(),
             #[cfg(feature = "editor")]
-            pending_launcher_action: None,
+            pending_launcher_action: proyecto_directo.as_ref().and_then(|dir| {
+                let ruta = std::path::PathBuf::from(dir);
+                if ruta.join("project.glass").is_file() {
+                    Some(LauncherAction::OpenProject(ruta))
+                } else {
+                    log::error!("--project: {:?} no contiene project.glass; se ignora.", ruta);
+                    None
+                }
+            }),
             #[cfg(feature = "editor")]
             ruta_escena_actual: None,
             #[cfg(feature = "editor")]
@@ -2302,6 +2316,8 @@ impl GlassEngineApp {
             is_sample_game_test,
             is_standalone_test,
             scene_to_load,
+            proyecto_directo,
+            raiz_motor: raiz_motor_actual(),
             player_script_handle: None,
             keys_pressed: HashSet::new(),
             axis_bank: glass_scripting::input_axes::AxisBank::new(
@@ -3104,6 +3120,76 @@ impl GlassEngineApp {
     /// para la subida rígida y las texturas). Volver a bloquear cualquiera
     /// de los dos aquí dentro cuelga la app: ni Mutex ni RwLock de std son
     /// reentrantes (cazado en vivo dos veces durante este bloque).
+    /// Apertura de un proyecto por su carpeta: la UNICA via, la use el
+    /// Hub (LauncherAction::OpenProject) o el arranque con --project
+    /// (que siembra esa misma accion). Selecciona la escena (campo
+    /// "scene" de project.glass o el primer *.scene.json), la carga o
+    /// deja la escena vacia, apunta el panel y el vigia a los assets
+    /// del proyecto, lo registra, guarda el registro y entra al editor.
+    #[cfg(feature = "editor")]
+    fn abrir_proyecto(&mut self, path: &std::path::Path) {
+        // 1) Campo "scene" de project.glass, relativo al proyecto.
+        let desde_meta = std::fs::read_to_string(path.join("project.glass"))
+            .ok()
+            .and_then(|txt| serde_json::from_str::<serde_json::Value>(&txt).ok())
+            .and_then(|v| v.get("scene").and_then(|s| s.as_str()).map(|s| path.join(s)))
+            .filter(|p| p.is_file());
+        // 2) Si no, el primer *.scene.json (por nombre) de la primera carpeta
+        //    de escenas que tenga alguno, en este orden.
+        let escena = desde_meta.or_else(|| {
+            ["Assets/Scenes", "assets/Scenes", "assets/scenes"]
+                .iter()
+                .find_map(|sub| {
+                    let mut candidatas: Vec<std::path::PathBuf> =
+                        std::fs::read_dir(path.join(sub))
+                            .ok()?
+                            .flatten()
+                            .map(|e| e.path())
+                            .filter(|p| {
+                                p.is_file()
+                                    && p.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .is_some_and(|n| n.ends_with(".scene.json"))
+                            })
+                            .collect();
+                    candidatas.sort();
+                    candidatas.into_iter().next()
+                })
+        });
+        // 3) Cargar la escena; si no hay o falla, escena vacía.
+        let cargada = match &escena {
+            Some(ruta) => self.open_scene_file(&ruta.to_string_lossy()),
+            None => false,
+        };
+        if !cargada {
+            self.setup_empty_scene();
+        }
+        log::info!("Proyecto abierto: {:?} (escena: {:?}, cargada: {})", path, escena, cargada);
+        // El panel de proyecto muestra los assets DEL PROYECTO abierto,
+        // no los del CWD: se respeta la convención que ya exista en
+        // disco (`Assets` en los proyectos del Launcher, `assets` en
+        // minúsculas en otros).
+        let raiz_assets = if path.join("Assets").is_dir() {
+            path.join("Assets")
+        } else if path.join("assets").is_dir() {
+            path.join("assets")
+        } else {
+            path.join("Assets")
+        };
+        self.vigilar_assets(&raiz_assets);
+        self.editor_layout.project.set_assets_root(raiz_assets);
+        // Registrar el proyecto abierto para que aparezca en el Hub,
+        // con el nombre de su project.glass (no el de la carpeta).
+        let nombre = glass_editor::launcher::nombre_proyecto(path);
+        self.launcher
+            .update_store
+            .register_project(&nombre, path);
+        if let Err(e) = self.launcher.update_store.save() {
+            log::error!("No se pudo guardar el registro de proyectos: {}", e);
+        }
+        self.app_mode = AppMode::Editor;
+    }
+
     /// Calentamiento de assets: textura por defecto del PBR, esquemas de
     /// grafos de shaders, precarga de TODOS los .glb de assets/models a
     /// VRAM y primitivas integradas. Antes vivía en `resumed()` y dejaba
@@ -3134,7 +3220,7 @@ impl GlassEngineApp {
         // (glass_core::shader_graph) para que la resolución por entidad y
         // las tools MCP de inspección puedan consultarlos sin recargar los
         // .graph.json en cada acceso.
-        if let Ok(entries) = std::fs::read_dir("assets/shader_graphs") {
+        if let Ok(entries) = std::fs::read_dir(self.raiz_motor.join("assets/shader_graphs")) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 let is_graph_json = path
@@ -3183,13 +3269,13 @@ impl GlassEngineApp {
         // Materiales de grafo: cada graph_<nombre>.frag.spv de assets/shaders
         // se registra como pipeline; una entidad lo usa con shader =
         // "graph:<nombre>" en su MeshData.
-        renderer.load_graph_materials(std::path::Path::new("assets/shaders"));
+        renderer.load_graph_materials(&self.raiz_motor.join("assets/shaders"));
 
         // Auditoría 2S (M-8): un grafo con .spv pero sin .graph.json
         // cargado perdía sus pases Shadow/Outline en silencio (el
         // pipeline existe, así que el fallback magenta no salta). Se
         // avisa una vez por grafo al arrancar.
-        if let Ok(entries) = std::fs::read_dir("assets/shaders") {
+        if let Ok(entries) = std::fs::read_dir(self.raiz_motor.join("assets/shaders")) {
             for entry in entries.flatten() {
                 let fname = entry.file_name();
                 let Some(fname) = fname.to_str() else { continue };
@@ -3214,13 +3300,13 @@ impl GlassEngineApp {
         // construirlo, con los layouts completos del PBR).
 
         {
-            let models_dir = Path::new("assets/models");
+            let models_dir = self.raiz_motor.join("assets/models");
             let mut glb_paths: Vec<std::path::PathBuf> = Vec::new();
             // Recorrido recursivo (mismo patrón que el cargador de
             // audio): los kits viven en subcarpetas (p. ej.
             // assets/models/polygon/) y se registran por su stem,
             // igual que los de la raíz.
-            let mut pending: Vec<std::path::PathBuf> = vec![models_dir.to_path_buf()];
+            let mut pending: Vec<std::path::PathBuf> = vec![models_dir.clone()];
             while let Some(dir) = pending.pop() {
                 if let Ok(entries) = std::fs::read_dir(&dir) {
                     for entry in entries.flatten() {
@@ -4291,61 +4377,7 @@ let resueltos = colliders_resueltos(body, shape);
                     self.app_mode = AppMode::Editor;
                 }
                 LauncherAction::OpenProject(path) => {
-                    // 1) Campo "scene" de project.glass, relativo al proyecto.
-                    let desde_meta = std::fs::read_to_string(path.join("project.glass"))
-                        .ok()
-                        .and_then(|txt| serde_json::from_str::<serde_json::Value>(&txt).ok())
-                        .and_then(|v| v.get("scene").and_then(|s| s.as_str()).map(|s| path.join(s)))
-                        .filter(|p| p.is_file());
-                    // 2) Si no, el primer *.scene.json (por nombre) de Assets/Scenes.
-                    let escena = desde_meta.or_else(|| {
-                        let mut candidatas: Vec<std::path::PathBuf> =
-                            std::fs::read_dir(path.join("Assets/Scenes"))
-                                .ok()?
-                                .flatten()
-                                .map(|e| e.path())
-                                .filter(|p| {
-                                    p.is_file()
-                                        && p.file_name()
-                                            .and_then(|n| n.to_str())
-                                            .is_some_and(|n| n.ends_with(".scene.json"))
-                                })
-                                .collect();
-                        candidatas.sort();
-                        candidatas.into_iter().next()
-                    });
-                    // 3) Cargar la escena; si no hay o falla, escena vacía.
-                    let cargada = match &escena {
-                        Some(ruta) => self.open_scene_file(&ruta.to_string_lossy()),
-                        None => false,
-                    };
-                    if !cargada {
-                        self.setup_empty_scene();
-                    }
-                    log::info!("Proyecto abierto: {:?} (escena: {:?}, cargada: {})", path, escena, cargada);
-                    // El panel de proyecto muestra los assets DEL PROYECTO abierto,
-                    // no los del CWD: se respeta la convención que ya exista en
-                    // disco (`Assets` en los proyectos del Launcher, `assets` en
-                    // minúsculas en otros).
-                    let raiz_assets = if path.join("Assets").is_dir() {
-                        path.join("Assets")
-                    } else if path.join("assets").is_dir() {
-                        path.join("assets")
-                    } else {
-                        path.join("Assets")
-                    };
-                    self.vigilar_assets(&raiz_assets);
-                    self.editor_layout.project.set_assets_root(raiz_assets);
-                    // Registrar el proyecto abierto para que aparezca en el Hub.
-                    let nombre = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "Proyecto".to_string());
-                    self.launcher.update_store.register_project(&nombre, &path);
-                    if let Err(e) = self.launcher.update_store.save() {
-                        log::error!("No se pudo guardar el registro de proyectos: {}", e);
-                    }
-                    self.app_mode = AppMode::Editor;
+                    self.abrir_proyecto(&path);
                 }
                 LauncherAction::OpenSceneFile(ruta) => {
                     self.open_scene_file(&ruta.to_string_lossy());
@@ -4368,13 +4400,13 @@ let resueltos = colliders_resueltos(body, shape);
         // y el banco los suaviza y calcula los botones con borde.
         // El dt es el mismo paso fijo que reciben los scripts.)
         {
-            let mtime = std::fs::metadata("assets/input_axes.json")
+            let mtime = std::fs::metadata(self.raiz_motor.join("assets/input_axes.json"))
                 .and_then(|m| m.modified())
                 .ok();
             if !self.input_defs_loaded || mtime != self.input_defs_mtime {
                 self.input_defs_loaded = true;
                 self.input_defs_mtime = mtime;
-                let defs = load_input_axis_defs();
+                let defs = load_input_axis_defs(&self.raiz_motor);
                 glass_scripting::input_axes::set_axis_defs(defs.clone());
                 self.axis_bank = glass_scripting::input_axes::AxisBank::new(defs);
             }
@@ -7253,9 +7285,11 @@ impl ApplicationHandler for GlassEngineApp {
             pending_script_spawns: self.pending_script_spawns.clone(),
         }));
 
-        let managed_dir = Path::new("managed/GlassEngine.Core/bin/Debug/net8.0");
+        let managed_dir = self
+            .raiz_motor
+            .join("managed/GlassEngine.Core/bin/Debug/net8.0");
         if managed_dir.exists() {
-            match self.script_host.initialize(managed_dir) {
+            match self.script_host.initialize(&managed_dir) {
                 Ok(()) => {
                     log::info!("main: ScriptHost C# (.NET CoreCLR) inicializado exitosamente.");
                     // CoreCLR instala sus propios manejadores de señales durante
@@ -7445,6 +7479,8 @@ impl ApplicationHandler for GlassEngineApp {
                     log::info!("Iniciando escena de juego por defecto en Standalone...");
                     self.setup_complete_sample_game_scene();
                 }
+            } else if self.proyecto_directo.is_some() {
+                log::info!("Arranque con --project: sin escena demo; el proyecto se abre tras la precarga.");
             } else {
                 log::info!("Iniciando escena interactiva 3D con plataformas y cubo jugador...");
                 self.setup_interactive_platformer_scene();
@@ -8225,6 +8261,29 @@ fn proyecto_de_args(args: &[String]) -> Option<String> {
         .position(|a| a == "--project")
         .and_then(|idx| args.get(idx + 1))
         .cloned()
+}
+
+/// Raiz del payload del motor (donde viven managed/ y los assets del
+/// motor): el directorio del ejecutable si trae el payload al lado
+/// (instalacion gestionada en engines/<version>/), o el directorio de
+/// trabajo (build de desarrollo: el ejecutable vive en target/ y el
+/// payload es el propio repo).
+fn resolver_raiz_motor(exe_dir: &std::path::Path, cwd: &std::path::Path) -> std::path::PathBuf {
+    if exe_dir.join("managed/GlassEngine.Core").is_dir() {
+        exe_dir.to_path_buf()
+    } else {
+        cwd.to_path_buf()
+    }
+}
+
+/// La raiz del motor de ESTE proceso, segun resolver_raiz_motor.
+fn raiz_motor_actual() -> std::path::PathBuf {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_default();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    resolver_raiz_motor(&exe_dir, &cwd)
 }
 
 /// Recolecta las luces puntuales de la escena en el UBO del frame: las
@@ -9043,7 +9102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scene_to_load = args.iter().position(|a| a == "--scene").and_then(|idx| args.get(idx + 1)).cloned();
     let es_hub = es_modo_hub(&args);
     let proyecto_directo = proyecto_de_args(&args);
-    let _ = (es_hub, &proyecto_directo);
+    let _ = es_hub;
     let is_sample_game_test = args.iter().any(|arg| arg == "--test-sample-game");
     let is_platformer_test = args.iter().any(|arg| arg == "--test-platformer");
     if is_platformer_test || is_sample_game_test || is_standalone_test {
@@ -9108,6 +9167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             is_standalone_test,
         },
         scene_to_load,
+        proyecto_directo,
     );
     // MCP sobre la escena viva: con la feature de editor, el servidor MCP
     // de la app sirve su stdio en un hilo dedicado (ver
@@ -9382,6 +9442,38 @@ mod standalone_launch_tests {
     #[test]
     fn hub_no_es_standalone() {
         assert!(!is_standalone_launch(false, &args(&["glass_app", "--hub"])));
+    }
+
+    #[test]
+    fn resolver_raiz_motor_usa_exe_dir_si_hay_payload_al_lado() {
+        let base = std::env::temp_dir().join(format!(
+            "glass_raiz_motor_exe_{}",
+            std::process::id()
+        ));
+        let exe_dir = base.join("exe");
+        let cwd = base.join("cwd");
+        std::fs::create_dir_all(exe_dir.join("managed/GlassEngine.Core")).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        assert_eq!(resolver_raiz_motor(&exe_dir, &cwd), exe_dir);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn resolver_raiz_motor_cae_a_cwd_sin_payload() {
+        let base = std::env::temp_dir().join(format!(
+            "glass_raiz_motor_cwd_{}",
+            std::process::id()
+        ));
+        let exe_dir = base.join("exe");
+        let cwd = base.join("cwd");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        assert_eq!(resolver_raiz_motor(&exe_dir, &cwd), cwd);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
 
