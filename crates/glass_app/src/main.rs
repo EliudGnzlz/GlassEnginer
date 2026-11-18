@@ -14,8 +14,10 @@ use glass_audio::{register_global_audio_system, AudioSystem};
 use glass_physics::{collider_shape_for_builtin, register_global_physics_world, BodyType, ColliderConfig, ColliderShape, ContactKind, PhysicsWorld};
 use glass_core::{GlassWindow, SceneManager, SceneState, WindowConfig};
 #[cfg(feature = "editor")]
-use glass_editor::{
-    AppMode, EditorDockingLayout, LauncherAction, LauncherPanel, ProjectTemplate, SampleScenePreset,
+use glass_editor::EditorDockingLayout;
+#[cfg(feature = "editor")]
+use glass_hub::launcher::{
+    AppMode, LauncherAction, LauncherPanel, ProjectTemplate, SampleScenePreset,
 };
 #[cfg(feature = "editor")]
 use glass_mcp::McpServer;
@@ -3359,7 +3361,7 @@ impl GlassEngineApp {
         self.editor_layout.project.set_assets_root(raiz_assets);
         // Registrar el proyecto abierto para que aparezca en el Hub,
         // con el nombre de su project.glass (no el de la carpeta).
-        let nombre = glass_editor::launcher::nombre_proyecto(path);
+        let nombre = glass_launcher::archivos::nombre_proyecto(path);
         self.launcher
             .update_store
             .register_project(&nombre, path);
@@ -7137,7 +7139,7 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                     Err(e) => {
                         log::error!("No se pudo relanzar el Hub tras actualizarlo ({accion:?}): {e}");
                         launcher.hub_update_state =
-                            glass_editor::launcher::UpdateUiState::Error(format!(
+                            glass_hub::launcher::UpdateUiState::Error(format!(
                                 "No se pudo reiniciar el Hub: {e}"
                             ));
                     }
@@ -7166,7 +7168,7 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
             if editor_layout.request_abrir_contenedora_escena {
                 editor_layout.request_abrir_contenedora_escena = false;
                 match &self.ruta_escena_actual {
-                    Some(ruta) => glass_editor::launcher::abrir_carpeta_contenedora(ruta),
+                    Some(ruta) => glass_launcher::archivos::abrir_carpeta_contenedora(ruta),
                     None => {
                         editor_layout.status_message = Some((
                             "La escena aún no tiene archivo (guárdala primero)".to_string(),
@@ -9685,7 +9687,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let retiradas = glass_editor::updates::procesar_pendientes_borrar();
         if std::env::args().any(|a| a == "--tras-actualizar-hub") {
-            glass_editor::launcher::anunciar_arranque_tras_actualizacion_hub();
+            glass_hub::launcher::anunciar_arranque_tras_actualizacion_hub();
         }
         glass_editor::updates::limpiar_respaldo_hub();
         if !retiradas.is_empty() {

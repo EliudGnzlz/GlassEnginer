@@ -1,0 +1,17 @@
+[package]
+name = "glass_launcher"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+egui.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+# Cliente HTTP con TLS, lectura de .zip y SHA-256 para las descargas
+# de motores y del propio Hub (módulo `updates`).
+ureq = "3"
+zip = "8"

@@ -1893,6 +1893,8 @@ dependencies = [
  "glass_audio",
  "glass_core",
  "glass_editor",
+ "glass_hub",
+ "glass_launcher",
  "glass_mcp",
  "glass_particles",
  "glass_physics",
@@ -1943,6 +1945,7 @@ dependencies = [
  "egui_dock",
  "glass_audio",
  "glass_core",
+ "glass_launcher",
  "glass_mcp",
  "glass_mesh_edit",
  "glass_renderer",
@@ -1951,6 +1954,39 @@ dependencies = [
  "image",
  "log",
  "rfd",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "ureq",
+ "zip",
+]
+
+[[package]]
+name = "glass_hub"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "egui",
+ "egui-ash-renderer",
+ "egui-winit",
+ "env_logger",
+ "glass_core",
+ "glass_launcher",
+ "glass_renderer",
+ "gpu-allocator",
+ "image",
+ "log",
+ "rfd",
+ "serde_json",
+ "winit",
+]
+
+[[package]]
+name = "glass_launcher"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "log",
  "serde",
  "serde_json",
  "sha2 0.10.9",

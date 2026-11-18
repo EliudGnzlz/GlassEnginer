@@ -1,0 +1,23 @@
+[package]
+name = "glass_hub"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+glass_core.workspace = true
+glass_launcher.workspace = true
+glass_renderer.workspace = true
+ash.workspace = true
+gpu-allocator.workspace = true
+egui.workspace = true
+egui-winit.workspace = true
+egui-ash-renderer.workspace = true
+winit.workspace = true
+log.workspace = true
+env_logger.workspace = true
+serde_json.workspace = true
+# Diálogos nativos (selector de carpetas del botón «Abrir» del Hub).
+rfd = "0.15"
+image.workspace = true

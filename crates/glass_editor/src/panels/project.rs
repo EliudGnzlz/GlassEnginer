@@ -1525,7 +1525,7 @@ impl ProjectPanel {
                     self.ejecutar_movimiento(item, destino);
                 }
                 if let Some(r) = abrir_explorador {
-                    crate::launcher::abrir_en_explorador(&r);
+                    glass_launcher::archivos::abrir_en_explorador(&r);
                 }
                 if let Some(r) = reconvertir {
                     self.pending_conversion = Some(r.clone());
@@ -2020,7 +2020,7 @@ impl ProjectPanel {
             self.eliminar(ruta);
         }
         if let Some(ruta) = abrir_explorador {
-            crate::launcher::abrir_en_explorador(&ruta);
+            glass_launcher::archivos::abrir_en_explorador(&ruta);
         }
         if let Some(ruta) = nuevo_arrastre {
             self.arrastre_asset = Some(ruta);
@@ -2383,7 +2383,7 @@ impl ProjectPanel {
             self.eliminar(ruta);
         }
         if let Some(ruta) = abrir_explorador {
-            crate::launcher::abrir_en_explorador(&ruta);
+            glass_launcher::archivos::abrir_en_explorador(&ruta);
         }
         if let Some(ruta) = nuevo_arrastre {
             self.arrastre_asset = Some(ruta);
