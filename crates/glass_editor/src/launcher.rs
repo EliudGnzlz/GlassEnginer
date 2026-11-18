@@ -142,6 +142,16 @@ pub struct LauncherPanel {
     pub update_state: UpdateUiState,
     /// Canal con el hilo que comprueba o instala (uno a la vez).
     update_rx: Option<std::sync::mpsc::Receiver<UpdateMsg>>,
+    /// Estado de la comprobación/descarga del propio Hub (S9).
+    pub hub_update_state: UpdateUiState,
+    /// Canal con el hilo que comprueba o aplica la actualización del Hub.
+    hub_update_rx: Option<std::sync::mpsc::Receiver<HubUpdateMsg>>,
+    /// Acción tras actualizar el Hub; la consume main.rs al pintar el frame.
+    pub accion_hub_pendiente: Option<crate::updates::AccionHub>,
+    /// Si está presente, sustituye a «Cargando el motor…» en la pantalla de carga.
+    pub texto_carga: Option<String>,
+    /// Fin del splash tras `--tras-actualizar-hub`.
+    pub splash_hub_hasta: Option<std::time::Instant>,
     /// Registro de complementos instalados (módulo `plugins`).
     pub plugin_store: crate::plugins::PluginStore,
     /// Catálogo oficial descargado en esta sesión, si se ha pedido.
@@ -184,6 +194,83 @@ pub enum UpdateUiState {
 }
 
 /// Mensajes del hilo de red al Launcher.
+/// Mensajes del hilo de actualización del propio Hub (canal propio, separado del motor).
+pub enum HubUpdateMsg {
+    Checked(Result<crate::updates::UpdateCheck, String>),
+    Aplicada(Result<crate::updates::AccionHub, String>),
+}
+
+/// Lo fija main.rs al arrancar con `--tras-actualizar-hub`; el panel lo consume
+/// en su primer frame llamando a `marcar_tras_actualizacion`.
+static ARRANQUE_TRAS_ACTUALIZAR_HUB: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn anunciar_arranque_tras_actualizacion_hub() {
+    ARRANQUE_TRAS_ACTUALIZAR_HUB.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+impl LauncherPanel {
+    /// Pantalla de carga breve (2 s) tras relanzar el Hub actualizado.
+    pub fn marcar_tras_actualizacion(&mut self) {
+        // El splash tiene su propio estado (`splash_hub_hasta`): NO
+        // toca `mostrar_carga`, que es de la precarga del motor
+        // (auditoría S9: un splash que expira no debe apagar una carga
+        // del motor concurrente, ni al revés).
+        self.texto_carga = Some(format!("Hub actualizado a la v{}", crate::updates::HUB_VERSION));
+        self.splash_hub_hasta = Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
+    }
+
+    /// Recoge mensajes del hilo del Hub y gestiona el splash. Devuelve cuándo repintar.
+    fn tick_hub_update(&mut self) -> Option<std::time::Duration> {
+        use std::sync::mpsc::TryRecvError;
+        use std::time::{Duration, Instant};
+
+        if ARRANQUE_TRAS_ACTUALIZAR_HUB.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            self.marcar_tras_actualizacion();
+        }
+
+        let mut repintar: Option<Duration> = None;
+        let recibido = self.hub_update_rx.as_ref().map(|rx| rx.try_recv());
+        match recibido {
+            None => {}
+            Some(Err(TryRecvError::Empty)) => repintar = Some(Duration::from_millis(100)),
+            Some(Err(TryRecvError::Disconnected)) => {
+                self.hub_update_rx = None;
+                self.hub_update_state =
+                    UpdateUiState::Error("El hilo de actualización del Hub terminó sin respuesta.".into());
+            }
+            Some(Ok(msg)) => {
+                self.hub_update_rx = None;
+                repintar = Some(Duration::ZERO);
+                self.hub_update_state = match msg {
+                    HubUpdateMsg::Checked(Ok(crate::updates::UpdateCheck::UpToDate)) => UpdateUiState::UpToDate,
+                    HubUpdateMsg::Checked(Ok(crate::updates::UpdateCheck::Available(rel))) => UpdateUiState::Available(rel),
+                    HubUpdateMsg::Aplicada(Ok(accion)) => {
+                        self.accion_hub_pendiente = Some(accion);
+                        UpdateUiState::Working("Actualización lista: el Hub se va a reiniciar…".into())
+                    }
+                    HubUpdateMsg::Checked(Err(e)) | HubUpdateMsg::Aplicada(Err(e)) => UpdateUiState::Error(e),
+                };
+            }
+        }
+
+        if let Some(hasta) = self.splash_hub_hasta {
+            let ahora = Instant::now();
+            if ahora >= hasta {
+                // Solo se limpia el estado PROPIO del splash; la
+                // pantalla de carga del motor (`mostrar_carga`) no se
+                // toca (auditoría S9).
+                self.texto_carga = None;
+                self.splash_hub_hasta = None;
+            } else {
+                let falta = hasta - ahora;
+                repintar = Some(repintar.map_or(falta, |r| r.min(falta)));
+            }
+        }
+        repintar
+    }
+}
+
 pub enum UpdateMsg {
     Checked(Result<crate::updates::UpdateCheck, String>),
     Installed(Result<crate::updates::ResumenInstalacionMotor, String>),
@@ -432,6 +519,11 @@ impl Default for LauncherPanel {
             update_store,
             update_repo_edit,
             update_state: UpdateUiState::Idle,
+            hub_update_state: UpdateUiState::Idle,
+            hub_update_rx: None,
+            accion_hub_pendiente: None,
+            texto_carga: None,
+            splash_hub_hasta: None,
             update_rx: None,
             plugin_store: crate::plugins::PluginStore::load(),
             plugin_catalog: None,
@@ -569,7 +661,12 @@ impl LauncherPanel {
         // Pantalla de carga: capa Foreground opaca sobre todo el Hub. Se
         // pinta con un painter de capa (visible desde el primer frame) y el
         // orden de capa la deja encima aunque se dibuje antes que los paneles.
-        if self.mostrar_carga {
+        if let Some(d) = self.tick_hub_update() {
+            ui.ctx().request_repaint_after(d);
+        }
+        // La pantalla se pinta con la carga del motor o con el splash
+        // del Hub recién actualizado (estados separados, auditoría S9).
+        if self.mostrar_carga || self.splash_hub_hasta.is_some() {
             let rect = ui.ctx().content_rect();
             let painter = ui.ctx().layer_painter(egui::LayerId::new(
                 egui::Order::Foreground,
@@ -587,14 +684,14 @@ impl LauncherPanel {
             painter.text(
                 centro + egui::vec2(0.0, 20.0),
                 egui::Align2::CENTER_CENTER,
-                "Cargando el motor…",
+                self.texto_carga.as_deref().unwrap_or("Cargando el motor…"),
                 egui::FontId::proportional(18.0),
                 ACCENT,
             );
             painter.text(
                 centro + egui::vec2(0.0, 50.0),
                 egui::Align2::CENTER_CENTER,
-                "Preparando modelos y materiales",
+                if self.texto_carga.is_some() { "" } else { "Preparando modelos y materiales" },
                 egui::FontId::proportional(13.0),
                 TEXT_MAIN,
             );
@@ -1578,9 +1675,71 @@ impl LauncherPanel {
             ui.add_space(8.0);
             ui.label(RichText::new("Hub").size(15.0).strong().color(TEXT_MAIN));
             Self::render_row(ui, &format!("🧊 GlassEnginer Hub v{}", crate::updates::HUB_VERSION),
-                "El Hub se actualiza desde aquí cuando haya una versión nueva: siempre con tu clic, nunca solo. (La comprobación llega con el bloque S9.)",
+                "El Hub se actualiza desde aquí cuando haya una versión nueva: siempre con tu clic, nunca solo.",
                 "✓ En uso", OK_GREEN,
                 || {});
+
+            // Idempotente: también se llama desde el render general.
+            if let Some(d) = self.tick_hub_update() {
+                ui.ctx().request_repaint_after(d);
+            }
+
+            let ocupado = self.hub_update_rx.is_some() || self.accion_hub_pendiente.is_some();
+            ui.add_space(6.0);
+            let buscar = ui
+                .add_enabled_ui(!ocupado, |ui| ui.button("Buscar actualizaciones del Hub").clicked())
+                .inner;
+            if buscar {
+                let api = crate::updates::api_base();
+                let repo = self.update_store.repo.clone();
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.hub_update_rx = Some(rx);
+                self.hub_update_state = UpdateUiState::Checking;
+                std::thread::spawn(move || {
+                    let r = crate::updates::check_hub_update(&api, &repo);
+                    let _ = tx.send(HubUpdateMsg::Checked(r));
+                });
+            }
+
+            let mut descargar = None;
+            let rojo = ui.visuals().error_fg_color;
+            match &self.hub_update_state {
+                UpdateUiState::Idle => {}
+                UpdateUiState::Checking => {
+                    ui.label(RichText::new("Buscando actualizaciones del Hub…").color(TEXT_MAIN));
+                }
+                UpdateUiState::UpToDate => {
+                    ui.label(RichText::new(format!(
+                        "Estás en la última versión del Hub (v{}).",
+                        crate::updates::HUB_VERSION
+                    )).color(OK_GREEN));
+                }
+                UpdateUiState::Available(rel) => {
+                    ui.label(RichText::new(format!("Hay una versión nueva del Hub: {}.", rel.tag_name)).color(TEXT_MAIN));
+                    // D2: la descarga solo empieza con este clic.
+                    if ui.add_enabled_ui(!ocupado, |ui| ui.button("Descargar e instalar").clicked()).inner {
+                        descargar = Some(rel.clone());
+                    }
+                }
+                UpdateUiState::Working(t) => {
+                    ui.label(RichText::new(t).color(TEXT_MAIN));
+                }
+                UpdateUiState::Error(e) => {
+                    ui.label(RichText::new(e).color(rojo));
+                }
+            }
+
+            if let Some(rel) = descargar {
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.hub_update_rx = Some(rx);
+                self.hub_update_state =
+                    UpdateUiState::Working(format!("Descargando el Hub {}, verificando su SHA-256…", rel.tag_name));
+                std::thread::spawn(move || {
+                    let r = crate::updates::descargar_actualizacion_hub(&rel)
+                        .and_then(|ruta| crate::updates::aplicar_actualizacion_hub(&ruta));
+                    let _ = tx.send(HubUpdateMsg::Aplicada(r));
+                });
+            }
         }
     }
 

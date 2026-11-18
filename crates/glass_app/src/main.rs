@@ -6930,6 +6930,37 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 self.egui_ctx.request_repaint();
             }
 
+            // S9: aplicar la actualización del Hub ya descargada y
+            // verificada por el panel. Se lanza el Hub nuevo (o el
+            // instalador en Windows) y este proceso sale con el patrón
+            // de `salir_del_proceso`. Un editor hijo abierto no se toca:
+            // es otro proceso y vive en engines/, no en el ejecutable
+            // del Hub. Si el lanzamiento falla, NO se sale: este proceso
+            // sigue con el Hub anterior en memoria (en Linux el archivo
+            // ya está reemplazado y se usará en el próximo arranque).
+            if let Some(accion) = launcher.accion_hub_pendiente.take() {
+                let lanzado = match &accion {
+                    glass_editor::updates::AccionHub::Relanzar { programa } => {
+                        std::process::Command::new(programa)
+                            .args(["--hub", "--tras-actualizar-hub"])
+                            .spawn()
+                    }
+                    glass_editor::updates::AccionHub::LanzarInstalador { setup } => {
+                        std::process::Command::new(setup).spawn()
+                    }
+                };
+                match lanzado {
+                    Ok(_) => self.salir_del_proceso = true,
+                    Err(e) => {
+                        log::error!("No se pudo relanzar el Hub tras actualizarlo ({accion:?}): {e}");
+                        launcher.hub_update_state =
+                            glass_editor::launcher::UpdateUiState::Error(format!(
+                                "No se pudo reiniciar el Hub: {e}"
+                            ));
+                    }
+                }
+            }
+
             if editor_layout.request_launcher {
                 editor_layout.request_launcher = false;
                 // Con cambios sin guardar no se vuelve al Hub a secas: se
@@ -9413,6 +9444,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "editor")]
     if app.proyecto_directo.is_none() && !app.is_standalone {
         let retiradas = glass_editor::updates::procesar_pendientes_borrar();
+        if std::env::args().any(|a| a == "--tras-actualizar-hub") {
+            glass_editor::launcher::anunciar_arranque_tras_actualizacion_hub();
+        }
+        glass_editor::updates::limpiar_respaldo_hub();
         if !retiradas.is_empty() {
             log::info!("Borrados diferidos completados al arrancar: {:?}", retiradas);
         }

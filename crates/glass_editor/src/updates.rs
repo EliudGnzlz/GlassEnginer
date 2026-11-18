@@ -673,6 +673,118 @@ pub fn select_latest_engine_release(releases: &[ReleaseInfo]) -> Option<ReleaseI
         .map(|(_, r)| r.clone())
 }
 
+/// ¿Es `tag` un tag de release DEL HUB? Los del Hub son
+/// `hub-v<versión>` ('hub-v' seguida de dígito y parseable por
+/// tag_version); los del motor y los complementos quedan fuera.
+pub fn is_hub_tag(tag: &str) -> bool {
+    let Some(rest) = tag.strip_prefix("hub-v") else {
+        return false;
+    };
+    matches!(rest.chars().next(), Some(c) if c.is_ascii_digit())
+        && tag_version(rest).is_ok()
+}
+
+/// La VersionKey de un tag de release del Hub (`hub-v1.2.3[-pre]`).
+/// Devuelve error si el tag no tiene la forma de un tag del Hub.
+pub fn hub_tag_version(tag: &str) -> Result<VersionKey, String> {
+    let Some(rest) = tag.strip_prefix("hub-v") else {
+        return Err(format!(
+            "'{tag}' no es un tag de release del Hub (falta el prefijo 'hub-v')."
+        ));
+    };
+    if !matches!(rest.chars().next(), Some(c) if c.is_ascii_digit()) {
+        return Err(format!(
+            "'{tag}' no es un tag de release del Hub (la versión no empieza por dígito)."
+        ));
+    }
+    tag_version(rest)
+}
+
+/// Elige la release del Hub más reciente de una lista (la de
+/// `GET /repos/{repo}/releases`): descarta borradores, se queda con
+/// los tags del Hub (las prerelease SÍ cuentan) y devuelve la mayor
+/// según VersionKey.
+pub fn select_latest_hub_release(releases: &[ReleaseInfo]) -> Option<ReleaseInfo> {
+    releases
+        .iter()
+        .filter(|r| !r.draft && is_hub_tag(&r.tag_name))
+        .filter_map(|r| hub_tag_version(&r.tag_name).ok().map(|k| (k, r)))
+        .max_by(|(a, _), (b, _)| a.cmp(b))
+        .map(|(_, r)| r.clone())
+}
+
+/// Devuelve la release del Hub más reciente publicada en `repo`.
+/// Espejo de `fetch_latest` con el selector del Hub (S9): misma
+/// petición a la lista de releases y mismos errores de transporte.
+pub fn fetch_latest_hub(api_base: &str, repo: &str) -> Result<ReleaseInfo, String> {
+    let url = format!("{api_base}/repos/{repo}/releases?per_page=100");
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(300)))
+        .build()
+        .into();
+    let mut resp = match agent
+        .get(&url)
+        .header("User-Agent", "GlassEnginer-Launcher")
+        .call()
+    {
+        Ok(r) => r,
+        Err(ureq::Error::StatusCode(404)) => {
+            return Err(format!(
+                "El repositorio '{repo}' no responde (404): puede ser privado o no existir. El Launcher no usa tokens: solo puede leer repositorios públicos."
+            ));
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    let body = resp
+        .body_mut()
+        .with_config()
+        .limit(LIMITE_LECTURA_HTTP)
+        .read_to_string()
+        .map_err(|e| e.to_string())?;
+    let releases: Vec<ReleaseInfo> = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    select_latest_hub_release(&releases)
+        .ok_or_else(|| format!("No hay ninguna release del Hub publicada en '{repo}'."))
+}
+
+/// Comprobación de actualización del propio Hub contra `HUB_VERSION`.
+/// La comparación se hace entre VersionKey: `is_newer` no sirve aquí
+/// porque `tag_version` no sabe desnudar el prefijo `hub-v`.
+pub fn check_hub_update(api_base: &str, repo: &str) -> Result<UpdateCheck, String> {
+    let release = fetch_latest_hub(api_base, repo)?;
+    let version_release = hub_tag_version(&release.tag_name)?;
+    let version_actual = tag_version(HUB_VERSION)?;
+    if version_release > version_actual {
+        Ok(UpdateCheck::Available(release))
+    } else {
+        Ok(UpdateCheck::UpToDate)
+    }
+}
+
+/// El asset del Hub para ESTA plataforma: en Linux el AppImage, en
+/// Windows el setup .exe; en otras plataformas no hay paquete del Hub.
+pub fn pick_hub_asset(release: &ReleaseInfo) -> Option<&AssetInfo> {
+    // Selección estricta (auditoría S9): el paquete del Hub es el del
+    // Launcher para esta plataforma — en Linux el AppImage, en Windows
+    // el setup — y debe ser el ÚNICO candidato; con varios, la elección
+    // sería ambigua y no se instala nada.
+    let slug = platform_slug();
+    let mut candidatos = release.assets.iter().filter(|a| {
+        let n = a.name.to_lowercase();
+        n.contains(slug) && n.contains("launcher")
+            && if cfg!(target_os = "linux") {
+                n.ends_with(".appimage")
+            } else if cfg!(target_os = "windows") {
+                n.ends_with(".exe") && n.contains("setup")
+            } else {
+                false
+            }
+    });
+    match (candidatos.next(), candidatos.next()) {
+        (Some(unico), None) => Some(unico),
+        _ => None,
+    }
+}
+
 pub fn expected_sha256(release: &ReleaseInfo, asset: &AssetInfo) -> Result<String, String> {
     if let Some(hash) = digest_sha256(asset) {
         return Ok(hash);
@@ -1122,9 +1234,281 @@ pub fn is_installed(_store: &LauncherStore, tag: &str) -> bool {
     motor_exe_in(&data_root(), version).is_file()
 }
 
+/// Qué debe hacer el Hub tras aplicar su propia actualización (lo ejecuta main.rs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccionHub {
+    /// Linux/AppImage (o ejecutable suelto): el archivo en `programa`
+    /// ya está reemplazado; hay que lanzarlo con `--hub` y
+    /// `--tras-actualizar-hub` y salir.
+    Relanzar { programa: std::path::PathBuf },
+    /// Windows: hay que ejecutar el instalador descargado y salir.
+    LanzarInstalador { setup: std::path::PathBuf },
+}
+
+/// Ejecutable actual del Hub. Dentro de un AppImage `current_exe` apunta al
+/// montaje temporal, no al archivo, así que manda `APPIMAGE` si está fijada.
+fn ejecutable_hub() -> Result<std::path::PathBuf, String> {
+    if let Some(a) = std::env::var_os("APPIMAGE") {
+        if !a.is_empty() {
+            return Ok(std::path::PathBuf::from(a));
+        }
+    }
+    std::env::current_exe().map_err(|e| format!("No se pudo localizar el ejecutable del Hub: {e}"))
+}
+
+fn ruta_respaldo_hub(destino: &std::path::Path) -> std::path::PathBuf {
+    let mut s = destino.as_os_str().to_os_string();
+    s.push(".viejo");
+    std::path::PathBuf::from(s)
+}
+
+/// Descarga el paquete del Hub de `release` para esta plataforma y verifica su
+/// SHA-256. Solo se llama tras el clic del usuario en «Descargar e instalar».
+pub fn descargar_actualizacion_hub(release: &ReleaseInfo) -> Result<std::path::PathBuf, String> {
+    let asset = pick_hub_asset(release).ok_or_else(|| {
+        format!("La versión {} del Hub no trae paquete para esta plataforma.", release.tag_name)
+    })?;
+    // El nombre viene de la API remota: solo se acepta el último componente.
+    let nombre = std::path::Path::new(&asset.name)
+        .file_name()
+        .map(|n| n.to_os_string())
+        .ok_or_else(|| format!("Nombre de paquete del Hub no válido: {}", asset.name))?;
+
+    let esperado = expected_sha256(release, asset)?;
+    let esperado = esperado.trim();
+    if esperado.is_empty() {
+        return Err(format!("La versión {} del Hub no publica SHA-256: no se instala.", release.tag_name));
+    }
+
+    let dir = data_root().join("hub-update");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+    let ruta = dir.join(nombre);
+
+    let bytes = get_bytes(&asset.browser_download_url)?;
+    std::fs::write(&ruta, &bytes)
+        .map_err(|e| format!("No se pudo guardar {}: {e}", ruta.display()))?;
+
+    let calculado = sha256_hex(&bytes);
+    if !calculado.eq_ignore_ascii_case(esperado) {
+        let _ = std::fs::remove_file(&ruta);
+        return Err(format!(
+            "El SHA-256 del Hub descargado no coincide (esperado {esperado}, obtenido {calculado}). No se ha instalado nada."
+        ));
+    }
+    Ok(ruta)
+}
+
+/// Aplica el paquete ya verificado. En Windows solo devuelve el instalador a
+/// lanzar; en el resto reemplaza el ejecutable del Hub (nunca el del editor).
+pub fn aplicar_actualizacion_hub(descargado: &std::path::Path) -> Result<AccionHub, String> {
+    if !descargado.is_file() {
+        return Err(format!("No existe el paquete descargado: {}", descargado.display()));
+    }
+    if cfg!(windows) {
+        return Ok(AccionHub::LanzarInstalador { setup: descargado.to_path_buf() });
+    }
+    let destino = ejecutable_hub()?;
+    aplicar_reemplazo_en(&destino, descargado)?;
+    let _ = std::fs::remove_file(descargado);
+    Ok(AccionHub::Relanzar { programa: destino })
+}
+
+/// Reemplazo seguro: `destino` → `destino.viejo`, copia del nuevo, 0o755.
+/// Si la copia falla, intenta dejar el ejecutable anterior en su sitio.
+pub fn aplicar_reemplazo_en(destino: &std::path::Path, descargado: &std::path::Path) -> Result<(), String> {
+    let viejo = ruta_respaldo_hub(destino);
+    if viejo.exists() {
+        std::fs::remove_file(&viejo)
+            .map_err(|e| format!("No se pudo borrar el respaldo anterior {}: {e}", viejo.display()))?;
+    }
+    std::fs::rename(destino, &viejo)
+        .map_err(|e| format!("No se pudo apartar {}: {e}", destino.display()))?;
+
+    if let Err(e) = copiar_ejecutable(descargado, destino) {
+        let _ = std::fs::remove_file(destino);
+        return Err(match std::fs::rename(&viejo, destino) {
+            Ok(()) => format!("No se pudo instalar el Hub nuevo ({e}); se ha restaurado la versión anterior."),
+            Err(e2) => format!(
+                "No se pudo instalar el Hub nuevo ({e}) ni restaurar la anterior ({e2}); la anterior está en {}.",
+                viejo.display()
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn copiar_ejecutable(origen: &std::path::Path, destino: &std::path::Path) -> std::io::Result<()> {
+    std::fs::copy(origen, destino)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(destino, std::fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
+}
+
+/// Al arrancar el Hub: borra `<ejecutable>.viejo` si quedó de una actualización.
+/// Nunca falla ni impide arrancar.
+pub fn limpiar_respaldo_hub() {
+    if let Ok(destino) = ejecutable_hub() {
+        limpiar_respaldo_en(&destino);
+    }
+}
+
+pub fn limpiar_respaldo_en(destino: &std::path::Path) {
+    let viejo = ruta_respaldo_hub(destino);
+    if viejo.is_file() {
+        let _ = std::fs::remove_file(&viejo);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    fn dir_prueba_hub(nombre: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("glass_hub_{nombre}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn aplicar_reemplazo_hub_deja_nuevo_y_respaldo() {
+        let d = dir_prueba_hub("reemplazo");
+        let destino = d.join("GlassEnginer-Hub.AppImage");
+        let descargado = d.join("descargado.AppImage");
+        std::fs::write(&destino, b"viejo").unwrap();
+        std::fs::write(&descargado, b"nuevo").unwrap();
+
+        super::aplicar_reemplazo_en(&destino, &descargado).unwrap();
+
+        assert_eq!(std::fs::read(&destino).unwrap(), b"nuevo");
+        assert_eq!(std::fs::read(super::ruta_respaldo_hub(&destino)).unwrap(), b"viejo");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let modo = std::fs::metadata(&destino).unwrap().permissions().mode();
+            assert_eq!(modo & 0o777, 0o755);
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn aplicar_reemplazo_hub_sustituye_respaldo_previo() {
+        let d = dir_prueba_hub("respaldo_previo");
+        let destino = d.join("hub");
+        let descargado = d.join("hub-nuevo");
+        std::fs::write(&destino, b"v2").unwrap();
+        std::fs::write(super::ruta_respaldo_hub(&destino), b"v1").unwrap();
+        std::fs::write(&descargado, b"v3").unwrap();
+
+        super::aplicar_reemplazo_en(&destino, &descargado).unwrap();
+
+        assert_eq!(std::fs::read(&destino).unwrap(), b"v3");
+        assert_eq!(std::fs::read(super::ruta_respaldo_hub(&destino)).unwrap(), b"v2");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn limpiar_respaldo_hub_borra_y_tolera_ausencia() {
+        let d = dir_prueba_hub("limpiar");
+        let destino = d.join("hub");
+        std::fs::write(&destino, b"actual").unwrap();
+        let viejo = super::ruta_respaldo_hub(&destino);
+        std::fs::write(&viejo, b"viejo").unwrap();
+
+        super::limpiar_respaldo_en(&destino);
+        assert!(!viejo.exists());
+        assert!(destino.exists());
+
+        // Sin respaldo: no debe fallar.
+        super::limpiar_respaldo_en(&destino);
+        assert!(destino.exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
     use super::*;
+
+    /// ReleaseInfo con el tag dado (el helper `release_de_prueba` fija
+    /// el tag a v0.10.18 y no sirve para probar los selectores).
+    fn rel_con_tag(tag: &str, draft: bool) -> ReleaseInfo {
+        ReleaseInfo {
+            tag_name: tag.to_string(),
+            draft,
+            prerelease: true,
+            name: "Release".to_string(),
+            html_url: "https://example.com".to_string(),
+            assets: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn los_selectores_no_se_contaminan_entre_motor_y_hub() {
+        let releases = vec![
+            rel_con_tag("v0.10.99", false),
+            rel_con_tag("hub-v0.10.5", false),
+            rel_con_tag("hub-v0.11.0", false),
+            rel_con_tag("herramienta-3d-v1.0.1", false),
+            rel_con_tag("hub-v0.12.0", true),
+        ];
+
+        assert_eq!(
+            select_latest_hub_release(&releases).map(|r| r.tag_name),
+            Some("hub-v0.11.0".to_string())
+        );
+        assert_eq!(
+            select_latest_engine_release(&releases).map(|r| r.tag_name),
+            Some("v0.10.99".to_string())
+        );
+    }
+
+    #[test]
+    fn is_hub_tag_reconoce_solo_los_tags_del_hub() {
+        assert!(is_hub_tag("hub-v0.11.0"));
+        assert!(is_hub_tag("hub-v0.11.0-beta"));
+        assert!(!is_hub_tag("v0.11.0"));
+        assert!(!is_hub_tag("herramienta-3d-v1.0.1"));
+        assert!(!is_hub_tag("hub-vx"));
+        assert!(!is_hub_tag("hub-0.11.0"));
+    }
+
+    #[test]
+    fn hub_tag_version_desnuda_el_prefijo_y_falla_con_otros_tags() {
+        assert!(hub_tag_version("hub-v0.11.0").is_ok());
+        assert!(hub_tag_version("hub-v0.11.0-beta").is_ok());
+        assert!(hub_tag_version("v0.11.0").is_err());
+        assert!(hub_tag_version("hub-vx").is_err());
+        assert_eq!(
+            hub_tag_version("hub-v0.11.0").unwrap(),
+            tag_version("0.11.0").unwrap()
+        );
+    }
+
+    #[test]
+    fn pick_hub_asset_elige_el_paquete_de_esta_plataforma() {
+        let mut rel = rel_con_tag("hub-v0.11.0", false);
+        rel.assets = vec![
+            asset_de_prueba("GlassEnginer-Launcher-0.11.0-windows-x64-setup.exe".into()),
+            asset_de_prueba("GlassEnginer-Launcher-0.11.0-linux-x64.AppImage".into()),
+            asset_de_prueba("GlassEnginer-Engine-0.11.0-linux-x64.zip".into()),
+            asset_de_prueba("checksums.txt".into()),
+        ];
+        let elegido = pick_hub_asset(&rel).map(|a| a.name.as_str());
+        match platform_slug() {
+            "linux-x64" => {
+                assert_eq!(
+                    elegido,
+                    Some("GlassEnginer-Launcher-0.11.0-linux-x64.AppImage")
+                )
+            }
+            "windows-x64" => {
+                assert_eq!(
+                    elegido,
+                    Some("GlassEnginer-Launcher-0.11.0-windows-x64-setup.exe")
+                )
+            }
+            _ => assert_eq!(elegido, None),
+        }
+    }
 
     fn rel(tag: &str) -> ReleaseInfo {
         ReleaseInfo {
