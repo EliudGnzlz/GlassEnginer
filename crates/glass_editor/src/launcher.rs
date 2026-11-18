@@ -127,6 +127,9 @@ pub struct LauncherPanel {
     pub new_path: String,
     pub new_template: ProjectTemplate,
     pub status_message: Option<String>,
+    /// Este Launcher corre como Hub separado (--hub): sus acciones
+    /// lanzan el motor en uso como proceso (lo consume main.rs).
+    pub es_hub: bool,
     /// Miniaturas ya intentadas por proyecto: `Some` si el `thumbnail.png`
     /// se cargó, `None` si no existe o no se pudo leer (no se reintenta).
     thumb_cache: HashMap<String, Option<egui::TextureHandle>>,
@@ -424,6 +427,7 @@ impl Default for LauncherPanel {
             new_path: path.to_string_lossy().into_owned(),
             new_template: ProjectTemplate::Platformer3D,
             status_message: None,
+            es_hub: false,
             thumb_cache: HashMap::new(),
             update_store,
             update_repo_edit,
@@ -631,10 +635,28 @@ impl LauncherPanel {
                         // El Hub trabaja en local: sin cuentas ni nube.
                         ui.label(RichText::new("● Modo local (sin conexión)").size(11.0).color(OK_GREEN));
                     });
-                    ui.horizontal(|ui| {
-                        ui.add_space(16.0);
-                        ui.label(RichText::new(format!("v{} • Vulkan 1.3", crate::updates::ENGINE_VERSION)).size(11.0).color(TEXT_DIM));
-                    });
+                    if self.es_hub {
+                        // Dos lineas: la barra lateral es estrecha y
+                        // «Hub vX · Motor vY» en una sola se cortaba.
+                        // (bottom_up: lo añadido despues queda encima.)
+                        let texto_motor = match crate::updates::EngineStore::load().en_uso {
+                            Some(v) => format!("Motor v{v}"),
+                            None => "Sin motor instalado".to_string(),
+                        };
+                        ui.horizontal(|ui| {
+                            ui.add_space(16.0);
+                            ui.label(RichText::new(texto_motor).size(11.0).color(TEXT_DIM));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.add_space(16.0);
+                            ui.label(RichText::new(format!("Hub v{}", crate::updates::HUB_VERSION)).size(11.0).color(TEXT_DIM));
+                        });
+                    } else {
+                        ui.horizontal(|ui| {
+                            ui.add_space(16.0);
+                            ui.label(RichText::new(format!("v{} • Vulkan 1.3", crate::updates::ENGINE_VERSION)).size(11.0).color(TEXT_DIM));
+                        });
+                    }
                     ui.add_space(8.0);
                     ui.separator();
                 });
@@ -876,6 +898,11 @@ impl LauncherPanel {
 
     fn render_samples_tab(&mut self, ui: &mut Ui, action: &mut Option<LauncherAction>) {
         Self::tab_title(ui, "Ejemplos", "Escenas de ejemplo incluidas con el motor. Se abren al momento en el editor, sin descargar nada.");
+        if self.sin_motor_hub() {
+            ui.add_space(8.0);
+            ui.label(RichText::new("⚠ Sin motor instalado: ve a Instalaciones y descarga el motor para poder abrir los ejemplos.").size(12.5).color(Color32::from_rgb(176, 42, 42)));
+            return;
+        }
         Self::render_row(ui, "★ 3D Platformer & Physics Demo (Escena de Prueba)",
             "Plataformas 3D, cuerpo rígido Rapier3D, script C# PlayerController (CoreCLR), audio Kira y shader PBR con luz solar.",
             "▶ Abrir", ACCENT,
@@ -916,10 +943,12 @@ impl LauncherPanel {
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Como en el Hub viejo: NEW en azul, ADD/Abrir en claro.
-                if Self::primary_button(ui, "➕ Nuevo", Vec2::new(110.0, 30.0)).clicked() {
+                // Sin motor en modo Hub, Nuevo y Abrir se pintan deshabilitados.
+                let sin_motor_botones = self.sin_motor_hub();
+                if ui.add_enabled_ui(!sin_motor_botones, |ui| Self::primary_button(ui, "➕ Nuevo", Vec2::new(110.0, 30.0)).clicked()).inner {
                     self.creating_project = true;
                 }
-                if ui.add_sized(Vec2::new(110.0, 30.0), egui::Button::new(RichText::new("📂 Abrir").size(13.0))).clicked() {
+                if ui.add_enabled_ui(!sin_motor_botones, |ui| ui.add_sized(Vec2::new(110.0, 30.0), egui::Button::new(RichText::new("📂 Abrir").size(13.0))).clicked()).inner {
                     // Selector de carpetas del sistema (como el «Open» del
                     // Hub de Unity): validar, registrar y abrir.
                     self.error_abrir = None;
@@ -941,6 +970,11 @@ impl LauncherPanel {
             });
         });
         ui.add_space(10.0);
+        let sin_motor = self.sin_motor_hub();
+        if sin_motor {
+            ui.label(RichText::new("⚠ Sin motor instalado: ve a Instalaciones y descarga el motor para poder crear y abrir proyectos.").size(12.5).color(egui::Color32::from_rgb(235, 180, 70)));
+            ui.add_space(8.0);
+        }
 
         if let Some(error) = &self.error_abrir {
             ui.label(
@@ -977,7 +1011,7 @@ impl LauncherPanel {
                 shown += 1;
                 // Todas las tarjetas, incluida la del directorio de trabajo
                 // si tiene project.glass, abren SU proyecto.
-                self.project_card(ui, name, desc, dir, action);
+                ui.add_enabled_ui(!sin_motor, |ui| self.project_card(ui, name, desc, dir, action));
             }
         });
         // Acción del menú contextual elegida en alguna tarjeta.
@@ -1099,8 +1133,13 @@ impl LauncherPanel {
     /// página del Launcher, SIN ventana emergente.
     fn render_create_view(&mut self, ui: &mut Ui, action: &mut Option<LauncherAction>) {
         ui.label(RichText::new("Crear un proyecto nuevo").size(20.0).strong().color(TEXT_MAIN));
+        let texto_cabecera = if self.es_hub {
+            format!("GlassEnginer Hub v{} • Todo se crea en tu equipo, sin conexión.", crate::updates::HUB_VERSION)
+        } else {
+            format!("GlassEnginer v{} • Todo se crea en tu equipo, sin conexión.", crate::updates::ENGINE_VERSION)
+        };
         ui.label(
-            RichText::new(format!("GlassEnginer v{} • Todo se crea en tu equipo, sin conexión.", crate::updates::ENGINE_VERSION))
+            RichText::new(texto_cabecera)
                 .size(12.0)
                 .color(TEXT_DIM),
         );
@@ -1314,12 +1353,71 @@ impl LauncherPanel {
             });
     }
 
+    /// Hay motor gestionado listo para lanzar (solo importa en
+    /// modo Hub).
+    fn motor_lanzable() -> Option<(std::path::PathBuf, String)> {
+        crate::updates::objetivo_sonda()
+    }
+
+    fn sin_motor_hub(&self) -> bool {
+        self.es_hub && Self::motor_lanzable().is_none()
+    }
+
     fn render_installs_tab(&mut self, ui: &mut Ui) {
         Self::tab_title(ui, "Instalaciones", "Versiones del motor en este equipo y actualizaciones desde GitHub Releases. Es la única parte del Launcher que usa internet, y solo cuando tú lo pides.");
-        Self::render_row(ui, &format!("🧊 GlassEnginer v{}", crate::updates::ENGINE_VERSION),
-            "Instalada • Esta copia del motor (Vulkan 1.3, Rapier3D, Kira, CoreCLR 8)",
-            "✓ En uso", OK_GREEN,
-            || {});
+        let store_motor = crate::updates::EngineStore::load();
+        let texto_actual: String = if self.es_hub {
+            store_motor.en_uso.as_ref().map(|v| format!("v{v}")).unwrap_or_else(|| "sin motor".into())
+        } else {
+            format!("v{}", crate::updates::ENGINE_VERSION)
+        };
+        if self.es_hub {
+            ui.label(RichText::new("Motor").size(15.0).strong().color(TEXT_MAIN));
+            ui.add_space(4.0);
+            match &store_motor.en_uso {
+                Some(v) => {
+                    Self::render_row(ui, &format!("🧊 GlassEnginer v{v}"),
+                        &format!("Motor gestionado en uso (engines/{v})"),
+                        "✓ En uso", OK_GREEN,
+                        || {});
+                }
+                None => {
+                    ui.label(RichText::new("⚠ Sin motor instalado todavía: busca actualizaciones y descarga el primero para poder abrir proyectos.").size(12.5).color(egui::Color32::from_rgb(235, 180, 70)));
+                }
+            }
+            if let Some(c) = &store_motor.conservada {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(format!("🧊 GlassEnginer v{c}")).size(14.0).strong().color(TEXT_MAIN));
+                        ui.label(RichText::new("Conservada por cambio pesado: no se lanza; solo se conserva o se borra.").size(12.0).color(TEXT_DIM));
+                    });
+                    if ui.button(RichText::new("🗑 Borrar").size(13.0)).clicked() {
+                        self.status_message = Some(match crate::updates::borrar_conservada_en(&crate::updates::data_root()) {
+                            Ok(_) => format!("Versión conservada v{c} borrada."),
+                            Err(e) => format!("⚠ {e}"),
+                        });
+                    }
+                });
+            }
+            let restos = crate::updates::restos_versions_en(&crate::updates::data_root());
+            if !restos.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("Restos del mecanismo viejo en versions/: {}", restos.join(", "))).size(12.5).color(TEXT_DIM));
+                    if ui.button(RichText::new("🗑 Borrar restos").size(13.0)).clicked() {
+                        self.status_message = Some(match crate::updates::borrar_versions_en(&crate::updates::data_root()) {
+                            Ok(_) => "Restos de versions/ borrados.".to_string(),
+                            Err(e) => format!("⚠ {e}"),
+                        });
+                    }
+                });
+            }
+            ui.add_space(8.0);
+        } else {
+            Self::render_row(ui, &format!("🧊 GlassEnginer v{}", crate::updates::ENGINE_VERSION),
+                "Instalada • Esta copia del motor (Vulkan 1.3, Rapier3D, Kira, CoreCLR 8)",
+                "✓ En uso", OK_GREEN,
+                || {});
+        }
         let instalaciones = self.update_store.installations.clone();
         for inst in &instalaciones {
             Self::render_row(ui, &format!("🧊 GlassEnginer v{}", inst.version),
@@ -1429,20 +1527,31 @@ impl LauncherPanel {
             self.update_rx = Some(rx);
             self.update_state = UpdateUiState::Checking;
             let repo = self.update_store.repo.clone();
+            let es_hub = self.es_hub;
+            let base = store_motor.en_uso.clone().unwrap_or_else(|| "0.0.0".to_string());
             std::thread::spawn(move || {
-                let r = crate::updates::check_update(&crate::updates::api_base(), &repo);
+                let r = if es_hub {
+                    crate::updates::check_update_against(&crate::updates::api_base(), &repo, &base)
+                } else {
+                    crate::updates::check_update(&crate::updates::api_base(), &repo)
+                };
                 let _ = tx.send(UpdateMsg::Checked(r));
             });
         }
 
         if al_dia {
             ui.add_space(6.0);
-            ui.label(RichText::new(format!("✓ Estás en la última versión publicada (v{}).", crate::updates::ENGINE_VERSION)).size(12.5).color(OK_GREEN));
+            ui.label(RichText::new(format!("✓ Estás en la última versión publicada ({texto_actual}).")).size(12.5).color(OK_GREEN));
         }
         if let Some(rel) = &disponible {
             let tag = rel.tag_name.clone();
             ui.add_space(6.0);
-            ui.label(RichText::new(format!("⬆ Hay una versión nueva: {tag} (esta copia es v{}).", crate::updates::ENGINE_VERSION)).size(13.0).strong().color(TEXT_MAIN));
+            let detalle = if self.es_hub && store_motor.en_uso.is_none() {
+                "aún no hay motor instalado".to_string()
+            } else {
+                format!("esta copia es {texto_actual}")
+            };
+            ui.label(RichText::new(format!("⬆ Hay una versión nueva: {tag} ({detalle}).")).size(13.0).strong().color(TEXT_MAIN));
             if crate::updates::is_installed(&self.update_store, &tag) {
                 ui.label(RichText::new("Ya está descargada en este equipo (mira la lista de arriba).").size(12.5).color(TEXT_DIM));
             } else if !ocupado && ui.button(RichText::new(format!("⬇ Descargar e instalar {tag}")).size(13.0)).clicked() {
@@ -1463,6 +1572,16 @@ impl LauncherPanel {
         }
         ui.add_space(8.0);
             ui.label(RichText::new("Al instalar una versión nueva, pasa a ser la que está en uso: la anterior se borra —si el cambio es pesado (primer o segundo número distinto) se conserva, marcada— y los proyectos se sellan con la versión nueva. Nada se instala si su SHA-256 no coincide con el publicado.").size(12.0).color(TEXT_DIM));
+        if self.es_hub {
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(8.0);
+            ui.label(RichText::new("Hub").size(15.0).strong().color(TEXT_MAIN));
+            Self::render_row(ui, &format!("🧊 GlassEnginer Hub v{}", crate::updates::HUB_VERSION),
+                "El Hub se actualiza desde aquí cuando haya una versión nueva: siempre con tu clic, nunca solo. (La comprobación llega con el bloque S9.)",
+                "✓ En uso", OK_GREEN,
+                || {});
+        }
     }
 
 

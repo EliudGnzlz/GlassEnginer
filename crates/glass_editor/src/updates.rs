@@ -710,13 +710,17 @@ pub enum UpdateCheck {
     Available(ReleaseInfo),
 }
 
-pub fn check_update(api_base: &str, repo: &str) -> Result<UpdateCheck, String> {
+pub fn check_update_against(api_base: &str, repo: &str, version_actual: &str) -> Result<UpdateCheck, String> {
     let release = fetch_latest(api_base, repo)?;
-    if is_newer(&release.tag_name, ENGINE_VERSION) {
+    if is_newer(&release.tag_name, version_actual) {
         Ok(UpdateCheck::Available(release))
     } else {
         Ok(UpdateCheck::UpToDate)
     }
+}
+
+pub fn check_update(api_base: &str, repo: &str) -> Result<UpdateCheck, String> {
+    check_update_against(api_base, repo, ENGINE_VERSION)
 }
 
 pub fn extract_zip(data: &[u8], dest: &std::path::Path) -> Result<usize, String> {
@@ -881,6 +885,49 @@ pub struct LockSesion {
 /// `root` — su ejecutable y su version. None si no hay motor en uso
 /// o su ejecutable no esta en disco (el llamante sondea entonces el
 /// propio binario, como en el modo combinado).
+/// Borra la version conservada bajo `root` y limpia el puntero.
+/// Con sesion activa en ella devuelve Err (que la cierre primero):
+/// un borrado a clic no se difiere en silencio. Ok(None) si no
+/// habia conservada.
+pub fn borrar_conservada_en(root: &std::path::Path) -> Result<Option<String>, String> {
+    let mut store = EngineStore::load_in(root);
+    let Some(version) = store.conservada.clone() else {
+        return Ok(None);
+    };
+    if version_con_sesion_activa_en(root, &version) {
+        return Err(format!("la version conservada v{version} tiene una sesion abierta: cierrala antes de borrarla"));
+    }
+    let dir = engines_dir_in(root).join(&version);
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).map_err(|e| format!("no se pudo borrar engines/{version}: {e}"))?;
+    }
+    store.conservada = None;
+    store.save_in(root)?;
+    Ok(Some(version))
+}
+
+/// Nombres de las carpetas que queden en el `versions/` heredado
+/// del mecanismo viejo (vacias si no hay carpeta o esta vacia).
+pub fn restos_versions_en(root: &std::path::Path) -> Vec<String> {
+    let dir = root.join("versions");
+    let Ok(rd) = std::fs::read_dir(&dir) else { return Vec::new() };
+    let mut nombres: Vec<String> = rd
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    nombres.sort();
+    nombres
+}
+
+/// Borra entero el `versions/` heredado bajo `root`.
+pub fn borrar_versions_en(root: &std::path::Path) -> Result<(), String> {
+    let dir = root.join("versions");
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).map_err(|e| format!("no se pudo borrar versions/: {e}"))?;
+    }
+    Ok(())
+}
+
 pub fn objetivo_sonda_en(root: &std::path::Path) -> Option<(std::path::PathBuf, String)> {
     let store = EngineStore::load_in(root);
     let version = store.en_uso?;
@@ -1466,6 +1513,60 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *glass.zip
                     .all(|e| !e.file_name().to_string_lossy().starts_with(".staging-"))
             })
             .unwrap_or(true)
+    }
+
+    #[test]
+    fn borrar_conservada_ok() {
+        let dir = dir_prueba_s3("borrar_conservada_ok");
+        let root = dir.join("datos");
+        std::fs::create_dir_all(engines_dir_in(&root).join("0.9.0")).unwrap();
+        std::fs::write(engines_dir_in(&root).join("0.9.0").join("f"), b"x").unwrap();
+        let mut store = EngineStore::load_in(&root);
+        store.conservada = Some("0.9.0".to_string());
+        store.save_in(&root).unwrap();
+        let r = borrar_conservada_en(&root).unwrap();
+        assert_eq!(r, Some("0.9.0".to_string()));
+        assert!(!engines_dir_in(&root).join("0.9.0").exists());
+        assert!(EngineStore::load_in(&root).conservada.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn borrar_conservada_sin_conservada() {
+        let dir = dir_prueba_s3("borrar_conservada_sin_conservada");
+        let root = dir.join("datos");
+        let r = borrar_conservada_en(&root).unwrap();
+        assert_eq!(r, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn borrar_conservada_con_sesion() {
+        let dir = dir_prueba_s3("borrar_conservada_con_sesion");
+        let root = dir.join("datos");
+        std::fs::create_dir_all(engines_dir_in(&root).join("0.9.0")).unwrap();
+        let mut store = EngineStore::load_in(&root);
+        store.conservada = Some("0.9.0".to_string());
+        store.save_in(&root).unwrap();
+        let _lock = bloquear_sesion_en(&root, "0.9.0").unwrap();
+        let r = borrar_conservada_en(&root);
+        assert!(r.is_err());
+        assert!(engines_dir_in(&root).join("0.9.0").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn restos_y_borrado_versions() {
+        let dir = dir_prueba_s3("restos_y_borrado_versions");
+        let root = dir.join("datos");
+        std::fs::create_dir_all(root.join("versions").join("a")).unwrap();
+        std::fs::create_dir_all(root.join("versions").join("b")).unwrap();
+        std::fs::write(root.join("versions").join("a").join("f"), b"x").unwrap();
+        assert_eq!(restos_versions_en(&root), vec!["a".to_string(), "b".to_string()]);
+        borrar_versions_en(&root).unwrap();
+        assert!(!root.join("versions").exists());
+        assert!(restos_versions_en(&root).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

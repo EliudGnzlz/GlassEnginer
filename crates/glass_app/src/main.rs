@@ -2260,6 +2260,7 @@ impl GlassEngineApp {
                 // Arranque directo al editor: la pantalla de carga se ve
                 // desde el primer frame, antes de que bloquee la precarga.
                 panel.mostrar_carga = start_in_editor;
+                panel.es_hub = es_hub;
                 panel
             },
             start_instant: std::time::Instant::now(),
@@ -3081,6 +3082,85 @@ impl GlassEngineApp {
                 self.abrir_proyecto(&project_dir);
             }
             Err(e) => log::error!("No se pudo crear el proyecto '{}': {}", name, e),
+        }
+    }
+
+    /// Lanza el motor gestionado en uso como proceso hijo con los
+    /// argumentos dados (S6). El hijo comparte la raíz de datos
+    /// (GLASS_LAUNCHER_HOME) pero NO hereda los overrides GLASS_*
+    /// de prueba/desarrollo del entorno del Hub (p. ej.
+    /// GLASS_UPDATE_API): se retiran todos menos
+    /// GLASS_LAUNCHER_HOME (auditoría S6). Un hilo recoge al hijo
+    /// al salir para no dejar procesos zombi.
+    #[cfg(feature = "editor")]
+    fn lanzar_motor_hijo(&mut self, args: &[&str]) {
+        match glass_editor::updates::objetivo_sonda() {
+            Some((exe, _)) => {
+                let mut cmd = std::process::Command::new(&exe);
+                cmd.args(args);
+                for (k, _) in std::env::vars() {
+                    if k.starts_with("GLASS_") && k != "GLASS_LAUNCHER_HOME" {
+                        cmd.env_remove(&k);
+                    }
+                }
+                match cmd.spawn() {
+                    Ok(hijo) => {
+                        log::info!("Motor lanzado ({}, pid {}) con {:?}", exe.display(), hijo.id(), args);
+                        let mut hijo = hijo;
+                        std::thread::spawn(move || {
+                            let _ = hijo.wait();
+                        });
+                    }
+                    Err(e) => {
+                        self.launcher.status_message =
+                            Some(format!("⚠ No se pudo lanzar el motor: {e}"));
+                    }
+                }
+            }
+            None => {
+                self.launcher.status_message = Some(
+                    "⚠ No hay motor instalado: ve a Instalaciones y descarga el motor.".into(),
+                );
+            }
+        }
+    }
+
+    /// Ejecuta una acción del Launcher en modo Hub (S6): todo se
+    /// lanza como proceso del motor gestionado; este proceso no
+    /// abre nada en el editor. El registro de la apertura lo hace
+    /// el propio hijo en su abrir_proyecto (escritor único del
+    /// registro: si el Hub también registrara al lanzar, los dos
+    /// guardados se pisarían — auditoría S6).
+    #[cfg(feature = "editor")]
+    fn ejecutar_accion_hub(&mut self, action: LauncherAction) {
+        match action {
+            LauncherAction::OpenProject(path) => {
+                let abs = absolutizar(&path);
+                let ruta = abs.to_string_lossy().into_owned();
+                self.lanzar_motor_hijo(&["--project", ruta.as_str()]);
+            }
+            LauncherAction::CreateProject { name, path, template } => {
+                match Self::crear_proyecto_en_disco(&name, &path, template) {
+                    Ok(dir) => {
+                        log::info!("Proyecto '{}' creado en disco: {:?}", name, dir);
+                        let ruta = dir.to_string_lossy().into_owned();
+                        self.lanzar_motor_hijo(&["--project", ruta.as_str()]);
+                    }
+                    Err(e) => {
+                        log::error!("No se pudo crear el proyecto '{}': {}", name, e);
+                        self.launcher.status_message =
+                            Some(format!("⚠ No se pudo crear el proyecto: {e}"));
+                    }
+                }
+            }
+            LauncherAction::LoadSampleScene(preset) => {
+                self.lanzar_motor_hijo(&["--sample", clave_de_sample(preset)]);
+            }
+            LauncherAction::OpenSceneFile(ruta) => {
+                let abs = absolutizar(&ruta);
+                let ruta = abs.to_string_lossy().into_owned();
+                self.lanzar_motor_hijo(&["--scene", ruta.as_str()]);
+            }
         }
     }
 
@@ -4357,6 +4437,25 @@ let resueltos = colliders_resueltos(body, shape);
             }
         }
 
+        // Modo Hub: las acciones de abrir/crear/ejemplo/escena lanzan el
+        // motor en uso como proceso hijo; nunca entran al editor en proceso
+        // ni se aplazan por precarga.
+        #[cfg(feature = "editor")]
+        if self.es_hub
+            && matches!(
+                self.pending_launcher_action,
+                Some(
+                    LauncherAction::LoadSampleScene(..)
+                        | LauncherAction::CreateProject { .. }
+                        | LauncherAction::OpenProject(..)
+                        | LauncherAction::OpenSceneFile(..)
+                )
+            )
+        {
+            if let Some(action) = self.pending_launcher_action.take() {
+                self.ejecutar_accion_hub(action);
+            }
+        }
         // Una acción que entra al editor antes de la precarga se aplaza:
         // se enciende la pantalla de carga y se reprocesa al terminar.
         #[cfg(feature = "editor")]
@@ -8315,6 +8414,29 @@ fn es_modo_hub(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--hub")
 }
 
+/// Ruta absoluta de `p` (las relativas se resuelven contra el CWD
+/// del Hub): los procesos hijo del motor no deben depender del
+/// directorio desde el que se invocó al Hub.
+#[cfg(feature = "editor")]
+fn absolutizar(p: &std::path::Path) -> std::path::PathBuf {
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(p)
+    }
+}
+
+/// Clave corta de un ejemplo para `--sample <clave>` (D6).
+#[cfg(feature = "editor")]
+fn clave_de_sample(p: SampleScenePreset) -> &'static str {
+    match p {
+        SampleScenePreset::PlatformerDemo => "plataformas",
+        SampleScenePreset::PhysicsPlayground => "fisica",
+        SampleScenePreset::AudioLightingShowcase => "luces",
+        SampleScenePreset::FullSampleGame => "juego",
+    }
+}
+
 /// Proyecto a abrir directamente (`--project <dir>`), la via con la que
 /// el Hub lanzara el motor gestionado. Por ahora solo se reconoce.
 fn proyecto_de_args(args: &[String]) -> Option<String> {
@@ -9251,6 +9373,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `start_live_mcp_stdio` para la decisión de arranque y sus porqués).
     #[cfg(feature = "editor")]
     app.start_live_mcp_stdio(args.iter().any(|arg| arg == "--mcp-live") && !es_hub);
+    // Lado receptor de --sample <clave> (D6): siembra la misma
+    // acción que produce la pestaña Ejemplos del Hub.
+    #[cfg(feature = "editor")]
+    if let Some(clave) = args
+        .iter()
+        .position(|a| a == "--sample")
+        .and_then(|i| args.get(i + 1))
+    {
+        let preset = match clave.as_str() {
+            "plataformas" => Some(SampleScenePreset::PlatformerDemo),
+            "fisica" => Some(SampleScenePreset::PhysicsPlayground),
+            "luces" => Some(SampleScenePreset::AudioLightingShowcase),
+            "juego" => Some(SampleScenePreset::FullSampleGame),
+            _ => None,
+        };
+        match preset {
+            Some(p) => {
+                app.pending_launcher_action = Some(LauncherAction::LoadSampleScene(p));
+            }
+            None => log::error!("--sample: clave desconocida «{clave}»; se ignora."),
+        }
+    }
     // S4: si este proceso es un motor gestionado (su exe vive en
     // engines/<version>/), toma el lock de sesion de su version: el
     // Hub no borrara esa version mientras este proceso viva. El
