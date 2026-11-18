@@ -1266,3 +1266,24 @@ Segunda mitad del punto 10 (la estructura, P3a, quedó cerrada en su sección). 
 **Verificación:** suite glass_editor 128/128; pipeline local exacto 5/5 a 0 (workspace: 720 tests, 0 fallos). **Test físico PASS por el camino real**: la rejilla se ve sobre el suelo del Escaparate alineada con la escena, con el eje X en rojo y el Z en azul cruzándose en el origen y el desvanecido hacia los bordes; el botón «# Rejilla» la apaga (suelo limpio) y la vuelve a encender.
 
 **Consumo:** Opus 17.356 · Kimi k3.1-pro 41.044 · DeepSeek flash 5.177 · Sonnet 0.
+
+## SEPARACIÓN HUB/MOTOR / S0 — BASES PURAS Y CORRECCIONES PREVIAS
+
+Primero de los sub-bloques S0–S10 del diseño en `fase1/diseno_separacion.md` (v3 + análisis en paralelo; decisiones D1–D6 aprobadas tal cual el 2026-11-18). Sin cambio de comportamiento visible: deja el suelo seguro para la separación.
+
+**En updates.rs:**
+- **`HUB_VERSION`** junto a `ENGINE_VERSION`: la identidad propia del Hub; hoy coinciden, desde aquí solo cambia cuando cambie el Hub.
+- **Registro del motor en archivo propio `engines.json`** (D1: solo lo escribe el Hub): `EngineStore { en_uso, conservada, pendientes_borrar }` con carga tolerante (ausente/ilegible → default) y **guardado atómico** (temporal `.tmp` + rename); rutas `engines_dir()`/`engines_dir_in(root)` y `motor_exe_in(root, versión)`.
+- **`es_cambio_pesado(a, b)`** (difieren major o minor; si alguna no parsea → pesado: ante la duda se conserva) y **`plan_retirada(en_uso, conservada, nueva)`** pura, con las reglas de la política (ligero borra la anterior; pesado conserva la anterior y borra la conservada previa; reinstalar la en uso no toca nada) y dos salvaguardas añadidas por Opus: nunca propone borrar la versión que se está instalando ni la que queda conservada.
+- **R1 corregido: `pick_asset` pierde el fallback de «un solo zip»** — instalaba el paquete de otra plataforma (en Windows, el zip de Linux). El test preexistente `pick_asset_prefiere_plataforma` afirmaba ese comportamiento defectuoso y se actualizó a la conducta nueva.
+- **`pick_engine_asset` nueva y estricta**: zip con «-engine-» y el slug de la plataforma; sin fallback. El contrato de nombre (`GlassEnginer-Engine-<versión>-<slug>.zip`) lo producirá release.yml en S8; la selección genérica sigue sirviendo al flujo actual hasta que S3 lo sustituya, para no romper el canal publicado a mitad de bloque.
+- **R2 corregido: la extracción restaura los permisos unix** de cada entrada (`unix_mode()` del zip) tras copiarla: un motor extraído en `engines/<v>` podrá lanzarse como proceso.
+- **R4 (mitad): `LauncherStore::save` atómico** (temporal + rename): un corte a mitad de escritura ya no corrompe `launcher.json`.
+
+**En main.rs:** `es_modo_hub(args)` y `proyecto_de_args(args)` puras junto a `is_standalone_launch`, parseadas en `main()` y aún sin uso (el comportamiento llega en S1/S6), con 3 tests de caracterización.
+
+**Paquetes en paralelo:** **Opus (20.553)** — HUB_VERSION, rutas, EngineStore, clasificación/plan y sus 9 tests, 5 pares ×1; **cazó un error en los «hechos verificados» de mi propio prompt** (`tag_version` devuelve `Result<VersionKey, String>` y `core` es `[u64; 4]`, no lo que yo afirmé) y escribió contra la firma real. **DeepSeek flash (8.599)** — pick_asset sin fallback, pick_engine_asset, bit de ejecución, save atómico y las dos funciones de main.rs: 6 pares ×1 tras corregirle los marcadores (`NEW` por `NUEVO`) y una línea en blanco que rompía el parseo del integrador. **Kimi k3.1-pro: 429 (límite de la API) al lanzar su auditoría** — sin consumo; la auditoría de S0 la asumí yo en la integración (lectura de cada par contra el fuente) y queda registrada como desviación con su causa.
+
+**Rescates de Rayo (declarados):** los tests de las correcciones de DeepSeek (no tenía las anclas literales y su borrador usaba constructores que no existen: `ReleaseInfo`/`AssetInfo` no derivan `Default`) los escribí yo con los constructores reales — regresión R1, tres de pick_engine_asset y el del bit de ejecución con un zip en memoria — y la actualización del test preexistente que afirmaba el fallback.
+
+**Verificación:** suite glass_editor 142/142 (128 + 14 nuevos) · glass_app 69/69 (3 nuevos de argumentos) · **pipeline local exacto 5/5 a 0 (workspace: 737 tests, 0 fallos)** · **test físico PASS**: el binario de editor arrancado con `--hub` abre el Hub de siempre, idéntico (la bandera se reconoce y aún no cambia el comportamiento; el modo combinado intacto).

@@ -14,6 +14,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use sha2::Digest;
 
 pub const ENGINE_VERSION: &str = "0.10.17.2-beta";
+/// Identidad propia del Hub (la cáscara fija). Solo cambia cuando cambia
+/// el Hub; hoy coincide con la del motor.
+pub const HUB_VERSION: &str = "0.10.17.2-beta";
 pub const DEFAULT_REPO: &str = "EliudGnzlz/GlassEnginer";
 pub const DEFAULT_API: &str = "https://api.github.com";
 
@@ -130,6 +133,21 @@ pub fn versions_dir() -> PathBuf {
     data_root().join("versions")
 }
 
+/// Carpeta de los motores gestionados por el Hub: data_root()/engines.
+pub fn engines_dir() -> PathBuf {
+    data_root().join("engines")
+}
+
+pub fn engines_dir_in(root: &std::path::Path) -> PathBuf {
+    root.join("engines")
+}
+
+/// Ejecutable del motor instalado: <root>/engines/<version>/glass_app[.exe].
+pub fn motor_exe_in(root: &std::path::Path, version: &str) -> PathBuf {
+    let exe = if cfg!(windows) { "glass_app.exe" } else { "glass_app" };
+    engines_dir_in(root).join(version).join(exe)
+}
+
 impl LauncherStore {
     pub fn load() -> LauncherStore {
         std::fs::read_to_string(store_path())
@@ -142,7 +160,10 @@ impl LauncherStore {
         let root = data_root();
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
         let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(store_path(), text).map_err(|e| e.to_string())
+        let ruta = store_path();
+        let tmp = ruta.with_extension("tmp");
+        std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &ruta).map_err(|e| e.to_string())
     }
 
     /// Registra (o refresca) un proyecto. Las rutas se comparan
@@ -199,6 +220,56 @@ impl LauncherStore {
     pub fn quitar_de_la_lista(&mut self, path: &std::path::Path) {
         self.desregistrar_proyecto(path);
         self.ocultar_proyecto(path);
+    }
+}
+
+/// Registro del motor gestionado (engines.json). Solo lo escribe el Hub.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct EngineStore {
+    #[serde(default)]
+    pub en_uso: Option<String>,
+    #[serde(default)]
+    pub conservada: Option<String>,
+    #[serde(default)]
+    pub pendientes_borrar: Vec<String>,
+}
+
+pub fn engines_store_path() -> PathBuf {
+    engines_store_path_in(&data_root())
+}
+
+pub fn engines_store_path_in(root: &std::path::Path) -> PathBuf {
+    root.join("engines.json")
+}
+
+impl EngineStore {
+    pub fn load() -> EngineStore {
+        Self::load_in(&data_root())
+    }
+
+    /// Archivo ausente o ilegible -> registro por defecto.
+    pub fn load_in(root: &std::path::Path) -> EngineStore {
+        std::fs::read_to_string(engines_store_path_in(root))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) -> Result<(), String> {
+        self.save_in(&data_root())
+    }
+
+    /// Escritura atómica: temporal hermano (.tmp) y rename al destino.
+    pub fn save_in(&self, root: &std::path::Path) -> Result<(), String> {
+        std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+        let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        let dest = engines_store_path_in(root);
+        let tmp = dest.with_extension("tmp");
+        std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &dest).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            e.to_string()
+        })
     }
 }
 
@@ -306,6 +377,58 @@ pub fn is_newer(tag: &str, current: &str) -> bool {
     release > current_version
 }
 
+/// Cambio pesado = difiere major o minor. Si alguna versión no parsea,
+/// se trata como pesado (ante la duda se conserva, no se borra).
+pub fn es_cambio_pesado(a: &str, b: &str) -> bool {
+    match (tag_version(a), tag_version(b)) {
+        (Ok(va), Ok(vb)) => va.core[0] != vb.core[0] || va.core[1] != vb.core[1],
+        _ => true,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanRetirada {
+    pub borrar: Vec<String>,
+    pub conservada: Option<String>,
+}
+
+/// Decide qué versiones del motor retirar al instalar `nueva`.
+/// Nunca propone borrar `nueva` ni la versión que queda conservada.
+pub fn plan_retirada(en_uso: Option<&str>, conservada: Option<&str>, nueva: &str) -> PlanRetirada {
+    let sin_cambios = PlanRetirada {
+        borrar: Vec::new(),
+        conservada: conservada.map(str::to_string),
+    };
+    let actual = match en_uso {
+        Some(v) => v,
+        None => return sin_cambios,
+    };
+    if actual == nueva {
+        return sin_cambios;
+    }
+    if es_cambio_pesado(actual, nueva) {
+        let borrar = conservada
+            .filter(|c| *c != actual && *c != nueva)
+            .map(str::to_string)
+            .into_iter()
+            .collect();
+        PlanRetirada {
+            borrar,
+            conservada: Some(actual.to_string()),
+        }
+    } else {
+        let borrar = if conservada == Some(actual) {
+            Vec::new()
+        } else {
+            vec![actual.to_string()]
+        };
+        PlanRetirada {
+            borrar,
+            conservada: conservada.map(str::to_string),
+        }
+    }
+}
+
 pub fn platform_slug() -> &'static str {
     use std::env::consts::{ARCH, OS};
 
@@ -330,11 +453,20 @@ pub fn pick_asset(release: &ReleaseInfo) -> Option<&AssetInfo> {
         return Some(*asset);
     }
 
-    if candidates.len() == 1 {
-        return candidates.first().copied();
-    }
-
     None
+}
+
+/// Selecciona el paquete del motor gestionado para esta plataforma.
+/// El contrato de nombre es `GlassEnginer-Engine-<version>-<slug>.zip`
+/// (lo produce release.yml). Seleccion ESTRICTA: un .zip cuyo nombre en
+/// minusculas contenga "-engine-" y el slug de la plataforma. Sin
+/// fallback de ningun tipo.
+pub fn pick_engine_asset(release: &ReleaseInfo) -> Option<&AssetInfo> {
+    let slug = platform_slug().to_lowercase();
+    release.assets.iter().find(|a| {
+        let name = a.name.to_lowercase();
+        name.ends_with(".zip") && name.contains("-engine-") && name.contains(slug.as_str())
+    })
 }
 
 pub fn digest_sha256(asset: &AssetInfo) -> Option<String> {
@@ -587,6 +719,11 @@ fn extract_zip_reader<R: std::io::Read + std::io::Seek>(
 
         let mut out = std::fs::File::create(&ruta).map_err(|e| e.to_string())?;
         std::io::copy(&mut f, &mut out).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        if let Some(modo) = f.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&ruta, std::fs::Permissions::from_mode(modo));
+        }
         count += 1;
     }
 
@@ -843,6 +980,215 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *glass.zip
     }
 
     #[test]
+    fn es_cambio_pesado_clasifica() {
+        assert!(!es_cambio_pesado("0.10.17.2-beta", "0.10.18"));
+        assert!(es_cambio_pesado("0.10.17.2-beta", "0.11.0"));
+        assert!(es_cambio_pesado("0.10.17.2", "1.0.0"));
+        assert!(es_cambio_pesado("basura", "0.10.18"));
+    }
+
+    #[test]
+    fn plan_retirada_ligero_borra_anterior_y_mantiene_conservada() {
+        let plan = plan_retirada(Some("0.10.17.2-beta"), Some("0.9.0"), "0.10.18");
+        assert_eq!(
+            plan,
+            PlanRetirada {
+                borrar: vec!["0.10.17.2-beta".to_string()],
+                conservada: Some("0.9.0".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn plan_retirada_pesado_sin_conservada_previa() {
+        let plan = plan_retirada(Some("0.10.18"), None, "0.11.0");
+        assert_eq!(
+            plan,
+            PlanRetirada {
+                borrar: Vec::new(),
+                conservada: Some("0.10.18".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn plan_retirada_pesado_con_conservada_previa() {
+        let plan = plan_retirada(Some("0.10.18"), Some("0.9.0"), "0.11.0");
+        assert_eq!(
+            plan,
+            PlanRetirada {
+                borrar: vec!["0.9.0".to_string()],
+                conservada: Some("0.10.18".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn plan_retirada_reinstalar_en_uso_no_cambia_nada() {
+        let plan = plan_retirada(Some("0.10.18"), Some("0.9.0"), "0.10.18");
+        assert_eq!(
+            plan,
+            PlanRetirada {
+                borrar: Vec::new(),
+                conservada: Some("0.9.0".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn plan_retirada_primera_instalacion() {
+        let plan = plan_retirada(None, None, "0.10.18");
+        assert_eq!(
+            plan,
+            PlanRetirada {
+                borrar: Vec::new(),
+                conservada: None,
+            }
+        );
+    }
+
+    fn engine_store_dir_temporal(sufijo: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "glass_engine_store_{}_{}",
+            sufijo,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn engine_store_roundtrip() {
+        let root = engine_store_dir_temporal("roundtrip");
+        let store = EngineStore {
+            en_uso: Some("0.11.0".to_string()),
+            conservada: Some("0.10.18".to_string()),
+            pendientes_borrar: vec!["0.9.0".to_string()],
+        };
+        store.save_in(&root).expect("save_in");
+        let cargado = EngineStore::load_in(&root);
+        assert_eq!(cargado.en_uso, store.en_uso);
+        assert_eq!(cargado.conservada, store.conservada);
+        assert_eq!(cargado.pendientes_borrar, store.pendientes_borrar);
+        assert!(!engines_store_path_in(&root).with_extension("tmp").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn engine_store_root_vacio_da_default() {
+        let root = engine_store_dir_temporal("vacio");
+        let cargado = EngineStore::load_in(&root);
+        assert_eq!(cargado.en_uso, None);
+        assert_eq!(cargado.conservada, None);
+        assert!(cargado.pendientes_borrar.is_empty());
+    }
+
+    #[test]
+    fn rutas_del_motor() {
+        let root = std::path::Path::new("raiz");
+        assert_eq!(engines_dir_in(root), root.join("engines"));
+        let exe = if cfg!(windows) { "glass_app.exe" } else { "glass_app" };
+        assert_eq!(
+            motor_exe_in(root, "0.10.18"),
+            root.join("engines").join("0.10.18").join(exe)
+        );
+    }
+
+    fn asset_de_prueba(name: String) -> AssetInfo {
+        AssetInfo {
+            name,
+            size: 10,
+            browser_download_url: "https://example.com/x.zip".to_string(),
+            digest: None,
+        }
+    }
+
+    fn release_de_prueba(assets: Vec<AssetInfo>) -> ReleaseInfo {
+        ReleaseInfo {
+            tag_name: "v0.10.18".to_string(),
+            draft: false,
+            prerelease: false,
+            name: "Release".to_string(),
+            html_url: "https://example.com".to_string(),
+            assets,
+        }
+    }
+
+    fn otro_slug() -> &'static str {
+        if platform_slug() == "windows-x64" {
+            "linux-x64"
+        } else {
+            "windows-x64"
+        }
+    }
+
+    #[test]
+    fn pick_asset_un_solo_zip_de_otra_plataforma_devuelve_none() {
+        // Regresion R1: el fallback de «un solo zip» instalaba el paquete
+        // de otra plataforma.
+        let release = release_de_prueba(vec![asset_de_prueba(format!(
+            "GlassEnginer-Launcher-0.10.17.2-beta-{}.zip",
+            otro_slug()
+        ))]);
+        assert!(pick_asset(&release).is_none());
+    }
+
+    #[test]
+    fn pick_engine_asset_elige_el_del_motor() {
+        let slug = platform_slug();
+        let release = release_de_prueba(vec![
+            asset_de_prueba(format!("GlassEnginer-Launcher-0.10.17.2-beta-{slug}.zip")),
+            asset_de_prueba(format!("GlassEnginer-Engine-0.10.18-{slug}.zip")),
+        ]);
+        let picked = pick_engine_asset(&release).expect("debe elegir el paquete del motor");
+        assert!(picked.name.contains("-Engine-"));
+    }
+
+    #[test]
+    fn pick_engine_asset_sin_motor_devuelve_none() {
+        let slug = platform_slug();
+        let release = release_de_prueba(vec![asset_de_prueba(format!(
+            "GlassEnginer-Launcher-0.10.17.2-beta-{slug}.zip"
+        ))]);
+        assert!(pick_engine_asset(&release).is_none());
+    }
+
+    #[test]
+    fn pick_engine_asset_de_otra_plataforma_devuelve_none() {
+        let release = release_de_prueba(vec![asset_de_prueba(format!(
+            "GlassEnginer-Engine-0.10.18-{}.zip",
+            otro_slug()
+        ))]);
+        assert!(pick_engine_asset(&release).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extraccion_conserva_el_bit_de_ejecucion() {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zw = zip::ZipWriter::new(&mut buf);
+            let opts = SimpleFileOptions::default().unix_permissions(0o100755);
+            zw.start_file("glass_app", opts).unwrap();
+            zw.write_all(b"#!/bin/sh\necho hola\n").unwrap();
+            zw.finish().unwrap();
+        }
+        let bytes = buf.into_inner();
+
+        let dir = std::env::temp_dir().join(format!("glass_exec_bit_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        extract_zip_reader(std::io::Cursor::new(bytes), &dir).expect("extraccion ok");
+
+        use std::os::unix::fs::PermissionsExt;
+        let meta = std::fs::metadata(dir.join("glass_app")).unwrap();
+        assert!(meta.permissions().mode() & 0o111 != 0, "falta el bit de ejecucion");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn pick_asset_prefiere_plataforma() {
         let bueno = format!("glass-{}.zip", platform_slug());
         let malo = "glass-otra-plataforma.zip".to_string();
@@ -885,7 +1231,10 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *glass.zip
             }],
         };
 
-        assert_eq!(pick_asset(&unico).map(|a| a.name.as_str()), Some("engine.zip"));
+        // S0 (separación): sin fallback de «un solo zip» (defecto R1). Un
+        // único zip sin el slug de la plataforma ya NO se elige: antes se
+        // instalaba el paquete de otra plataforma.
+        assert!(pick_asset(&unico).is_none());
 
         let vacio = ReleaseInfo {
             tag_name: "v0.2.0".to_string(),

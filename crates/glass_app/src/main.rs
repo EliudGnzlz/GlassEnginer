@@ -8211,6 +8211,22 @@ fn is_standalone_launch(pure_build: bool, args: &[String]) -> bool {
     pure_build || args.iter().any(|arg| arg == "--standalone" || arg == "--game")
 }
 
+/// Modo Hub (separacion Hub/motor): la cascara que gestiona motores y
+/// lanza el editor como proceso propio. Por ahora solo se reconoce el
+/// argumento; el comportamiento llega en sub-bloques posteriores.
+fn es_modo_hub(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--hub")
+}
+
+/// Proyecto a abrir directamente (`--project <dir>`), la via con la que
+/// el Hub lanzara el motor gestionado. Por ahora solo se reconoce.
+fn proyecto_de_args(args: &[String]) -> Option<String> {
+    args.iter()
+        .position(|a| a == "--project")
+        .and_then(|idx| args.get(idx + 1))
+        .cloned()
+}
+
 /// Recolecta las luces puntuales de la escena en el UBO del frame: las
 /// `MAX_POINT_LIGHTS` entidades con luz «Point» o «Spot» más cercanas
 /// al ojo, con su posición de MUNDO (matriz jerárquica, no el
@@ -9025,6 +9041,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let is_standalone = is_standalone_launch(!cfg!(feature = "editor"), &args);
     let is_standalone_test = args.iter().any(|arg| arg == "--test-standalone");
     let scene_to_load = args.iter().position(|a| a == "--scene").and_then(|idx| args.get(idx + 1)).cloned();
+    let es_hub = es_modo_hub(&args);
+    let proyecto_directo = proyecto_de_args(&args);
+    let _ = (es_hub, &proyecto_directo);
     let is_sample_game_test = args.iter().any(|arg| arg == "--test-sample-game");
     let is_platformer_test = args.iter().any(|arg| arg == "--test-platformer");
     if is_platformer_test || is_sample_game_test || is_standalone_test {
@@ -9341,6 +9360,28 @@ mod standalone_launch_tests {
     fn editor_con_bandera_es_juego() {
         assert!(is_standalone_launch(false, &args(&["glass_app", "--standalone"])));
         assert!(is_standalone_launch(false, &args(&["glass_app", "--game"])));
+    }
+
+    #[test]
+    fn modo_hub_se_detecta() {
+        assert!(es_modo_hub(&args(&["glass_app", "--hub"])));
+        assert!(!es_modo_hub(&args(&["glass_app"])));
+        assert!(!es_modo_hub(&args(&["glass_app", "--standalone"])));
+    }
+
+    #[test]
+    fn proyecto_de_args_lee_el_valor() {
+        assert_eq!(
+            proyecto_de_args(&args(&["glass_app", "--project", "/tmp/proyecto"])),
+            Some("/tmp/proyecto".to_string())
+        );
+        assert_eq!(proyecto_de_args(&args(&["glass_app", "--project"])), None);
+        assert_eq!(proyecto_de_args(&args(&["glass_app"])), None);
+    }
+
+    #[test]
+    fn hub_no_es_standalone() {
+        assert!(!is_standalone_launch(false, &args(&["glass_app", "--hub"])));
     }
 }
 
