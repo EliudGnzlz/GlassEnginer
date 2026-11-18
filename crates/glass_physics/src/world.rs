@@ -1749,7 +1749,16 @@ impl PhysicsWorld {
             .collect();
         let current: f32 = colliders.iter().map(|&(_, _, m)| m).sum();
         if current <= 1e-6 {
-            return false;
+            // Sin colliders no hay densidades que reescalar y, sin masa,
+            // el cuerpo queda inerte ante la gravedad y flota para siempre.
+            let Some(cuerpo_rapier) = self.rigid_body_set.get_mut(rapier) else {
+                return false;
+            };
+            cuerpo_rapier.set_additional_mass_properties(
+                MassProperties::from_cuboid(mass, vector![0.5, 0.5, 0.5]),
+                true,
+            );
+            return true;
         }
         let factor = mass / current;
         for (ch, density, _) in colliders {
@@ -3781,6 +3790,26 @@ mod tests {
             world.create_rigid_body(9407, BodyType::Dynamic, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
         assert!(world.closest_point_on_bounds(sin_colliders, [1.0, 0.0, 0.0]).is_none());
         assert!(world.closest_point_on_bounds(u64::MAX, [1.0, 0.0, 0.0]).is_none());
+    }
+
+    #[test]
+    fn rigidbody_sin_collider_cae_con_gravedad() {
+        let mut world = PhysicsWorld::new();
+        let cuerpo = world.create_rigid_body(
+            40,
+            BodyType::Dynamic,
+            [0.0, 3.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        );
+
+        assert!(world.set_mass(cuerpo, 2.0));
+
+        for _ in 0..60 {
+            world.step(1.0 / 60.0);
+        }
+
+        let transform = world.get_transform(cuerpo).expect("transform del cuerpo");
+        assert!(transform.position[1] < 2.0);
     }
 
     fn mundo_con_suelo() -> (PhysicsWorld, u64) {

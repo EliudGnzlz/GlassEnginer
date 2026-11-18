@@ -166,6 +166,15 @@ pub enum MeshColliderMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhysicsData {
     pub body_type: String, // "Dynamic", "Static", "Kinematic"
+    /// Presencia del componente Rigidbody (separación RB/Collider
+    /// estilo Unity, 2026-11-18). Sin Rigidbody, el Collider solo es
+    /// estático: la construcción de física fuerza cuerpo fijo.
+    #[serde(default = "default_true")]
+    pub has_rigidbody: bool,
+    /// Presencia del componente Collider. Sin Collider, el Rigidbody
+    /// es un cuerpo sin forma: cae y no colisiona con nada.
+    #[serde(default = "default_true")]
+    pub has_collider: bool,
     pub mass: f32,
     pub friction: f32,
     pub restitution: f32,
@@ -265,6 +274,8 @@ impl Default for PhysicsData {
     fn default() -> Self {
         Self {
             body_type: "Dynamic".into(),
+            has_rigidbody: true,
+            has_collider: true,
             interpolate: false,
             mass: 1.0,
             friction: 0.7,
@@ -1327,14 +1338,27 @@ impl EntityData {
         } else {
             None
         };
-        let physics = if components.iter().any(|c| c == "RigidBody") {
-            // Regla de D3m3tr10: sin RigidBody (y sin CharacterController,
-            // que se crea por script en tiempo de juego) un objeto NO
-            // tiene física: ni cuerpo ni collider. Un Collider suelto no
-            // crea nada; la física entra solo por el RigidBody o el CC.
+        let tiene_rigidbody = components.iter().any(|c| c == "RigidBody");
+        let tiene_collider = components.iter().any(|c| c == "Collider");
+        let physics = if !tiene_rigidbody && tiene_collider {
+            // Regla refinada de D3m3tr10 (2026-11-18): sin RigidBody ni
+            // CharacterController no hay física DINÁMICA. Un Collider solo
+            // es geometría estática, como en Unity. "StaticCollider" a secas
+            // sigue sin crear física aquí (el spawn la materializa).
+            Some(PhysicsData {
+                body_type: "Static".into(),
+                has_rigidbody: false,
+                has_collider: true,
+                ..PhysicsData::default()
+            })
+        } else if tiene_rigidbody {
+            // Con RigidBody: cuerpo según is_static y collider inferido
+            // incluido (el spawn por código depende de este contrato).
             let body_type = if is_static { "Static".into() } else { "Dynamic".into() };
             Some(PhysicsData {
                 body_type,
+                has_rigidbody: true,
+                has_collider: true,
                 mass: 1.0,
                 friction: 0.7,
                 restitution: 0.05,
@@ -2150,15 +2174,26 @@ mod regression_physics_tests {
     use super::*;
 
     #[test]
-    fn collider_sin_rigidbody_no_crea_fisica() {
-        // Regla de D3m3tr10: sin RigidBody no hay física, ni siquiera
-        // un cuerpo estático: un Collider suelto no crea nada.
+    fn collider_sin_rigidbody_es_estatico() {
+        // Regla refinada de D3m3tr10 (2026-11-18): un Collider sin
+        // RigidBody es geometría estática, como en Unity.
         let entity = EntityData::new(
             1,
             "Cube".into(),
             vec!["Transform".into(), "MeshRenderer".into(), "Collider".into()],
         );
-        assert!(entity.physics.is_none());
+        let phys = entity.physics.as_ref().expect("Collider solo debe crear física estática");
+        assert!(!phys.has_rigidbody);
+        assert!(phys.has_collider);
+        assert_eq!(phys.body_type, "Static");
+    }
+
+    #[test]
+    fn rigidbody_a_secas_trae_collider() {
+        let entity = EntityData::new(1, "Cube".into(), vec!["RigidBody".into()]);
+        let phys = entity.physics.as_ref().expect("RigidBody debe crear física");
+        assert!(phys.has_rigidbody);
+        assert!(phys.has_collider);
     }
 
     #[test]

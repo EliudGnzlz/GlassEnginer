@@ -133,8 +133,11 @@ impl SceneManager {
         &self.active_key
     }
 
-    /// Nombres de las escenas disponibles en `assets/scenes`.
+    /// Nombres de las escenas disponibles en `assets/scenes`; sin raíz de proyecto no se ofrece ninguna, pues las del payload del motor no son del usuario.
     pub fn available_scenes(&self) -> Vec<String> {
+        if !self.vfs.es_raiz_de_proyecto() {
+            return Vec::new();
+        }
         self.vfs.list_scenes()
     }
 
@@ -314,6 +317,22 @@ pub fn short_scene_name(asset_key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sin_marcador_de_proyecto_no_se_ofrecen_escenas() {
+        let raiz = std::env::temp_dir().join(format!("glass_scenes_sin_marcador_{}", std::process::id()));
+        let scenes = raiz.join("assets/scenes");
+        std::fs::create_dir_all(&scenes).unwrap();
+        std::fs::write(scenes.join("Ejemplo.scene.json"), "[]").unwrap();
+
+        let manager = SceneManager::new(&raiz);
+        assert!(manager.available_scenes().is_empty());
+
+        std::fs::write(raiz.join("project.glass"), "{}").unwrap();
+        assert!(manager.available_scenes().contains(&"Ejemplo".to_string()));
+
+        std::fs::remove_dir_all(&raiz).ok();
+    }
 
     fn tmp_project(tag: &str) -> PathBuf {
         let base = std::env::temp_dir().join(format!("glass_scenes_{tag}_{}", std::process::id()));

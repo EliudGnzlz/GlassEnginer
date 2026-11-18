@@ -119,6 +119,9 @@ pub struct ViewportPanel {
     pub editor_cam_center: [f32; 3],
     /// Rejilla del suelo en la vista de escena (capa del editor).
     pub show_grid: bool,
+    // Placas con el nombre sobre el objeto seleccionado en la vista de
+    // escena (menú Gizmos). Defecto true: comportamiento histórico.
+    pub show_nameplates: bool,
     // Cámara activa seleccionada para Game View (multi-cámara)
     pub selected_camera_id: Option<u64>,
     // Eje activo actualmente arrastrado en el Gizmo 3D
@@ -168,6 +171,7 @@ impl Default for ViewportPanel {
             editor_cam_dist: 10.0,
             editor_cam_center: [3.5, 1.5, 0.0],
             show_grid: true,
+            show_nameplates: true,
             selected_camera_id: None,
             active_drag_axis: GizmoAxis::None,
             press_axis: GizmoAxis::None,
@@ -224,10 +228,10 @@ impl ViewportPanel {
             });
         }
 
-        // Sin barra propia: los botones de herramienta duplicaban los
-        // de la barra principal superior, y «Centrar»/«# Rejilla»
-        // viven ahora también allí (orden del usuario, 2026-11-18).
-        // La vista gana la franja entera para la escena.
+        // Sin barra propia: «Centrar» vive en la barra principal;
+        // la rejilla y las placas se controlan desde el botón «Gizmos»
+        // superpuesto en la esquina de esta vista (orden del usuario,
+        // 2026-11-18). La vista gana la franja entera para la escena.
 
         let available = ui.available_size();
         self.scene_width = available.x.max(64.0);
@@ -261,6 +265,24 @@ impl ViewportPanel {
                 let sized_tex = SizedTexture::new(id, vec2(self.scene_width, self.scene_height));
                 Image::from_texture(sized_tex).paint_at(ui, rect);
             }
+
+            // Botón «Gizmos» superpuesto (esquina superior derecha de la
+            // vista): el ÚNICO sitio que controla la rejilla y las placas
+            // de nombre (orden del usuario, 2026-11-18).
+            egui::Area::new(egui::Id::new("gizmos_escena"))
+                .fixed_pos(rect.right_top() + egui::vec2(-96.0, 6.0))
+                .show(ui.ctx(), |ui| {
+                    ui.menu_button("Gizmos ▾", |ui| {
+                        ui.checkbox(&mut self.show_grid, "Rejilla");
+                        ui.checkbox(&mut self.show_nameplates, "Nombres de objetos");
+                        ui.separator();
+                        ui.label(
+                            egui::RichText::new("Visibilidad por componente: próximamente")
+                                .weak()
+                                .small(),
+                        );
+                    });
+                });
 
             let painter = ui.painter();
 
@@ -324,6 +346,7 @@ impl ViewportPanel {
                                 &view_proj,
                                 rect,
                                 &self.mesh_bounds,
+                                self.show_nameplates,
                             );
                         }
                     }
@@ -603,10 +626,34 @@ impl ViewportPanel {
                                         }
                                     }
                                     GizmoMode::Rotate => {
-                                        match self.active_drag_axis {
-                                            GizmoAxis::X => ent.transform.add_rotation_euler([delta.y * 0.6, 0.0, 0.0]),
-                                            GizmoAxis::Y => ent.transform.add_rotation_euler([0.0, delta.x * 0.6, 0.0]),
-                                            GizmoAxis::Z => ent.transform.add_rotation_euler([0.0, 0.0, (delta.x - delta.y) * 0.6]),
+                                        // El anillo persigue al cursor y el signo sale de la proyección
+                                        // (el mapeo fijo anterior invertía el giro según el lado de la cámara; reporte 2026-11-18).
+                                        let eje = match self.active_drag_axis {
+                                            GizmoAxis::X => Some(0usize),
+                                            GizmoAxis::Y => Some(1usize),
+                                            GizmoAxis::Z => Some(2usize),
+                                            _ => None,
+                                        };
+                                        match (eje, pos_mundo, mouse_pos) {
+                                            (Some(eje), Some(origen), Some(raton)) => {
+                                                let grados = gizmo_3d::angulo_arrastre_anillo(
+                                                    origen,
+                                                    eje,
+                                                    &gizmo_3d::CamaraAnillo {
+                                                        ojo: eye,
+                                                        derecha: cam_right,
+                                                        arriba: cam_up,
+                                                        adelante: [-cy * cx, -sy, -cy * cz],
+                                                        tan_mitad_fov: (22.5f32).to_radians().tan(),
+                                                    },
+                                                    rect,
+                                                    raton,
+                                                    delta,
+                                                );
+                                                let mut giro = [0.0f32; 3];
+                                                giro[eje] = grados;
+                                                ent.transform.add_rotation_euler(giro);
+                                            }
                                             _ => ent.transform.add_rotation_euler([0.0, delta.x * 0.5, 0.0]),
                                         }
                                     }

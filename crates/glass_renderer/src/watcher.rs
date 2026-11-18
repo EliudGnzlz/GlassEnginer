@@ -447,9 +447,61 @@ impl AssetWatcher {
     }
 }
 
+/// Busca `<stem>.glb` recorriendo `raices` en orden y en profundidad
+/// (subcarpetas incluidas, recorrido ordenado para ser determinista).
+/// Devuelve la primera ruta cuyo file_stem sea exactamente `stem`.
+pub fn resolver_glb_por_stem(raices: &[&std::path::Path], stem: &str) -> Option<std::path::PathBuf> {
+    for raiz in raices {
+        let mut pending: Vec<std::path::PathBuf> = vec![raiz.to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            let lectura = match std::fs::read_dir(&dir) {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+            let mut entradas: Vec<std::path::PathBuf> =
+                lectura.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+            entradas.sort();
+            for ruta in entradas {
+                if ruta.is_dir() {
+                    pending.push(ruta);
+                } else if ruta.extension().and_then(|e| e.to_str()) == Some("glb")
+                    && ruta.file_stem().and_then(|s| s.to_str()) == Some(stem)
+                {
+                    return Some(ruta);
+                }
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ruta_bridge_en_raiz;
+    use super::{resolver_glb_por_stem, ruta_bridge_en_raiz};
+
+    #[test]
+    fn resolver_glb_encuentra_en_subcarpeta_y_respeta_orden() {
+        let base = std::env::temp_dir()
+            .join(format!("glass_resolver_glb_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let raiz1 = base.join("raiz1");
+        let raiz2 = base.join("raiz2");
+        std::fs::create_dir_all(&raiz1).unwrap();
+        std::fs::create_dir_all(raiz2.join("sub")).unwrap();
+        std::fs::write(raiz1.join("a.glb"), b"").unwrap();
+        std::fs::write(raiz2.join("a.glb"), b"").unwrap();
+        std::fs::write(raiz2.join("sub").join("b.glb"), b"").unwrap();
+
+        let raices = [raiz1.as_path(), raiz2.as_path()];
+        assert_eq!(
+            resolver_glb_por_stem(&raices, "b"),
+            Some(raiz2.join("sub").join("b.glb"))
+        );
+        assert_eq!(resolver_glb_por_stem(&raices, "a"), Some(raiz1.join("a.glb")));
+        assert_eq!(resolver_glb_por_stem(&raices, "zz"), None);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
     use std::path::PathBuf;
 
     fn raiz_temporal(nombre: &str) -> PathBuf {

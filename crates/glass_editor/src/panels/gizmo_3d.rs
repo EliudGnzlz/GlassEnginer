@@ -68,6 +68,137 @@ pub fn matmul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
 /// dibujo, el hit-test y el arrastre: tienen que coincidir).
 pub const GIZMO_EJE_LEN: f32 = 1.4;
 
+/// Mediana de píxeles por unidad de mundo de los tres ejes en `origen`.
+/// None si alguna proyección falla o el resultado no es utilizable.
+fn px_por_unidad_mediana(origen: [f32; 3], vp: &[f32; 16], rect: Rect) -> Option<f32> {
+    let centro = world_to_screen(origen, vp, rect)?;
+    let mut px = [0.0f32; 3];
+    for (i, px_i) in px.iter_mut().enumerate() {
+        let mut punta = origen;
+        punta[i] += GIZMO_EJE_LEN;
+        let p = world_to_screen(punta, vp, rect)?;
+        *px_i = (p - centro).length() / GIZMO_EJE_LEN;
+    }
+    px.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mediana = px[1];
+    (mediana.is_finite() && mediana > 1e-3).then_some(mediana)
+}
+
+/// Radio en mundo del anillo de rotación para que mida ≈45 px en pantalla
+/// a cualquier distancia.
+pub fn radio_anillo_mundo(origen: [f32; 3], vp: &[f32; 16], rect: Rect) -> f32 {
+    px_por_unidad_mediana(origen, vp, rect).map_or(1.4, |m| 45.0 / m)
+}
+
+/// Longitud en mundo de cada eje para que mida ≈70 px en pantalla (tamaño
+/// constante estilo Unity), limitada para distancias extremas.
+pub fn longitud_eje_gizmo_mundo(origen: [f32; 3], vp: &[f32; 16], rect: Rect) -> f32 {
+    px_por_unidad_mediana(origen, vp, rect)
+        .map_or(GIZMO_EJE_LEN, |m| (70.0 / m).clamp(0.3, 20.0))
+}
+
+/// Ángulo (en grados, listo para `add_rotation_euler`) que produce arrastrar
+/// el anillo del eje `eje` con el desplazamiento `delta` hasta `raton`.
+///
+/// Método de intersección con el plano (el de Unity): el rayo del cursor
+/// perfora el plano del anillo en un único punto 3D, y el giro del frame es
+/// el ángulo de ese punto alrededor del eje menos el del cursor previo
+/// (`raton - delta`). Sustituye al método del parámetro θ sobre la polilínea
+/// proyectada: cuando la elipse proyectada es estrecha, sus arcos frontal y
+/// trasero casi coinciden en pantalla, el punto más cercano saltaba de arco
+/// y el giro salía con el signo cambiado. Si el rayo es paralelo al plano
+/// (cámara en el plano del anillo) o lo corta detrás del ojo, no hay giro.
+/// Un salto imposible en un frame (>60°) se descarta.
+/// Cámara mínima para convertir píxeles en rayos durante el arrastre de
+/// un anillo: posición, base (derecha/arriba/adelante) y tangente de medio
+/// FOV vertical.
+#[derive(Clone, Copy)]
+pub struct CamaraAnillo {
+    pub ojo: [f32; 3],
+    pub derecha: [f32; 3],
+    pub arriba: [f32; 3],
+    pub adelante: [f32; 3],
+    pub tan_mitad_fov: f32,
+}
+
+pub fn angulo_arrastre_anillo(
+    origen: [f32; 3],
+    eje: usize,
+    cam: &CamaraAnillo,
+    rect: Rect,
+    raton: Pos2,
+    delta: egui::Vec2,
+) -> f32 {
+    fn punto(a: [f32; 3], b: [f32; 3]) -> f32 {
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    }
+    if rect.width() <= 0.0 || rect.height() <= 0.0 {
+        return 0.0;
+    }
+    // Base (u, w) del plano del anillo y normal n, como en `anillo_rotacion_puntos`.
+    let (u, w, n) = match eje {
+        0 => ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
+        1 => ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
+        _ => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+    };
+    let aspecto = rect.width() / rect.height();
+    // Dirección (sin normalizar) del rayo que sale del ojo por el píxel `s`.
+    let rayo = |s: Pos2| -> [f32; 3] {
+        let ndc_x = 2.0 * (s.x - rect.min.x) / rect.width() - 1.0;
+        let ndc_y = 2.0 * (s.y - rect.min.y) / rect.height() - 1.0;
+        let kx = ndc_x * aspecto * cam.tan_mitad_fov;
+        let ky = -ndc_y * cam.tan_mitad_fov;
+        [
+            cam.adelante[0] + cam.derecha[0] * kx + cam.arriba[0] * ky,
+            cam.adelante[1] + cam.derecha[1] * kx + cam.arriba[1] * ky,
+            cam.adelante[2] + cam.derecha[2] * kx + cam.arriba[2] * ky,
+        ]
+    };
+    // Ángulo alrededor del eje del punto donde el rayo de `s` corta el plano.
+    let angulo_en = |s: Pos2| -> Option<f32> {
+        let dir = rayo(s);
+        let denom = punto(dir, n);
+        if denom.abs() < 1e-6 {
+            return None;
+        }
+        let oo = [
+            origen[0] - cam.ojo[0],
+            origen[1] - cam.ojo[1],
+            origen[2] - cam.ojo[2],
+        ];
+        let t = punto(oo, n) / denom;
+        if t <= 0.0 {
+            return None;
+        }
+        let v = [
+            cam.ojo[0] + dir[0] * t - origen[0],
+            cam.ojo[1] + dir[1] * t - origen[1],
+            cam.ojo[2] + dir[2] * t - origen[2],
+        ];
+        Some(punto(v, w).atan2(punto(v, u)))
+    };
+    let (Some(a), Some(b)) = (angulo_en(raton), angulo_en(raton - delta)) else {
+        return 0.0;
+    };
+    let mut dif = a - b;
+    if dif > std::f32::consts::PI {
+        dif -= std::f32::consts::TAU;
+    } else if dif <= -std::f32::consts::PI {
+        dif += std::f32::consts::TAU;
+    }
+    let mut grados = dif.to_degrees();
+    // La parametrización de `anillo_rotacion_puntos` avanza con la rotación
+    // positiva en los anillos X y Z, pero al revés en el Y (sus ejes del
+    // plano son (X, Z), orden zurdo respecto a +Y): ahí Δθ es −giro.
+    if eje == 1 {
+        grados = -grados;
+    }
+    if grados.abs() > 60.0 {
+        return 0.0;
+    }
+    grados
+}
+
 /// Avance en unidades de mundo a lo largo de un eje del gizmo cuando el ratón
 /// se desplaza `delta` píxeles en pantalla: la proyección del delta sobre la
 /// dirección EN PANTALLA del eje, a la escala (mundo/píxel) de ese eje a esa
@@ -200,7 +331,7 @@ pub fn render_3d_transform_gizmo(
         return GizmoAxis::None;
     };
 
-    let axis_len_3d = GIZMO_EJE_LEN;
+    let axis_len_3d = longitud_eje_gizmo_mundo(origin_3d, vp, rect);
 
     // Calcular puntas de los 3 ejes en espacio de mundo
     let p_x_world = [origin_3d[0] + axis_len_3d, origin_3d[1], origin_3d[2]];
@@ -223,14 +354,7 @@ pub fn render_3d_transform_gizmo(
 
     // Anillos de rotación 3D reales (solo en modo Rotate), radio en pantalla ≈ 45 px
     let anillos_2d: Option<[Vec<Option<Pos2>>; 3]> = if matches!(mode, crate::panels::viewport::GizmoMode::Rotate) {
-        let mut px_por_unidad = [
-            (tip_x - center_2d).length() / GIZMO_EJE_LEN,
-            (tip_y - center_2d).length() / GIZMO_EJE_LEN,
-            (tip_z - center_2d).length() / GIZMO_EJE_LEN,
-        ];
-        px_por_unidad.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let mediana = px_por_unidad[1];
-        let radio_mundo = if mediana.is_finite() && mediana > 1e-3 { 45.0 / mediana } else { 1.4 };
+        let radio_mundo = radio_anillo_mundo(origin_3d, vp, rect);
         Some([0usize, 1, 2].map(|eje| {
             anillo_rotacion_puntos(origin_3d, eje, radio_mundo, 64)
                 .into_iter()
@@ -419,17 +543,32 @@ pub fn render_3d_transform_gizmo(
     hovered_axis
 }
 
-/// Cotas locales (min, max) de la geometría de una entidad: las reales de
-/// su malla según el mapa que la app llena desde el AssetCache. Con
-/// `model == ""` el render usa la malla "cube" de respaldo, así que se
-/// consultan sus cotas. Sin malla conocida, el cubo unidad de siempre.
+/// Cotas locales (mín, máx) de la malla de `ent`, en la convención del motor
+/// (1 unidad = 1 m).
+///
+/// Convención de escala: si `ent.mesh.model` está vacío, la entidad se dibuja
+/// con el cubo de respaldo (assets/models/cube.glb), cuya malla abarca de −1 a
+/// +1 (2 m) y a la que el render aplica una media escala extra; por eso las
+/// cotas de selección/picking son las del mapa `bounds` reducidas a la mitad.
+/// Si el modelo se nombra explícitamente (incluido "cube", que el render trata
+/// como modelo y no lleva media escala) o es cualquier otro, las cotas del mapa
+/// se usan tal cual. Sin malla o sin entrada en el mapa se devuelve el cubo
+/// unidad centrado en el origen.
 pub fn entity_local_bounds(
     ent: &EntityData,
     bounds: &std::collections::HashMap<String, ([f32; 3], [f32; 3])>,
 ) -> ([f32; 3], [f32; 3]) {
     if let Some(mesh) = &ent.mesh {
-        let key = if mesh.model.is_empty() { "cube" } else { mesh.model.as_str() };
+        let model_vacio = mesh.model.is_empty();
+        let key = if model_vacio { "cube" } else { mesh.model.as_str() };
         if let Some(b) = bounds.get(key) {
+            if model_vacio {
+                let (min, max) = *b;
+                return (
+                    [min[0] * 0.5, min[1] * 0.5, min[2] * 0.5],
+                    [max[0] * 0.5, max[1] * 0.5, max[2] * 0.5],
+                );
+            }
             return *b;
         }
     }
@@ -886,6 +1025,7 @@ pub fn draw_selection_bounding_box(
     vp: &[f32; 16],
     rect: Rect,
     bounds: &std::collections::HashMap<String, ([f32; 3], [f32; 3])>,
+    mostrar_nombre: bool,
 ) {
     // La caja envuelve la geometría real de la malla (sus cotas locales).
     // Al transformarla por `world` hereda la rotación, la escala y la
@@ -938,42 +1078,45 @@ pub fn draw_selection_bounding_box(
     }
 
     // Etiqueta flotante con el nombre del GameObject sobre el objeto
-    let mut top_screen_pos: Option<Pos2> = None;
-    for opt_pt in &corners_screen {
-        if let Some(pt) = *opt_pt {
-            top_screen_pos = match top_screen_pos {
-                None => Some(pt),
-                Some(cur) => {
-                    if pt.y < cur.y {
-                        Some(pt)
-                    } else {
-                        Some(cur)
+    // (solo si el menú Gizmos la tiene activa).
+    if mostrar_nombre {
+        let mut top_screen_pos: Option<Pos2> = None;
+        for opt_pt in &corners_screen {
+            if let Some(pt) = *opt_pt {
+                top_screen_pos = match top_screen_pos {
+                    None => Some(pt),
+                    Some(cur) => {
+                        if pt.y < cur.y {
+                            Some(pt)
+                        } else {
+                            Some(cur)
+                        }
                     }
-                }
-            };
+                };
+            }
         }
-    }
 
-    if let Some(top_pt) = top_screen_pos {
-        let badge_pos = top_pt + vec2(0.0, -16.0);
-        let badge_text = format!("📦 {} (#{})", entity.name, entity.id);
+        if let Some(top_pt) = top_screen_pos {
+            let badge_pos = top_pt + vec2(0.0, -16.0);
+            let badge_text = entity.name.clone();
 
-        let font_id = egui::FontId::proportional(11.0);
-        let text_color = Color32::from_rgb(255, 245, 220);
-        let bg_color = Color32::from_rgba_unmultiplied(20, 20, 25, 220);
+            let font_id = egui::FontId::proportional(11.0);
+            let text_color = Color32::from_rgb(255, 245, 220);
+            let bg_color = Color32::from_rgba_unmultiplied(20, 20, 25, 220);
 
-        let galley = painter.layout_no_wrap(badge_text, font_id, text_color);
-        let text_size = galley.size();
-        let badge_rect = Rect::from_center_size(badge_pos, text_size + vec2(12.0, 6.0));
+            let galley = painter.layout_no_wrap(badge_text, font_id, text_color);
+            let text_size = galley.size();
+            let badge_rect = Rect::from_center_size(badge_pos, text_size + vec2(12.0, 6.0));
 
-        painter.rect(
-            badge_rect,
-            4.0,
-            bg_color,
-            Stroke::new(1.0, Color32::WHITE),
-            egui::StrokeKind::Inside,
-        );
-        painter.galley(badge_pos - text_size * 0.5, galley, text_color);
+            painter.rect(
+                badge_rect,
+                4.0,
+                bg_color,
+                Stroke::new(1.0, Color32::WHITE),
+                egui::StrokeKind::Inside,
+            );
+            painter.galley(badge_pos - text_size * 0.5, galley, text_color);
+        }
     }
 }
 
@@ -1459,6 +1602,54 @@ mod tests_picking {
         m
     }
 
+    #[test]
+    fn cotas_cubo_respaldo_a_la_mitad() {
+        // La malla del cubo por defecto abarca −1..1 pero el render la
+        // dibuja con media escala (convención de 1 m): las cotas de
+        // selección/picking de una entidad sin modelo son la mitad.
+        let mut m = Cotas::new();
+        m.insert("cube".into(), ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]));
+        let ent = entidad_malla(1, "Cube", "", [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+        assert_eq!(
+            super::entity_local_bounds(&ent, &m),
+            ([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5])
+        );
+    }
+
+    #[test]
+    fn cotas_modelo_cube_explicito_tal_cual() {
+        // Con el modelo nombrado («cube» incluido) el render no aplica
+        // media escala: las cotas van tal cual salen del mapa.
+        let mut m = Cotas::new();
+        m.insert("cube".into(), ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]));
+        let ent = entidad_malla(1, "Cube", "cube", [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+        assert_eq!(
+            super::entity_local_bounds(&ent, &m),
+            ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0])
+        );
+    }
+
+    #[test]
+    fn cotas_modelo_importado_tal_cual() {
+        let mut m = Cotas::new();
+        m.insert("serpiente".into(), ([-2.0, 0.0, -1.0], [2.0, 1.0, 1.0]));
+        let ent = entidad_malla(1, "Serpiente", "serpiente", [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+        assert_eq!(
+            super::entity_local_bounds(&ent, &m),
+            ([-2.0, 0.0, -1.0], [2.0, 1.0, 1.0])
+        );
+    }
+
+    #[test]
+    fn cotas_sin_malla_cubo_unidad() {
+        let m = Cotas::new();
+        let ent = EntityData::new(3, "Empty".into(), vec!["Transform".into()]);
+        assert_eq!(
+            super::entity_local_bounds(&ent, &m),
+            ([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5])
+        );
+    }
+
     fn mundos(ents: &[EntityData]) -> HashMap<u64, [f32; 16]> {
         ents.iter()
             .map(|e| {
@@ -1569,11 +1760,21 @@ mod tests_picking {
         let hero = entidad_malla(1, "Hero", "hero", [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
         assert_eq!(entity_local_bounds(&hero, &cotas_hero), hero_cotas);
 
+        // El cubo de respaldo es la excepción a «cotas tal cual»: su
+        // malla abarca −1..1 pero el render la dibuja con media escala
+        // (convención de 1 m), así que una entidad SIN modelo (model
+        // vacío) usa la mitad de las cotas del mapa. La versión anterior
+        // de este test afirmaba las cotas crudas: era el defecto del
+        // punto 2 de la ronda 2026-11-18 (la caja salía el doble que el
+        // cubo renderizado), corregido con esta convención.
         let cube_cotas = ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0]);
         let mut cotas_cube = Cotas::new();
         cotas_cube.insert("cube".into(), cube_cotas);
         let cubo = entidad_malla(2, "Cube", "", [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
-        assert_eq!(entity_local_bounds(&cubo, &cotas_cube), cube_cotas);
+        assert_eq!(
+            entity_local_bounds(&cubo, &cotas_cube),
+            ([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5])
+        );
 
         let vacio = EntityData::new(3, "Empty".into(), vec!["Transform".into()]);
         assert_eq!(
@@ -1647,6 +1848,197 @@ mod tests_picking {
             1000.0,
         );
         matmul(&proj, &view)
+    }
+
+    /// Rota el punto `p` alrededor del eje unitario `k` por `ang` radianes
+    /// (fórmula de Rodrigues, mano derecha).
+    fn rota_rodrigues(p: [f32; 3], k: [f32; 3], ang: f32) -> [f32; 3] {
+        let (c, s) = (ang.cos(), ang.sin());
+        let cruz = [
+            k[1] * p[2] - k[2] * p[1],
+            k[2] * p[0] - k[0] * p[2],
+            k[0] * p[1] - k[1] * p[0],
+        ];
+        let punto = k[0] * p[0] + k[1] * p[1] + k[2] * p[2];
+        [
+            p[0] * c + cruz[0] * s + k[0] * punto * (1.0 - c),
+            p[1] * c + cruz[1] * s + k[1] * punto * (1.0 - c),
+            p[2] * c + cruz[2] * s + k[2] * punto * (1.0 - c),
+        ]
+    }
+
+    /// Punto 15: el eje del gizmo mide lo mismo en pantalla a 5 y a 40
+    /// unidades de distancia (tamaño constante estilo Unity).
+    #[test]
+    fn eje_gizmo_mantiene_tamano_en_pantalla() {
+        let rect = rect_prueba();
+        let origen = [0.0, 0.0, 0.0];
+        let mut largos_px = [0.0f32; 2];
+        for (i, eye) in [[0.0, 0.0, 5.0], [0.0, 0.0, 40.0]].iter().enumerate() {
+            let vp = vp_desde(*eye, rect);
+            let len = longitud_eje_gizmo_mundo(origen, &vp, rect);
+            let p0 = world_to_screen(origen, &vp, rect).unwrap();
+            let p1 = world_to_screen([origen[0] + len, origen[1], origen[2]], &vp, rect).unwrap();
+            largos_px[i] = (p1 - p0).length();
+        }
+        let dif_rel = (largos_px[0] - largos_px[1]).abs() / largos_px[0];
+        assert!(
+            dif_rel < 0.15,
+            "el eje debe medir igual en pantalla: {} px cerca, {} px lejos",
+            largos_px[0],
+            largos_px[1]
+        );
+    }
+
+    /// Punto 16 (LA REGRESIÓN del anillo invertido): agarrando el anillo X
+    /// por su punto más cercano a la cámara y arrastrando 20 px hacia
+    /// abajo, el punto agarrado baja en pantalla siguiendo a la mano, desde
+    /// AMBOS lados del plano YZ.
+    #[test]
+    fn anillo_x_sigue_a_la_mano_desde_ambos_lados() {
+        let rect = rect_prueba();
+        let origen = [0.0, 0.0, 0.0];
+        let tan_mitad = (22.5f32).to_radians().tan();
+        for eye in [[10.0, 3.0, 6.0], [-10.0, 3.0, 6.0]] {
+            let vp = vp_desde(eye, rect);
+            let (r, u, f) = base_camara(eye);
+            let radio = radio_anillo_mundo(origen, &vp, rect);
+            // Punto del anillo X más cercano al ojo.
+            let mut cerca: Option<([f32; 3], Pos2, f32)> = None;
+            for p in anillo_rotacion_puntos(origen, 0, radio, 64) {
+                let d = (p[0] - eye[0]).powi(2) + (p[1] - eye[1]).powi(2) + (p[2] - eye[2]).powi(2);
+                if cerca.is_none_or(|(_, _, md)| d < md) {
+                    if let Some(s) = world_to_screen(p, &vp, rect) {
+                        cerca = Some((p, s, d));
+                    }
+                }
+            }
+            let (punto, pantalla, _) = cerca.expect("el anillo debe proyectarse");
+            let grados = angulo_arrastre_anillo(
+                origen,
+                0,
+                &CamaraAnillo { ojo: eye, derecha: r, arriba: u, adelante: f, tan_mitad_fov: tan_mitad },
+                rect,
+                pantalla + egui::Vec2::new(0.0, 20.0),
+                egui::Vec2::new(0.0, 20.0),
+            );
+            assert!(grados.abs() > 0.5, "ojo {eye:?}: el arrastre debe girar: {grados}°");
+            let girado = rota_rodrigues(punto, [1.0, 0.0, 0.0], grados.to_radians());
+            let s2 = world_to_screen(girado, &vp, rect).unwrap();
+            assert!(
+                s2.y > pantalla.y + 5.0,
+                "ojo {eye:?}: el punto agarrado debe BAJAR siguiendo a la mano: {} -> {}",
+                pantalla.y,
+                s2.y
+            );
+        }
+    }
+
+    /// Base (derecha, arriba, adelante) para una cámara en `eye` que mira al
+    /// origen con up +Y, con las convenciones de look_at del motor:
+    /// r = f × (0, 1, 0), u = r × f.
+    fn base_camara(eye: [f32; 3]) -> ([f32; 3], [f32; 3], [f32; 3]) {
+        let f = {
+            let v = [-eye[0], -eye[1], -eye[2]];
+            let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            [v[0] / l, v[1] / l, v[2] / l]
+        };
+        let r = {
+            let v = [-f[2], 0.0, f[0]];
+            let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
+            [v[0] / l, v[1] / l, v[2] / l]
+        };
+        let u = [
+            r[1] * f[2] - r[2] * f[1],
+            r[2] * f[0] - r[0] * f[2],
+            r[0] * f[1] - r[1] * f[0],
+        ];
+        (r, u, f)
+    }
+
+    /// Punto 16, seguimiento fino: el anillo Z se ve de frente; agarrando su
+    /// punto derecho y arrastrando 20 px hacia abajo, el punto gira con el
+    /// cursor casi 1:1, desde +Z y desde −Z (detrás, el signo se compensa
+    /// solo y el punto también baja).
+    #[test]
+    fn anillo_z_sigue_al_cursor_desde_ambos_lados() {
+        let rect = rect_prueba();
+        let origen = [0.0, 0.0, 0.0];
+        let tan_mitad = (22.5f32).to_radians().tan();
+        for eye in [[0.0, 0.0, 10.0], [0.0, 0.0, -10.0]] {
+            let vp = vp_desde(eye, rect);
+            let (r, u, f) = base_camara(eye);
+            let radio = radio_anillo_mundo(origen, &vp, rect);
+            // Punto del anillo Z más a la derecha en pantalla (mayor x).
+            let mut der: Option<([f32; 3], Pos2)> = None;
+            for p in anillo_rotacion_puntos(origen, 2, radio, 64) {
+                if let Some(s) = world_to_screen(p, &vp, rect) {
+                    if der.is_none_or(|(_, ms)| s.x > ms.x) {
+                        der = Some((p, s));
+                    }
+                }
+            }
+            let (punto, pantalla) = der.expect("el anillo debe proyectarse");
+            let grados = angulo_arrastre_anillo(
+                origen,
+                2,
+                &CamaraAnillo { ojo: eye, derecha: r, arriba: u, adelante: f, tan_mitad_fov: tan_mitad },
+                rect,
+                pantalla + egui::Vec2::new(0.0, 20.0),
+                egui::Vec2::new(0.0, 20.0),
+            );
+            assert!(grados.abs() > 3.0, "ojo {eye:?}: debe girar varios grados: {grados}°");
+            let girado = rota_rodrigues(punto, [0.0, 0.0, 1.0], grados.to_radians());
+            let s2 = world_to_screen(girado, &vp, rect).unwrap();
+            assert!(
+                (s2.y - pantalla.y - 20.0).abs() < 8.0,
+                "ojo {eye:?}: el punto debe seguir al cursor (~20 px): movió {}",
+                s2.y - pantalla.y
+            );
+        }
+    }
+
+    /// Caso del fallo físico: cámara casi sobre el eje Z, el anillo X se ve
+    /// como una elipse estrecha. Agarrando su punto de t = 45° (parte alta,
+    /// hacia la cámara) y arrastrando 30 px hacia abajo, el giro es positivo
+    /// (la parte alta cae hacia la cámara) y el punto agarrado baja.
+    /// El ojo es (1, 2, 10) y no (0, 2, 10): con x = 0 el ojo está dentro del
+    /// plano YZ del anillo, todo rayo es paralelo al plano, no hay
+    /// intersección y el giro es 0 por diseño. Con x = 1 la elipse sigue
+    /// siendo estrecha (el caso del fallo) sin ser degenerada.
+    #[test]
+    fn anillo_x_camara_casi_frontal_arrastre_abajo_gira_positivo() {
+        let rect = rect_prueba();
+        let origen = [0.0, 0.0, 0.0];
+        let tan_mitad = (22.5f32).to_radians().tan();
+        let eye = [1.0, 2.0, 10.0];
+        let vp = vp_desde(eye, rect);
+        let (r, u, f) = base_camara(eye);
+        let radio = radio_anillo_mundo(origen, &vp, rect);
+        let t = std::f32::consts::FRAC_PI_4;
+        let punto = [0.0, radio * t.cos(), radio * t.sin()];
+        let pantalla = world_to_screen(punto, &vp, rect).expect("el agarre debe proyectarse");
+        let delta = egui::Vec2::new(0.0, 30.0);
+        let grados = angulo_arrastre_anillo(
+            origen,
+            0,
+            &CamaraAnillo { ojo: eye, derecha: r, arriba: u, adelante: f, tan_mitad_fov: tan_mitad },
+            rect,
+            pantalla + delta,
+            delta,
+        );
+        assert!(
+            grados > 3.0,
+            "arrastrar hacia abajo la parte alta debe girar en positivo: {grados}°"
+        );
+        let girado = rota_rodrigues(punto, [1.0, 0.0, 0.0], grados.to_radians());
+        let s2 = world_to_screen(girado, &vp, rect).unwrap();
+        assert!(
+            s2.y > pantalla.y + 3.0,
+            "el punto agarrado debe BAJAR siguiendo a la mano: {} -> {}",
+            pantalla.y,
+            s2.y
+        );
     }
 
     /// Vista por defecto (ojo en +Z): el eje X se proyecta a la derecha y un

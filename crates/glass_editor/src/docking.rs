@@ -90,6 +90,10 @@ pub struct EditorDockingLayout {
     pub shader_graph: ShaderGraphEditorPanel,
     pub mesh_tool: MeshToolPanel,
     pub dock_state: DockState<EditorTab>,
+    /// Pestañas cerradas con la X en el último frame (las deja el
+    /// TabViewer vía `on_close`): el layout las drena tras pintar el
+    /// dock para sincronizar estados extra (la bandera de Frametime).
+    pub tabs_cerradas: Vec<EditorTab>,
     pub current_preset: LayoutPreset,
     /// Espacio de trabajo activo: el editor de siempre o el de herramientas.
     pub espacio: EspacioTrabajo,
@@ -217,6 +221,7 @@ impl EditorDockingLayout {
             shader_graph: ShaderGraphEditorPanel::new(),
             mesh_tool: MeshToolPanel::new(),
             dock_state: DockState::new(vec![EditorTab::SceneView, EditorTab::GameView]),
+            tabs_cerradas: Vec::new(),
             current_preset: LayoutPreset::Default,
             espacio: EspacioTrabajo::Editor,
             herramienta_activa: "meshforge".to_string(),
@@ -1168,20 +1173,14 @@ impl EditorDockingLayout {
 
             ui.separator();
 
-            // 2b. Cámara de escena y rejilla (vivían en la barra propia
-            // de la vista de escena; se movieron aquí el 2026-11-18 y
-            // la barra duplicada de la vista se retiró).
+            // 2b. Cámara de escena. «Centrar» se queda aquí; la rejilla
+            // se controla SOLO desde el menú «Gizmos» de la vista de
+            // escena (un solo sitio manda, orden del usuario 2026-11-18).
             if ui.button("⌖ Centrar").on_hover_text("Centrar cámara de escena").clicked() {
                 self.viewport.editor_cam_center = [3.5, 1.5, 0.0];
                 self.viewport.editor_cam_dist = 10.0;
                 self.viewport.editor_cam_pitch = 0.25;
                 self.viewport.editor_cam_yaw = 0.0;
-            }
-
-            let btn_rejilla = egui::Button::new(egui::RichText::new("# Rejilla").size(13.0))
-                .selected(self.viewport.show_grid);
-            if ui.add(btn_rejilla).on_hover_text("Rejilla del suelo: lineas de 1 m y de 10 m").clicked() {
-                self.viewport.show_grid = !self.viewport.show_grid;
             }
 
             ui.separator();
@@ -1268,6 +1267,7 @@ impl EditorDockingLayout {
             game_texture_id,
             selected_entity_id: &mut selected_id,
             scene_state,
+            cerradas: &mut self.tabs_cerradas,
         };
 
         if espacio == EspacioTrabajo::Herramientas {
@@ -1289,6 +1289,16 @@ impl EditorDockingLayout {
         } else {
             DockArea::new(&mut self.dock_state)
                 .show_inside(ui, &mut tab_viewer);
+        }
+
+        // Cierres por la X de las pestañas: egui_dock ya quitó la
+        // pestaña del árbol (la visibilidad del menú Window se deriva
+        // de ahí); solo queda sincronizar la bandera de Frametime, que
+        // vive fuera del árbol.
+        for tab in self.tabs_cerradas.drain(..) {
+            if tab == EditorTab::Frametime {
+                self.show_frametime = false;
+            }
         }
 
         // --- PENDIENTES DEL PANEL «PROYECTO» ---
@@ -1733,7 +1743,7 @@ struct EditorTabViewer<'a> {
     game_texture_id: Option<egui::TextureId>,
     selected_entity_id: &'a mut Option<u64>,
     scene_state: &'a Arc<Mutex<SceneState>>,
-
+    cerradas: &'a mut Vec<EditorTab>,
 }
 
 impl<'a> TabViewer for EditorTabViewer<'a> {
@@ -1788,7 +1798,16 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
     }
 
     fn is_closeable(&self, _tab: &Self::Tab) -> bool {
-        false
+        // Todos los paneles se cierran por su X (estilo Unity); el
+        // menú Window es el camino de vuelta (set_tab_visible).
+        true
+    }
+
+    fn on_close(&mut self, tab: &mut Self::Tab) -> egui_dock::widgets::tab_viewer::OnCloseResponse {
+        // egui_dock quita la pestaña del árbol; el layout solo
+        // necesita saberlo para sincronizar estados extra.
+        self.cerradas.push(*tab);
+        egui_dock::widgets::tab_viewer::OnCloseResponse::Close
     }
 }
 

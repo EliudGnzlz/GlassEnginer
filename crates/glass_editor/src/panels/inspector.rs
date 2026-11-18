@@ -404,54 +404,87 @@ impl InspectorPanel {
                 }
 
                 // ==========================================
-                // 4. COMPONENTE RIGIDBODY & COLLIDER (RAPIER3D)
+                // 4. COMPONENTES RIGIDBODY Y COLLIDER (RAPIER3D)
+                // Separados como en Unity: un Collider sin Rigidbody es estático.
                 // ==========================================
-                let mut remove_physics = false;
+                let mut remove_rigidbody = false;
+                let mut remove_collider = false;
                 if let Some(ref mut phys) = entity.physics {
-                    ui.collapsing("⚙ RigidBody & Collider (Rapier3D)", |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Tipo de Cuerpo:");
-                            egui::ComboBox::from_id_salt(format!("phys_type_{}", entity.id))
-                                .selected_text(&phys.body_type)
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut phys.body_type, "Dynamic".into(), "Dynamic (Física y gravedad)");
-                                    ui.selectable_value(&mut phys.body_type, "Static".into(), "Static (Inmóvil)");
-                                    ui.selectable_value(&mut phys.body_type, "Kinematic".into(), "Kinematic (Controlado)");
-                                });
+                    if phys.has_rigidbody {
+                        ui.collapsing("⚙ Rigidbody", |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Tipo de Cuerpo:");
+                                egui::ComboBox::from_id_salt(format!("phys_type_{}", entity.id))
+                                    .selected_text(&phys.body_type)
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut phys.body_type, "Dynamic".into(), "Dynamic (Física y gravedad)");
+                                        ui.selectable_value(&mut phys.body_type, "Static".into(), "Static (Inmóvil)");
+                                        ui.selectable_value(&mut phys.body_type, "Kinematic".into(), "Kinematic (Controlado)");
+                                    });
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Masa:");
+                                ui.add(DragValue::new(&mut phys.mass).speed(0.1).range(0.01..=500.0).suffix(" kg"));
+                            });
+
+                            ui.label(RichText::new(format!(
+                                "Velocidad Lineal: ({:.2}, {:.2}, {:.2}) m/s",
+                                phys.linear_velocity[0], phys.linear_velocity[1], phys.linear_velocity[2]
+                            )).color(Color32::from_rgb(160, 210, 255)));
+
+                            if ui.small_button("🗑 Quitar Rigidbody").clicked() {
+                                remove_rigidbody = true;
+                            }
                         });
+                    }
 
-                        ui.horizontal(|ui| {
-                            ui.label("Masa:");
-                            ui.add(DragValue::new(&mut phys.mass).speed(0.1).range(0.01..=500.0).suffix(" kg"));
+                    if phys.has_collider {
+                        ui.collapsing("🧊 Collider", |ui| {
+                            // En Unity fricción y elasticidad son del material del collider.
+                            ui.add(Slider::new(&mut phys.friction, 0.0..=1.0).text("Fricción"));
+                            ui.add(Slider::new(&mut phys.restitution, 0.0..=1.0).text("Elasticidad (Bounciness)"));
+
+                            ui.label(RichText::new("Colisionador Cuboide (Half-Extents):").strong());
+                            ui.horizontal(|ui| {
+                                ui.label("X");
+                                ui.add(DragValue::new(&mut phys.box_extents[0]).speed(0.05));
+                                ui.label("Y");
+                                ui.add(DragValue::new(&mut phys.box_extents[1]).speed(0.05));
+                                ui.label("Z");
+                                ui.add(DragValue::new(&mut phys.box_extents[2]).speed(0.05));
+                            });
+
+                            if ui.small_button("🗑 Quitar Collider").clicked() {
+                                remove_collider = true;
+                            }
                         });
-
-                        ui.add(Slider::new(&mut phys.friction, 0.0..=1.0).text("Fricción"));
-                        ui.add(Slider::new(&mut phys.restitution, 0.0..=1.0).text("Elasticidad (Bounciness)"));
-
-                        ui.label(RichText::new("Colisionador Cuboide (Half-Extents):").strong());
-                        ui.horizontal(|ui| {
-                            ui.label("X");
-                            ui.add(DragValue::new(&mut phys.box_extents[0]).speed(0.05));
-                            ui.label("Y");
-                            ui.add(DragValue::new(&mut phys.box_extents[1]).speed(0.05));
-                            ui.label("Z");
-                            ui.add(DragValue::new(&mut phys.box_extents[2]).speed(0.05));
-                        });
-
-                        ui.label(RichText::new(format!(
-                            "Velocidad Lineal: ({:.2}, {:.2}, {:.2}) m/s",
-                            phys.linear_velocity[0], phys.linear_velocity[1], phys.linear_velocity[2]
-                        )).color(Color32::from_rgb(160, 210, 255)));
-
-                        if ui.small_button("🗑 Quitar RigidBody").clicked() {
-                            remove_physics = true;
-                        }
-                    });
+                    }
                     ui.separator();
                 }
-                if remove_physics {
-                    entity.physics = None;
-                    entity.components.retain(|c| c != "RigidBody" && c != "Collider" && c != "StaticCollider");
+                if remove_rigidbody || remove_collider {
+                    if let Some(ref mut phys) = entity.physics {
+                        if remove_rigidbody {
+                            phys.has_rigidbody = false;
+                        }
+                        if remove_collider {
+                            phys.has_collider = false;
+                        }
+                    }
+                    if remove_rigidbody {
+                        entity.components.retain(|c| c != "RigidBody");
+                    }
+                    if remove_collider {
+                        entity.components.retain(|c| c != "Collider");
+                    }
+                    let sin_componentes = entity
+                        .physics
+                        .as_ref()
+                        .is_some_and(|p| !p.has_rigidbody && !p.has_collider);
+                    if sin_componentes {
+                        entity.physics = None;
+                        entity.components.retain(|c| c != "StaticCollider");
+                    }
                 }
 
                 // ==========================================
@@ -752,11 +785,36 @@ impl InspectorPanel {
                             self.show_add_component_menu = false;
                         }
 
-                        if entity.physics.is_none() && ui.button("⚙ RigidBody & Collider").clicked() {
-                            entity.physics = Some(PhysicsData::default());
-                            entity.components.push("RigidBody".into());
-                            entity.components.push("Collider".into());
-                            self.show_add_component_menu = false;
+                        if entity.physics.is_none() {
+                            if ui.button("⚙ Rigidbody").clicked() {
+                                entity.physics = Some(PhysicsData {
+                                    has_rigidbody: true,
+                                    has_collider: false,
+                                    ..PhysicsData::default()
+                                });
+                                entity.components.push("RigidBody".into());
+                                self.show_add_component_menu = false;
+                            } else if ui.button("🧊 Collider").clicked() {
+                                entity.physics = Some(PhysicsData {
+                                    body_type: "Static".into(),
+                                    has_rigidbody: false,
+                                    has_collider: true,
+                                    ..PhysicsData::default()
+                                });
+                                entity.components.push("Collider".into());
+                                self.show_add_component_menu = false;
+                            }
+                        } else if let Some(ref mut phys) = entity.physics {
+                            if !phys.has_rigidbody && ui.button("⚙ Añadir Rigidbody").clicked() {
+                                phys.has_rigidbody = true;
+                                entity.components.push("RigidBody".into());
+                                self.show_add_component_menu = false;
+                            }
+                            if !phys.has_collider && ui.button("🧊 Añadir Collider").clicked() {
+                                phys.has_collider = true;
+                                entity.components.push("Collider".into());
+                                self.show_add_component_menu = false;
+                            }
                         }
 
                         if entity.script.is_none() && ui.button("📜 Script C# (.NET CoreCLR)").clicked() {

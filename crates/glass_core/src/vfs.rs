@@ -135,6 +135,11 @@ impl AssetVfs {
         &self.root
     }
 
+    /// Indica si la raíz es un proyecto real; sin marcador es el payload del motor o una carpeta suelta, y sus escenas no se ofrecen.
+    pub fn es_raiz_de_proyecto(&self) -> bool {
+        self.root.join("project.glass").is_file() || self.root.join(ROOT_MARKER).is_file()
+    }
+
     /// Directorio absoluto del explorador de assets (`<raíz>/assets`).
     pub fn assets_dir(&self) -> PathBuf {
         self.root.join("assets")
@@ -213,19 +218,23 @@ impl AssetVfs {
         Ok(entries)
     }
 
-    /// Lista los nombres de escena disponibles (`assets/scenes/*.scene.json`),
-    /// sin la extensión doble, ordenados alfabéticamente.
+    /// Lista los nombres de escena disponibles (`assets/scenes/*.scene.json` y
+    /// `Assets/Scenes/*.scene.json`), sin la extensión doble, ordenados alfabéticamente.
     pub fn list_scenes(&self) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
-        let Ok(entries) = self.list(SCENES_DIR) else {
-            return names;
-        };
-        for entry in entries {
-            if entry.is_dir {
+        for dir in [SCENES_DIR, "Assets/Scenes"] {
+            let Ok(entries) = self.list(dir) else {
                 continue;
-            }
-            if let Some(stem) = entry.name.strip_suffix(".scene.json") {
-                names.push(stem.to_string());
+            };
+            for entry in entries {
+                if entry.is_dir {
+                    continue;
+                }
+                if let Some(stem) = entry.name.strip_suffix(".scene.json") {
+                    if !names.iter().any(|name| name.as_str() == stem) {
+                        names.push(stem.to_string());
+                    }
+                }
             }
         }
         names.sort();
@@ -262,7 +271,17 @@ impl AssetVfs {
         }
 
         let bare = format!("{SCENES_DIR}/{requested}");
-        self.exists(&bare).then_some(bare)
+        if self.exists(&bare) {
+            return Some(bare);
+        }
+
+        let with_ext_upper = format!("Assets/Scenes/{requested}.scene.json");
+        if self.exists(&with_ext_upper) {
+            return Some(with_ext_upper);
+        }
+
+        let bare_upper = format!("Assets/Scenes/{requested}");
+        self.exists(&bare_upper).then_some(bare_upper)
     }
 }
 

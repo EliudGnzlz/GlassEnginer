@@ -1778,6 +1778,16 @@ struct GlassEngineApp {
     /// árbol del motor.
     #[cfg(feature = "editor")]
     raiz_proyecto_actual: Option<std::path::PathBuf>,
+    /// Stems ya intentados por la recarga bajo demanda en esta escena:
+    /// evita reintentar cada frame un modelo sin .glb o corrupto. Se
+    /// limpia al aplicarse una carga de escena.
+    recarga_bajo_demanda: std::collections::HashSet<String>,
+    /// Stems que `evict_idle` expulsó en ESTE proceso. La recarga bajo
+    /// demanda SOLO deshace expulsiones: en un arranque sin escaneo
+    /// inicial de modelos (p. ej. `--scene`) nada se expulsa y nada se
+    /// recarga — cargar en frío a mitad del primer frame segfaultaba el
+    /// driver (llvmpipe; verificado contra la base a19062a, 2026-11-18).
+    modelos_expulsados: std::collections::HashSet<String>,
     /// Nombre activo de la escena cuando se fijó la ruta; si el vigía del
     /// editor anuncia otro nombre, la ruta ya no vale.
     #[cfg(feature = "editor")]
@@ -2286,6 +2296,8 @@ impl GlassEngineApp {
             ruta_escena_actual: None,
             #[cfg(feature = "editor")]
             raiz_proyecto_actual: None,
+            recarga_bajo_demanda: std::collections::HashSet::new(),
+            modelos_expulsados: std::collections::HashSet::new(),
             #[cfg(feature = "editor")]
             nombre_escena_con_ruta: String::new(),
             #[cfg(feature = "editor")]
@@ -3329,6 +3341,20 @@ impl GlassEngineApp {
             path.join("Assets")
         };
         self.raiz_proyecto_actual = Some(path.to_path_buf());
+        // Reancla las escenas al proyecto: si no, las cargas por nombre usan el directorio de arranque.
+        match self.scene_manager.lock() {
+            Ok(mut m) => {
+                *m = SceneManager::new(path);
+                log::info!(
+                    "Gestor de escenas reanclado a {}: {} escenas disponibles",
+                    path.display(),
+                    m.available_scenes().len()
+                );
+            }
+            Err(_) => log::error!(
+                "SceneManager: candado envenenado al abrir el proyecto; las escenas quedan ancladas a la raíz anterior."
+            ),
+        }
         self.vigilar_assets(&raiz_assets);
         self.editor_layout.project.set_assets_root(raiz_assets);
         // Registrar el proyecto abierto para que aparezca en el Hub,
@@ -3781,6 +3807,72 @@ impl GlassEngineApp {
 
     fn check_asset_reloads(&mut self) {
         self.drenar_peticiones_conversion();
+        // El cuerpo original (bucle `for ev in events`) vive en
+        // procesar_eventos_recarga; así el paso bajo demanda corre siempre
+        // después del bucle, aunque el cuerpo retorne antes.
+        self.procesar_eventos_recarga();
+
+        // Recarga bajo demanda: evict_idle expulsa los modelos ociosos y nada
+        // los recargaba al volver a una escena que los referencia (se veía el
+        // cubo de respaldo para siempre). Se carga como máximo 1 por frame.
+        let referenciados: Vec<String> = match self.scene_state.lock() {
+            Ok(estado) => estado
+                .entities
+                .iter()
+                .filter_map(|ent| ent.mesh.as_ref())
+                .filter(|mesh| !mesh.model.is_empty())
+                .map(|mesh| mesh.model.clone())
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        for stem in &referenciados {
+            if self.recarga_bajo_demanda.contains(stem) {
+                continue;
+            }
+            // Solo se deshacen expulsiones reales de este proceso: un stem
+            // nunca cargado (arranque sin escaneo) no es asunto de esta vía.
+            if !self.modelos_expulsados.contains(stem) {
+                continue;
+            }
+            let en_cache = self
+                .asset_cache
+                .read()
+                .map(|c| c.bounds(stem).is_some())
+                .unwrap_or(false);
+            if en_cache {
+                continue;
+            }
+            #[cfg(feature = "editor")]
+            let assets_proyecto: Option<std::path::PathBuf> =
+                self.raiz_proyecto_actual.as_ref().map(|p| p.join("Assets"));
+            #[cfg(not(feature = "editor"))]
+            let assets_proyecto: Option<std::path::PathBuf> = None;
+            let modelos_motor = self.raiz_motor.join("assets").join("models");
+            let assets_motor = self.raiz_motor.join("assets");
+            let mut raices: Vec<&std::path::Path> = Vec::new();
+            if let Some(p) = assets_proyecto.as_deref() {
+                raices.push(p);
+            }
+            raices.push(&modelos_motor);
+            raices.push(&assets_motor);
+            let ruta = glass_renderer::watcher::resolver_glb_por_stem(&raices, stem);
+            // Marcado antes de cargar: un .glb corrupto no se reintenta cada frame.
+            self.recarga_bajo_demanda.insert(stem.clone());
+            match ruta {
+                Some(ruta) => {
+                    log::info!("AssetCache: recarga bajo demanda de '{}' desde {:?}", stem, ruta);
+                    self.cargar_modelo_desde_glb(&ruta);
+                    self.modelos_expulsados.remove(stem);
+                }
+                None => {
+                    log::warn!("AssetCache: '{}' sin .glb localizable para recarga bajo demanda", stem);
+                }
+            }
+            break;
+        }
+    }
+
+    fn procesar_eventos_recarga(&mut self) {
         let events: Vec<AssetReloadEvent> = self
             .asset_watchers
             .iter()
@@ -3791,78 +3883,7 @@ impl GlassEngineApp {
             match ev {
                 AssetReloadEvent::MeshReloaded(path) => {
                     log::info!("Procesando recarga en caliente de modelo: {:?}", path);
-                    if let (Some(renderer), Some(vk_ctx)) = (&self.renderer, &self.vulkan_context) {
-                        if let Ok(bytes) = std::fs::read(&path) {
-                            if let Ok(model) = MeshLoader::load_model_from_glb_bytes(&bytes) {
-                                let upload_res = {
-                                    let mut alloc = renderer.allocator.lock().unwrap();
-                                    MeshLoader::upload_to_gpu(
-                                        &renderer.device,
-                                        &mut alloc,
-                                        &model.vertices,
-                                        &model.indices,
-                                        vk_ctx.graphics_queue,
-                                        renderer.command_pool,
-                                    )
-                                };
-
-                                if let Ok(gpu_mesh) = upload_res {
-                                    let stem = path
-                                        .file_stem()
-                                        .and_then(|s| s.to_str())
-                                        .unwrap_or("unnamed");
-                                    let mut alloc = renderer.allocator.lock().unwrap();
-                                    let mut cache = self.asset_cache.write().unwrap();
-                                    let primary = model.primary_material().cloned();
-                                    cache.insert_mesh(
-                                        &renderer.device,
-                                        &mut alloc,
-                                        stem,
-                                        gpu_mesh,
-                                    );
-                                    // La recarga también refresca materiales e
-                                    // imágenes: si el .blend cambió el material,
-                                    // el editor debe ver el nuevo, no el viejo.
-                                    cache.insert_model_data(
-                                        stem,
-                                        model.materials.clone(),
-                                        primary,
-                                        model.images.clone(),
-                                        model.primitive_ranges.clone(),
-                                        model.objects.clone(),
-                                    );
-                                    // Geometría CPU retenida (Fase 1.5): los
-                                    // colliders de malla la leen al reconstruir
-                                    // la física; sin esto se pierde al subir a GPU.
-                                    cache.insert_geometry(stem, &model);
-                                    self.upload_skin_if_any(renderer, vk_ctx, &mut alloc, &mut cache, &model, stem);
-                                    // Y las texturas GPU de todos los
-                                    // materiales: se resuben y los sets del
-                                    // modelo se reapuntan a las nuevas vistas.
-                                    if let Some(layout) = renderer.pbr_pipeline.descriptor_set_layout {
-                                        let mut uploaded: Vec<usize> = Vec::new();
-                                        for mat in &model.materials {
-                                            if let Some(idx) = mat.base_color_image {
-                                                if !uploaded.contains(&idx) {
-                                                    uploaded.push(idx);
-                                                    if let Some(img) = model.images.get(idx) {
-                                                        cache.insert_texture(
-                                                            &renderer.device,
-                                                            &mut alloc,
-                                                            TextureUpload { queue: vk_ctx.graphics_queue, command_pool: renderer.command_pool, set_layout: layout },
-                                                            stem,
-                                                            idx,
-                                                            img,
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    self.cargar_modelo_desde_glb(&path);
                 }
                 AssetReloadEvent::ShaderReloaded(path) => {
                     // Auditoría C2: la recarga en caliente de shaders
@@ -3896,6 +3917,85 @@ impl GlassEngineApp {
         }
     }
 
+    /// Carga un modelo .glb completo en la caché (malla GPU, materiales,
+    /// imágenes, geometría CPU, skin y texturas). Secuencia compartida por la
+    /// recarga en caliente y la recarga bajo demanda.
+    fn cargar_modelo_desde_glb(&mut self, path: &std::path::Path) {
+        if let (Some(renderer), Some(vk_ctx)) = (&self.renderer, &self.vulkan_context) {
+            if let Ok(bytes) = std::fs::read(path) {
+                if let Ok(model) = MeshLoader::load_model_from_glb_bytes(&bytes) {
+                    let upload_res = {
+                        let mut alloc = renderer.allocator.lock().unwrap();
+                        MeshLoader::upload_to_gpu(
+                            &renderer.device,
+                            &mut alloc,
+                            &model.vertices,
+                            &model.indices,
+                            vk_ctx.graphics_queue,
+                            renderer.command_pool,
+                        )
+                    };
+
+                    if let Ok(gpu_mesh) = upload_res {
+                        let stem = path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("unnamed");
+                        let mut alloc = renderer.allocator.lock().unwrap();
+                        let mut cache = self.asset_cache.write().unwrap();
+                        let primary = model.primary_material().cloned();
+                        cache.insert_mesh(
+                            &renderer.device,
+                            &mut alloc,
+                            stem,
+                            gpu_mesh,
+                        );
+                        // La recarga también refresca materiales e
+                        // imágenes: si el .blend cambió el material,
+                        // el editor debe ver el nuevo, no el viejo.
+                        cache.insert_model_data(
+                            stem,
+                            model.materials.clone(),
+                            primary,
+                            model.images.clone(),
+                            model.primitive_ranges.clone(),
+                            model.objects.clone(),
+                        );
+                        // Geometría CPU retenida (Fase 1.5): los
+                        // colliders de malla la leen al reconstruir
+                        // la física; sin esto se pierde al subir a GPU.
+                        cache.insert_geometry(stem, &model);
+                        self.upload_skin_if_any(renderer, vk_ctx, &mut alloc, &mut cache, &model, stem);
+                        // Y las texturas GPU de todos los
+                        // materiales: se resuben y los sets del
+                        // modelo se reapuntan a las nuevas vistas.
+                        if let Some(layout) = renderer.pbr_pipeline.descriptor_set_layout {
+                            let mut uploaded: Vec<usize> = Vec::new();
+                            for mat in &model.materials {
+                                if let Some(idx) = mat.base_color_image {
+                                    if !uploaded.contains(&idx) {
+                                        uploaded.push(idx);
+                                        if let Some(img) = model.images.get(idx) {
+                                            cache.insert_texture(
+                                                &renderer.device,
+                                                &mut alloc,
+                                                TextureUpload { queue: vk_ctx.graphics_queue, command_pool: renderer.command_pool, set_layout: layout },
+                                                stem,
+                                                idx,
+                                                img,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Aplica la carga de escena pendiente, si la hay, al final del frame.
     /// Aplica la carga de escena pendiente, si la hay, al final del frame.
     ///
     /// `SceneManager.LoadScene` de C# (y el menú del editor) sólo encolan; aquí
@@ -3909,6 +4009,7 @@ impl GlassEngineApp {
     ///    nueva: los cuerpos de Rapier apuntan a ids viejos y hay que rehacerlos.
     /// 4. Se instancian los scripts que declara la escena nueva.
     fn apply_pending_scene_load(&mut self) {
+        self.recarga_bajo_demanda.clear();
         let result = {
             let Ok(mut manager) = self.scene_manager.lock() else {
                 log::error!("SceneManager: candado envenenado, no se aplica la carga pendiente.");
@@ -4080,10 +4181,16 @@ let mut descriptors: Vec<DescriptorCuerpo> = Vec::new();
                 if ent.portal.is_some() {
                     continue;
                 }
-                let body_type = match body.body_type.as_str() {
-                    "Static" => BodyType::Static,
-                    "Kinematic" => BodyType::Kinematic,
-                    _ => BodyType::Dynamic,
+                let body_type = if !body.has_rigidbody {
+                    // Collider sin Rigidbody = collider estático (Unity):
+                    // cuerpo fijo sea cual sea body_type.
+                    BodyType::Static
+                } else {
+                    match body.body_type.as_str() {
+                        "Static" => BodyType::Static,
+                        "Kinematic" => BodyType::Kinematic,
+                        _ => BodyType::Dynamic,
+                    }
                 };
                 let world = world_matrices.get(&ent.id).copied().unwrap_or_else(|| {
                     glass_core::mat4_from_trs_euler(
@@ -4107,10 +4214,17 @@ let mut descriptors: Vec<DescriptorCuerpo> = Vec::new();
                     glass_core::mat4_scale(world),
                     body.box_extents,
                 );
-let resueltos = colliders_resueltos(body, shape);
+// Rigidbody sin Collider: cuerpo sin formas (Rapier lo acepta).
+let resueltos = if body.has_collider {
+    colliders_resueltos(body, shape)
+} else {
+    Vec::new()
+};
                 // Si el cuerpo pide malla real, guardamos los datos para resolverla
                 // tras el bucle de escena (hace falta el AssetCache).
-                let mesh = if body.mesh_collider != glass_core::MeshColliderMode::None {
+                let mesh = if !body.has_collider {
+                    None
+                } else if body.mesh_collider != glass_core::MeshColliderMode::None {
                     Some((
                         body.mesh_collider,
                         model.to_string(),
@@ -5264,6 +5378,9 @@ let resueltos = colliders_resueltos(body, shape);
             let mut cache = self.asset_cache.write().unwrap();
             cache.advance_tick();
             let evicted = cache.evict_idle(&renderer.device, &mut alloc, 600, &protected);
+            for nombre in &evicted {
+                self.modelos_expulsados.insert(nombre.clone());
+            }
             if !evicted.is_empty() {
                 log::info!("AssetCache: {} modelos ociosos expulsados: {:?}", evicted.len(), evicted);
             }
