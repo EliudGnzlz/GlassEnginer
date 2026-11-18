@@ -830,6 +830,13 @@ pub fn instalar_motor_desde_zip(
     let mut retiradas = Vec::new();
     let mut diferidas = Vec::new();
     for v in &plan.borrar {
+        if version_con_sesion_activa_en(root, v) {
+            diferidas.push(v.clone());
+            if !store.pendientes_borrar.contains(v) {
+                store.pendientes_borrar.push(v.clone());
+            }
+            continue;
+        }
         match std::fs::remove_dir_all(engines.join(v)) {
             Ok(()) => retiradas.push(v.clone()),
             Err(_) => {
@@ -862,6 +869,124 @@ pub fn instalar_motor_desde_zip(
 /// temporales de descarga (`.descarga-*`) y carpetas de staging
 /// (`.staging-*`) dentro de engines/. Lo que no se pueda borrar se
 /// deja: barrer nunca impide instalar.
+/// Lock de sesion de un motor gestionado: mientras un proceso lo
+/// sostiene (lock compartido sobre engines/<version>/.sesion.lock),
+/// el Hub sabe que esa version esta viva y no la borra. El guarda
+/// conserva el archivo abierto; al soltarse (Drop) el lock se libera.
+pub struct LockSesion {
+    _archivo: std::fs::File,
+}
+
+/// Ruta del archivo de lock de sesion de una version.
+pub fn lock_sesion_path_in(root: &std::path::Path, version: &str) -> std::path::PathBuf {
+    engines_dir_in(root).join(version).join(".sesion.lock")
+}
+
+/// Toma el lock de sesion (compartido) de `version` bajo `root`:
+/// varios editores de la misma version lo comparten.
+pub fn bloquear_sesion_en(root: &std::path::Path, version: &str) -> Result<LockSesion, String> {
+    let dir = engines_dir_in(root).join(version);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let archivo = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_sesion_path_in(root, version))
+        .map_err(|e| e.to_string())?;
+    archivo.lock_shared().map_err(|e| e.to_string())?;
+    Ok(LockSesion { _archivo: archivo })
+}
+
+/// Toma el lock de sesion de `version` en la raiz de datos real.
+pub fn bloquear_sesion(version: &str) -> Result<LockSesion, String> {
+    bloquear_sesion_en(&data_root(), version)
+}
+
+/// ¿Tiene `version` una sesion viva bajo `root`? Sonda con un lock
+/// exclusivo sin esperar: si algun editor sostiene el compartido, la
+/// sonda no puede tomar el exclusivo.
+pub fn version_con_sesion_activa_en(root: &std::path::Path, version: &str) -> bool {
+    let ruta = lock_sesion_path_in(root, version);
+    if !ruta.is_file() {
+        return false;
+    }
+    let Ok(archivo) = std::fs::OpenOptions::new().read(true).open(&ruta) else {
+        return false;
+    };
+    match archivo.try_lock() {
+        Ok(()) => {
+            let _ = archivo.unlock();
+            false
+        }
+        // WouldBlock = sesion viva. Cualquier otro error = indeterminado:
+        // la sonda es fail-closed y ante la duda NO se borra.
+        Err(_) => true,
+    }
+}
+
+/// ¿Tiene `version` una sesion viva en la raiz de datos real?
+pub fn version_con_sesion_activa(version: &str) -> bool {
+    version_con_sesion_activa_en(&data_root(), version)
+}
+
+/// Si este proceso ES un motor gestionado (su ejecutable vive en
+/// engines/<version>/ de la raiz de datos), toma el lock de sesion
+/// de su version y lo devuelve; si no, None.
+pub fn bloquear_sesion_si_gestionado() -> Option<LockSesion> {
+    let exe = std::env::current_exe().ok()?;
+    let engines = engines_dir();
+    let dentro = exe.strip_prefix(&engines).ok()?;
+    let version = dentro.components().next()?.as_os_str().to_str()?.to_string();
+    match bloquear_sesion(&version) {
+        Ok(lock) => {
+            log::info!("Lock de sesion del motor gestionado v{} tomado.", version);
+            Some(lock)
+        }
+        Err(e) => {
+            log::warn!("No se pudo tomar el lock de sesion de la v{}: {}", version, e);
+            None
+        }
+    }
+}
+
+/// Completa los borrados diferidos bajo `root`: de las versiones en
+/// pendientes_borrar del EngineStore, borra las que ya no tienen
+/// sesion viva (una carpeta ya ausente cuenta como borrada). Guarda
+/// el registro solo si cambio. Devuelve las versiones retiradas.
+pub fn procesar_pendientes_borrar_en(root: &std::path::Path) -> Vec<String> {
+    let mut store = EngineStore::load_in(root);
+    if store.pendientes_borrar.is_empty() {
+        return Vec::new();
+    }
+    let engines = engines_dir_in(root);
+    let mut borradas = Vec::new();
+    store.pendientes_borrar.retain(|v| {
+        if version_con_sesion_activa_en(root, v) {
+            return true;
+        }
+        match std::fs::remove_dir_all(engines.join(v)) {
+            Ok(()) => {
+                borradas.push(v.clone());
+                false
+            }
+            Err(_) if !engines.join(v).exists() => {
+                borradas.push(v.clone());
+                false
+            }
+            Err(_) => true,
+        }
+    });
+    if !borradas.is_empty() {
+        let _ = store.save_in(root);
+    }
+    borradas
+}
+
+/// Completa los borrados diferidos en la raiz de datos real.
+pub fn procesar_pendientes_borrar() -> Vec<String> {
+    procesar_pendientes_borrar_en(&data_root())
+}
+
 pub fn limpiar_residuos_instalacion(root: &std::path::Path) {
     let engines = engines_dir_in(root);
     let Ok(entradas) = std::fs::read_dir(&engines) else {
@@ -1325,6 +1450,53 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *glass.zip
                     .all(|e| !e.file_name().to_string_lossy().starts_with(".staging-"))
             })
             .unwrap_or(true)
+    }
+
+    #[test]
+    fn sesion_activa_se_detecta_y_se_libera() {
+        let dir = dir_prueba_s3("sesion");
+        let root = dir.join("datos");
+        assert!(!version_con_sesion_activa_en(&root, "0.10.0"));
+        let lock = bloquear_sesion_en(&root, "0.10.0").unwrap();
+        assert!(version_con_sesion_activa_en(&root, "0.10.0"));
+        drop(lock);
+        assert!(!version_con_sesion_activa_en(&root, "0.10.0"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pendientes_se_borran_sin_sesion_y_esperan_con_sesion() {
+        let dir = dir_prueba_s3("pendientes");
+        let root = dir.join("datos");
+        std::fs::create_dir_all(engines_dir_in(&root).join("0.9.0")).unwrap();
+        std::fs::create_dir_all(engines_dir_in(&root).join("0.9.1")).unwrap();
+        let mut store = EngineStore::load_in(&root);
+        store.pendientes_borrar = vec!["0.9.0".to_string(), "0.9.1".to_string()];
+        store.save_in(&root).unwrap();
+        let _lock = bloquear_sesion_en(&root, "0.9.1").unwrap();
+        let borradas = procesar_pendientes_borrar_en(&root);
+        assert_eq!(borradas, vec!["0.9.0".to_string()]);
+        assert!(!engines_dir_in(&root).join("0.9.0").exists());
+        assert!(engines_dir_in(&root).join("0.9.1").exists());
+        let store = EngineStore::load_in(&root);
+        assert_eq!(store.pendientes_borrar, vec!["0.9.1".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn instalar_con_sesion_activa_difiere_la_retirada() {
+        let dir = dir_prueba_s3("diferida");
+        let root = dir.join("datos");
+        let zip = zip_con_exe(&dir);
+        instalar_motor_desde_zip(&root, &zip, "0.10.0", &[]).unwrap();
+        let _lock = bloquear_sesion_en(&root, "0.10.0").unwrap();
+        let resumen = instalar_motor_desde_zip(&root, &zip, "0.10.1", &[]).unwrap();
+        assert_eq!(resumen.diferidas, vec!["0.10.0".to_string()]);
+        assert!(resumen.retiradas.is_empty());
+        assert!(engines_dir_in(&root).join("0.10.0").is_dir());
+        let store = EngineStore::load_in(&root);
+        assert!(store.pendientes_borrar.contains(&"0.10.0".to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

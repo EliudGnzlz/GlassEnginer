@@ -1328,6 +1328,11 @@ impl LauncherPanel {
                 || {});
         }
         ui.add_space(12.0);
+        let pendientes = crate::updates::EngineStore::load().pendientes_borrar;
+        if !pendientes.is_empty() {
+            ui.label(RichText::new(format!("⏳ Pendientes de borrar: {}. Se retirarán cuando cierres el motor que las está usando.", pendientes.join(", "))).size(12.5).color(TEXT_DIM));
+            ui.add_space(12.0);
+        }
 
         // Ajuste del repositorio de actualizaciones (owner/repo).
         ui.horizontal(|ui| {

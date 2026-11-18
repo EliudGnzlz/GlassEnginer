@@ -1780,6 +1780,10 @@ struct GlassEngineApp {
     /// Vuelta al Hub en espera de la decisión del diálogo de guardado.
     #[cfg(feature = "editor")]
     volver_al_hub_pendiente: bool,
+    /// Salida ordenada pedida en modo hijo del Hub: el bucle de
+    /// eventos la recoge tras el frame y cierra el proceso.
+    #[cfg(feature = "editor")]
+    salir_del_proceso: bool,
     /// Tras «Guardar» sin ruta se abrió «Save Scene As»: al cerrarse ese
     /// diálogo se retoma (o se abandona) la vuelta al Hub pendiente.
     #[cfg(feature = "editor")]
@@ -2271,6 +2275,8 @@ impl GlassEngineApp {
             nombre_escena_con_ruta: String::new(),
             #[cfg(feature = "editor")]
             volver_al_hub_pendiente: false,
+            #[cfg(feature = "editor")]
+            salir_del_proceso: false,
             #[cfg(feature = "editor")]
             esperando_save_as: false,
             #[cfg(feature = "editor")]
@@ -6827,7 +6833,11 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                     self.volver_al_hub_pendiente = true;
                     editor_layout.dialogo_guardar_cierre = true;
                 } else {
-                    self.app_mode = AppMode::Launcher;
+                    if self.proyecto_directo.is_some() {
+                        self.salir_del_proceso = true;
+                    } else {
+                        self.app_mode = AppMode::Launcher;
+                    }
                 }
                 self.egui_ctx.request_repaint();
             }
@@ -6904,7 +6914,11 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                                 Ok(()) => {
                                     self.ultimo_autoguardado = std::time::Instant::now();
                                     self.volver_al_hub_pendiente = false;
-                                    self.app_mode = AppMode::Launcher;
+                                    if self.proyecto_directo.is_some() {
+                        self.salir_del_proceso = true;
+                    } else {
+                        self.app_mode = AppMode::Launcher;
+                    }
                                     self.egui_ctx.request_repaint();
                                 }
                                 Err(e) => {
@@ -6933,7 +6947,11 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                             editor_layout.marcar_guardada(&sc);
                         }
                         self.volver_al_hub_pendiente = false;
+                        if self.proyecto_directo.is_some() {
+                        self.salir_del_proceso = true;
+                    } else {
                         self.app_mode = AppMode::Launcher;
+                    }
                         self.egui_ctx.request_repaint();
                     }
                     glass_editor::DecisionCierre::Cancelar => {
@@ -6951,7 +6969,11 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 let volver = self.volver_al_hub_pendiente;
                 self.volver_al_hub_pendiente = false;
                 if volver && !sucia {
-                    self.app_mode = AppMode::Launcher;
+                    if self.proyecto_directo.is_some() {
+                        self.salir_del_proceso = true;
+                    } else {
+                        self.app_mode = AppMode::Launcher;
+                    }
                     self.egui_ctx.request_repaint();
                 }
             }
@@ -8157,6 +8179,11 @@ impl ApplicationHandler for GlassEngineApp {
                         self.egui_ctx.request_repaint();
                         return;
                     }
+                    if self.proyecto_directo.is_some() {
+                        log::info!("Cierre de ventana en el editor hijo: salida ordenada.");
+                        event_loop.exit();
+                        return;
+                    }
                     log::info!("Cierre de ventana en el editor: volviendo al Launcher.");
                     self.app_mode = AppMode::Launcher;
                     return;
@@ -8241,6 +8268,11 @@ impl ApplicationHandler for GlassEngineApp {
                         return;
                     }
                     log::error!("Error durante render_frame: {}", e);
+                }
+                #[cfg(feature = "editor")]
+                if self.salir_del_proceso {
+                    event_loop.exit();
+                    return;
                 }
                 if let Some(w) = &self.window {
                     w.request_redraw();
@@ -9193,6 +9225,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `start_live_mcp_stdio` para la decisión de arranque y sus porqués).
     #[cfg(feature = "editor")]
     app.start_live_mcp_stdio(args.iter().any(|arg| arg == "--mcp-live"));
+    // S4: si este proceso es un motor gestionado (su exe vive en
+    // engines/<version>/), toma el lock de sesion de su version: el
+    // Hub no borrara esa version mientras este proceso viva. El
+    // guarda vive hasta que run_app vuelve.
+    #[cfg(feature = "editor")]
+    let _lock_sesion = glass_editor::updates::bloquear_sesion_si_gestionado();
+    // S4: borrados diferidos de instalaciones pasadas, SOLO desde
+    // el proceso del Hub (un hijo no escribe engines.json, D1): si
+    // alguna version pendiente ya no tiene sesion viva, se retira.
+    #[cfg(feature = "editor")]
+    if app.proyecto_directo.is_none() && !app.is_standalone {
+        let retiradas = glass_editor::updates::procesar_pendientes_borrar();
+        if !retiradas.is_empty() {
+            log::info!("Borrados diferidos completados al arrancar: {:?}", retiradas);
+        }
+    }
     event_loop.run_app(&mut app)?;
 
     Ok(())
