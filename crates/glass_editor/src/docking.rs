@@ -98,6 +98,12 @@ pub struct EditorDockingLayout {
     /// resuelve a la primera disponible.
     pub herramienta_activa: String,
     pub request_launcher: bool,
+    /// Espejo de `ruta_escena_actual` de la app (se sincroniza cada frame).
+    /// El guardado la prefiere si la escena activa sigue siendo esa.
+    pub ruta_escena_actual: Option<std::path::PathBuf>,
+    /// Espejo de `nombre_escena_con_ruta` de la app: nombre activo cuando
+    /// se fijó la ruta.
+    pub nombre_escena_con_ruta: String,
     pub request_build_and_run: bool,
     pub request_build_settings: bool,
     /// File → «Abrir carpeta contenedora de la escena»: lo resuelve la app,
@@ -215,6 +221,8 @@ impl EditorDockingLayout {
             espacio: EspacioTrabajo::Editor,
             herramienta_activa: "meshforge".to_string(),
             request_launcher: false,
+            ruta_escena_actual: None,
+            nombre_escena_con_ruta: String::new(),
             request_abrir_contenedora_escena: false,
             request_copiar_ruta_escena: false,
             request_build_and_run: false,
@@ -375,6 +383,21 @@ impl EditorDockingLayout {
     /// se escribía en disco no coincidía con el nombre que reportaba el puente.
     /// Ahora la ruta sale de `SceneManager::save_key()`, que conoce la clave de
     /// asset de la escena cargada; `Save Scene As` sólo la deriva de un nombre.
+    /// Ruta directa de guardado: la registrada al cargar la escena desde
+    /// archivo, solo si la escena activa sigue llamándose igual (si el
+    /// usuario cambió de escena, la ruta registrada ya no describe a la
+    /// activa y manda la clave VFS de siempre).
+    fn ruta_guardado_directa(
+        ruta: &Option<std::path::PathBuf>,
+        nombre_con_ruta: &str,
+        nombre_activo: &str,
+    ) -> Option<std::path::PathBuf> {
+        match ruta {
+            Some(_) if !nombre_con_ruta.is_empty() && nombre_con_ruta == nombre_activo => ruta.clone(),
+            _ => None,
+        }
+    }
+
     fn save_scene_to(
         &mut self,
         scene_state: &Arc<Mutex<SceneState>>,
@@ -390,6 +413,35 @@ impl EditorDockingLayout {
             self.status_message = Some(("SceneManager bloqueado por un hilo en pánico".into(), ahora()));
             return;
         };
+
+        // Guardado simple de una escena cargada desde archivo: se escribe en
+        // su ruta absoluta, igual que el autoguardado de la app.
+        let ruta_directa = match save_as {
+            None => Self::ruta_guardado_directa(
+                &self.ruta_escena_actual,
+                &self.nombre_escena_con_ruta,
+                manager.active_scene_name(),
+            ),
+            Some(_) => None,
+        };
+        if let Some(ruta) = ruta_directa {
+            let Ok(scene) = scene_state.lock() else {
+                self.status_message = Some(("SceneState bloqueado; no se guardó nada".into(), ahora()));
+                return;
+            };
+            let mensaje = match scene.save_to_json(&ruta.to_string_lossy()) {
+                Ok(()) => {
+                    self.hash_guardado = crate::undo::scene_hash(&scene.entities, scene.next_entity_id);
+                    format!("Escena guardada en {}", ruta.display())
+                }
+                Err(e) => format!("No se pudo guardar {}: {e}", ruta.display()),
+            };
+            drop(scene);
+            drop(manager);
+            self.status_message = Some((mensaje, ahora()));
+            return;
+        }
+
         let key = match save_as {
             Some(name) => glass_core::scenes::scene_key_for_name(name),
             None => manager.save_key(),
@@ -1792,6 +1844,32 @@ mod tests_puerta_herramienta_3d {
 #[cfg(test)]
 mod tests_guardado {
     use super::*;
+
+    #[test]
+    fn ruta_directa_si_coincide_nombre() {
+        let r = Some(std::path::PathBuf::from("/p/a.scene.json"));
+        assert_eq!(
+            EditorDockingLayout::ruta_guardado_directa(&r, "a", "a"),
+            r
+        );
+    }
+
+    #[test]
+    fn sin_ruta_directa_si_cambia_nombre_o_vacio() {
+        let r = Some(std::path::PathBuf::from("/p/a.scene.json"));
+        assert_eq!(
+            EditorDockingLayout::ruta_guardado_directa(&r, "a", "b"),
+            None
+        );
+        assert_eq!(
+            EditorDockingLayout::ruta_guardado_directa(&r, "", ""),
+            None
+        );
+        assert_eq!(
+            EditorDockingLayout::ruta_guardado_directa(&None, "a", "a"),
+            None
+        );
+    }
 
     #[test]
     fn suciedad_por_contenido() {

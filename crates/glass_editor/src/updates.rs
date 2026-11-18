@@ -1128,9 +1128,93 @@ pub fn bloquear_sesion_si_gestionado() -> Option<LockSesion> {
 /// pendientes_borrar del EngineStore, borra las que ya no tienen
 /// sesion viva (una carpeta ya ausente cuenta como borrada). Guarda
 /// el registro solo si cambio. Devuelve las versiones retiradas.
+/// Añade a `pendientes_borrar` las carpetas de versión de `engines/` que el store
+/// no conoce. No borra nada: el borrado posterior respeta las sesiones activas.
+pub fn reconciliar_huerfanas_en(root: &std::path::Path) -> Vec<String> {
+    let mut store = EngineStore::load_in(root);
+    // Defensa (auditoría S10): la versión en uso y la conservada NUNCA
+    // son pendientes de borrar, vengan de donde vengan (un rollback
+    // puede devolver a en uso una versión que quedó pendiente con una
+    // sesión viva). Se purgan aquí y también en procesar.
+    let mut cambio = false;
+    let en_uso = store.en_uso.clone();
+    let conservada = store.conservada.clone();
+    store.pendientes_borrar.retain(|v| {
+        let protegida = Some(v.as_str()) == en_uso.as_deref()
+            || Some(v.as_str()) == conservada.as_deref();
+        if protegida {
+            cambio = true;
+        }
+        !protegida
+    });
+    let dir = engines_dir_in(root);
+    let entradas = match std::fs::read_dir(&dir) {
+        Ok(entradas) => entradas,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut candidatas = Vec::new();
+    for entrada in entradas.flatten() {
+        let nombre = match entrada.file_name().into_string() {
+            Ok(nombre) => nombre,
+            Err(_) => continue,
+        };
+        if !entrada.path().is_dir() {
+            continue;
+        }
+        if tag_version(&nombre).is_err() {
+            continue;
+        }
+        if store.en_uso.as_deref() == Some(nombre.as_str()) {
+            continue;
+        }
+        if store.conservada.as_deref() == Some(nombre.as_str()) {
+            continue;
+        }
+        if store.pendientes_borrar.iter().any(|p| p == &nombre) {
+            continue;
+        }
+        candidatas.push(nombre);
+    }
+
+    candidatas.sort();
+    let mut anadidas = Vec::new();
+    for nombre in candidatas {
+        store.pendientes_borrar.push(nombre.clone());
+        anadidas.push(nombre);
+    }
+    if !anadidas.is_empty() || cambio {
+        // Si falla el guardado, se tolera (el arranque no debe
+        // bloquearse) pero se deja rastro: sin persistir, procesar no
+        // verá estas pendientes (auditoría S10).
+        if let Err(e) = store.save_in(root) {
+            log::warn!("No se pudo guardar engines.json tras reconciliar huérfanas: {e}");
+        }
+    }
+    anadidas
+}
+
+/// Envoltorio de `reconciliar_huerfanas_en` sobre `data_root()`.
+pub fn reconciliar_huerfanas() -> Vec<String> {
+    reconciliar_huerfanas_en(&data_root())
+}
+
 pub fn procesar_pendientes_borrar_en(root: &std::path::Path) -> Vec<String> {
     let mut store = EngineStore::load_in(root);
+    // Defensa (auditoría S10): en uso y conservada jamás se borran,
+    // aunque una lista de pendientes vieja las nombre; se purgan de la
+    // lista y el purgado se persiste con el resto de cambios.
+    let antes = store.pendientes_borrar.len();
+    let en_uso = store.en_uso.clone();
+    let conservada = store.conservada.clone();
+    store.pendientes_borrar.retain(|v| {
+        Some(v.as_str()) != en_uso.as_deref() && Some(v.as_str()) != conservada.as_deref()
+    });
+    let purgadas = antes - store.pendientes_borrar.len();
     if store.pendientes_borrar.is_empty() {
+        if purgadas > 0 {
+            let _ = store.save_in(root);
+        }
         return Vec::new();
     }
     let engines = engines_dir_in(root);
@@ -1151,7 +1235,7 @@ pub fn procesar_pendientes_borrar_en(root: &std::path::Path) -> Vec<String> {
             Err(_) => true,
         }
     });
-    if !borradas.is_empty() {
+    if !borradas.is_empty() || purgadas > 0 {
         let _ = store.save_in(root);
     }
     borradas
@@ -1439,6 +1523,128 @@ mod tests {
             html_url: "https://example.com".to_string(),
             assets: Vec::new(),
         }
+    }
+
+    #[test]
+    fn reconcilia_huerfanas_sin_borrar_y_es_idempotente() {
+        let d = std::env::temp_dir().join(format!(
+            "glass_s3_reconcilia_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(super::engines_dir_in(&d)).unwrap();
+
+        for nombre in [
+            "0.10.99",
+            "0.10.98",
+            "0.10.97",
+            "0.10.96",
+            "notas",
+            ".staging-0.10.95",
+        ] {
+            std::fs::create_dir_all(super::engines_dir_in(&d).join(nombre)).unwrap();
+        }
+        std::fs::write(super::engines_dir_in(&d).join("0.10.94"), b"archivo").unwrap();
+
+        let mut store = super::EngineStore::load_in(&d);
+        store.en_uso = Some("0.10.99".to_string());
+        store.conservada = Some("0.10.98".to_string());
+        store.pendientes_borrar = vec!["0.10.97".to_string()];
+        store.save_in(&d).unwrap();
+
+        assert_eq!(
+            super::reconciliar_huerfanas_en(&d),
+            vec!["0.10.96".to_string()]
+        );
+        let recargado = super::EngineStore::load_in(&d);
+        assert!(recargado
+            .pendientes_borrar
+            .contains(&"0.10.96".to_string()));
+        assert!(super::reconciliar_huerfanas_en(&d).is_empty());
+
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn procesar_nunca_borra_la_en_uso_ni_la_conservada() {
+        // Escenario de la auditoría S10: una lista de pendientes vieja
+        // nombra a la versión que volvió a estar en uso tras un
+        // rollback; procesar debe purgarla, no borrarla.
+        let d = std::env::temp_dir().join(format!(
+            "glass_s10_protegidas_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        for v in ["0.10.99", "0.10.98", "0.10.97"] {
+            std::fs::create_dir_all(engines_dir_in(&d).join(v)).unwrap();
+        }
+        let mut store = EngineStore::load_in(&d);
+        store.en_uso = Some("0.10.99".to_string());
+        store.conservada = Some("0.10.98".to_string());
+        store.pendientes_borrar = vec![
+            "0.10.99".to_string(),
+            "0.10.98".to_string(),
+            "0.10.97".to_string(),
+        ];
+        store.save_in(&d).unwrap();
+
+        let borradas = procesar_pendientes_borrar_en(&d);
+        assert_eq!(borradas, vec!["0.10.97".to_string()]);
+        assert!(engines_dir_in(&d).join("0.10.99").is_dir());
+        assert!(engines_dir_in(&d).join("0.10.98").is_dir());
+        assert!(!engines_dir_in(&d).join("0.10.97").exists());
+        assert!(EngineStore::load_in(&d).pendientes_borrar.is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn reconciliar_y_procesar_respetan_una_sesion_viva() {
+        // Integración reconciliar→procesar (auditoría S10): la
+        // huérfana con sesión viva pasa a pendiente pero NO se borra
+        // hasta que la sesión muere.
+        let d = std::env::temp_dir().join(format!(
+            "glass_s10_sesion_viva_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(engines_dir_in(&d).join("0.10.96")).unwrap();
+        let mut store = EngineStore::load_in(&d);
+        store.en_uso = Some("0.10.99".to_string());
+        store.save_in(&d).unwrap();
+
+        let guarda = bloquear_sesion_en(&d, "0.10.96").unwrap();
+        assert_eq!(
+            reconciliar_huerfanas_en(&d),
+            vec!["0.10.96".to_string()]
+        );
+        assert!(procesar_pendientes_borrar_en(&d).is_empty());
+        assert!(engines_dir_in(&d).join("0.10.96").is_dir());
+        assert!(EngineStore::load_in(&d)
+            .pendientes_borrar
+            .contains(&"0.10.96".to_string()));
+
+        drop(guarda);
+        assert_eq!(
+            procesar_pendientes_borrar_en(&d),
+            vec!["0.10.96".to_string()]
+        );
+        assert!(!engines_dir_in(&d).join("0.10.96").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn reconciliar_sin_engines_devuelve_vacio_y_no_crea_nada() {
+        let d = std::env::temp_dir().join(format!(
+            "glass_s3_reconcilia_sin_engines_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+
+        assert!(super::reconciliar_huerfanas_en(&d).is_empty());
+        assert!(!super::engines_dir_in(&d).exists());
+
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

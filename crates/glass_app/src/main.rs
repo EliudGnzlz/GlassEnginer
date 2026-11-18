@@ -1773,6 +1773,11 @@ struct GlassEngineApp {
     /// por defecto o nueva): su guardado pasa por «Save Scene As».
     #[cfg(feature = "editor")]
     ruta_escena_actual: Option<std::path::PathBuf>,
+    /// Raíz del proyecto abierto (abrir_proyecto); Build & Run construye sobre
+    /// ella. None = sin proyecto: el build usa el CWD, como siempre en el
+    /// árbol del motor.
+    #[cfg(feature = "editor")]
+    raiz_proyecto_actual: Option<std::path::PathBuf>,
     /// Nombre activo de la escena cuando se fijó la ruta; si el vigía del
     /// editor anuncia otro nombre, la ruta ya no vale.
     #[cfg(feature = "editor")]
@@ -2280,6 +2285,8 @@ impl GlassEngineApp {
             #[cfg(feature = "editor")]
             ruta_escena_actual: None,
             #[cfg(feature = "editor")]
+            raiz_proyecto_actual: None,
+            #[cfg(feature = "editor")]
             nombre_escena_con_ruta: String::new(),
             #[cfg(feature = "editor")]
             volver_al_hub_pendiente: false,
@@ -2745,47 +2752,67 @@ impl GlassEngineApp {
 
     pub fn execute_build_and_run(&mut self) {
         log::info!("🚀 Iniciando Pipeline de Build & Run Standalone...");
+        // Base del build: la raíz del proyecto abierto; sin proyecto (o sin
+        // editor), el CWD, como siempre en el árbol del motor.
+        #[cfg(feature = "editor")]
+        let base = self
+            .raiz_proyecto_actual
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        #[cfg(not(feature = "editor"))]
+        let base = std::path::PathBuf::from(".");
+        let build_dir = base.join("build").join("standalone");
+        let _ = std::fs::create_dir_all(&build_dir);
+
+        // 1. Copiar al paquete TODO el árbol de assets del proyecto (shaders,
+        // modelos .glb y .gltf, texturas, audio y escenas, con sus
+        // subcarpetas), con la misma convención Assets/assets de
+        // abrir_proyecto. Antes la copia era plana y con filtro de extensión:
+        // un .gltf con sus texturas en una subcarpeta, o el audio, nunca
+        // llegaban al paquete y el juego arrancaba incompleto.
+        let assets_src = if base.join("Assets").is_dir() {
+            base.join("Assets")
+        } else if base.join("assets").is_dir() {
+            base.join("assets")
+        } else {
+            base.join("Assets")
+        };
+        if let Err(e) = copy_dir_recursive(&assets_src, &build_dir.join("assets")) {
+            log::error!("Fallo copiando assets al build: {}", e);
+        }
+
         // La escena del build es la escena EDITADA en este momento. Se guarda
-        // con un nombre propio del build: antes se volcaba siempre sobre
-        // SampleScene.scene.json, sobrescribiendo la escena de ejemplo del
-        // proyecto en cada build.
+        // con un nombre propio del build y directamente dentro del paquete
+        // (después de copiar los assets, para que nada la pise): el árbol
+        // fuente no se toca.
         let scene_path = "assets/scenes/Standalone.scene.json";
+        let scene_file = build_dir.join(scene_path);
         if let Ok(sc) = self.scene_state.lock() {
             // save_to_json no crea el directorio padre.
-            if let Some(parent) = std::path::Path::new(scene_path).parent() {
+            if let Some(parent) = scene_file.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            if let Err(e) = sc.save_to_json(scene_path) {
+            let scene_file_str = scene_file.to_string_lossy().into_owned();
+            if let Err(e) = sc.save_to_json(&scene_file_str) {
                 log::error!("Fallo al guardar escena para el build: {}", e);
             }
         }
 
+        // 2. project.json nace en el paquete, con la escena del build como default.
         #[cfg(feature = "editor")]
         {
             self.editor_layout.project_settings.default_scene = scene_path.to_string();
-            let _ = self.editor_layout.project_settings.save_to_file("project.json");
+            let project_file_str = build_dir.join("project.json").to_string_lossy().into_owned();
+            let _ = self.editor_layout.project_settings.save_to_file(&project_file_str);
         }
-
-        let build_dir = std::path::Path::new("build/standalone");
-
-        // 1. Copiar TODO el árbol de assets (shaders, modelos .glb y .gltf,
-        // texturas, audio y escenas, con sus subcarpetas). Antes la copia era
-        // plana y con filtro de extensión: un .gltf con sus texturas en una
-        // subcarpeta, o el audio, nunca llegaban al paquete y el juego
-        // arrancaba incompleto.
-        if let Err(e) = copy_dir_recursive(std::path::Path::new("assets"), &build_dir.join("assets")) {
-            log::error!("Fallo copiando assets al build: {}", e);
-        }
-
-        // 2. Copiar project.json (con la escena del build como default).
-        let _ = std::fs::copy("project.json", build_dir.join("project.json"));
 
         // 3. Copiar la carpeta gestionada de C# completa (antes: una lista
         // fija de 4 ficheros; cualquier dependencia nueva quedaba fuera).
-        let managed_src = std::path::Path::new("managed/GlassEngine.Core/bin/Debug/net8.0");
+        // El origen es el payload del motor de ESTE proceso, no el del CWD.
+        let managed_src = raiz_motor_actual().join("managed/GlassEngine.Core/bin/Debug/net8.0");
         let managed_dst = build_dir.join("managed/GlassEngine.Core/bin/Debug/net8.0");
         if managed_src.exists() {
-            if let Err(e) = copy_dir_recursive(managed_src, &managed_dst) {
+            if let Err(e) = copy_dir_recursive(&managed_src, &managed_dst) {
                 log::error!("Fallo copiando DLLs gestionadas al build: {}", e);
             }
         }
@@ -2806,18 +2833,24 @@ impl GlassEngineApp {
             }
         }
 
-        log::info!("✅ Standalone Package generado exitosamente en build/standalone/");
+        log::info!("✅ Standalone Package generado exitosamente en {}", build_dir.display());
         #[cfg(feature = "editor")]
         {
             self.editor_layout.status_message = Some((
-                "🚀 Build Standalone completado con éxito en build/standalone/".into(),
+                format!(
+                    "🚀 Build Standalone completado con éxito en {}",
+                    build_dir.display()
+                ),
                 std::time::Instant::now(),
             ));
         }
 
-        // 5. Lanzar ejecutable standalone en segundo plano.
-        let child_res = std::process::Command::new(build_dir.join(&exe_name))
-            .current_dir(build_dir)
+        // 5. Lanzar ejecutable standalone en segundo plano. Programa y CWD en
+        // absoluto: con un programa relativo y current_dir, Rust resuelve el
+        // programa contra el directorio nuevo y el spawn falla.
+        let build_abs = std::fs::canonicalize(&build_dir).unwrap_or_else(|_| build_dir.clone());
+        let child_res = std::process::Command::new(build_abs.join(&exe_name))
+            .current_dir(&build_abs)
             .args(["--standalone", "--scene", scene_path])
             .spawn();
 
@@ -3106,6 +3139,12 @@ impl GlassEngineApp {
                         cmd.env_remove(&k);
                     }
                 }
+                // El hijo es el ejecutable del motor en engines/, no el AppImage del Hub:
+                // si hereda APPIMAGE, cualquier lógica que localice «su» ejecutable apuntaría al Hub.
+                cmd.env_remove("APPIMAGE");
+                // APPDIR (la raíz del montaje del AppImage del Hub) es
+                // el mismo problema por otra puerta (auditoría S10).
+                cmd.env_remove("APPDIR");
                 match cmd.spawn() {
                     Ok(hijo) => {
                         log::info!("Motor lanzado ({}, pid {}) con {:?}", exe.display(), hijo.id(), args);
@@ -3289,6 +3328,7 @@ impl GlassEngineApp {
         } else {
             path.join("Assets")
         };
+        self.raiz_proyecto_actual = Some(path.to_path_buf());
         self.vigilar_assets(&raiz_assets);
         self.editor_layout.project.set_assets_root(raiz_assets);
         // Registrar el proyecto abierto para que aparezca en el Hub,
@@ -4488,6 +4528,7 @@ let resueltos = colliders_resueltos(body, shape);
             match action {
                 LauncherAction::LoadSampleScene(preset) => {
                     self.ruta_escena_actual = None;
+                    self.raiz_proyecto_actual = None;
                     match preset {
                         SampleScenePreset::PlatformerDemo => {
                             self.setup_interactive_platformer_scene();
@@ -6898,7 +6939,16 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
             if let Ok(cache) = self.asset_cache.read() {
                 self.editor_layout.viewport.mesh_bounds = cache.bounds_snapshot();
             }
+            // Se clona antes de tomar el préstamo mutable de editor_layout.
+            #[cfg(feature = "editor")]
+            let (ruta_clonada, nombre_clonado) =
+                (self.ruta_escena_actual.clone(), self.nombre_escena_con_ruta.clone());
             let editor_layout = &mut self.editor_layout;
+            #[cfg(feature = "editor")]
+            {
+                editor_layout.ruta_escena_actual = ruta_clonada;
+                editor_layout.nombre_escena_con_ruta = nombre_clonado;
+            }
             let launcher = &mut self.launcher;
             let app_mode = self.app_mode;
             let scene_state = &self.scene_state;
@@ -8444,6 +8494,48 @@ fn is_standalone_launch(pure_build: bool, args: &[String]) -> bool {
 /// Modo Hub (separacion Hub/motor): la cascara que gestiona motores y
 /// lanza el editor como proceso propio. Por ahora solo se reconoce el
 /// argumento; el comportamiento llega en sub-bloques posteriores.
+/// Contrato de los modos de arranque. Pura: solo mira `args`, no lee el entorno.
+fn validar_argumentos(args: &[String]) -> Result<(), String> {
+    const CON_VALOR: [(&str, &str); 3] = [
+        ("--project", "la carpeta del proyecto"),
+        ("--scene", "la ruta de la escena"),
+        ("--sample", "el nombre del ejemplo"),
+    ];
+    for (flag, que) in CON_VALOR {
+        // TODAS las apariciones del flag (auditoría S10): un valor que
+        // es otro flag cuenta como valor ausente.
+        for (idx, a) in args.iter().enumerate() {
+            if a == flag {
+                let falta = match args.get(idx + 1) {
+                    None => true,
+                    Some(siguiente) => siguiente.starts_with("--"),
+                };
+                if falta {
+                    return Err(format!("el argumento {flag} necesita un valor ({que})"));
+                }
+            }
+        }
+    }
+
+    let tiene = |flag: &str| args.iter().any(|a| a == flag);
+
+    // El Hub no abre nada en su propio proceso: eso es el modo hijo.
+    if tiene("--hub") {
+        for (flag, _) in CON_VALOR {
+            if tiene(flag) {
+                return Err(format!("argumentos incompatibles: --hub con {flag}"));
+            }
+        }
+    }
+
+    // Dos formas distintas de abrir: la escena suelta va sin proyecto o desde el Hub.
+    if tiene("--project") && tiene("--scene") {
+        return Err("argumentos incompatibles: --project con --scene".to_string());
+    }
+
+    Ok(())
+}
+
 fn es_modo_hub(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--hub")
 }
@@ -9332,11 +9424,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scene_to_load = args.iter().position(|a| a == "--scene").and_then(|idx| args.get(idx + 1)).cloned();
     let es_hub = es_modo_hub(&args);
     let proyecto_directo = proyecto_de_args(&args);
-    // --hub y --project son modos excluyentes (S5): el Hub no abre
-    // proyectos en su propio proceso; eso es el modo hijo.
-    if es_hub && proyecto_directo.is_some() {
-        log::error!("Argumentos incompatibles: --hub con --project. El Hub lanza el motor como proceso hijo, no lo abre en el suyo.");
-        return Err("argumentos incompatibles: --hub con --project".into());
+    // Contrato de modos de arranque (S5 ampliado): valores obligatorios y
+    // combinaciones excluyentes. Ver validar_argumentos.
+    if let Err(msg) = validar_argumentos(&args) {
+        log::error!("Argumentos inválidos: {msg}");
+        return Err(msg.into());
     }
     let is_sample_game_test = args.iter().any(|arg| arg == "--test-sample-game");
     let is_platformer_test = args.iter().any(|arg| arg == "--test-platformer");
@@ -9442,7 +9534,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // el proceso del Hub (un hijo no escribe engines.json, D1): si
     // alguna version pendiente ya no tiene sesion viva, se retira.
     #[cfg(feature = "editor")]
-    if app.proyecto_directo.is_none() && !app.is_standalone {
+    if es_hub && app.proyecto_directo.is_none() && !app.is_standalone {
+        // Orden contractual: reconciliar → procesar. Las huérfanas pasan a pendientes
+        // y procesar_pendientes_borrar las borra si no tienen sesión.
+        let huerfanas = glass_editor::updates::reconciliar_huerfanas();
+        if !huerfanas.is_empty() {
+            log::info!("Instalaciones huérfanas reconciliadas como pendientes de borrar: {:?}", huerfanas);
+        }
         let retiradas = glass_editor::updates::procesar_pendientes_borrar();
         if std::env::args().any(|a| a == "--tras-actualizar-hub") {
             glass_editor::launcher::anunciar_arranque_tras_actualizacion_hub();
@@ -9698,6 +9796,47 @@ mod standalone_launch_tests {
     fn editor_con_bandera_es_juego() {
         assert!(is_standalone_launch(false, &args(&["glass_app", "--standalone"])));
         assert!(is_standalone_launch(false, &args(&["glass_app", "--game"])));
+    }
+
+    #[test]
+    fn validar_argumentos_acepta_los_modos_sanos() {
+        assert!(validar_argumentos(&args(&["glass_app"])).is_ok());
+        assert!(validar_argumentos(&args(&["glass_app", "--hub"])).is_ok());
+        assert!(validar_argumentos(&args(&["glass_app", "--project", "/tmp/p"])).is_ok());
+        assert!(validar_argumentos(&args(&["glass_app", "--scene", "e.scene.json"])).is_ok());
+        assert!(validar_argumentos(&args(&["glass_app", "--sample", "fisica"])).is_ok());
+        assert!(validar_argumentos(&args(&["glass_app", "--standalone", "--scene", "e.json"])).is_ok());
+    }
+
+    #[test]
+    fn validar_argumentos_exige_valor_en_los_flags_con_valor() {
+        for flag in ["--project", "--scene", "--sample"] {
+            let err = validar_argumentos(&args(&["glass_app", flag])).unwrap_err();
+            assert!(err.contains(flag), "el error debe nombrar el flag: {err}");
+            assert!(err.contains("necesita un valor"), "{err}");
+        }
+    }
+
+    #[test]
+    fn validar_argumentos_un_flag_no_es_un_valor() {
+        // Auditoría S10: el token siguiente que es otro flag cuenta
+        // como valor ausente, y TODAS las apariciones se validan.
+        let err = validar_argumentos(&args(&["glass_app", "--project", "--standalone"])).unwrap_err();
+        assert!(err.contains("--project") && err.contains("necesita un valor"), "{err}");
+        let err = validar_argumentos(&args(&["glass_app", "--scene", "a.json", "--scene"])).unwrap_err();
+        assert!(err.contains("--scene") && err.contains("necesita un valor"), "{err}");
+    }
+
+    #[test]
+    fn validar_argumentos_rechaza_las_parejas_incompatibles() {
+        let err = validar_argumentos(&args(&["glass_app", "--hub", "--project", "/tmp/p"])).unwrap_err();
+        assert!(err.contains("--hub") && err.contains("--project"), "{err}");
+        let err = validar_argumentos(&args(&["glass_app", "--hub", "--scene", "e.json"])).unwrap_err();
+        assert!(err.contains("--hub") && err.contains("--scene"), "{err}");
+        let err = validar_argumentos(&args(&["glass_app", "--hub", "--sample", "fisica"])).unwrap_err();
+        assert!(err.contains("--hub") && err.contains("--sample"), "{err}");
+        let err = validar_argumentos(&args(&["glass_app", "--project", "/tmp/p", "--scene", "e.json"])).unwrap_err();
+        assert!(err.contains("--project") && err.contains("--scene"), "{err}");
     }
 
     #[test]
