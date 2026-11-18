@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::updates::{
-    data_root, extract_zip, get_bytes, is_newer, now_unix, sha256_hex, ENGINE_VERSION,
+    data_root, extract_zip, get_bytes, is_newer, now_unix, sha256_hex,
 };
 
 /// Nombre del manifiesto dentro de cada paquete.
@@ -159,26 +159,26 @@ pub fn fetch_catalog(repo: &str) -> Result<PluginCatalog, String> {
         .map_err(|e| format!("El catálogo de complementos ({url}) no es un JSON válido: {e}"))
 }
 
-/// Requisito de motor que no se cumple (p. ej. ">= 0.11.0"), o None si es compatible.
-pub fn engine_incompatibility(m: &PluginManifest) -> Option<String> {
+/// Requisito de motor que no se cumple contra `version` (p. ej. ">= 0.11.0"), o None si es compatible.
+pub fn engine_incompatibility(m: &PluginManifest, version: &str) -> Option<String> {
     if let Some(min) = m.min_engine.as_deref() {
         // El motor es más viejo que el mínimo.
-        if is_newer(min, ENGINE_VERSION) {
+        if is_newer(min, version) {
             return Some(format!(">= {min}"));
         }
     }
     if let Some(max) = m.max_engine.as_deref() {
         // El motor es más nuevo que el máximo.
-        if is_newer(ENGINE_VERSION, max) {
+        if is_newer(version, max) {
             return Some(format!("<= {max}"));
         }
     }
     None
 }
 
-/// true si la versión del motor está dentro de [min_engine, max_engine].
-pub fn engine_compatible(m: &PluginManifest) -> bool {
-    engine_incompatibility(m).is_none()
+/// true si `version` del motor está dentro de [min_engine, max_engine].
+pub fn engine_compatible(m: &PluginManifest, version: &str) -> bool {
+    engine_incompatibility(m, version).is_none()
 }
 
 /// true si el complemento está instalado y el catálogo ofrece una versión más nueva.
@@ -189,12 +189,12 @@ pub fn update_available(m: &PluginManifest, store: &PluginStore) -> bool {
 }
 
 /// Descarga, verifica e instala un complemento en data_root()/plugins/<id>.
-pub fn install_plugin(m: &PluginManifest) -> Result<PluginInstall, String> {
+pub fn install_plugin(m: &PluginManifest, version: &str) -> Result<PluginInstall, String> {
     // Comprobaciones baratas antes de descargar nada.
     validate_id(&m.id)?;
-    check_engine(m)?;
+    check_engine(m, version)?;
     let bytes = get_bytes(&m.url)?;
-    install_plugin_from_bytes(m, &bytes, &data_root())
+    install_plugin_from_bytes(m, &bytes, &data_root(), version)
 }
 
 /// Núcleo de la instalación sin red: verifica `bytes` e instala en `root`/plugins/<id>,
@@ -203,9 +203,10 @@ pub fn install_plugin_from_bytes(
     m: &PluginManifest,
     bytes: &[u8],
     root: &Path,
+    version: &str,
 ) -> Result<PluginInstall, String> {
     validate_id(&m.id)?;
-    check_engine(m)?;
+    check_engine(m, version)?;
 
     // El hash se comprueba ANTES de tocar el disco.
     let expected = m.sha256.trim().to_ascii_lowercase();
@@ -265,6 +266,37 @@ pub fn plugin_enabled(id: &str) -> bool {
     PluginStore::load().find(id).is_some_and(|i| i.enabled)
 }
 
+/// Puerta de activación con una versión de motor explícita.
+///
+/// true solo si el complemento está instalado, activado y el manifiesto de su
+/// instalación (`<install.path>/<MANIFEST_FILE>`) es compatible con `version`
+/// (un complemento incompatible no se activa). Sin manifiesto en la carpeta
+/// (instalación heredada), la compatibilidad es desconocida y no bloquea;
+/// un manifiesto presente pero corrupto sí bloquea: sus metadatos no son
+/// fiables (auditoría S7).
+pub fn plugin_enabled_for(id: &str, version: &str) -> bool {
+    let store = PluginStore::load();
+    let Some(install) = store.find(id) else {
+        // Sin instalación registrada, `plugin_enabled` también diría false.
+        return plugin_enabled(id);
+    };
+    if !install.enabled {
+        return false;
+    }
+    let manifest_path = Path::new(&install.path).join(MANIFEST_FILE);
+    match fs::read(&manifest_path) {
+        Ok(bytes) => match serde_json::from_slice::<PluginManifest>(&bytes) {
+            Ok(m) => engine_compatible(&m, version),
+            // Manifiesto presente pero corrupto: sus metadatos no son
+            // fiables y el complemento no se activa (auditoría S7).
+            Err(_) => false,
+        },
+        // Sin manifiesto (instalación heredada): compatibilidad
+        // desconocida, no se bloquea.
+        Err(_) => true,
+    }
+}
+
 /// El id viene de la red y se usa como nombre de carpeta: solo [A-Za-z0-9._-], sin '.' inicial.
 fn validate_id(id: &str) -> Result<(), String> {
     let valid = !id.is_empty()
@@ -279,10 +311,10 @@ fn validate_id(id: &str) -> Result<(), String> {
     }
 }
 
-fn check_engine(m: &PluginManifest) -> Result<(), String> {
-    match engine_incompatibility(m) {
+fn check_engine(m: &PluginManifest, version: &str) -> Result<(), String> {
+    match engine_incompatibility(m, version) {
         Some(req) => Err(format!(
-            "El complemento {} requiere motor {req}; este es {ENGINE_VERSION}.",
+            "El complemento {} requiere motor {req}; este es {version}.",
             m.name
         )),
         None => Ok(()),
@@ -309,6 +341,7 @@ fn extract_and_check(m: &PluginManifest, bytes: &[u8], dest: &Path) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::updates::ENGINE_VERSION;
     use std::io::{Cursor, Write};
 
     /// Carpeta temporal única por proceso y por test.
@@ -393,20 +426,41 @@ mod tests {
     #[test]
     fn compatibilidad_con_el_motor() {
         let mut m = manifest("x", "1.0.0");
-        assert!(engine_compatible(&m));
+        assert!(engine_compatible(&m, ENGINE_VERSION));
 
         m.min_engine = Some("0.10.0".to_owned());
-        assert!(engine_compatible(&m));
+        assert!(engine_compatible(&m, ENGINE_VERSION));
         m.min_engine = Some("99.0.0".to_owned());
-        assert!(!engine_compatible(&m));
-        assert_eq!(engine_incompatibility(&m).as_deref(), Some(">= 99.0.0"));
+        assert!(!engine_compatible(&m, ENGINE_VERSION));
+        assert_eq!(
+            engine_incompatibility(&m, ENGINE_VERSION).as_deref(),
+            Some(">= 99.0.0")
+        );
 
         m.min_engine = None;
         m.max_engine = Some("0.1.0".to_owned());
-        assert!(!engine_compatible(&m));
-        assert_eq!(engine_incompatibility(&m).as_deref(), Some("<= 0.1.0"));
+        assert!(!engine_compatible(&m, ENGINE_VERSION));
+        assert_eq!(
+            engine_incompatibility(&m, ENGINE_VERSION).as_deref(),
+            Some("<= 0.1.0")
+        );
         m.max_engine = Some("99.0.0".to_owned());
-        assert!(engine_compatible(&m));
+        assert!(engine_compatible(&m, ENGINE_VERSION));
+    }
+
+    #[test]
+    fn incompatible_con_una_version_y_compatible_con_otra() {
+        // Versiones literales fijas: el test es determinista sea cual sea ENGINE_VERSION.
+        let mut m = manifest("x", "1.0.0");
+        m.min_engine = Some("0.10.50".to_owned());
+
+        assert_eq!(
+            engine_incompatibility(&m, "0.10.17").as_deref(),
+            Some(">= 0.10.50")
+        );
+        assert!(!engine_compatible(&m, "0.10.17"));
+        assert!(engine_compatible(&m, "0.10.50"));
+        assert!(engine_compatible(&m, "0.10.99"));
     }
 
     #[test]
@@ -419,13 +473,20 @@ mod tests {
     }
 
     #[test]
+    fn plugin_enabled_for_sin_instalacion_es_falso() {
+        assert!(!plugin_enabled_for("no-existe-de-verdad", "0.10.17"));
+        assert!(!plugin_enabled_for("no-existe-de-verdad", "0.10.99"));
+        assert!(!plugin_enabled_for("no-existe-de-verdad", "99.0.0"));
+    }
+
+    #[test]
     fn instalar_desde_bytes() {
         let root = temp_root("install_ok");
         let bytes = package("herramienta-3d", "1.0.0");
         let mut m = manifest("herramienta-3d", "1.0.0");
         m.sha256 = sha256_hex(&bytes).to_ascii_uppercase();
 
-        let inst = install_plugin_from_bytes(&m, &bytes, &root).unwrap();
+        let inst = install_plugin_from_bytes(&m, &bytes, &root, ENGINE_VERSION).unwrap();
         let dir = plugins_dir_in(&root).join("herramienta-3d");
         assert!(dir.join(MANIFEST_FILE).is_file());
         assert!(dir.join("modulo.json").is_file());
@@ -440,10 +501,37 @@ mod tests {
         let bytes2 = package("herramienta-3d", "1.1.0");
         let mut m2 = manifest("herramienta-3d", "1.1.0");
         m2.sha256 = sha256_hex(&bytes2);
-        install_plugin_from_bytes(&m2, &bytes2, &root).unwrap();
+        install_plugin_from_bytes(&m2, &bytes2, &root, ENGINE_VERSION).unwrap();
         let store = PluginStore::load_from(&store_path_in(&root));
         assert_eq!(store.installs.len(), 1);
         assert_eq!(store.find("herramienta-3d").map(|i| i.version.as_str()), Some("1.1.0"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn instalar_rechaza_con_version_explicita() {
+        let root = temp_root("install_version_explicita");
+        let bytes = package("herramienta-3d", "1.0.0");
+        let mut m = manifest("herramienta-3d", "1.0.0");
+        m.min_engine = Some("0.10.50".to_owned());
+        m.sha256 = sha256_hex(&bytes);
+
+        // Motor gestionado más viejo que el mínimo: se rechaza antes de tocar el disco.
+        let err = install_plugin_from_bytes(&m, &bytes, &root, "0.10.17").unwrap_err();
+        assert!(
+            err.contains("requiere motor >= 0.10.50"),
+            "error inesperado: {err}"
+        );
+        assert!(!plugins_dir_in(&root).join("herramienta-3d").exists());
+        assert!(PluginStore::load_from(&store_path_in(&root)).find("herramienta-3d").is_none());
+
+        // El mismo paquete con una versión de motor suficiente sí se instala.
+        let inst = install_plugin_from_bytes(&m, &bytes, &root, "0.10.99").unwrap();
+        assert!(inst.enabled);
+        assert!(plugins_dir_in(&root)
+            .join("herramienta-3d")
+            .join(MANIFEST_FILE)
+            .is_file());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -454,7 +542,7 @@ mod tests {
         let mut m = manifest("herramienta-3d", "1.0.0");
         m.sha256 = "00".repeat(32);
 
-        let err = install_plugin_from_bytes(&m, &bytes, &root).unwrap_err();
+        let err = install_plugin_from_bytes(&m, &bytes, &root, ENGINE_VERSION).unwrap_err();
         assert!(err.contains("SHA-256"));
         assert!(!plugins_dir_in(&root).join("herramienta-3d").exists());
         assert!(PluginStore::load_from(&store_path_in(&root)).find("herramienta-3d").is_none());
@@ -468,7 +556,7 @@ mod tests {
         let mut m = manifest("herramienta-3d", "1.0.0");
         m.sha256 = sha256_hex(&bytes);
 
-        assert!(install_plugin_from_bytes(&m, &bytes, &root).is_err());
+        assert!(install_plugin_from_bytes(&m, &bytes, &root, ENGINE_VERSION).is_err());
         assert!(!plugins_dir_in(&root).join("herramienta-3d").exists());
         assert!(!plugins_dir_in(&root).join(".herramienta-3d.part").exists());
         assert!(PluginStore::load_from(&store_path_in(&root)).find("herramienta-3d").is_none());
@@ -481,7 +569,7 @@ mod tests {
         let bytes = package("../fuera", "1.0.0");
         let mut m = manifest("../fuera", "1.0.0");
         m.sha256 = sha256_hex(&bytes);
-        assert!(install_plugin_from_bytes(&m, &bytes, &root).is_err());
+        assert!(install_plugin_from_bytes(&m, &bytes, &root, ENGINE_VERSION).is_err());
         assert!(validate_id(".oculto").is_err());
         assert!(validate_id("").is_err());
         assert!(validate_id("herramienta-3d").is_ok());

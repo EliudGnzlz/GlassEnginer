@@ -2141,7 +2141,10 @@ impl GlassEngineApp {
         // Puerta del complemento «herramienta-3d» para las tools glass_mesh_*.
         #[cfg(feature = "editor")]
         mcp_server
-            .set_mesh_tools_enabled(glass_editor::plugins::plugin_enabled("herramienta-3d"));
+            .set_mesh_tools_enabled(glass_editor::plugins::plugin_enabled_for(
+                "herramienta-3d",
+                glass_editor::updates::ENGINE_VERSION,
+            ));
         let asset_cache = AssetCache::new();
         let audio_system = Arc::new(AudioSystem::new());
         register_global_audio_system(audio_system.clone());
@@ -9285,7 +9288,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mcp_server = McpServer::new(scene_state);
         // Puerta del complemento «herramienta-3d» para las tools glass_mesh_*.
         mcp_server
-            .set_mesh_tools_enabled(glass_editor::plugins::plugin_enabled("herramienta-3d"));
+            .set_mesh_tools_enabled(glass_editor::plugins::plugin_enabled_for(
+                "herramienta-3d",
+                glass_editor::updates::ENGINE_VERSION,
+            ));
         mcp_server.run_stdio_loop();
         return Ok(());
     }

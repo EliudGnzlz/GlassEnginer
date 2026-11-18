@@ -1627,6 +1627,13 @@ impl LauncherPanel {
         let store = self.plugin_store.clone();
         let color_error = ui.visuals().error_fg_color;
         let color_aviso = ui.visuals().warn_fg_color;
+        // Version contra la que se juzga la compatibilidad (S7): en el
+        // Hub, la del motor gestionado en uso; en combinado, la propia.
+        let version_motor: Option<String> = if self.es_hub {
+            crate::updates::EngineStore::load().en_uso
+        } else {
+            Some(crate::updates::ENGINE_VERSION.to_string())
+        };
 
         ui.label(egui::RichText::new("Complementos").size(22.0).strong().color(TEXT_MAIN));
         ui.add_space(4.0);
@@ -1699,7 +1706,10 @@ impl LauncherPanel {
                     .show(ui, |ui| {
                         for m in &cat.plugins {
                             let instalado = store.find(&m.id);
-                            let requisito = plugins::engine_incompatibility(m);
+                            let requisito = match &version_motor {
+                                Some(v) => plugins::engine_incompatibility(m, v),
+                                None => Some("sin motor instalado".to_string()),
+                            };
                             let compatible = requisito.is_none();
 
                             ui.group(|ui| {
@@ -1746,14 +1756,25 @@ impl LauncherPanel {
                                                 );
                                             }
                                             let texto = if inst.enabled { "Desactivar" } else { "Activar" };
-                                            if ui.add_enabled(!ocupado, egui::Button::new(texto)).clicked() {
+                                            if ui
+                                                .add_enabled(
+                                                    !ocupado && (inst.enabled || compatible),
+                                                    egui::Button::new(texto),
+                                                )
+                                                .clicked()
+                                            {
                                                 alternar = Some((m.id.clone(), !inst.enabled));
                                             }
                                         }
                                     }
                                     if let Some(req) = &requisito {
                                         ui.label(
-                                            egui::RichText::new(format!("⚠ Requiere motor {req}"))
+                                            egui::RichText::new(if version_motor.is_none() {
+                                                "⚠ Sin motor instalado: instala el motor para usar complementos."
+                                                    .to_owned()
+                                            } else {
+                                                format!("⚠ Requiere motor {req}")
+                                            })
                                                 .size(13.0)
                                                 .color(color_aviso),
                                         );
@@ -1794,8 +1815,10 @@ impl LauncherPanel {
                 m.name
             ));
             let (tx, rx) = mpsc::channel();
+            let version = version_motor
+                .unwrap_or_else(|| crate::updates::ENGINE_VERSION.to_string());
             std::thread::spawn(move || {
-                let _ = tx.send(PluginMsg::Installed(plugins::install_plugin(&m)));
+                let _ = tx.send(PluginMsg::Installed(plugins::install_plugin(&m, &version)));
             });
             self.plugin_rx = Some(rx);
         }

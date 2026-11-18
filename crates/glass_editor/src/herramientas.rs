@@ -35,7 +35,12 @@ pub fn registro_herramientas() -> Vec<HerramientaInfo> {
 /// Herramientas del registro cuyo portón pasa, con el estado de los
 /// complementos leído en vivo de disco (como hace el menú Window).
 pub fn herramientas_disponibles() -> Vec<HerramientaInfo> {
-    disponibles_con(crate::plugins::plugin_enabled)
+    // S7: el portón juzga también la compatibilidad del complemento
+    // instalado contra la versión de este motor (D3: incompatible, no
+    // se activa).
+    disponibles_con(|id| {
+        crate::plugins::plugin_enabled_for(id, crate::updates::ENGINE_VERSION)
+    })
 }
 
 /// Filtra el registro con el portón dado. Es la versión testeable de

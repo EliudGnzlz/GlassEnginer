@@ -1357,3 +1357,33 @@ Primero de los sub-bloques S0–S10 del diseño en `fase1/diseno_separacion.md` 
 **Paquetes en paralelo:** **Opus (36.182)** — campo `es_hub` y helpers en el panel, pie de dos versiones, cabecera Hub, Instalaciones en dos secciones, comprobación contra la gestionada, interceptación en main (18 pares esperados; M3/M4 y la sección Hub llegaron como código suelto en sus notas y los insertó Rayo con las correcciones de Kimi). **DeepSeek flash (6.033)** — `check_update_against`, `borrar_conservada_en`, `restos_versions_en`, `borrar_versions_en` y 4 tests, otra vez con el vicio del `#[test]` duplicado: reescritos por Rayo contra la API real. **Kimi k3.1-pro (4.304)** — auditoría con veredicto NO APTO por la carrera del registro y el riesgo del entorno: ambos aplicados; puntos 3 y 5 OK, punto 4 verificado.
 
 **Verificación:** glass_editor 161/161 (+4) · glass_app 74/74 · **pipeline local exacto 5/5 a 0 (761 tests)** · **test físico PASS** con raíz aislada y el binario real copiado a `engines/0.10.100`: doble clic en la tarjeta → hijo del gestionado con `--project`, su lock de sesión tomado y «Proyecto abierto» en su log, con el Hub vivo en su vista; Ejemplos → hijo con `--sample fisica`; Crear proyecto desde el Hub → creado en disco (`project.glass`) y hijo lanzado, registrado por el propio hijo; Instalaciones con las dos secciones y la comprobación contra la gestionada («Estás en la última versión publicada (v0.10.100)», no contra la versión del binario); Borrar restos y Borrar conservada a clic, verificados en disco y en `engines.json`; y con una segunda raíz sin motor: aviso y acciones deshabilitadas en Proyectos, solo el aviso en Ejemplos, aviso en Instalaciones y la comprobación con base «0.0.0» ofreciendo «v0.10.100 (aún no hay motor instalado)». La VM se reemplazó a mitad del test (procesos y Xvfb/xdotool perdidos): se reinstaló el tooling y se repitieron las comprobaciones restantes sobre la misma fixture.
+
+## Separación S7 — complementos contra el motor en uso (2026-11-18)
+
+- **D3 hecho código**: el juicio de compatibilidad de complementos ya no usa
+  una constante global: `engine_incompatibility`/`engine_compatible`/
+  `check_engine`/`install_plugin`/`install_plugin_from_bytes` reciben la
+  **versión explícita** contra la que juzgar. En el Hub, la pestaña
+  Complementos juzga contra el **motor gestionado en uso** (`engines.json`);
+  en modo combinado, contra el propio binario. Sin motor instalado: aviso
+  «⚠ Sin motor instalado: instala el motor para usar complementos.», todo
+  complemento marcado incompatible («sin motor instalado») y Activar
+  bloqueado — Desactivar sigue permitido. La instalación también juzga
+  contra esa versión (la del Hub en modo Hub).
+- **Puerta de activación versionada** `plugin_enabled_for(id, version)`:
+  lee el manifiesto de la instalación en disco y exige compatibilidad con
+  la versión dada. Las tres puertas de MeshForge la usan ya con la versión
+  del proceso (MCP en vivo, MCP stdio y `herramientas_disponibles`).
+  Semántica de borde (auditoría Kimi aplicada): sin manifiesto en la
+  carpeta (instalación heredada) no bloquea; manifiesto presente pero
+  corrupto SÍ bloquea (metadatos no fiables). La semántica de instalación
+  se mantiene de rechazo: un incompatible nunca llega a instalarse porque
+  `check_engine` corre antes de persistir.
+- **Test físico PASS** por la vía real del MCP stdio (`--mcp`,
+  tools/list) con raíz aislada y la herramienta-3d registrada y activada:
+  manifiesto con `min_engine 99.0.0` → 50 tools, **0 glass_mesh_***;
+  manifiesto corrupto → 0; sin manifiesto → 57 tools, **7 glass_mesh_***;
+  manifiesto compatible → 7. La puerta responde a la versión tal como se
+  pidió (D3: incompatible, no se activa).
+- Pipeline local exacto: 5/5 a 0, **764 tests** (glass_editor 164).
+  Consumo: **Opus 9.285 · DeepSeek flash 14.725 · Kimi k3.1-pro 2.987**.
