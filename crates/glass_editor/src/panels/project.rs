@@ -89,6 +89,9 @@ pub fn listar_directorio(dir: &Path) -> Result<Vec<Entrada>, String> {
         if nombre.starts_with('.') {
             continue;
         }
+        if nombre.ends_with(".meta.json") {
+            continue;
+        }
         let es_dir = item.file_type().map(|t| t.is_dir()).unwrap_or(false);
         let bytes = item.metadata().map(|m| m.len()).unwrap_or(0);
         entradas.push(Entrada { nombre, es_dir, bytes });
@@ -468,6 +471,29 @@ pub fn mover_a_papelera(raiz_proyecto: &Path, ruta: &Path) -> Result<PathBuf, St
     Ok(destino)
 }
 
+/// Migas de pan desde la raíz de assets hasta `current_dir`: pares
+/// (etiqueta visible, ruta acumulada). La primera etiqueta es el nombre
+/// de la propia raíz. Si `current_dir` no cuelga de `assets_root`,
+/// devuelve una sola miga con la raíz.
+pub fn migas(assets_root: &Path, current_dir: &Path) -> Vec<(String, PathBuf)> {
+    let nombre_raiz = assets_root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "assets".to_string());
+    let mut salida = vec![(nombre_raiz, assets_root.to_path_buf())];
+    if let Ok(rel) = current_dir.strip_prefix(assets_root) {
+        let mut acumulada = assets_root.to_path_buf();
+        for componente in rel.components() {
+            acumulada.push(componente.as_os_str());
+            salida.push((
+                componente.as_os_str().to_string_lossy().into_owned(),
+                acumulada.clone(),
+            ));
+        }
+    }
+    salida
+}
+
 /// Todas las carpetas bajo `assets_root` (incluida ella misma), en orden.
 pub fn listar_carpetas(assets_root: &Path) -> Vec<PathBuf> {
     let mut carpetas = Vec::new();
@@ -651,6 +677,7 @@ fn submenu_crear(ui: &mut egui::Ui) -> Option<TipoCreacion> {
             (TipoCreacion::Carpeta, "📁 Carpeta"),
             (TipoCreacion::Escena, "🎬 Escena"),
             (TipoCreacion::Material, "🖌 Material"),
+            (TipoCreacion::Prefab, "🧩 Prefab"),
             (TipoCreacion::Grafo, "🎨 Grafo de shaders"),
             (TipoCreacion::Script, "📜 Script C#"),
         ] {
@@ -692,6 +719,10 @@ pub struct ProjectPanel {
     pub pending_conversion: Option<PathBuf>,
     /// Asset cuyo arrastre hacia la escena o la jerarquía está en curso.
     pub arrastre_asset: Option<PathBuf>,
+    /// Texto del buscador del panel (filtra el listado por nombre).
+    pub busqueda: String,
+    /// Árbol de carpetas cacheado (raíz primero); se renueva en `refrescar`.
+    pub arbol_carpetas: Vec<PathBuf>,
 }
 
 impl Default for ProjectPanel {
@@ -717,6 +748,8 @@ impl ProjectPanel {
             pending_prefab_instantiate: None,
             pending_conversion: None,
             arrastre_asset: None,
+            busqueda: String::new(),
+            arbol_carpetas: Vec::new(),
         };
         panel.refrescar();
         panel
@@ -770,6 +803,7 @@ impl ProjectPanel {
                 self.set_error(e);
             }
         }
+        self.arbol_carpetas = listar_carpetas(&self.assets_root);
     }
 
     /// Importa los archivos soltados desde el SO al directorio
@@ -968,10 +1002,21 @@ impl ProjectPanel {
         let en_raiz = self.en_raiz();
         let mut pedir_refresco = false;
         let mut pedir_subir = false;
+        let mut navegar_cabecera: Option<PathBuf> = None;
         ui.horizontal(|ui| {
             ui.heading("📁 Proyecto / Assets");
             ui.separator();
-            ui.label(format!("Ruta: {}", self.ruta_actual_legible()));
+            ui.label("Ruta:");
+            let migas_cabecera = migas(&self.assets_root, &self.current_dir);
+            let total_migas = migas_cabecera.len();
+            for (i, (etiqueta, ruta)) in migas_cabecera.into_iter().enumerate() {
+                if ui.small_button(etiqueta).clicked() {
+                    navegar_cabecera = Some(ruta);
+                }
+                if i + 1 < total_migas {
+                    ui.label("›");
+                }
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("🔄 Refrescar").clicked() {
                     pedir_refresco = true;
@@ -990,6 +1035,11 @@ impl ProjectPanel {
         }
         if pedir_subir {
             self.subir();
+        }
+        if let Some(dir) = navegar_cabecera {
+            self.current_dir = dir;
+            self.seleccion = None;
+            self.refrescar();
         }
 
         // --- Barra de creación ------------------------------------------------
@@ -1041,6 +1091,66 @@ impl ProjectPanel {
 
         ui.separator();
 
+        // --- Buscador ---------------------------------------------------------
+        ui.horizontal(|ui| {
+            ui.label("🔍");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.busqueda)
+                    .hint_text("Buscar en esta carpeta…")
+                    .desired_width(220.0),
+            );
+            if !self.busqueda.is_empty() && ui.small_button("✖").clicked() {
+                self.busqueda.clear();
+            }
+        });
+
+        // --- Dos zonas: árbol de carpetas (izquierda) + lista (derecha) -------
+        // Columnas con layout ordinario, SIN egui::Panel/CentralPanel: dentro
+        // de una pestaña del dock, esos paneles acaban robando la primera
+        // fila del contenido (la cabecera queda bajo la barra de pestañas).
+        // Verificado en vivo el 2026-11-17.
+        let altura_zonas = ui.available_height();
+        let mut navegar_arbol: Option<PathBuf> = None;
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(180.0, altura_zonas),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("arbol_carpetas_scroll")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            let raiz = self.assets_root.clone();
+                            for dir in self.arbol_carpetas.clone() {
+                                let profundidad = dir
+                                    .strip_prefix(&raiz)
+                                    .map(|r| r.components().count())
+                                    .unwrap_or(0);
+                                let nombre = if profundidad == 0 {
+                                    raiz.file_name()
+                                        .map(|n| n.to_string_lossy().into_owned())
+                                        .unwrap_or_else(|| "assets".to_string())
+                                } else {
+                                    dir.file_name()
+                                        .map(|n| n.to_string_lossy().into_owned())
+                                        .unwrap_or_default()
+                                };
+                                ui.horizontal(|ui| {
+                                    ui.add_space(profundidad as f32 * 14.0);
+                                    let activa = rutas_iguales(&dir, &self.current_dir);
+                                    if ui
+                                        .selectable_label(activa, format!("📁 {nombre}"))
+                                        .clicked()
+                                    {
+                                        navegar_arbol = Some(dir.clone());
+                                    }
+                                });
+                            }
+                        });
+                },
+            );
+            ui.separator();
+            ui.vertical(|ui| {
         // --- Lista de assets --------------------------------------------------
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -1085,7 +1195,11 @@ impl ProjectPanel {
                     ui.label(egui::RichText::new("(carpeta vacía)").italics().weak());
                 }
 
-                let entradas = self.entradas.clone();
+                let mut entradas = self.entradas.clone();
+                if !self.busqueda.is_empty() {
+                    let q = self.busqueda.to_lowercase();
+                    entradas.retain(|e| e.nombre.to_lowercase().contains(&q));
+                }
 
                 // Acciones diferidas: durante el dibujo sólo se leen campos.
                 let mut seleccionar: Option<PathBuf> = None;
@@ -1406,6 +1520,13 @@ impl ProjectPanel {
                     }
                 }
             });
+            });
+        });
+        if let Some(dir) = navegar_arbol {
+            self.current_dir = dir;
+            self.seleccion = None;
+            self.refrescar();
+        }
     }
 }
 
@@ -1781,5 +1902,40 @@ mod tests {
         assert!(prefab.descendant_entities.is_empty());
         assert!(crear_prefab(&raiz, "Heroe").is_err(), "duplicado debe fallar");
         let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn migas_desde_la_raiz_hasta_la_carpeta() {
+        let raiz = PathBuf::from("/p/assets");
+        let actual = PathBuf::from("/p/assets/models/x");
+        let resultado = migas(&raiz, &actual);
+        assert_eq!(
+            resultado,
+            vec![
+                ("assets".to_string(), PathBuf::from("/p/assets")),
+                ("models".to_string(), PathBuf::from("/p/assets/models")),
+                ("x".to_string(), PathBuf::from("/p/assets/models/x")),
+            ]
+        );
+
+        let en_raiz = migas(&raiz, &raiz);
+        assert_eq!(en_raiz, vec![("assets".to_string(), PathBuf::from("/p/assets"))]);
+    }
+
+    #[test]
+    fn listar_directorio_oculta_los_meta_json() {
+        let dir = std::env::temp_dir().join(format!("glass_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.glb"), b"x").unwrap();
+        std::fs::write(dir.join("a.glb.meta.json"), b"{}").unwrap();
+        std::fs::write(dir.join("b.txt"), b"y").unwrap();
+
+        let entradas = listar_directorio(&dir).unwrap();
+        let nombres: Vec<_> = entradas.iter().map(|e| e.nombre.clone()).collect();
+        assert!(nombres.contains(&"a.glb".to_string()));
+        assert!(nombres.contains(&"b.txt".to_string()));
+        assert!(!nombres.contains(&"a.glb.meta.json".to_string()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
