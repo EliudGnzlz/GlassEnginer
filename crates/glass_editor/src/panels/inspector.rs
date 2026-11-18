@@ -11,6 +11,11 @@ use std::sync::{Arc, Mutex};
 /// extensión) de los `.glb` bajo `assets/`, que es lo que la precarga del
 /// motor sube al AssetCache con esa misma clave.
 fn scan_model_names() -> Vec<String> {
+    scan_model_names_in(std::path::Path::new("assets"))
+}
+
+/// Igual que `scan_model_names`, pero bajo la raíz dada (para tests).
+fn scan_model_names_in(root: &std::path::Path) -> Vec<String> {
     fn walk(dir: &std::path::Path, depth: u32, out: &mut Vec<String>) {
         if depth > 8 {
             return;
@@ -34,7 +39,7 @@ fn scan_model_names() -> Vec<String> {
         }
     }
     let mut names = Vec::new();
-    walk(std::path::Path::new("assets"), 0, &mut names);
+    walk(root, 0, &mut names);
     names.sort();
     names.dedup();
     names
@@ -50,6 +55,10 @@ pub struct InspectorPanel {
     model_names: Vec<String>,
     model_names_for: Option<u64>,
     model_names_dirty: bool,
+    /// Último valor de `mesh.model` para el que ya se reescaneó la lista por
+    /// no aparecer en ella; evita reescanear en cada frame cuando el modelo
+    /// falta de verdad.
+    rescan_for_model: Option<String>,
 }
 
 impl InspectorPanel {
@@ -59,6 +68,7 @@ impl InspectorPanel {
             model_names: Vec::new(),
             model_names_for: None,
             model_names_dirty: true,
+            rescan_for_model: None,
         }
     }
 
@@ -94,11 +104,25 @@ impl InspectorPanel {
         };
 
         // La lista de modelos del selector de malla se refresca al cambiar
-        // la entidad seleccionada (o cuando la sección pide un refresco).
-        if self.model_names_dirty || self.model_names_for != Some(entity.id) {
+        // la entidad seleccionada, cuando la sección pide un refresco, o
+        // cuando el modelo actual no está en la lista cacheada: un horneado
+        // de MeshForge o una conversión pueden crear el .glb sin cambiar la
+        // selección, y dar el aviso "no está en assets/" con la lista vieja
+        // sería falso. Si tras reescanear sigue sin aparecer, el aviso es
+        // real y no se vuelve a reescanear para ese mismo valor.
+        let modelo_actual = entity
+            .mesh
+            .as_ref()
+            .map(|m| m.model.clone())
+            .unwrap_or_default();
+        let falta_en_cache = !modelo_actual.is_empty()
+            && !self.model_names.contains(&modelo_actual)
+            && self.rescan_for_model.as_deref() != Some(modelo_actual.as_str());
+        if self.model_names_dirty || self.model_names_for != Some(entity.id) || falta_en_cache {
             self.model_names = scan_model_names();
             self.model_names_for = Some(entity.id);
             self.model_names_dirty = false;
+            self.rescan_for_model = Some(modelo_actual);
         }
 
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -799,5 +823,65 @@ impl InspectorPanel {
                 }
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scan_model_names_in;
+    use std::path::{Path, PathBuf};
+
+    /// Crea un directorio temporal único para un test. Si ya existe (resto de
+    /// una ejecución anterior con el mismo pid), lo borra antes.
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "glass_inspector_test_{}_{}",
+            tag,
+            std::process::id()
+        ));
+        if dir.exists() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        std::fs::create_dir_all(&dir).expect("crear directorio temporal");
+        dir
+    }
+
+    fn touch(path: &Path) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("crear carpeta padre");
+        }
+        std::fs::write(path, b"").expect("crear archivo");
+    }
+
+    #[test]
+    fn recoge_stems_glb_recursivo_ordenado_y_sin_duplicados() {
+        let root = temp_dir("recoge");
+        touch(&root.join("nave.glb"));
+        touch(&root.join("nave.GLB")); // duplicado por mayúsculas
+        touch(&root.join("sub").join("torreta.glb"));
+        touch(&root.join("sub").join("profundo").join("base.GLB"));
+        touch(&root.join("notas.txt"));
+        touch(&root.join("sprite.png"));
+
+        let names = scan_model_names_in(&root);
+
+        assert_eq!(
+            names,
+            vec![
+                "base".to_string(),
+                "nave".to_string(),
+                "torreta".to_string()
+            ]
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn raiz_inexistente_devuelve_lista_vacia() {
+        let root = temp_dir("inexistente");
+        let missing = root.join("no_existe");
+        assert!(scan_model_names_in(&missing).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
