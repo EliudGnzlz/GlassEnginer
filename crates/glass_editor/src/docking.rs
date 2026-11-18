@@ -93,6 +93,10 @@ pub struct EditorDockingLayout {
     pub current_preset: LayoutPreset,
     /// Espacio de trabajo activo: el editor de siempre o el de herramientas.
     pub espacio: EspacioTrabajo,
+    /// Id (del registro `herramientas`) de la herramienta activa en el
+    /// espacio «Herramientas». Si deja de estar disponible, render() la
+    /// resuelve a la primera disponible.
+    pub herramienta_activa: String,
     pub request_launcher: bool,
     pub request_build_and_run: bool,
     pub request_build_settings: bool,
@@ -143,10 +147,10 @@ impl Default for EditorDockingLayout {
 }
 
 impl EditorDockingLayout {
-    /// El espacio que manda de verdad: «Herramientas» solo existe con el
-    /// portón del complemento «herramienta-3d» activo; sin él, el espacio
-    /// efectivo es siempre «Editor» (la herramienta vive en su espacio
-    /// propio, ya no es una pestaña del dock).
+    /// El espacio que manda de verdad: «Herramientas» solo existe con al
+    /// menos una herramienta disponible en el registro; sin ninguna, el
+    /// espacio efectivo es siempre «Editor» (las herramientas viven en su
+    /// espacio propio, ya no son pestañas del dock).
     pub fn espacio_efectivo(&self, porton_activo: bool) -> EspacioTrabajo {
         match self.espacio {
             EspacioTrabajo::Herramientas if !porton_activo => EspacioTrabajo::Editor,
@@ -209,6 +213,7 @@ impl EditorDockingLayout {
             dock_state: DockState::new(vec![EditorTab::SceneView, EditorTab::GameView]),
             current_preset: LayoutPreset::Default,
             espacio: EspacioTrabajo::Editor,
+            herramienta_activa: "meshforge".to_string(),
             request_launcher: false,
             request_abrir_contenedora_escena: false,
             request_copiar_ruta_escena: false,
@@ -590,13 +595,23 @@ impl EditorDockingLayout {
         }
 
         // --- ESPACIO DE TRABAJO ---
-        // El portón se lee en vivo (de disco, como hace el menú Window):
-        // si el complemento se apaga estando en «Herramientas», se vuelve
-        // solo al «Editor» en este mismo frame.
-        let porton_herramientas = crate::plugins::plugin_enabled("herramienta-3d");
+        // El portón del espacio es «hay alguna herramienta disponible
+        // según el registro». Los portones de cada herramienta se leen en
+        // vivo (de disco, como hace el menú Window): si se apagan todas
+        // estando en «Herramientas», se vuelve solo al «Editor» en este
+        // mismo frame.
+        let disponibles = crate::herramientas::herramientas_disponibles();
+        let porton_herramientas = !disponibles.is_empty();
         let espacio = self.espacio_efectivo(porton_herramientas);
         if espacio != self.espacio {
             self.espacio = espacio;
+        }
+        // Si la herramienta activa dejó de estar disponible, pasa a la
+        // primera disponible.
+        if let Some(h) = crate::herramientas::resolver_activa(&disponibles, &self.herramienta_activa) {
+            if h.id != self.herramienta_activa {
+                self.herramienta_activa = h.id.to_string();
+            }
         }
 
         // --- 1. BARRA DE MENÚS PRINCIPAL ESTILO UNITY / UNREAL ---
@@ -1019,7 +1034,7 @@ impl EditorDockingLayout {
             if porton_herramientas
                 && ui
                     .selectable_label(espacio == EspacioTrabajo::Herramientas, "🧊 Herramientas")
-                    .on_hover_text("El espacio propio de las herramientas (MeshForge)")
+                    .on_hover_text("El espacio propio de las herramientas")
                     .clicked()
             {
                 self.espacio = EspacioTrabajo::Herramientas;
@@ -1186,12 +1201,21 @@ impl EditorDockingLayout {
         };
 
         if espacio == EspacioTrabajo::Herramientas {
-            // Espacio de herramientas: el panel manda a cuerpo completo y
-            // el dock del editor ni se dibuja (su estado queda intacto
-            // para la vuelta). Todo lo demás de este render (atajos,
-            // pendientes del panel Proyecto, adaptación del collider,
-            // diálogos) corre igual en los dos espacios.
+            // Espacio de herramientas: manda la herramienta activa, a
+            // cuerpo completo, y el dock del editor ni se dibuja (su estado
+            // queda intacto para la vuelta). Hoy la única registrada es
+            // MeshForge y su panel es el que se dibuja; el despacho por
+            // herramienta vivirá aquí cuando haya más paneles. El panel
+            // recibe el registro y su petición de cambio se drena después.
+            // Todo lo demás de este render (atajos, pendientes del panel
+            // Proyecto, adaptación del collider, diálogos) corre igual en
+            // los dos espacios.
+            self.mesh_tool.herramientas = disponibles.clone();
+            self.mesh_tool.herramienta_activa = self.herramienta_activa.clone();
             self.mesh_tool.render(ui, scene_state);
+            if let Some(id) = self.mesh_tool.peticion_herramienta.take() {
+                self.herramienta_activa = id;
+            }
         } else {
             DockArea::new(&mut self.dock_state)
                 .show_inside(ui, &mut tab_viewer);

@@ -61,6 +61,12 @@ pub struct MeshToolPanel {
     collider_prompt_no_ask: bool,
     /// Adaptación del collider que aplica la capa de docking al cerrar.
     pub pending_collider_adapt: Option<ColliderAdapt>,
+    /// Herramientas disponibles según el registro (las pasa docking en cada frame).
+    pub herramientas: Vec<crate::herramientas::HerramientaInfo>,
+    /// Herramienta activa del espacio (la fija docking; la lee la zona de identidad).
+    pub herramienta_activa: String,
+    /// Cambio de herramienta pedido desde la lista lateral; lo drena docking.
+    pub peticion_herramienta: Option<String>,
 }
 
 /// Estado del modo «agarrar»: plano de cámara fijo por el centroide.
@@ -97,6 +103,9 @@ impl Default for MeshToolPanel {
             collider_prompt: None,
             collider_prompt_no_ask: false,
             pending_collider_adapt: None,
+            herramientas: Vec::new(),
+            herramienta_activa: "meshforge".to_string(),
+            peticion_herramienta: None,
             path_input: String::new(),
             status: "Sin sesión: abre un .glb de assets/.".to_owned(),
             camera: OrbitCamera::new([0.0, 0.0, 0.0]),
@@ -824,12 +833,34 @@ impl MeshToolPanel {
 
     /// Zona de identidad (barra lateral): la herramienta activa del espacio.
     fn zona_identidad(&mut self, ui: &mut egui::Ui) {
-        ui.strong("🧊 MeshForge");
-        ui.weak("Editor de mallas (.glb)");
+        if let Some(activa) = self
+            .herramientas
+            .iter()
+            .find(|h| h.id == self.herramienta_activa.as_str())
+        {
+            ui.strong(format!("{} {}", activa.icono, activa.nombre));
+            ui.weak(activa.descripcion);
+        }
         ui.separator();
         ui.weak("Herramientas");
-        let _ = ui.selectable_label(true, "🧊 MeshForge");
-        ui.weak("Más herramientas en camino");
+        let mut pedida: Option<String> = None;
+        for herramienta in &self.herramientas {
+            if ui
+                .selectable_label(
+                    herramienta.id == self.herramienta_activa.as_str(),
+                    format!("{} {}", herramienta.icono, herramienta.nombre),
+                )
+                .clicked()
+            {
+                pedida = Some(herramienta.id.to_string());
+            }
+        }
+        if let Some(id) = pedida {
+            self.peticion_herramienta = Some(id);
+        }
+        if self.herramientas.len() < 2 {
+            ui.weak("Más herramientas en camino");
+        }
     }
 
     /// Zona central sin sesión: el aviso de que hay que abrir un .glb.
