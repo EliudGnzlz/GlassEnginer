@@ -1,0 +1,20 @@
+[package]
+name = "glass_fbx"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+# Lector FBX nativo (C de un fichero, MIT/Unlicense): sustituye a Blender
+# para los .fbx; el .blend sigue por el bridge.
+ufbx = "0.7.2"
+
+[dev-dependencies]
+# Los tests de estructura parsean el GLB emitido con la misma crate que
+# usa el cargador del motor.
+gltf.workspace = true

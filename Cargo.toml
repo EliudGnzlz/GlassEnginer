@@ -12,6 +12,7 @@ members = [
     "crates/glass_mesh_edit",
     "crates/glass_launcher",
     "crates/glass_hub",
+    "crates/glass_fbx",
 ]
 resolver = "2"
 
