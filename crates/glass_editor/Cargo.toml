@@ -9,6 +9,7 @@ license.workspace = true
 glass_core.workspace = true
 glass_launcher.workspace = true
 glass_mesh_edit.workspace = true
+glass_physics.workspace = true
 glass_renderer.workspace = true
 glass_mcp.workspace = true
 glass_audio.workspace = true

@@ -6986,7 +6986,7 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
             #[cfg(feature = "editor")]
             {
                 let viewport = &self.editor_layout.viewport;
-                if viewport.show_grid {
+                if viewport.gizmos.show_grid {
                     let verts = glass_editor::panels::gizmo_3d::vertices_rejilla(
                         viewport.editor_cam_center,
                         viewport.editor_cam_dist,

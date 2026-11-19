@@ -1120,6 +1120,312 @@ pub fn draw_selection_bounding_box(
     }
 }
 
+/// Qué hay que dibujar como collider de una entidad, resuelto con las mismas
+/// reglas que la construcción de física (ver `collider_dibujo`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ColliderDibujo {
+    /// Primitivos de Rapier, cada uno con su offset local respecto al cuerpo.
+    Formas(Vec<(glass_physics::ColliderShape, [f32; 3])>),
+    /// Collider de malla: la física sustituye los primitivos por la
+    /// geometría del modelo; el gizmo de primitivos no aplica.
+    Malla,
+    /// Sin componente de física o sin Collider.
+    Ninguno,
+}
+/// Espejo literal de `shape_de_spec` (glass_app/src/main.rs): debe producir
+/// la misma forma que recibe Rapier para que el gizmo no mienta. Vive
+/// duplicada porque glass_app es el binario y el editor no puede depender
+/// de él; si cambia allí, debe cambiar aquí.
+fn forma_de_spec(spec: &glass_core::ColliderSpec) -> glass_physics::ColliderShape {
+    use glass_physics::ColliderShape;
+    match spec.shape.as_str() {
+        "Sphere" => ColliderShape::Ball { radius: spec.size[0].max(0.01) },
+        "Capsule" => ColliderShape::Capsule { half_height: spec.size[0].max(0.0), radius: spec.size[1].max(0.01) },
+        "Cylinder" => ColliderShape::Cylinder { half_height: spec.size[0].max(0.0), radius: spec.size[1].max(0.01) },
+        _ => ColliderShape::Cuboid { half_extents: spec.size },
+    }
+}
+/// Resuelve el collider de `ent` con las mismas reglas que la física
+/// (`colliders_resueltos` en glass_app): sin Collider no hay nada; el
+/// collider de malla tiene prioridad sobre los primitivos; con specs, una
+/// forma por spec con su offset; con la lista vacía, la forma histórica
+/// inferida del nombre de la malla visual con `box_offset`.
+///
+/// `world_scale` es la escala MUNDIAL de la entidad (la misma que recibe
+/// `collider_shape_for_builtin` al construir el cuerpo).
+pub fn collider_dibujo(ent: &EntityData, world_scale: [f32; 3]) -> ColliderDibujo {
+    let Some(physics) = ent.physics.as_ref() else {
+        return ColliderDibujo::Ninguno;
+    };
+    if !physics.has_collider {
+        return ColliderDibujo::Ninguno;
+    }
+    // `matches!` en lugar de `!=` para no exigir PartialEq a MeshColliderMode.
+    if !matches!(physics.mesh_collider, glass_core::MeshColliderMode::None) {
+        return ColliderDibujo::Malla;
+    }
+    if physics.colliders.is_empty() {
+        // Sin modelo el render cae al cubo, y `""` en
+        // collider_shape_for_builtin da la caja de box_extents: coherente.
+        let modelo = ent.mesh.as_ref().map(|m| m.model.as_str()).unwrap_or("");
+        ColliderDibujo::Formas(vec![(
+            glass_physics::collider_shape_for_builtin(modelo, world_scale, physics.box_extents),
+            physics.box_offset,
+        )])
+    } else {
+        ColliderDibujo::Formas(
+            physics
+                .colliders
+                .iter()
+                .map(|spec| (forma_de_spec(spec), spec.offset))
+                .collect(),
+        )
+    }
+}
+/// Dibuja las 12 aristas del paralelepípedo local [lo, hi] transformado por
+/// `world`, en una sola pasada (sin halo ni vértices ancla, a diferencia de
+/// la caja de selección). Mismo orden de esquinas y aristas que
+/// `draw_selection_bounding_box`.
+#[allow(clippy::too_many_arguments)]
+pub fn dibujar_caja(
+    painter: &Painter,
+    lo: [f32; 3],
+    hi: [f32; 3],
+    world: &[f32; 16],
+    vp: &[f32; 16],
+    rect: Rect,
+    color: Color32,
+    grosor: f32,
+) {
+    let corners_local = aabb_corners(lo, hi);
+
+    let mut corners_screen: [Option<Pos2>; 8] = [None; 8];
+    for (i, c) in corners_local.iter().enumerate() {
+        let p = glass_core::mat4_transform_point(*world, *c);
+        corners_screen[i] = world_to_screen(p, vp, rect);
+    }
+
+    // 12 aristas del paralelepípedo
+    const EDGES: [(usize, usize); 12] = [
+        (0, 1), (1, 2), (2, 3), (3, 0), // Base
+        (4, 5), (5, 6), (6, 7), (7, 4), // Techo
+        (0, 4), (1, 5), (2, 6), (3, 7), // Pilares verticales
+    ];
+
+    let stroke = Stroke::new(grosor, color);
+    for &(a, b) in &EDGES {
+        if let (Some(pa), Some(pb)) = (corners_screen[a], corners_screen[b]) {
+            painter.line_segment([pa, pb], stroke);
+        }
+    }
+}
+/// Puntos de un círculo `centro + (eje_u·cos θ + eje_v·sin θ)·radio`, con
+/// `segmentos + 1` puntos: el último repite EXACTAMENTE el primero para
+/// cerrar el anillo (cos(τ) en f32 no da 1.0 justo y dejaría una rendija).
+/// `segmentos` se acota a 1 para no dividir por cero.
+pub fn circulo_puntos(
+    centro: [f32; 3],
+    eje_u: [f32; 3],
+    eje_v: [f32; 3],
+    radio: f32,
+    segmentos: usize,
+) -> Vec<[f32; 3]> {
+    let n = segmentos.max(1);
+    let mut puntos = Vec::with_capacity(n + 1);
+    for i in 0..n {
+        let theta = (i as f32 / n as f32) * std::f32::consts::TAU;
+        let (s, c) = (theta.sin(), theta.cos());
+        puntos.push([
+            centro[0] + (eje_u[0] * c + eje_v[0] * s) * radio,
+            centro[1] + (eje_u[1] * c + eje_v[1] * s) * radio,
+            centro[2] + (eje_u[2] * c + eje_v[2] * s) * radio,
+        ]);
+    }
+    puntos.push(puntos[0]);
+    puntos
+}
+/// Polilínea CERRADA del perfil de una cápsula en el plano (eje_u, +Y):
+/// línea derecha (radio, -hh)→(radio, hh), arco superior centrado en
+/// (0, hh) de 0 a π, línea izquierda (-radio, hh)→(-radio, -hh) y arco
+/// inferior centrado en (0, -hh) de π a 2π. Las líneas rectas salen solas
+/// como tramos entre el final de un arco y el inicio del siguiente. El eje
+/// de la cápsula es +Y, como en Rapier. El último punto repite exactamente
+/// el primero para cerrar el perfil. `segmentos` (tramos por arco) se acota
+/// a 1 para no dividir por cero.
+pub fn capsula_puntos_perfil(
+    centro: [f32; 3],
+    eje_u: [f32; 3],
+    half_height: f32,
+    radio: f32,
+    segmentos: usize,
+) -> Vec<[f32; 3]> {
+    let n = segmentos.max(1);
+    let a_3d = |x: f32, y: f32| -> [f32; 3] {
+        [
+            centro[0] + eje_u[0] * x,
+            centro[1] + eje_u[1] * x + y,
+            centro[2] + eje_u[2] * x,
+        ]
+    };
+    let pi = std::f32::consts::PI;
+    let mut puntos = Vec::with_capacity(2 * n + 3);
+
+    // Inicio de la línea derecha.
+    puntos.push(a_3d(radio, -half_height));
+
+    // Arco superior: su primer punto (radio, hh) cierra la línea derecha y
+    // su último (-radio, hh) abre la izquierda.
+    for i in 0..=n {
+        let theta = pi * (i as f32 / n as f32);
+        puntos.push(a_3d(radio * theta.cos(), half_height + radio * theta.sin()));
+    }
+
+    // Arco inferior: su primer punto (-radio, -hh) cierra la línea izquierda.
+    // El punto final (ángulo 2π) se sustituye por el primero exacto.
+    for i in 0..n {
+        let theta = pi + pi * (i as f32 / n as f32);
+        puntos.push(a_3d(radio * theta.cos(), -half_height + radio * theta.sin()));
+    }
+    puntos.push(puntos[0]);
+    puntos
+}
+/// Dibuja una polilínea de puntos LOCALES: los transforma por `world`, los
+/// proyecta y salta los tramos con algún extremo fuera de pantalla (mismo
+/// patrón `prev_pt` que la esfera de alcance de `draw_light_gizmo`).
+fn dibujar_polilinea_local(
+    painter: &Painter,
+    puntos: &[[f32; 3]],
+    world: &[f32; 16],
+    vp: &[f32; 16],
+    rect: Rect,
+    stroke: Stroke,
+) {
+    let mut prev_pt: Option<Pos2> = None;
+    for p in puntos {
+        let p_mundo = glass_core::mat4_transform_point(*world, *p);
+        if let Some(sc_pt) = world_to_screen(p_mundo, vp, rect) {
+            if let Some(prev) = prev_pt {
+                painter.line_segment([prev, sc_pt], stroke);
+            }
+            prev_pt = Some(sc_pt);
+        } else {
+            prev_pt = None;
+        }
+    }
+}
+/// Maquinaria común de dibujo de primitivos de Rapier en wireframe,
+/// parametrizada por color y grosor para compartirla entre el collider
+/// (verde) y el CharacterController (cian). Las formas están en el espacio
+/// local del cuerpo con su offset; Rapier orienta cápsula y cilindro sobre +Y.
+fn dibujar_formas(
+    painter: &Painter,
+    formas: &[(glass_physics::ColliderShape, [f32; 3])],
+    world: &[f32; 16],
+    vp: &[f32; 16],
+    rect: Rect,
+    color: Color32,
+    grosor: f32,
+) {
+    use glass_physics::ColliderShape;
+
+    const SEGS_ANILLO: usize = 32;
+    const SEGS_ARCO: usize = 12;
+    const EJE_X: [f32; 3] = [1.0, 0.0, 0.0];
+    const EJE_Y: [f32; 3] = [0.0, 1.0, 0.0];
+    const EJE_Z: [f32; 3] = [0.0, 0.0, 1.0];
+
+    let stroke = Stroke::new(grosor, color);
+    let desplazar = |o: [f32; 3], dx: f32, dy: f32, dz: f32| [o[0] + dx, o[1] + dy, o[2] + dz];
+
+    for &(forma, off) in formas {
+        match forma {
+            ColliderShape::Cuboid { half_extents: he } => {
+                let lo = [off[0] - he[0], off[1] - he[1], off[2] - he[2]];
+                let hi = [off[0] + he[0], off[1] + he[1], off[2] + he[2]];
+                dibujar_caja(painter, lo, hi, world, vp, rect, color, grosor);
+            }
+            ColliderShape::Ball { radius } => {
+                // Tres anillos ortogonales: planos XY, YZ y XZ.
+                for (u, v) in [(EJE_X, EJE_Y), (EJE_Y, EJE_Z), (EJE_X, EJE_Z)] {
+                    let anillo = circulo_puntos(off, u, v, radius, SEGS_ANILLO);
+                    dibujar_polilinea_local(painter, &anillo, world, vp, rect, stroke);
+                }
+            }
+            ColliderShape::Capsule { half_height, radius } => {
+                // Perfiles en los planos XY y ZY.
+                for u in [EJE_X, EJE_Z] {
+                    let perfil = capsula_puntos_perfil(off, u, half_height, radius, SEGS_ARCO);
+                    dibujar_polilinea_local(painter, &perfil, world, vp, rect, stroke);
+                }
+                // Anillos XZ donde el tramo recto se une a los casquetes.
+                for y in [half_height, -half_height] {
+                    let anillo = circulo_puntos(desplazar(off, 0.0, y, 0.0), EJE_X, EJE_Z, radius, SEGS_ANILLO);
+                    dibujar_polilinea_local(painter, &anillo, world, vp, rect, stroke);
+                }
+            }
+            ColliderShape::Cylinder { half_height, radius } => {
+                // Tapas superior e inferior.
+                for y in [half_height, -half_height] {
+                    let anillo = circulo_puntos(desplazar(off, 0.0, y, 0.0), EJE_X, EJE_Z, radius, SEGS_ANILLO);
+                    dibujar_polilinea_local(painter, &anillo, world, vp, rect, stroke);
+                }
+                // Cuatro generatrices verticales en ±X y ±Z.
+                for (dx, dz) in [(radius, 0.0), (-radius, 0.0), (0.0, radius), (0.0, -radius)] {
+                    let linea = [
+                        desplazar(off, dx, -half_height, dz),
+                        desplazar(off, dx, half_height, dz),
+                    ];
+                    dibujar_polilinea_local(painter, &linea, world, vp, rect, stroke);
+                }
+            }
+        }
+    }
+}
+/// Dibuja el collider de una entidad en wireframe verde estilo Unity.
+///
+/// `formas` sale de `collider_dibujo`. Esas formas están en unidades de
+/// MUNDO (collider_shape_for_builtin ya aplicó la escala mundial y Rapier
+/// no escala colliders), así que `world` debe ser la pose del cuerpo
+/// (rotación + traslación, SIN escala): con la matriz de mundo completa la
+/// escala se aplicaría dos veces. `resaltado` (entidad seleccionada) usa
+/// trazo opaco y más grueso.
+pub fn draw_collider_gizmo(
+    painter: &Painter,
+    formas: &[(glass_physics::ColliderShape, [f32; 3])],
+    world: &[f32; 16],
+    vp: &[f32; 16],
+    rect: Rect,
+    resaltado: bool,
+) {
+    let (color, grosor) = if resaltado {
+        (Color32::from_rgb(90, 255, 130), 1.8)
+    } else {
+        (Color32::from_rgba_unmultiplied(90, 255, 130, 130), 1.2)
+    };
+    dibujar_formas(painter, formas, world, vp, rect, color, grosor);
+}
+/// Dibuja la cápsula del CharacterController en cian. `ch.height` es la
+/// altura TOTAL (casquetes incluidos), de ahí half_height = altura/2 − radio,
+/// el tramo recto que espera Rapier. Como en `draw_collider_gizmo`, `world`
+/// debe ser la pose sin escala: la cápsula del controlador no se escala.
+pub fn draw_character_gizmo(
+    painter: &Painter,
+    ch: &glass_core::CharacterData,
+    world: &[f32; 16],
+    vp: &[f32; 16],
+    rect: Rect,
+    resaltado: bool,
+) {
+    let half_height = (ch.height * 0.5 - ch.radius).max(0.0);
+    let forma = glass_physics::ColliderShape::Capsule { half_height, radius: ch.radius };
+    let (color, grosor) = if resaltado {
+        (Color32::from_rgb(90, 225, 255), 1.8)
+    } else {
+        (Color32::from_rgba_unmultiplied(90, 225, 255, 130), 1.2)
+    };
+    dibujar_formas(painter, &[(forma, ch.center)], world, vp, rect, color, grosor);
+}
+
 /// Base de una cámara para el dibujo del frustum: posición y ejes de mundo.
 pub struct BaseFrustum {
     pub pos: [f32; 3],
@@ -1146,7 +1452,14 @@ pub fn esquina_frustum(base: &BaseFrustum, d: f32, w: f32, h: f32, sr: f32, su: 
     p
 }
 
-/// Dibuja el Gizmo 3D de una Cámara: Icono 2D flotante, Frustum piramidal wireframe y vector de visión
+/// Dibuja el Gizmo 3D de una Cámara: Icono 2D flotante, Frustum piramidal wireframe y vector de visión.
+///
+/// `icon_px` es el diámetro final del badge en píxeles: el llamador ya aplicó
+/// la escala del menú Gizmos y la atenuación por distancia (modo «Iconos 3D»).
+/// `mostrar_icono` controla el badge y el nombre (sin icono no hay rect
+/// clicable y se devuelve None); `mostrar_gizmo` controla el frustum, que
+/// además solo se dibuja con la cámara seleccionada.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_camera_gizmo(
     painter: &Painter,
     cam_entity: &EntityData,
@@ -1154,6 +1467,9 @@ pub fn draw_camera_gizmo(
     vp: &[f32; 16],
     rect: Rect,
     is_selected: bool,
+    icon_px: f32,
+    mostrar_icono: bool,
+    mostrar_gizmo: bool,
 ) -> Option<Rect> {
     // Posición y orientación en mundo: un gizmo de cámara hijo debe dibujarse
     // donde la cámara está realmente, no donde su transform local dice.
@@ -1231,7 +1547,9 @@ pub fn draw_camera_gizmo(
         Stroke::new(1.0, Color32::from_rgba_unmultiplied(80, 220, 255, 70))
     };
 
-    if is_selected {
+    // El frustum depende de la selección Y del interruptor de gizmo de
+    // cámara del menú Gizmos: el icono y el gizmo se apagan por separado.
+    if is_selected && mostrar_gizmo {
         // 1. Rayos desde el vértice de la cámara (Apex) hacia las 4 esquinas del plano cercano
         let stroke_apex = Stroke::new(1.2, Color32::from_rgba_unmultiplied(80, 220, 255, 170));
         if let Some(pc) = p_cam {
@@ -1292,9 +1610,15 @@ pub fn draw_camera_gizmo(
         }
     }
 
-    // Dibujar icono billboard simple y elegante (24px)
+    // Sin icono no hay badge ni nombre, y tampoco rect clicable: el
+    // llamador no debe poder seleccionar la cámara por un icono invisible.
+    if !mostrar_icono {
+        return None;
+    }
+
+    // Dibujar icono billboard simple y elegante (diámetro icon_px)
     if let Some(screen_pos) = p_cam {
-        let badge_rect = Rect::from_center_size(screen_pos, vec2(24.0, 24.0));
+        let badge_rect = Rect::from_center_size(screen_pos, vec2(icon_px, icon_px));
         let bg_fill = if is_selected {
             Color32::from_rgb(0, 100, 170)
         } else {
@@ -1306,17 +1630,22 @@ pub fn draw_camera_gizmo(
             Stroke::new(1.0, Color32::from_rgb(60, 90, 120))
         };
 
-        painter.circle(screen_pos, 12.0, bg_fill, border_stroke);
+        // Proporciones del diseño original de 24 px: radio 12 (= icon_px/2),
+        // glifo de 12 (= icon_px/2) y nombre 16 px por debajo (= icon_px·0.66).
+        // El glifo se acota a 1 px porque egui no admite fuentes de tamaño 0
+        // (icono reducido a nada por la atenuación por distancia).
+        let glifo_px = (icon_px * 0.5).max(1.0);
+        painter.circle(screen_pos, icon_px * 0.5, bg_fill, border_stroke);
         painter.text(
             screen_pos,
             egui::Align2::CENTER_CENTER,
             "🎥",
-            egui::FontId::proportional(12.0),
+            egui::FontId::proportional(glifo_px),
             Color32::WHITE,
         );
 
         painter.text(
-            screen_pos + vec2(0.0, 16.0),
+            screen_pos + vec2(0.0, icon_px * 0.66),
             egui::Align2::CENTER_TOP,
             &cam_entity.name,
             egui::FontId::proportional(10.0),
@@ -1329,7 +1658,13 @@ pub fn draw_camera_gizmo(
     }
 }
 
-/// Dibuja el Gizmo 3D de una Luz: Icono simple, rayos/orientación de sol (Directional) o esfera de alcance (Point Light)
+/// Dibuja el Gizmo 3D de una Luz: Icono simple, rayos/orientación de sol (Directional) o esfera de alcance (Point Light).
+///
+/// `icon_px` es el diámetro final del badge en píxeles (escala y distancia ya
+/// aplicadas por el llamador). `mostrar_icono` controla badge y nombre (sin
+/// icono se devuelve None); `mostrar_gizmo` controla rayos/esfera y la
+/// etiqueta de alcance, que además solo se dibujan con la luz seleccionada.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_light_gizmo(
     painter: &Painter,
     light_entity: &EntityData,
@@ -1337,6 +1672,9 @@ pub fn draw_light_gizmo(
     vp: &[f32; 16],
     rect: Rect,
     is_selected: bool,
+    icon_px: f32,
+    mostrar_icono: bool,
+    mostrar_gizmo: bool,
 ) -> Option<Rect> {
     let pos = glass_core::mat4_translation(*world);
 
@@ -1356,7 +1694,9 @@ pub fn draw_light_gizmo(
 
     let p_light = world_to_screen(pos, vp, rect);
 
-    if is_selected {
+    // Rayos/esfera dependen de la selección Y del interruptor de gizmo de
+    // luz del menú Gizmos: el icono y el gizmo se apagan por separado.
+    if is_selected && mostrar_gizmo {
         if ltype == "Directional" {
             // Dirección solar: dibujar disco emisor y 5 rayos paralelos que viajan en dirección de la luz
             let up_approx = if l_dir[1].abs() > 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
@@ -1486,9 +1826,15 @@ pub fn draw_light_gizmo(
         }
     }
 
-    // Dibujar icono billboard simple y elegante (24px)
+    // Sin icono no hay badge ni nombre, y tampoco rect clicable: el
+    // llamador no debe poder seleccionar la luz por un icono invisible.
+    if !mostrar_icono {
+        return None;
+    }
+
+    // Dibujar icono billboard simple y elegante (diámetro icon_px)
     if let Some(screen_pos) = p_light {
-        let badge_rect = Rect::from_center_size(screen_pos, vec2(24.0, 24.0));
+        let badge_rect = Rect::from_center_size(screen_pos, vec2(icon_px, icon_px));
         let icon_str = if ltype == "Directional" { "☼" } else { "💡" };
 
         let bg_fill = if is_selected {
@@ -1502,17 +1848,21 @@ pub fn draw_light_gizmo(
             Stroke::new(1.0, Color32::from_rgb(130, 105, 35))
         };
 
-        painter.circle(screen_pos, 12.0, bg_fill, border_stroke);
+        // Proporciones relativas al diámetro: radio icon_px/2, glifo
+        // icon_px/2 y nombre icon_px·0.66 por debajo (16 px con 24 px).
+        // El glifo se acota a 1 px porque egui no admite fuentes de tamaño 0.
+        let glifo_px = (icon_px * 0.5).max(1.0);
+        painter.circle(screen_pos, icon_px * 0.5, bg_fill, border_stroke);
         painter.text(
             screen_pos,
             egui::Align2::CENTER_CENTER,
             icon_str,
-            egui::FontId::proportional(13.0),
+            egui::FontId::proportional(glifo_px),
             Color32::WHITE,
         );
 
         painter.text(
-            screen_pos + vec2(0.0, 16.0),
+            screen_pos + vec2(0.0, icon_px * 0.66),
             egui::Align2::CENTER_TOP,
             &light_entity.name,
             egui::FontId::proportional(10.0),
@@ -2271,5 +2621,141 @@ mod tests_picking {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_gizmos {
+    use super::*;
+    use glass_physics::ColliderShape;
+
+    const EPS: f32 = 1.0e-4;
+
+    fn resta(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+        [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+    }
+
+    fn punto(a: [f32; 3], b: [f32; 3]) -> f32 {
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    }
+
+    /// PhysicsData mínimo por JSON: solo los campos sin `serde(default)`;
+    /// el resto toma los defaults de escena, como al cargar un fichero.
+    fn fisica_base() -> serde_json::Value {
+        serde_json::json!({
+            "body_type": "Static",
+            "mass": 1.0,
+            "friction": 0.5,
+            "restitution": 0.0,
+            "box_extents": [0.5, 0.5, 0.5],
+            "linear_velocity": [0.0, 0.0, 0.0],
+        })
+    }
+
+    fn entidad_con_fisica(fisica: serde_json::Value) -> EntityData {
+        let mut ent = EntityData::new(99, "Prueba".into(), vec!["Transform".into()]);
+        ent.physics = Some(serde_json::from_value(fisica).expect("PhysicsData de prueba"));
+        ent
+    }
+
+    #[test]
+    fn circulo_puntos_en_radio_en_plano_y_cerrado() {
+        let centro = [1.0, -2.0, 3.0];
+        // Base ortonormal inclinada para no probar solo planos de ejes.
+        let u = [1.0, 0.0, 0.0];
+        let v = [0.0, 0.6, 0.8];
+        let normal = [0.0, -0.8, 0.6];
+        let radio = 2.5;
+        let pts = circulo_puntos(centro, u, v, radio, 24);
+
+        assert_eq!(pts.len(), 25);
+        for p in &pts {
+            let d = resta(*p, centro);
+            assert!((punto(d, d).sqrt() - radio).abs() < EPS, "punto fuera del radio: {:?}", p);
+            assert!(punto(d, normal).abs() < EPS, "punto fuera del plano: {:?}", p);
+        }
+        assert_eq!(pts.first(), pts.last());
+    }
+
+    #[test]
+    fn capsula_perfil_cotas_y_cerrado() {
+        let hh = 0.75;
+        let r = 0.5;
+        let pts = capsula_puntos_perfil([0.0; 3], [1.0, 0.0, 0.0], hh, r, 16);
+
+        let max_x = pts.iter().map(|p| p[0].abs()).fold(0.0f32, f32::max);
+        let max_y = pts.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+        let min_y = pts.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+
+        assert!((max_x - r).abs() < EPS, "max |x| = {}", max_x);
+        assert!((max_y - (hh + r)).abs() < EPS, "max y = {}", max_y);
+        assert!((min_y + (hh + r)).abs() < EPS, "min y = {}", min_y);
+        assert!(pts.iter().all(|p| p[2].abs() < EPS), "perfil fuera del plano XY");
+        assert_eq!(pts.first(), pts.last());
+    }
+
+    #[test]
+    fn collider_dibujo_sin_physics_es_ninguno() {
+        let ent = EntityData::new(99, "Prueba".into(), vec!["Transform".into()]);
+        let ent = EntityData { physics: None, ..ent };
+        assert_eq!(collider_dibujo(&ent, [1.0; 3]), ColliderDibujo::Ninguno);
+    }
+
+    #[test]
+    fn collider_dibujo_sin_collider_es_ninguno() {
+        let mut fisica = fisica_base();
+        fisica["has_collider"] = serde_json::json!(false);
+        let ent = entidad_con_fisica(fisica);
+        assert_eq!(collider_dibujo(&ent, [1.0; 3]), ColliderDibujo::Ninguno);
+    }
+
+    #[test]
+    fn collider_dibujo_spec_sphere_es_ball_con_offset() {
+        let mut fisica = fisica_base();
+        fisica["colliders"] = serde_json::json!([{
+            "shape": "Sphere",
+            "size": [0.7, 0.0, 0.0],
+            "offset": [0.0, 1.0, 0.0],
+            "is_trigger": false,
+        }]);
+        let ent = entidad_con_fisica(fisica);
+        assert_eq!(
+            collider_dibujo(&ent, [1.0; 3]),
+            ColliderDibujo::Formas(vec![(ColliderShape::Ball { radius: 0.7 }, [0.0, 1.0, 0.0])])
+        );
+    }
+
+    #[test]
+    fn collider_dibujo_lista_vacia_malla_sphere_escala_2() {
+        let mut fisica = fisica_base();
+        fisica["box_offset"] = serde_json::json!([0.0, 0.25, 0.0]);
+        let mut ent = entidad_con_fisica(fisica);
+        ent.mesh = Some(Default::default());
+        if let Some(m) = ent.mesh.as_mut() {
+            m.model = "sphere".to_string();
+        }
+
+        // Regla de collider_shape_for_builtin: 0.5 · escala máxima.
+        match collider_dibujo(&ent, [2.0, 2.0, 2.0]) {
+            ColliderDibujo::Formas(formas) => {
+                assert_eq!(formas.len(), 1);
+                match formas[0] {
+                    (ColliderShape::Ball { radius }, off) => {
+                        assert!((radius - 1.0).abs() < EPS, "radio = {}", radius);
+                        assert_eq!(off, [0.0, 0.25, 0.0]);
+                    }
+                    otra => panic!("se esperaba Ball, llegó {:?}", otra),
+                }
+            }
+            otro => panic!("se esperaba Formas, llegó {:?}", otro),
+        }
+    }
+
+    #[test]
+    fn collider_dibujo_mesh_collider_convex_es_malla() {
+        let mut fisica = fisica_base();
+        fisica["mesh_collider"] = serde_json::json!("Convex");
+        let ent = entidad_con_fisica(fisica);
+        assert_eq!(collider_dibujo(&ent, [1.0; 3]), ColliderDibujo::Malla);
     }
 }

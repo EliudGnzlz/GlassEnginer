@@ -117,11 +117,8 @@ pub struct ViewportPanel {
     pub editor_cam_pitch: f32,
     pub editor_cam_dist: f32,
     pub editor_cam_center: [f32; 3],
-    /// Rejilla del suelo en la vista de escena (capa del editor).
-    pub show_grid: bool,
-    // Placas con el nombre sobre el objeto seleccionado en la vista de
-    // escena (menú Gizmos). Defecto true: comportamiento histórico.
-    pub show_nameplates: bool,
+    /// Preferencias del menú Gizmos, persistidas entre sesiones.
+    pub gizmos: crate::gizmo_prefs::GizmoPrefs,
     // Cámara activa seleccionada para Game View (multi-cámara)
     pub selected_camera_id: Option<u64>,
     // Eje activo actualmente arrastrado en el Gizmo 3D
@@ -172,8 +169,7 @@ impl Default for ViewportPanel {
             editor_cam_pitch: 0.25,
             editor_cam_dist: 10.0,
             editor_cam_center: [3.5, 1.5, 0.0],
-            show_grid: true,
-            show_nameplates: true,
+            gizmos: crate::gizmo_prefs::GizmoPrefs::load(),
             selected_camera_id: None,
             active_drag_axis: GizmoAxis::None,
             press_axis: GizmoAxis::None,
@@ -190,6 +186,18 @@ impl Default for ViewportPanel {
 impl ViewportPanel {
     pub fn is_playing(&self) -> bool {
         self.play_state == PlayState::Playing
+    }
+
+    /// Tamaño en píxeles del icono de un componente a `dist` de la cámara
+    /// del editor: base 24 px por la escala del usuario; con Iconos 3D
+    /// además escala con la distancia (perspectiva, referencia 10 m).
+    fn tam_icono(&self, dist: f32) -> f32 {
+        let base = 24.0 * self.gizmos.icon_scale;
+        if self.gizmos.icons_3d {
+            (base * (10.0 / dist.max(0.1))).clamp(8.0, 96.0)
+        } else {
+            base
+        }
     }
 
     /// Punto de mundo donde aterriza un asset soltado en `pos`: la
@@ -273,22 +281,69 @@ impl ViewportPanel {
             }
 
             // Botón «Gizmos» superpuesto (esquina superior derecha de la
-            // vista): el ÚNICO sitio que controla la rejilla y las placas
-            // de nombre (orden del usuario, 2026-11-18).
+            // vista): controla la rejilla, las placas de nombre y la
+            // visibilidad de los gizmos de cada componente integrado.
+            let gizmos_antes = self.gizmos.clone();
             egui::Area::new(egui::Id::new("gizmos_escena"))
                 .fixed_pos(rect.right_top() + egui::vec2(-96.0, 6.0))
                 .show(ui.ctx(), |ui| {
                     ui.menu_button("Gizmos ▾", |ui| {
-                        ui.checkbox(&mut self.show_grid, "Rejilla");
-                        ui.checkbox(&mut self.show_nameplates, "Nombres de objetos");
-                        ui.separator();
-                        ui.label(
-                            egui::RichText::new("Visibilidad por componente: próximamente")
-                                .weak()
-                                .small(),
+                        ui.set_min_width(280.0);
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut self.gizmos.icons_3d, "Iconos 3D");
+                            ui.add(
+                                egui::Slider::new(&mut self.gizmos.icon_scale, 0.25..=3.0)
+                                    .text("Tamaño"),
+                            );
+                        });
+                        ui.checkbox(&mut self.gizmos.show_grid, "Rejilla");
+                        ui.checkbox(
+                            &mut self.gizmos.show_nameplates,
+                            "Nombres de objetos",
                         );
+                        ui.checkbox(
+                            &mut self.gizmos.selection_outline,
+                            "Contorno de selección",
+                        );
+                        ui.checkbox(
+                            &mut self.gizmos.colliders_always,
+                            "Contornos de collider siempre",
+                        );
+                        ui.separator();
+                        ui.label(egui::RichText::new("Componentes integrados").strong());
+                        egui::Grid::new("gizmos_componentes")
+                            .num_columns(3)
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new("").small().strong());
+                                ui.label(egui::RichText::new("Icono").small().strong());
+                                ui.label(egui::RichText::new("Gizmo").small().strong());
+                                ui.end_row();
+
+                                ui.label("Cámara");
+                                ui.checkbox(&mut self.gizmos.icon_camera, "");
+                                ui.checkbox(&mut self.gizmos.gizmo_camera, "");
+                                ui.end_row();
+
+                                ui.label("Luz");
+                                ui.checkbox(&mut self.gizmos.icon_light, "");
+                                ui.checkbox(&mut self.gizmos.gizmo_light, "");
+                                ui.end_row();
+
+                                ui.label("Collider");
+                                ui.label(egui::RichText::new("—").weak());
+                                ui.checkbox(&mut self.gizmos.gizmo_collider, "");
+                                ui.end_row();
+
+                                ui.label("Character Controller");
+                                ui.label(egui::RichText::new("—").weak());
+                                ui.checkbox(&mut self.gizmos.gizmo_character, "");
+                                ui.end_row();
+                            });
                     });
                 });
+            if self.gizmos != gizmos_antes {
+                let _ = self.gizmos.save();
+            }
 
             let painter = ui.painter();
 
@@ -342,39 +397,129 @@ impl ViewportPanel {
                                 ent.transform.scale,
                             )
                         });
+                    let ent_pos = glass_core::mat4_translation(world);
+                    let dist = ((eye[0] - ent_pos[0]).powi(2)
+                        + (eye[1] - ent_pos[1]).powi(2)
+                        + (eye[2] - ent_pos[2]).powi(2))
+                    .sqrt();
 
-                    if ent.camera.is_some() {
-                        gizmo_3d::draw_camera_gizmo(painter, ent, &world, &view_proj, rect, is_sel);
+                    if ent.camera.is_some()
+                        && (self.gizmos.icon_camera
+                            || (is_sel && self.gizmos.gizmo_camera))
+                    {
+                        gizmo_3d::draw_camera_gizmo(
+                            painter,
+                            ent,
+                            &world,
+                            &view_proj,
+                            rect,
+                            is_sel,
+                            self.tam_icono(dist),
+                            self.gizmos.icon_camera,
+                            self.gizmos.gizmo_camera,
+                        );
                     }
-                    if ent.light.is_some() {
-                        gizmo_3d::draw_light_gizmo(painter, ent, &world, &view_proj, rect, is_sel);
+                    if ent.light.is_some()
+                        && (self.gizmos.icon_light
+                            || (is_sel && self.gizmos.gizmo_light))
+                    {
+                        gizmo_3d::draw_light_gizmo(
+                            painter,
+                            ent,
+                            &world,
+                            &view_proj,
+                            rect,
+                            is_sel,
+                            self.tam_icono(dist),
+                            self.gizmos.icon_light,
+                            self.gizmos.gizmo_light,
+                        );
+                    }
+
+                    // Los colliders se muestran siempre al seleccionar su
+                    // entidad; la opción global permite inspeccionarlos todos.
+                    if self.gizmos.gizmo_collider
+                        && (is_sel || self.gizmos.colliders_always)
+                    {
+                        match gizmo_3d::collider_dibujo(
+                            ent,
+                            glass_core::mat4_scale(world),
+                        ) {
+                            gizmo_3d::ColliderDibujo::Formas(formas) => {
+                                gizmo_3d::draw_collider_gizmo(
+                                    painter,
+                                    &formas,
+                                    &world,
+                                    &view_proj,
+                                    rect,
+                                    is_sel,
+                                );
+                            }
+                            gizmo_3d::ColliderDibujo::Malla => {
+                                let (lo, hi) =
+                                    gizmo_3d::entity_local_bounds(ent, &self.mesh_bounds);
+                                gizmo_3d::dibujar_caja(
+                                    painter,
+                                    lo,
+                                    hi,
+                                    &world,
+                                    &view_proj,
+                                    rect,
+                                    egui::Color32::from_rgba_unmultiplied(
+                                        90,
+                                        255,
+                                        130,
+                                        if is_sel { 255 } else { 130 },
+                                    ),
+                                    if is_sel { 1.8 } else { 1.2 },
+                                );
+                            }
+                            gizmo_3d::ColliderDibujo::Ninguno => {}
+                        }
+                    }
+
+                    if self.gizmos.gizmo_character
+                        && (is_sel || self.gizmos.colliders_always)
+                    {
+                        if let Some(ch) = &ent.character {
+                            gizmo_3d::draw_character_gizmo(
+                                painter,
+                                ch,
+                                &world,
+                                &view_proj,
+                                rect,
+                                is_sel,
+                            );
+                        }
                     }
                 }
 
                 // Dibujar Bounding Box 3D del objeto seleccionado (funciona tanto en Edit como en Play)
-                if let Some(target_id) = *selected_entity_id {
-                    if let Some(ent) = state.entities.iter().find(|e| e.id == target_id) {
-                        let is_pure_cam_or_light = (ent.camera.is_some() || ent.light.is_some()) && ent.mesh.is_none();
-                        if !is_pure_cam_or_light {
-                            let world = gizmo_world_matrices
-                                .get(&ent.id)
-                                .copied()
-                                .unwrap_or_else(|| {
-                                    glass_core::mat4_from_trs_euler(
-                                        ent.transform.position,
-                                        ent.transform.rotation(),
-                                        ent.transform.scale,
-                                    )
-                                });
-                            gizmo_3d::draw_selection_bounding_box(
-                                painter,
-                                ent,
-                                &world,
-                                &view_proj,
-                                rect,
-                                &self.mesh_bounds,
-                                self.show_nameplates,
-                            );
+                if self.gizmos.selection_outline {
+                    if let Some(target_id) = *selected_entity_id {
+                        if let Some(ent) = state.entities.iter().find(|e| e.id == target_id) {
+                            let is_pure_cam_or_light = (ent.camera.is_some() || ent.light.is_some()) && ent.mesh.is_none();
+                            if !is_pure_cam_or_light {
+                                let world = gizmo_world_matrices
+                                    .get(&ent.id)
+                                    .copied()
+                                    .unwrap_or_else(|| {
+                                        glass_core::mat4_from_trs_euler(
+                                            ent.transform.position,
+                                            ent.transform.rotation(),
+                                            ent.transform.scale,
+                                        )
+                                    });
+                                gizmo_3d::draw_selection_bounding_box(
+                                    painter,
+                                    ent,
+                                    &world,
+                                    &view_proj,
+                                    rect,
+                                    &self.mesh_bounds,
+                                    self.gizmos.show_nameplates,
+                                );
+                            }
                         }
                     }
                 }

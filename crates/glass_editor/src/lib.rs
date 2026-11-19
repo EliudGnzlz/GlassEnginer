@@ -6,6 +6,7 @@ pub mod panels;
 pub use glass_launcher::plugins;
 pub use glass_launcher::updates;
 pub mod tool_prefs;
+pub mod gizmo_prefs;
 pub mod undo;
 
 pub use docking::{DecisionCierre, EditorDockingLayout};

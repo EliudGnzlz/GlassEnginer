@@ -1947,6 +1947,7 @@ dependencies = [
  "glass_launcher",
  "glass_mcp",
  "glass_mesh_edit",
+ "glass_physics",
  "glass_renderer",
  "glass_scripting",
  "gpu-allocator",
