@@ -55,12 +55,78 @@ fn mantenimiento_instalaciones(tras_actualizar: bool) {
     }
 }
 
+/// Valida los argumentos del Hub: cada binario valida solo los suyos.
+/// El Hub acepta únicamente `--hub` (no-op por compatibilidad con los
+/// lanzadores antiguos que lo relanzaban así) y `--tras-actualizar-hub`
+/// (anuncia el arranque tras una actualización propia). Los flags del
+/// motor (`--project`, `--scene`, `--sample`, `--standalone`, `--game`,
+/// `--mcp`, `--mcp-stdio`, `--mcp-live` y los modos de prueba
+/// `--test-*`/`--check-vulkan`) se rechazan con un mensaje que
+/// señala al motor; cualquier otro argumento que empiece por `--` se
+/// rechaza como desconocido para el Hub. Los argumentos que no empiezan
+/// por `--` también se rechazan (el Hub no recibe rutas sueltas).
+/// `args` es `std::env::args()` completo (argv[0] incluido): se salta.
+fn validar_argumentos_hub(args: &[String]) -> Result<(), String> {
+    const FLAGS_DEL_MOTOR: &[&str] = &[
+        "--project",
+        "--scene",
+        "--sample",
+        "--standalone",
+        "--game",
+        "--mcp",
+        "--mcp-stdio",
+        "--mcp-live",
+        // Modos de prueba/headless del motor (misma familia que los
+        // flags de arriba: pertenecen a glass_app, no al Hub).
+        "--test-init",
+        "--check-vulkan",
+        "--test-m3",
+        "--test-m4",
+        "--test-m5",
+        "--test-m6",
+        "--test-m7",
+        "--test-m8",
+        "--test-m9",
+        "--test-m10",
+        "--test-standalone",
+        "--test-sample-game",
+        "--test-platformer",
+    ];
+
+    for arg in args.iter().skip(1) {
+        let arg = arg.as_str();
+        match arg {
+            "--hub" | "--tras-actualizar-hub" => {}
+            _ if arg.starts_with("--") => {
+                let flag = arg.split_once('=').map_or(arg, |(nombre, _)| nombre);
+                if FLAGS_DEL_MOTOR.contains(&flag) {
+                    return Err(format!(
+                        "el argumento {flag} es del motor (glass_app), no del Hub: el Hub lanza el motor instalado, no abre proyectos directamente."
+                    ));
+                }
+                return Err(format!(
+                    "argumento desconocido para el Hub: {arg} (el Hub solo acepta --hub y --tras-actualizar-hub)."
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "argumento desconocido para el Hub: {arg} (el Hub solo acepta --hub y --tras-actualizar-hub)."
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args: Vec<String> = std::env::args().collect();
-    // `--hub` se acepta como no-op por compatibilidad con los lanzadores antiguos.
-    let _ = args.iter().any(|a| a == "--hub");
+    if let Err(mensaje) = validar_argumentos_hub(&args) {
+        log::error!("{mensaje}");
+        eprintln!("{mensaje}");
+        std::process::exit(2);
+    }
     mantenimiento_instalaciones(args.iter().any(|a| a == "--tras-actualizar-hub"));
 
     #[allow(unused_mut)]
@@ -368,7 +434,7 @@ impl Estado {
             let lanzado = match accion_hub {
                 AccionHub::Relanzar { programa } => Some(
                     std::process::Command::new(&programa)
-                        .args(["--hub", "--tras-actualizar-hub"])
+                        .args(["--tras-actualizar-hub"])
                         .spawn(),
                 ),
                 AccionHub::LanzarInstalador { setup } => {
@@ -764,3 +830,50 @@ fn ejecutar_accion_hub(panel: &mut LauncherPanel, action: LauncherAction) {
         }
     }
 }
+#[cfg(test)]
+mod tests_validacion_hub {
+    use super::validar_argumentos_hub;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn acepta_los_argumentos_del_hub() {
+        assert!(validar_argumentos_hub(&args(&["glass_hub"])).is_ok());
+        assert!(validar_argumentos_hub(&args(&["glass_hub", "--hub"])).is_ok());
+        assert!(validar_argumentos_hub(&args(&["glass_hub", "--tras-actualizar-hub"])).is_ok());
+        assert!(
+            validar_argumentos_hub(&args(&["glass_hub", "--hub", "--tras-actualizar-hub"])).is_ok()
+        );
+    }
+
+    #[test]
+    fn rechaza_los_flags_del_motor() {
+        let casos: &[(&str, &[&str])] = &[
+            ("--project", &["glass_hub", "--project", "/tmp/p"]),
+            ("--scene", &["glass_hub", "--scene", "escena.ron"]),
+            ("--sample", &["glass_hub", "--sample", "demo"]),
+            ("--standalone", &["glass_hub", "--standalone"]),
+            ("--game", &["glass_hub", "--game"]),
+            ("--mcp", &["glass_hub", "--mcp"]),
+            ("--mcp-stdio", &["glass_hub", "--mcp-stdio"]),
+            ("--mcp-live", &["glass_hub", "--mcp-live"]),
+            ("--check-vulkan", &["glass_hub", "--check-vulkan"]),
+            ("--test-m5", &["glass_hub", "--test-m5"]),
+        ];
+        for (flag, lista) in casos {
+            let err = validar_argumentos_hub(&args(lista))
+                .expect_err(&format!("{flag} debería rechazarse"));
+            assert!(err.contains(flag), "el mensaje no menciona {flag}: {err}");
+            assert!(err.contains("glass_app"), "el mensaje no señala al motor: {err}");
+        }
+    }
+
+    #[test]
+    fn rechaza_argumentos_desconocidos() {
+        assert!(validar_argumentos_hub(&args(&["glass_hub", "--foo"])).is_err());
+        assert!(validar_argumentos_hub(&args(&["glass_hub", "/tmp/p"])).is_err());
+    }
+}
+

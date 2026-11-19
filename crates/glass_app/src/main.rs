@@ -8558,6 +8558,14 @@ fn validar_argumentos(args: &[String]) -> Result<(), String> {
 
     let tiene = |flag: &str| args.iter().any(|a| a == flag);
 
+    // Los flags del Hub no pertenecen al motor.
+    if tiene("--hub") {
+        return Err("el argumento --hub es del Hub (GlassHub), no del motor: abre GlassHub para gestionar proyectos.".to_string());
+    }
+    if tiene("--tras-actualizar-hub") {
+        return Err("el argumento --tras-actualizar-hub es del Hub (GlassHub), no del motor.".to_string());
+    }
+
     // Dos formas distintas de abrir: la escena suelta va sin proyecto o desde el Hub.
     if tiene("--project") && tiene("--scene") {
         return Err("argumentos incompatibles: --project con --scene".to_string());
@@ -9829,11 +9837,21 @@ mod standalone_launch_tests {
     #[test]
     fn validar_argumentos_acepta_los_modos_sanos() {
         assert!(validar_argumentos(&args(&["glass_app"])).is_ok());
-        assert!(validar_argumentos(&args(&["glass_app", "--hub"])).is_ok());
         assert!(validar_argumentos(&args(&["glass_app", "--project", "/tmp/p"])).is_ok());
         assert!(validar_argumentos(&args(&["glass_app", "--scene", "e.scene.json"])).is_ok());
         assert!(validar_argumentos(&args(&["glass_app", "--sample", "fisica"])).is_ok());
         assert!(validar_argumentos(&args(&["glass_app", "--standalone", "--scene", "e.json"])).is_ok());
+    }
+
+    #[test]
+    fn validar_argumentos_rechaza_los_flags_del_hub() {
+        let err = validar_argumentos(&args(&["glass_app", "--hub"])).unwrap_err();
+        assert!(err.contains("GlassHub"), "{err}");
+        let err = validar_argumentos(&args(&["glass_app", "--tras-actualizar-hub"])).unwrap_err();
+        assert!(err.contains("GlassHub"), "{err}");
+        // Mixto: el flag del Hub gana aunque haya un destino válido.
+        let err = validar_argumentos(&args(&["glass_app", "--hub", "--project", "/tmp/p"])).unwrap_err();
+        assert!(err.contains("--hub") && err.contains("GlassHub"), "{err}");
     }
 
     #[test]
