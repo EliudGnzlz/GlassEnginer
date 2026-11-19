@@ -323,7 +323,22 @@ impl MeshToolPanel {
             let Some(session) = self.session.as_ref() else {
                 return;
             };
-            match glass_mesh_edit::preview::pick_face(
+            // En modo Vértices el picking por pantalla manda primero: un
+            // vértice visible bajo el cursor se selecciona aunque el rayo
+            // no atraviese ninguna cara (p. ej. un vértice de silueta).
+            let directo = if self.selection_mode == SelectionMode::Verts {
+                glass_mesh_edit::preview::pick_vertex_with(
+                    &session.mesh.verts,
+                    point_rel,
+                    14.0,
+                    project,
+                )
+            } else {
+                None
+            };
+            match directo {
+                Some(vertice) => (None, Some(vertice), true),
+                None => match glass_mesh_edit::preview::pick_face(
                 &session.mesh.verts,
                 &session.mesh.faces,
                 origin_local,
@@ -373,6 +388,7 @@ impl MeshToolPanel {
                     (None, vertice, true)
                 }
                 None => (None, None, false),
+            },
             }
         };
 
@@ -1367,6 +1383,30 @@ mod tests {
         );
         assert!(panel.selected_verts.contains(&0));
         assert_eq!(panel.selected_verts.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pick_viewport_vertice_de_silueta_sin_impacto_de_cara() {
+        // Regresión R2: clic exactamente sobre un vértice cuyo rayo no
+        // atraviesa ninguna cara (silueta). El picking por pantalla debe
+        // seleccionarlo igual; antes se limpiaba la selección.
+        let (mut panel, _scene, dir) = panel_editando("pick_silueta", None);
+        panel.selection_mode = SelectionMode::Verts;
+        let objetivo = panel.session.as_ref().unwrap().mesh.verts[0];
+        let proyeccion = move |p: [f32; 3]| Some(([p[0] * 100.0, p[1] * 100.0], 0.0));
+        let punto = [objetivo[0] * 100.0, objetivo[1] * 100.0];
+        panel.pick_viewport(
+            [0.0, 0.0, 5.0],
+            [0.0, 1.0, 0.0],
+            punto,
+            &proyeccion,
+            false,
+        );
+        assert!(panel.selected_verts.contains(&0));
+        assert_eq!(panel.selected_verts.len(), 1);
+        assert_eq!(panel.status, "Seleccionado: 1 vértices.");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
