@@ -698,6 +698,8 @@ fn lanzar_motor_hijo(panel: &mut LauncherPanel, args: &[&str]) {
             // El hijo es el ejecutable del motor en engines/, no el AppImage del Hub:
             // si hereda APPIMAGE, cualquier lógica que localice «su» ejecutable apuntaría al Hub.
             cmd.env_remove("APPIMAGE");
+            cmd.env_remove("LD_LIBRARY_PATH");
+            cmd.env_remove("LD_PRELOAD");
             // APPDIR (la raíz del montaje del AppImage del Hub) es
             // el mismo problema por otra puerta (auditoría S10).
             cmd.env_remove("APPDIR");

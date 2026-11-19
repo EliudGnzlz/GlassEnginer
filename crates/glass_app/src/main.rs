@@ -1817,6 +1817,10 @@ struct GlassEngineApp {
     /// eventos la recoge tras el frame y cierra el proceso.
     #[cfg(feature = "editor")]
     salir_del_proceso: bool,
+    /// V3: hay un Hub localizable en este equipo; gobierna la
+    /// visibilidad del botón «Hub» del editor.
+    #[cfg(feature = "editor")]
+    pub hub_disponible: bool,
     /// Tras «Guardar» sin ruta se abrió «Save Scene As»: al cerrarse ese
     /// diálogo se retoma (o se abandona) la vuelta al Hub pendiente.
     #[cfg(feature = "editor")]
@@ -2303,6 +2307,8 @@ impl GlassEngineApp {
             volver_al_hub_pendiente: false,
             #[cfg(feature = "editor")]
             salir_del_proceso: false,
+            #[cfg(feature = "editor")]
+            hub_disponible: glass_launcher::updates::ruta_hub().is_some(),
             #[cfg(feature = "editor")]
             esperando_save_as: false,
             #[cfg(feature = "editor")]
@@ -3195,6 +3201,55 @@ impl GlassEngineApp {
     /// para la subida rígida y las texturas). Volver a bloquear cualquiera
     /// de los dos aquí dentro cuelga la app: ni Mutex ni RwLock de std son
     /// reentrantes (cazado en vivo dos veces durante este bloque).
+    /// Apertura de un proyecto por su carpeta: la UNICA via, la use el
+    /// Hub (AccionApertura::OpenProject) o el arranque con --project
+    /// (que siembra esa misma accion). Selecciona la escena (campo
+    /// "scene" de project.glass o el primer *.scene.json), la carga o
+    /// deja la escena vacia, apunta el panel y el vigia a los assets
+    /// del proyecto, lo registra, guarda el registro y entra al editor.
+    #[cfg(feature = "editor")]
+/// V3 (separación verdadera): al salir del editor hacia el Hub,
+/// localizarlo y lanzarlo como programa aparte. Función libre (no
+/// método) porque los sitios de salida viven dentro del cierre de
+/// frame, con `self` ya partido en préstamos disjuntos. Si el Hub
+/// no se localiza o no arranca, se sale igualmente: quien pulsa
+/// «Hub» pidió salir, no quedarse atrapado en el editor. La
+/// higiene de entorno replica la del lanzamiento Hub→motor
+/// (fuera overrides GLASS_* de prueba salvo la raíz del lanzador).
+#[cfg(feature = "editor")]
+fn lanzar_hub_al_salir() {
+    static HUB_LANZADO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if HUB_LANZADO.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    match glass_launcher::updates::ruta_hub() {
+        Some(hub) => {
+            let mut cmd = std::process::Command::new(&hub);
+            cmd.stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            for (k, _) in std::env::vars_os() {
+                let ks = k.to_string_lossy();
+                if ks.starts_with("GLASS_") && ks != "GLASS_LAUNCHER_HOME" {
+                    cmd.env_remove(&k);
+                }
+            }
+            cmd.env_remove("APPIMAGE");
+            cmd.env_remove("LD_LIBRARY_PATH");
+            cmd.env_remove("LD_PRELOAD");
+            cmd.env_remove("APPDIR");
+            match cmd.spawn() {
+                Ok(_) => log::info!("Volviendo al Hub: lanzado {:?}", hub),
+                Err(e) => log::error!(
+                    "No se pudo lanzar el Hub ({:?}): {e}; se sale igualmente.",
+                    hub
+                ),
+            }
+        }
+        None => log::info!("Volver al Hub: no hay Hub localizable; se sale del editor."),
+    }
+}
+
     /// Apertura de un proyecto por su carpeta: la UNICA via, la use el
     /// Hub (AccionApertura::OpenProject) o el arranque con --project
     /// (que siembra esa misma accion). Selecciona la escena (campo
@@ -7006,6 +7061,7 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 if cargando {
                     pantalla_carga_motor(ui);
                 } else {
+                    editor_layout.hub_disponible = self.hub_disponible;
                     editor_layout.render(
                         ui,
                         scene_tid,
@@ -7034,7 +7090,8 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                     self.volver_al_hub_pendiente = true;
                     editor_layout.dialogo_guardar_cierre = true;
                 } else {
-                    self.salir_del_proceso = true;
+                    Self::lanzar_hub_al_salir();
+self.salir_del_proceso = true;
                 }
                 self.egui_ctx.request_repaint();
             }
@@ -7111,7 +7168,8 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                                 Ok(()) => {
                                     self.ultimo_autoguardado = std::time::Instant::now();
                                     self.volver_al_hub_pendiente = false;
-                                    self.salir_del_proceso = true;
+                                    Self::lanzar_hub_al_salir();
+self.salir_del_proceso = true;
                                     self.egui_ctx.request_repaint();
                                 }
                                 Err(e) => {
@@ -7140,7 +7198,8 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                             editor_layout.marcar_guardada(&sc);
                         }
                         self.volver_al_hub_pendiente = false;
-                        self.salir_del_proceso = true;
+                        Self::lanzar_hub_al_salir();
+self.salir_del_proceso = true;
                         self.egui_ctx.request_repaint();
                     }
                     glass_editor::DecisionCierre::Cancelar => {
@@ -7158,7 +7217,8 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 let volver = self.volver_al_hub_pendiente;
                 self.volver_al_hub_pendiente = false;
                 if volver && !sucia {
-                    self.salir_del_proceso = true;
+                    Self::lanzar_hub_al_salir();
+self.salir_del_proceso = true;
                     self.egui_ctx.request_repaint();
                 }
             }

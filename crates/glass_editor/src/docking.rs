@@ -102,6 +102,8 @@ pub struct EditorDockingLayout {
     /// resuelve a la primera disponible.
     pub herramienta_activa: String,
     pub request_launcher: bool,
+    /// Lo fija la app: hay un Hub localizable en este equipo (V3). Sin Hub, el botón de volver se oculta en vez de fallar.
+    pub hub_disponible: bool,
     /// Espejo de `ruta_escena_actual` de la app (se sincroniza cada frame).
     /// El guardado la prefiere si la escena activa sigue siendo esa.
     pub ruta_escena_actual: Option<std::path::PathBuf>,
@@ -226,6 +228,7 @@ impl EditorDockingLayout {
             espacio: EspacioTrabajo::Editor,
             herramienta_activa: "meshforge".to_string(),
             request_launcher: false,
+            hub_disponible: false,
             ruta_escena_actual: None,
             nombre_escena_con_ruta: String::new(),
             request_abrir_contenedora_escena: false,
@@ -727,7 +730,7 @@ impl EditorDockingLayout {
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("🏠 Project Hub / Launcher").clicked() {
+                if self.hub_disponible && ui.button("🏠 Project Hub / Launcher").clicked() {
                     self.request_launcher = true;
                     ui.close();
                 }
@@ -1116,9 +1119,11 @@ impl EditorDockingLayout {
             ui.spacing_mut().item_spacing.x = 4.0;
 
             // 0. Botón de acceso al Hub / Lanzador de Proyectos
-            if ui.button(egui::RichText::new("🏠 Hub").strong().color(egui::Color32::from_rgb(80, 210, 255)))
-                .on_hover_text("Regresar al Lanzador de Proyectos y Escenas de Ejemplo (Hub)")
-                .clicked()
+            if self.hub_disponible
+                && ui
+                    .button(egui::RichText::new("🏠 Hub").strong().color(egui::Color32::from_rgb(80, 210, 255)))
+                    .on_hover_text("Regresar al Lanzador de Proyectos y Escenas de Ejemplo (Hub)")
+                    .clicked()
             {
                 self.request_launcher = true;
             }

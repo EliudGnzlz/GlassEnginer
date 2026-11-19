@@ -125,6 +125,72 @@ pub fn data_root() -> PathBuf {
     PathBuf::from(base).join("GlassEnginer")
 }
 
+/// ¿Es `p` un ejecutable regular? En Unix exige el bit de
+/// ejecución: un archivo que solo supera `is_file()` (una copia a
+/// medias, un resto de descarga) no debe pasar por Hub.
+fn es_ejecutable(p: &std::path::Path) -> bool {
+    if !p.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::metadata(p) {
+            Ok(m) => m.permissions().mode() & 0o111 != 0,
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+/// Ruta al ejecutable del Hub separado (separación verdadera V3).
+///
+/// Orden de búsqueda, del ancla más fuerte a la más débil:
+/// 1. La raíz de ESTA instalación derivada del propio ejecutable:
+///    el motor instalado vive en `<raíz>/engines/<versión>/`, y el
+///    Hub en `<raíz>/`. Es la única que no puede cruzar a otra
+///    instalación que conviva en el mismo equipo.
+/// 2. La raíz del lanzador (`data_root()`: GLASS_LAUNCHER_HOME o
+///    ~/GlassEnginer), que es la que el Hub en curso fijó al
+///    lanzar este motor.
+/// 3. Junto al ejecutable en curso: las builds de desarrollo,
+///    donde glass_hub y glass_app comparten carpeta.
+pub fn ruta_hub() -> Option<PathBuf> {
+    let candidatos: &[&str] = if cfg!(windows) {
+        &["GlassHub.exe", "glass_hub.exe"]
+    } else {
+        &["glass_hub", "GlassHub"]
+    };
+    let buscar_en = |dir: &std::path::Path| -> Option<PathBuf> {
+        candidatos
+            .iter()
+            .map(|n| dir.join(n))
+            .find(|p| es_ejecutable(p))
+    };
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir_version) = exe.parent() {
+            if let Some(dir_engines) = dir_version.parent() {
+                if dir_engines.file_name().is_some_and(|n| n == "engines") {
+                    if let Some(raiz) = dir_engines.parent() {
+                        if let Some(hub) = buscar_en(raiz) {
+                            return Some(hub);
+                        }
+                    }
+                }
+            }
+            if let Some(hub) = buscar_en(&data_root()) {
+                return Some(hub);
+            }
+            return buscar_en(dir_version);
+        }
+    }
+    buscar_en(&data_root())
+}
+
 pub fn store_path() -> PathBuf {
     data_root().join("launcher.json")
 }
