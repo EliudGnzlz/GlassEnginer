@@ -505,7 +505,15 @@ impl HierarchyPanel {
                     }
 
                     bg_resp.context_menu(|ui| {
-                        ui.label("➕ Crear GameObject");
+                        // La primera fila es la acción (criterio Unity:
+                        // «Create Empty» abre el menú contextual de la
+                        // jerarquía). Antes era un `ui.label` con pinta
+                        // de ítem: al clicarlo el menú se cerraba sin
+                        // crear nada (defecto reportado el 2026-11-18).
+                        if ui.button("➕ Crear GameObject Vacío (Create Empty)").clicked() {
+                            pending_action = Some(HierarchyAction::Create(EntityPreset::Empty));
+                            ui.close();
+                        }
                         ui.separator();
                         Self::render_creation_menu(ui, &mut pending_action);
                     });
