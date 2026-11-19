@@ -2948,57 +2948,39 @@ impl McpServer {
                 }
                 let glb = ruta.with_extension("glb");
                 // Rutas ABSOLUTAS contra la raíz del proyecto: algún
-                // eslabón de la cadena (app → bridge → Blender)
+                // eslabón de la cadena (app → la cadena de conversión)
                 // resolvía las relativas contra el $PWD del lanzador
                 // y la recarga fallaba al abrir la app desde un
                 // acceso directo o un IDE (defecto de la Fase 10).
                 let raiz = raiz_proyecto();
-                let salida = glass_renderer::watcher::ejecutar_bridge_con_blender(
-                    &raiz.join("tools/headless_blender_bridge.py"),
+                let salida = glass_renderer::watcher::convertir_fuente(
                     &raiz.join(path),
                     &raiz.join(&glb),
                 );
                 match salida {
-                    Ok(salida) => {
-                        let stdout = salida.stdout;
-                        let resultado = stdout
-                            .lines()
-                            .rev()
-                            .find_map(|l| l.strip_prefix("GLASS_BRIDGE_RESULT "))
-                            .and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok());
-                        match resultado {
-                            Some(mut r) => {
-                                if let Some(obj) = r.as_object_mut() {
-                                    obj.insert(
-                                        "note".into(),
-                                        json!("La escritura del .glb dispara la recarga en caliente por el vigía."),
-                                    );
-                                }
-                                McpResponse::success(
-                                    id,
-                                    json!({
-                                        "content": [{
-                                            "type": "text",
-                                            "text": serde_json::to_string_pretty(&r).unwrap()
-                                        }]
-                                    }),
-                                )
-                            }
-                            None => McpResponse::error(
-                                id,
-                                -32005,
-                                format!(
-                                    "El bridge no devolvió resultado. Salida: {}",
-                                    stdout.chars().take(400).collect::<String>()
-                                ),
-                            ),
-                        }
+                    Ok(informe) => {
+                        let via = match informe.via {
+                            glass_renderer::watcher::ViaConversion::Nativa => "nativa",
+                            glass_renderer::watcher::ViaConversion::Blender => "blender",
+                        };
+                        let resultado = json!({
+                            "ok": true,
+                            "via": via,
+                            "counts": informe.conteos,
+                            "avisos": informe.avisos,
+                            "note": "La escritura del .glb dispara la recarga en caliente por el vigía.",
+                        });
+                        McpResponse::success(
+                            id,
+                            json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": serde_json::to_string_pretty(&resultado).unwrap()
+                                }]
+                            }),
+                        )
                     }
-                    Err(e) => McpResponse::error(
-                        id,
-                        -32005,
-                        format!("No se pudo lanzar el bridge: {e}"),
-                    ),
+                    Err(e) => McpResponse::error(id, -32005, e),
                 }
             }
 

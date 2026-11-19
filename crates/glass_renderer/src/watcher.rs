@@ -426,31 +426,148 @@ pub fn ejecutar_bridge_con_blender(
     })
 }
 
-/// Ejecuta el bridge una vez; true si tuvo éxito.
-fn ejecutar_bridge(bridge_script: &Path, input_path: &Path, glb_path: &Path) -> bool {
-    match ejecutar_bridge_con_blender(bridge_script, input_path, glb_path) {
-        Ok(salida) if salida.exito => {
-            log::info!(
-                "Conversión headless exitosa: {:?} -> {:?}",
-                input_path,
-                glb_path
-            );
-            true
-        }
-        Ok(salida) => {
-            log::error!(
-                "Fallo en conversión Blender ({:?}): {}\nstderr:\n{}",
-                input_path,
-                resumen_bridge(&salida.stdout),
-                salida.stderr
-            );
-            false
-        }
-        Err(e) => {
-            log::error!("Fallo al invocar el bridge de Blender: {}", e);
-            false
+/// Vía por la que se obtuvo el .glb. Se expone para que el vigía (y la UI)
+/// puedan distinguir una conversión nativa de una que tiró de Blender.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViaConversion {
+    Nativa,
+    Blender,
+}
+
+/// Resultado común a ambas vías: así el llamante no necesita saber qué
+/// convertidor actuó para registrar, notificar o mostrar avisos.
+#[derive(Debug, Clone)]
+pub struct InformeFuente {
+    pub conteos: glass_fbx::Conteos,
+    pub avisos: Vec<String>,
+    pub via: ViaConversion,
+}
+
+/// Convierte una fuente .blend/.fbx a .glb eligiendo la vía adecuada.
+///
+/// Un .fbx va primero por el convertidor nativo, que no depende de Blender.
+/// Blender solo se usa como respaldo si está instalado. Un .blend solo puede
+/// abrirlo Blender, así que va directo al bridge.
+pub fn convertir_fuente(fuente: &Path, destino_glb: &Path) -> Result<InformeFuente, String> {
+    let extension = fuente
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+
+    match extension.as_deref() {
+        Some("fbx") => match glass_fbx::convertir_fbx(fuente, destino_glb) {
+            Ok(informe) => Ok(InformeFuente {
+                conteos: informe.conteos,
+                avisos: informe.avisos,
+                via: ViaConversion::Nativa,
+            }),
+            Err(e) => {
+                // Sin Blender no hay respaldo posible. Se devuelve el error nativo
+                // a secas: para un .fbx Blender no es requisito, y mencionarlo
+                // haría creer al usuario que debe instalarlo.
+                if resolver_blender().is_none() {
+                    return Err(e.to_string());
+                }
+                match convertir_con_bridge(fuente, destino_glb) {
+                    Ok(mut informe) => {
+                        // Se deja constancia del fallo nativo: el .glb existe,
+                        // pero el convertidor nativo tiene un caso pendiente.
+                        informe.avisos.push(format!(
+                            "el convertidor nativo falló ({e}); se usó Blender como respaldo"
+                        ));
+                        Ok(informe)
+                    }
+                    Err(m) => Err(format!(
+                        "No se pudo convertir «{}»: el convertidor nativo falló ({e}) y el respaldo con Blender también ({m})",
+                        fuente.display()
+                    )),
+                }
+            }
+        },
+        // Los errores de esta vía ya mencionan Blender cuando corresponde.
+        Some("blend") => convertir_con_bridge(fuente, destino_glb),
+        _ => {
+            let nombre = fuente
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_else(|| fuente.to_string_lossy());
+            Err(format!(
+                "Solo se convierten fuentes .blend/.fbx (recibido «{nombre}»)"
+            ))
         }
     }
+}
+
+/// Vía Blender: lanza el bridge headless y traduce su salida a InformeFuente.
+fn convertir_con_bridge(fuente: &Path, destino_glb: &Path) -> Result<InformeFuente, String> {
+    // Se comprueba aquí y no en el vigía: la vía nativa no necesita el script.
+    let bridge = bridge_path();
+    if !bridge.exists() {
+        return Err(format!(
+            "Bridge de Blender no encontrado en '{}': no se exporta {:?}.",
+            bridge.display(),
+            fuente
+        ));
+    }
+
+    // El Err (sin Blender o fallo al lanzar) ya trae un mensaje adecuado.
+    let salida = ejecutar_bridge_con_blender(&bridge, fuente, destino_glb)?;
+
+    if !salida.exito {
+        let resumen = resumen_bridge(&salida.stdout);
+        let stderr = salida.stderr.trim();
+        return Err(if stderr.is_empty() {
+            resumen
+        } else {
+            format!("{resumen} | stderr: {stderr}")
+        });
+    }
+
+    // Si el bridge dice acertar pero no informa de conteos, no se inventan:
+    // un informe con ceros parecería una exportación vacía válida.
+    let conteos = conteos_desde_resultado_bridge(&salida.stdout)
+        .ok_or_else(|| "El bridge no devolvió resultado".to_string())?;
+
+    Ok(InformeFuente {
+        conteos,
+        avisos: Vec::new(),
+        via: ViaConversion::Blender,
+    })
+}
+
+/// Extrae los conteos de la línea `GLASS_BRIDGE_RESULT {json}` del bridge.
+///
+/// Se toma la última línea con el prefijo porque Blender y sus addons pueden
+/// imprimir ruido antes, y la línea definitiva del bridge va al final.
+pub fn conteos_desde_resultado_bridge(stdout: &str) -> Option<glass_fbx::Conteos> {
+    const PREFIJO: &str = "GLASS_BRIDGE_RESULT ";
+
+    let carga = stdout.lines().rev().find_map(|l| l.strip_prefix(PREFIJO))?;
+    let valor: serde_json::Value = serde_json::from_str(carga.trim()).ok()?;
+
+    if valor.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+        return None;
+    }
+
+    let counts = valor.get("counts")?.as_object()?;
+
+    // Campo ausente = 0 (versiones antiguas del bridge no informan de todos).
+    // Un campo presente pero no entero es un resultado corrupto, así que da None.
+    let campo = |nombre: &str| -> Option<usize> {
+        match counts.get(nombre) {
+            None => Some(0),
+            Some(v) => usize::try_from(v.as_u64()?).ok(),
+        }
+    };
+
+    Some(glass_fbx::Conteos {
+        meshes: campo("meshes")?,
+        nodes: campo("nodes")?,
+        materials: campo("materials")?,
+        animations: campo("animations")?,
+        skins: campo("skins")?,
+        bytes: campo("bytes")?,
+    })
 }
 
 #[cfg(test)]
@@ -700,22 +817,32 @@ fn lanzar_conversion(path: &Path, tx: &Sender<AssetReloadEvent>) {
         let _turno = CERROJO_CONVERSION
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let bridge_script = bridge_path();
-        if !bridge_script.exists() {
-            // Fase 6: nada de fallos silenciosos.
-            log::error!(
-                "Bridge de Blender no encontrado en '{}': no se exporta {:?}. \
-                 El .glb queda como estaba.",
-                bridge_script.display(),
-                input_path
-            );
-            return;
-        }
         let mut hash_previo = hash_inicial;
         for ronda in 1..=MAX_RONDAS_EXPORTACION {
-            if !ejecutar_bridge(&bridge_script, &input_path, &glb_path) {
-                // Sin registro: el próximo guardado reintenta.
-                break;
+            // F2: convertir_fuente elige la vía (nativa para .fbx con
+            // respaldo en Blender; bridge para .blend).
+            let informe = match convertir_fuente(&input_path, &glb_path) {
+                Ok(informe) => informe,
+                Err(e) => {
+                    // Sin registro: el próximo guardado reintenta.
+                    log::error!("Fallo de conversión ({:?}): {}", input_path, e);
+                    break;
+                }
+            };
+            match informe.via {
+                ViaConversion::Nativa => log::info!(
+                    "Conversión nativa exitosa: {:?} -> {:?}",
+                    input_path,
+                    glb_path
+                ),
+                ViaConversion::Blender => log::info!(
+                    "Conversión headless exitosa: {:?} -> {:?}",
+                    input_path,
+                    glb_path
+                ),
+            }
+            for aviso in &informe.avisos {
+                log::warn!("Aviso al convertir {:?}: {}", input_path, aviso);
             }
             if let Some(h) = &hash_previo {
                 registrar_exportado(&input_path, h.clone());
