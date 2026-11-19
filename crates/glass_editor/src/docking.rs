@@ -1867,7 +1867,8 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 self.viewport.render_game_tab(ui, self.game_texture_id, self.scene_state);
             }
             EditorTab::Inspector => {
-                self.inspector.render(ui, *self.selected_entity_id, self.scene_state);
+                let mesh_bounds = &self.viewport.mesh_bounds;
+                self.inspector.render(ui, *self.selected_entity_id, self.scene_state, mesh_bounds);
             }
             EditorTab::Console => {
                 self.console.render_console_only(ui);

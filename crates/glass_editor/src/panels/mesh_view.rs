@@ -128,9 +128,11 @@ pub fn hit_gizmo_axis(
 /// 4) caras seleccionadas rellenas ámbar con contorno,
 /// 5) vértices seleccionados (naranja, r=5),
 /// 6) gizmo de 3 ejes en el centroide (línea + círculo en la punta; más grueso si es el eje activo).
+///
 /// `offset_local` desplaza SOLO los vértices seleccionados (preview de arrastre/grab).
 /// `project`: punto local -> Pos2 ABSOLUTO de pantalla (None = detrás de cámara; la cara/arista se salta).
 /// `depth`: punto local -> distancia a la cámara (para ordenar las caras).
+#[allow(clippy::too_many_arguments)]
 pub fn overlay_shapes(
     verts: &[[f32; 3]],
     faces: &[[u32; 3]],

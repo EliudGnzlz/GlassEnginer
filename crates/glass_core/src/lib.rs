@@ -32,7 +32,7 @@ pub use prefab::Prefab;
 pub use project::ProjectSettings;
 pub use scene::{
     canvas_scale_factor, layout_group_rects, resolve_scene_ui_rects, resolve_ui_rect,
-    resolve_ui_rect_in, AudioSourceData, CameraData, CanvasData, ColliderSpec, EntityData,
+    resolve_ui_rect_in, AudioSourceData, CameraData, CanvasData, CharacterData, ColliderSpec, EntityData,
     LayoutGroupData, LightData, LightProfileData, MaterialData, MeshColliderMode, MeshData,
     PhysicsData,
     RectTransformData, SceneState, ScriptComponentData, TransformData, UIButtonData, UITextData,

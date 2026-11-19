@@ -22,6 +22,8 @@ pub struct PhysicsWorld {
     pub collider_set: ColliderSet,
     pub query_pipeline: QueryPipeline,
     pub characters: HashMap<u64, crate::character::CharacterState>,
+    /// Entidades cuyo CC lo creó el editor desde el autorado: el FFI de scripts no puede reemplazarlos.
+    pub characters_autorados: std::collections::HashSet<u64>,
     pub ragdolls: std::collections::HashMap<u64, crate::ragdoll::RagdollState>,
     /// Transform de cada entidad interpolada justo antes del último substep fijo.
     prev_transforms: std::collections::HashMap<u64, TransformFfi>,
@@ -190,6 +192,7 @@ impl PhysicsWorld {
             collider_set: ColliderSet::new(),
             query_pipeline: QueryPipeline::new(),
             characters: HashMap::new(),
+            characters_autorados: std::collections::HashSet::new(),
             ragdolls: HashMap::new(),
             prev_transforms: std::collections::HashMap::new(),
             interp_bodies: std::collections::HashSet::new(),
@@ -3610,6 +3613,30 @@ mod tests {
             Group::from_bits_truncate(1u32 << capa),
             g.filter,
         ));
+    }
+
+    /// El CC autorado (del editor) manda: la vía de scripts
+    /// (`create_character`, la del FFI) no puede reemplazarlo, y al
+    /// destruirlo la marca se retira y la vía normal vuelve a funcionar.
+    #[test]
+    fn cc_autorado_bloquea_la_via_de_scripts() {
+        let (mut world, _suelo) = mundo_con_suelo();
+        assert!(world.create_character_autorado(
+            42,
+            [0.0, 1.0, 0.0],
+            cfg_ccx(),
+            [0.0, 0.0, 0.0],
+            0.001,
+            true,
+            true,
+        ));
+        // La vía de scripts no lo reemplaza ni lo destruye.
+        assert!(!world.create_character(42, [5.0, 1.0, 5.0], cfg_ccx()));
+        let (pos, _, _) = world.character_info(42).expect("el autorado sigue vivo");
+        assert!((pos[0]).abs() < 0.01 && (pos[2]).abs() < 0.01);
+        // Al destruirlo, la marca se va y la vía normal vuelve.
+        assert!(world.destroy_character(42));
+        assert!(world.create_character(42, [5.0, 1.0, 5.0], cfg_ccx()));
     }
 
     fn cfg_ccx() -> crate::character::CharacterConfig {

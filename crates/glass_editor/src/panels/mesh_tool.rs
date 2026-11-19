@@ -439,7 +439,7 @@ impl MeshToolPanel {
 
     /// Entidad de escena cuya malla se está editando, si hay sesión.
     pub fn entidad_en_edicion(&self) -> Option<u64> {
-        self.session.is_some().then(|| self.target_entity).flatten()
+        self.session.is_some().then_some(self.target_entity).flatten()
     }
 
     /// Abre una sesión desde un .glb por ruta (API pública; ya no está en la UI).

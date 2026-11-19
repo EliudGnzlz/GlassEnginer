@@ -164,6 +164,85 @@ pub enum MeshColliderMode {
 // Dentro de PhysicsData, tras is_trigger:
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Derive heredado de la línea de atributos anterior: #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CharacterData {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_cc_radius")]
+    pub radius: f32,
+    #[serde(default = "default_cc_height")]
+    pub height: f32,
+    #[serde(default = "default_cc_slope")]
+    pub slope_limit_deg: f32,
+    #[serde(default = "default_cc_step")]
+    pub step_offset: f32,
+    #[serde(default = "default_cc_skin")]
+    pub skin_width: f32,
+    #[serde(default = "default_cc_min_move")]
+    pub min_move_distance: f32,
+    #[serde(default)]
+    pub center: [f32; 3],
+    #[serde(default = "default_true")]
+    pub detect_collisions: bool,
+    #[serde(default = "default_cc_snap")]
+    pub snap: f32,
+}
+
+fn default_cc_radius() -> f32 {
+    0.5
+}
+fn default_cc_height() -> f32 {
+    2.0
+}
+fn default_cc_slope() -> f32 {
+    45.0
+}
+fn default_cc_step() -> f32 {
+    0.3
+}
+fn default_cc_skin() -> f32 {
+    0.08
+}
+fn default_cc_min_move() -> f32 {
+    0.001
+}
+fn default_cc_snap() -> f32 {
+    0.3
+}
+
+impl Default for CharacterData {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            radius: default_cc_radius(),
+            height: default_cc_height(),
+            slope_limit_deg: default_cc_slope(),
+            step_offset: default_cc_step(),
+            skin_width: default_cc_skin(),
+            min_move_distance: default_cc_min_move(),
+            center: [0.0; 3],
+            detect_collisions: default_true(),
+            snap: default_cc_snap(),
+        }
+    }
+}
+
+impl CharacterData {
+    /// (radius, height, skin_width, step_offset, slope_limit_deg, snap) para construir el
+    /// CharacterConfig de glass_physics en el llamador (glass_core no depende de glass_physics).
+    pub fn config(&self) -> (f32, f32, f32, f32, f32, f32) {
+        (
+            self.radius,
+            self.height,
+            self.skin_width,
+            self.step_offset,
+            self.slope_limit_deg,
+            self.snap,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhysicsData {
     pub body_type: String, // "Dynamic", "Static", "Kinematic"
     /// Presencia del componente Rigidbody (separación RB/Collider
@@ -179,6 +258,10 @@ pub struct PhysicsData {
     pub friction: f32,
     pub restitution: f32,
     pub box_extents: [f32; 3],
+    /// Centro (local) del collider en el camino histórico de lista vacía
+    /// (`colliders` sin specs). Espejo de `ColliderSpec::offset`.
+    #[serde(default)]
+    pub box_offset: [f32; 3],
     pub linear_velocity: [f32; 3],
     /// Capa de colisión (0..31): el collider pertenece a esta capa y
     /// colisiona según su máscara. Fase 1.
@@ -281,6 +364,7 @@ impl Default for PhysicsData {
             friction: 0.7,
             restitution: 0.05,
             box_extents: [0.5, 0.5, 0.5],
+            box_offset: [0.0, 0.0, 0.0],
             linear_velocity: [0.0, 0.0, 0.0],
             layer: 0,
             collision_mask: u32::MAX,
@@ -1275,6 +1359,9 @@ pub struct EntityData {
     pub script: Option<String>,
     pub script_data: Option<ScriptComponentData>,
     pub physics: Option<PhysicsData>,
+    /// Character Controller autorado en el editor (se crea en la física al entrar en Play).
+    #[serde(default)]
+    pub character: Option<CharacterData>,
     pub audio: Option<AudioSourceData>,
     /// Emisor de partículas (Fase 8P).
     #[serde(default)]
@@ -1363,6 +1450,7 @@ impl EntityData {
                 friction: 0.7,
                 restitution: 0.05,
                 box_extents: [0.5, 0.5, 0.5],
+                box_offset: [0.0, 0.0, 0.0],
                 linear_velocity: [0.0, 0.0, 0.0],
                 layer: 0,
                 collision_mask: u32::MAX,
@@ -1463,6 +1551,7 @@ impl EntityData {
             script,
             script_data,
             physics,
+            character: None,
             audio,
             particles,
             camera,

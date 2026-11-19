@@ -1777,6 +1777,16 @@ struct GlassEngineApp {
     /// play_state del frame anterior, para detectar transiciones.
     #[cfg(feature = "editor")]
     prev_play_state: glass_editor::PlayState,
+    /// Velocidad vertical acumulada del driver de CC: (entidad seleccionada, vy).
+    // Ambos campos solo se leen en builds con editor (el Play y su
+    // driver de CC); en el binario de juego quedan escritos y sin uso.
+    #[allow(dead_code)]
+    cc_driver_vy: Option<(u64, f32)>,
+    /// Ids de los CC autorados creados al entrar en Play: al salir se
+    /// destruyen exactamente estos (la escena puede haber cambiado
+    /// durante Play y ya no enumerarlos).
+    #[allow(dead_code)]
+    cc_autorados_en_play: Vec<u64>,
     #[cfg(feature = "editor")]
     pub cargando: bool,
     #[cfg(feature = "editor")]
@@ -2278,6 +2288,8 @@ impl GlassEngineApp {
             play_snapshot: None,
             #[cfg(feature = "editor")]
             prev_play_state: glass_editor::PlayState::Edit,
+            cc_driver_vy: None,
+            cc_autorados_en_play: Vec::new(),
             // Arranque directo al editor: la pantalla de carga se ve
             // desde el primer frame, antes de que bloquee la precarga.
             #[cfg(feature = "editor")]
@@ -4066,8 +4078,65 @@ fn lanzar_hub_al_salir() {
                 }
                 self.editor_layout.viewport.active_tab = glass_editor::ViewportTab::GameView;
                 self.editor_layout.focus_game_tab();
+
+                // Personajes autorados: (id, datos, centro de la cápsula en mundo).
+                let autorados: Vec<_> = match self.scene_state.lock() {
+                    Ok(scene) => scene
+                        .entities
+                        .iter()
+                        .filter(|e| e.active)
+                        .filter_map(|e| e.character.as_ref().map(|d| (e.id, d.clone())))
+                        .map(|(id, d)| {
+                            let centro = glass_core::mat4_transform_point(
+                                scene.compute_world_matrix(id),
+                                d.center,
+                            );
+                            (id, d, centro)
+                        })
+                        .collect(),
+                    Err(_) => Vec::new(),
+                };
+                if !autorados.is_empty() {
+                    if let Ok(mut physics) = self.physics_world.lock() {
+                        for (id, data, centro) in &autorados {
+                            let (radius, height, skin, step_offset, slope_limit_deg, snap) =
+                                data.config();
+                            let creado = physics.create_character_autorado(
+                                *id,
+                                *centro,
+                                glass_physics::character::CharacterConfig {
+                                    radius,
+                                    height,
+                                    skin,
+                                    step_offset,
+                                    slope_limit_deg,
+                                    snap,
+                                },
+                                data.center,
+                                data.min_move_distance,
+                                data.detect_collisions,
+                                data.enabled,
+                            );
+                            if creado {
+                                self.cc_autorados_en_play.push(*id);
+                            }
+                        }
+                    }
+                }
             }
             PlayTransition::StopPlay => {
+                // Destruir los CC autorados creados al entrar (la lista
+                // guardada, no la escena actual: durante Play la escena
+                // pudo cambiar o perder entidades) antes de restaurar,
+                // para que ni el personaje ni su marca sobrevivan.
+                let ids_cc: Vec<u64> = std::mem::take(&mut self.cc_autorados_en_play);
+                if !ids_cc.is_empty() {
+                    if let Ok(mut physics) = self.physics_world.lock() {
+                        for id in ids_cc {
+                            physics.destroy_character(id);
+                        }
+                    }
+                }
                 if let Some(foto) = self.play_snapshot.take() {
                     self.restore_play_snapshot(foto);
                 }
@@ -4949,6 +5018,7 @@ let resueltos = if body.has_collider {
         #[cfg(not(feature = "editor"))]
         let simulation_running = true;
 
+        // 1b. Driver de prueba del CC autorado (editor): mueve al personaje seleccionado con WASD antes del paso de física, como haría un script.
         // 2. Ejecutar paso de C# Scripting (.NET CoreCLR) — solo si simulación activa.
         // Antes del Update va la reconciliación de instanciación: crea los
         // scripts spawneados en el frame anterior (su primer Update es ESTE)
@@ -5143,6 +5213,146 @@ let resueltos = if body.has_collider {
                 }
             }
         }
+
+        // conducir_cc_seleccionado: corre DESPUÉS del paso de física y de
+        // su sincronización de transforms, para que su escritura sea la
+        // última palabra del frame (la sincronización copia el centro de
+        // la cápsula como posición y pisaría el offset `center` autorado).
+        // move_character resuelve contra los colliders ya actualizados por
+        // el paso. Bloqueos por separado: escena → física → escena.
+        #[cfg(feature = "editor")]
+        if is_playing {
+            'conducir_cc_seleccionado: {
+                use winit::keyboard::{KeyCode, PhysicalKey};
+                const DT: f32 = 0.016667;
+
+                if self.editor_layout.viewport.play_state != glass_editor::PlayState::Playing {
+                    self.cc_driver_vy = None;
+                    break 'conducir_cc_seleccionado;
+                }
+                let Some(id) = self.editor_layout.hierarchy.selected_entity else {
+                    self.cc_driver_vy = None;
+                    break 'conducir_cc_seleccionado;
+                };
+
+                // Escena: validar la entidad y leer su center autorado.
+                let center_local = match self.scene_state.lock() {
+                    Ok(scene) => match scene.entities.iter().find(|e| e.id == id) {
+                        Some(e) if e.active && e.script.is_none() => match e.character.as_ref() {
+                            Some(data) if data.enabled => Some(data.center),
+                            _ => None,
+                        },
+                        _ => None,
+                    },
+                    Err(_) => None,
+                };
+                let Some(center_local) = center_local else {
+                    self.cc_driver_vy = None;
+                    break 'conducir_cc_seleccionado;
+                };
+
+                // Entrada horizontal.
+                let tecla = |c: KeyCode| self.keys_pressed.contains(&PhysicalKey::Code(c));
+                let mut dx = 0.0f32;
+                let mut dz = 0.0f32;
+                if tecla(KeyCode::KeyW) || tecla(KeyCode::ArrowUp) {
+                    dz -= 1.0;
+                }
+                if tecla(KeyCode::KeyS) || tecla(KeyCode::ArrowDown) {
+                    dz += 1.0;
+                }
+                if tecla(KeyCode::KeyA) || tecla(KeyCode::ArrowLeft) {
+                    dx -= 1.0;
+                }
+                if tecla(KeyCode::KeyD) || tecla(KeyCode::ArrowRight) {
+                    dx += 1.0;
+                }
+                let len = (dx * dx + dz * dz).sqrt();
+                if len > 1.0 {
+                    dx /= len;
+                    dz /= len;
+                }
+                let vel = if tecla(KeyCode::ShiftLeft) || tecla(KeyCode::ShiftRight) {
+                    8.0
+                } else {
+                    4.0
+                };
+
+                let mut vy = match self.cc_driver_vy {
+                    Some((eid, v)) if eid == id => v,
+                    _ => 0.0,
+                };
+
+                // Física: gravedad según grounded y movimiento.
+                let movido = match self.physics_world.lock() {
+                    Ok(mut physics) => {
+                        let grounded = physics
+                            .character_info(id)
+                            .map(|(_, g, _)| g)
+                            .unwrap_or(false);
+                        if grounded {
+                            if vy < 0.0 {
+                                vy = -0.5;
+                            }
+                        } else {
+                            vy -= 9.81 * DT;
+                        }
+                        let desired = [dx * vel * DT, vy * DT, dz * vel * DT];
+                        physics.move_character(id, desired, DT)
+                    }
+                    Err(_) => None,
+                };
+                let Some((centro, grounded, _)) = movido else {
+                    self.cc_driver_vy = None;
+                    break 'conducir_cc_seleccionado;
+                };
+
+                // Escena: la posición de MUNDO destino es centro − offset
+                // de mundo del center autorado; el transform guarda la
+                // posición LOCAL, así que con padre se convierte con la
+                // inversa afín de la matriz de mundo del padre.
+                if let Ok(mut scene) = self.scene_state.lock() {
+                    let world = scene.compute_world_matrix(id);
+                    let c = glass_core::mat4_transform_point(world, center_local);
+                    let t = glass_core::mat4_translation(world);
+                    let destino_mundo = [
+                        centro[0] - (c[0] - t[0]),
+                        centro[1] - (c[1] - t[1]),
+                        centro[2] - (c[2] - t[2]),
+                    ];
+                    let padre = scene
+                        .entities
+                        .iter()
+                        .find(|e| e.id == id)
+                        .and_then(|e| e.parent);
+                    let destino_local = match padre {
+                        Some(pid) => {
+                            let inv = glass_core::mat4_inverse_affine(
+                                scene.compute_world_matrix(pid),
+                            );
+                            // Sin inversa (padre degenerado, p. ej. escala
+                            // cero) no se escribe nada: guardar la posición
+                            // de mundo como local corrompería la entidad.
+                            inv.map(|m| glass_core::mat4_transform_point(m, destino_mundo))
+                        }
+                        None => Some(destino_mundo),
+                    };
+                    if let Some(local) = destino_local {
+                        if let Some(e) = scene.entities.iter_mut().find(|e| e.id == id) {
+                            e.transform.position = local;
+                        }
+                    }
+                }
+
+                if grounded {
+                    vy = -0.5;
+                }
+                self.cc_driver_vy = Some((id, vy));
+            }
+        } else {
+            self.cc_driver_vy = None;
+        }
+
 
         let profile_physics_us: u64 = profile_t_physics.elapsed().as_micros() as u64;
 
@@ -8939,7 +9149,7 @@ fn colliders_resueltos(
         vec![(
             shape_inferida,
             ColliderConfig { layer: body.layer, mask: body.collision_mask, is_trigger: body.is_trigger },
-            [0.0, 0.0, 0.0],
+            body.box_offset,
         )]
     } else {
         body.colliders

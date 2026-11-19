@@ -1,6 +1,6 @@
 use egui::{Color32, DragValue, RichText, Slider, Ui};
 use glass_core::{
-    AudioSourceData, CameraData, CanvasData, LightData, MeshData, PhysicsData,
+    AudioSourceData, CameraData, CanvasData, CharacterData, LightData, MeshData, PhysicsData,
     RectTransformData, SceneState, ScriptComponentData, UIButtonData, UITextData,
     UIImageData,
     UIDragData,
@@ -48,6 +48,7 @@ fn scan_model_names_in(root: &std::path::Path) -> Vec<String> {
 #[derive(Default)]
 pub struct InspectorPanel {
     show_add_component_menu: bool,
+    busqueda_componente: String,
     /// Nombres de modelo disponibles (los .glb bajo `assets/`, sin
     /// extensión) para el selector de malla. Se cachean por entidad
     /// seleccionada y se refrescan al cambiar la selección o con el
@@ -65,6 +66,7 @@ impl InspectorPanel {
     pub fn new() -> Self {
         Self {
             show_add_component_menu: false,
+            busqueda_componente: String::new(),
             model_names: Vec::new(),
             model_names_for: None,
             model_names_dirty: true,
@@ -77,6 +79,7 @@ impl InspectorPanel {
         ui: &mut Ui,
         selected_id: Option<u64>,
         scene_state: &Arc<Mutex<SceneState>>,
+        model_bounds: &std::collections::HashMap<String, ([f32; 3], [f32; 3])>,
     ) {
         ui.horizontal(|ui| {
             ui.heading("🔍 Inspector");
@@ -409,6 +412,13 @@ impl InspectorPanel {
                 // ==========================================
                 let mut remove_rigidbody = false;
                 let mut remove_collider = false;
+                // Datos de la entidad que la sección Collider necesita sin
+                // volver a prestar `entity` (dentro va prestada mutable
+                // vía `phys`): nombre del modelo, si tiene malla y sus
+                // cotas locales para «Ajustar a la malla».
+                let modelo_entidad: String =
+                    entity.mesh.as_ref().map(|m| m.model.clone()).unwrap_or_default();
+                let cotas_entidad = super::gizmo_3d::entity_local_bounds(entity, model_bounds);
                 if let Some(ref mut phys) = entity.physics {
                     if phys.has_rigidbody {
                         ui.collapsing("⚙ Rigidbody", |ui| {
@@ -423,9 +433,77 @@ impl InspectorPanel {
                                     });
                             });
 
+                            // Lee/pone un bit de `phys.constraints` con una casilla.
+                            macro_rules! casilla_bit {
+                                ($ui:expr, $label:expr, $bit:expr) => {{
+                                    let mut v = (phys.constraints & $bit) != 0;
+                                    if $ui.checkbox(&mut v, $label).changed() {
+                                        if v {
+                                            phys.constraints |= $bit;
+                                        } else {
+                                            phys.constraints &= !$bit;
+                                        }
+                                    }
+                                }};
+                            }
+
                             ui.horizontal(|ui| {
                                 ui.label("Masa:");
                                 ui.add(DragValue::new(&mut phys.mass).speed(0.1).range(0.01..=500.0).suffix(" kg"));
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Drag:");
+                                ui.add(DragValue::new(&mut phys.linear_damping).speed(0.05).range(0.0..=100.0));
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Angular Drag:");
+                                ui.add(DragValue::new(&mut phys.angular_damping).speed(0.05).range(0.0..=100.0));
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut phys.use_gravity, "Use Gravity");
+                                ui.checkbox(&mut phys.interpolate, "Interpolate");
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Is Kinematic");
+                                if phys.body_type == "Static" {
+                                    let mut apagada = false;
+                                    ui.add_enabled(false, |ui: &mut Ui| ui.checkbox(&mut apagada, ""));
+                                } else {
+                                    let mut kinematic = phys.body_type == "Kinematic";
+                                    if ui.checkbox(&mut kinematic, "").changed() {
+                                        phys.body_type = if kinematic { "Kinematic" } else { "Dynamic" }.into();
+                                    }
+                                }
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Collision Detection:");
+                                egui::ComboBox::from_id_salt(format!("phys_ccd_{}", selected_id.unwrap_or(0)))
+                                    .selected_text(if phys.ccd { "Continua" } else { "Discreta" })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut phys.ccd, false, "Discreta");
+                                        ui.selectable_value(&mut phys.ccd, true, "Continua");
+                                    });
+                            });
+
+                            ui.label(RichText::new("Constraints").strong());
+                            ui.group(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Freeze Position");
+                                    casilla_bit!(ui, "X", 1);
+                                    casilla_bit!(ui, "Y", 2);
+                                    casilla_bit!(ui, "Z", 4);
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Freeze Rotation");
+                                    casilla_bit!(ui, "X", 8);
+                                    casilla_bit!(ui, "Y", 16);
+                                    casilla_bit!(ui, "Z", 32);
+                                });
                             });
 
                             ui.label(RichText::new(format!(
@@ -441,19 +519,237 @@ impl InspectorPanel {
 
                     if phys.has_collider {
                         ui.collapsing("🧊 Collider", |ui| {
+                            use glass_core::scene::{ColliderSpec, MeshColliderMode};
+
+                            // Convierte `size` entre familias de forma con un criterio simple:
+                            // · Box (half-extents) → Sphere: radio = x; → Capsule/Cylinder: [half_height = y, radio = x].
+                            // · Sphere (radio r) → Box: [r, r, r]; → Capsule/Cylinder: [r, r].
+                            // · Capsule/Cylinder ([hh, r]) → Box: [r, hh, r]; → Sphere: radio = r.
+                            // Capsule ↔ Cylinder comparten disposición [half_height, radio]: se conserva.
+                            fn tamano_convertido(desde: &str, hacia: &str, s: [f32; 3]) -> [f32; 3] {
+                                let familia = |t: &str| match t {
+                                    "Box" => 0,
+                                    "Sphere" => 1,
+                                    _ => 2,
+                                };
+                                match (familia(desde), familia(hacia)) {
+                                    (0, 1) => [s[0], 0.0, 0.0],
+                                    (0, 2) => [s[1], s[0], 0.0],
+                                    (1, 0) => [s[0], s[0], s[0]],
+                                    (1, 2) => [s[0], s[0], 0.0],
+                                    (2, 0) => [s[1], s[0], s[1]],
+                                    (2, 1) => [s[1], 0.0, 0.0],
+                                    _ => s,
+                                }
+                            }
+
                             // En Unity fricción y elasticidad son del material del collider.
                             ui.add(Slider::new(&mut phys.friction, 0.0..=1.0).text("Fricción"));
                             ui.add(Slider::new(&mut phys.restitution, 0.0..=1.0).text("Elasticidad (Bounciness)"));
 
-                            ui.label(RichText::new("Colisionador Cuboide (Half-Extents):").strong());
+                            let modelo: String = modelo_entidad.clone();
+                            let inferido: &str = match modelo.as_str() {
+                                "sphere" => "Sphere",
+                                "capsule" => "Capsule",
+                                "cylinder" => "Cylinder",
+                                _ => "Box",
+                            };
+                            let tipo_actual: String = match phys.mesh_collider {
+                                MeshColliderMode::Convex => "Mesh (Convex)".to_string(),
+                                MeshColliderMode::TriMesh => "Mesh (TriMesh)".to_string(),
+                                MeshColliderMode::None => match phys.colliders.first() {
+                                    Some(c) => c.shape.clone(),
+                                    None => inferido.to_string(),
+                                },
+                            };
+
+                            let mut tipo_nuevo = tipo_actual.clone();
                             ui.horizontal(|ui| {
-                                ui.label("X");
-                                ui.add(DragValue::new(&mut phys.box_extents[0]).speed(0.05));
-                                ui.label("Y");
-                                ui.add(DragValue::new(&mut phys.box_extents[1]).speed(0.05));
-                                ui.label("Z");
-                                ui.add(DragValue::new(&mut phys.box_extents[2]).speed(0.05));
+                                ui.label("Tipo");
+                                egui::ComboBox::from_id_salt(format!("collider_tipo_{}", selected_id.unwrap_or(0)))
+                                    .selected_text(tipo_actual.clone())
+                                    .show_ui(ui, |ui| {
+                                        for t in ["Box", "Sphere", "Capsule", "Cylinder", "Mesh (Convex)", "Mesh (TriMesh)"] {
+                                            ui.selectable_value(&mut tipo_nuevo, t.to_string(), t);
+                                        }
+                                    });
                             });
+
+                            if tipo_nuevo != tipo_actual {
+                                match tipo_nuevo.as_str() {
+                                    "Mesh (Convex)" => phys.mesh_collider = MeshColliderMode::Convex,
+                                    "Mesh (TriMesh)" => phys.mesh_collider = MeshColliderMode::TriMesh,
+                                    prim => {
+                                        phys.mesh_collider = MeshColliderMode::None;
+                                        if phys.colliders.is_empty() {
+                                            // Box → Box con lista vacía: se sigue editando box_extents/box_offset.
+                                            if !(prim == "Box" && tipo_actual == "Box") {
+                                                let size = tamano_convertido("Box", prim, phys.box_extents);
+                                                let is_trigger = phys.is_trigger;
+                                                phys.colliders.push(ColliderSpec {
+                                                    shape: prim.to_string(),
+                                                    size,
+                                                    offset: phys.box_offset,
+                                                    is_trigger,
+                                                });
+                                            }
+                                        } else {
+                                            let c = &mut phys.colliders[0];
+                                            if c.shape != prim {
+                                                c.size = tamano_convertido(&c.shape, prim, c.size);
+                                                c.shape = prim.to_string();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            let tipo = tipo_nuevo;
+
+                            if let Some(c) = phys.colliders.first_mut() {
+                                ui.checkbox(&mut c.is_trigger, "Is Trigger");
+                            } else {
+                                ui.checkbox(&mut phys.is_trigger, "Is Trigger");
+                            }
+
+                            if tipo.starts_with("Mesh") {
+                                if modelo.is_empty() {
+                                    ui.label(RichText::new("(sin malla: caerá a los primitivos)").weak());
+                                } else {
+                                    ui.label(format!("Malla: {modelo}"));
+                                }
+                                if matches!(phys.mesh_collider, MeshColliderMode::TriMesh)
+                                    && phys.has_rigidbody
+                                    && phys.body_type != "Static"
+                                {
+                                    ui.label(
+                                        RichText::new("En cuerpos dinámicos TriMesh se degrada a Convex al simular.")
+                                            .color(Color32::from_rgb(255, 190, 80)),
+                                    );
+                                }
+                            } else {
+                                // Copias locales del offset/size efectivos. `cambiado` es la bandera de
+                                // materialización perezosa: solo al editar se escribe (y, con lista vacía
+                                // y tipo no-Box, se crea el spec equivalente).
+                                let (mut center, mut size) = match phys.colliders.first() {
+                                    Some(c) => (c.offset, c.size),
+                                    None => (phys.box_offset, tamano_convertido("Box", &tipo, phys.box_extents)),
+                                };
+                                let mut cambiado = false;
+
+                                ui.horizontal(|ui| {
+                                    ui.label("Center");
+                                    for (eje, v) in ["X", "Y", "Z"].iter().zip(center.iter_mut()) {
+                                        ui.label(*eje);
+                                        cambiado |= ui.add(DragValue::new(v).speed(0.05)).changed();
+                                    }
+                                });
+
+                                match tipo.as_str() {
+                                    "Box" => {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Size");
+                                            for (eje, h) in ["X", "Y", "Z"].iter().zip(size.iter_mut()) {
+                                                ui.label(*eje);
+                                                let mut completo = *h * 2.0;
+                                                if ui
+                                                    .add(DragValue::new(&mut completo).speed(0.05).range(0.01..=f32::INFINITY))
+                                                    .changed()
+                                                {
+                                                    *h = completo.max(0.01) * 0.5;
+                                                    cambiado = true;
+                                                }
+                                            }
+                                        });
+                                    }
+                                    "Sphere" => {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Radius");
+                                            cambiado |= ui
+                                                .add(DragValue::new(&mut size[0]).speed(0.05).range(0.01..=f32::INFINITY))
+                                                .changed();
+                                        });
+                                    }
+                                    "Capsule" => {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Radius");
+                                            cambiado |= ui
+                                                .add(DragValue::new(&mut size[1]).speed(0.05).range(0.01..=f32::INFINITY))
+                                                .changed();
+                                        });
+                                        let mut altura = 2.0 * (size[0] + size[1]);
+                                        ui.horizontal(|ui| {
+                                            ui.label("Height");
+                                            if ui
+                                                .add(DragValue::new(&mut altura).speed(0.05).range(0.0..=f32::INFINITY))
+                                                .changed()
+                                            {
+                                                size[0] = (altura * 0.5 - size[1]).max(0.0);
+                                                cambiado = true;
+                                            }
+                                        });
+                                        ui.label(RichText::new("Dirección: Y").weak());
+                                    }
+                                    "Cylinder" => {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Radius");
+                                            cambiado |= ui
+                                                .add(DragValue::new(&mut size[1]).speed(0.05).range(0.01..=f32::INFINITY))
+                                                .changed();
+                                        });
+                                        let mut altura = 2.0 * size[0];
+                                        ui.horizontal(|ui| {
+                                            ui.label("Height");
+                                            if ui
+                                                .add(DragValue::new(&mut altura).speed(0.05).range(0.0..=f32::INFINITY))
+                                                .changed()
+                                            {
+                                                size[0] = altura.max(0.0) * 0.5;
+                                                cambiado = true;
+                                            }
+                                        });
+                                    }
+                                    _ => {}
+                                }
+
+                                if tipo == "Box" || tipo == "Sphere" {
+                                    let pulsado = ui
+                                        .add_enabled_ui(!modelo.is_empty(), |ui| ui.button("🎯 Ajustar a la malla").clicked())
+                                        .inner;
+                                    if pulsado {
+                                        let (lo, hi) = cotas_entidad;
+                                        for i in 0..3 {
+                                            center[i] = (lo[i] + hi[i]) * 0.5;
+                                        }
+                                        if tipo == "Box" {
+                                            for i in 0..3 {
+                                                size[i] = ((hi[i] - lo[i]) * 0.5).max(0.005);
+                                            }
+                                        } else {
+                                            let mayor = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(hi[2] - lo[2]);
+                                            size[0] = (mayor * 0.5).max(0.01);
+                                        }
+                                        cambiado = true;
+                                    }
+                                }
+
+                                if cambiado {
+                                    if let Some(c) = phys.colliders.first_mut() {
+                                        c.offset = center;
+                                        c.size = size;
+                                    } else if tipo == "Box" {
+                                        phys.box_offset = center;
+                                        phys.box_extents = size;
+                                    } else {
+                                        let is_trigger = phys.is_trigger;
+                                        phys.colliders.push(ColliderSpec {
+                                            shape: tipo.clone(),
+                                            size,
+                                            offset: center,
+                                            is_trigger,
+                                        });
+                                    }
+                                }
+                            }
 
                             if ui.small_button("🗑 Quitar Collider").clicked() {
                                 remove_collider = true;
@@ -485,6 +781,88 @@ impl InspectorPanel {
                         entity.physics = None;
                         entity.components.retain(|c| c != "StaticCollider");
                     }
+                }
+
+                // ==========================================
+                // 4b. COMPONENTE CHARACTER CONTROLLER
+                // ==========================================
+                let mut remove_character = false;
+                if let Some(ref mut cc) = entity.character {
+                    ui.collapsing("🚶 Character Controller", |ui| {
+                        ui.checkbox(&mut cc.enabled, "Enabled");
+                        ui.horizontal(|ui| {
+                            ui.label("Slope Limit");
+                            ui.add(
+                                egui::DragValue::new(&mut cc.slope_limit_deg)
+                                    .speed(0.5)
+                                    .range(0.0..=90.0)
+                                    .suffix("°"),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Step Offset");
+                            ui.add(
+                                egui::DragValue::new(&mut cc.step_offset)
+                                    .speed(0.01)
+                                    .range(0.0..=2.0),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Skin Width");
+                            ui.add(
+                                egui::DragValue::new(&mut cc.skin_width)
+                                    .speed(0.001)
+                                    .range(0.001..=0.5),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Min Move Distance");
+                            ui.add(
+                                egui::DragValue::new(&mut cc.min_move_distance)
+                                    .speed(0.0005)
+                                    .range(0.0..=0.1),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Center");
+                            ui.add(egui::DragValue::new(&mut cc.center[0]).speed(0.01).prefix("X "));
+                            ui.add(egui::DragValue::new(&mut cc.center[1]).speed(0.01).prefix("Y "));
+                            ui.add(egui::DragValue::new(&mut cc.center[2]).speed(0.01).prefix("Z "));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Radius");
+                            let resp = ui.add(
+                                egui::DragValue::new(&mut cc.radius)
+                                    .speed(0.01)
+                                    .range(0.01..=2.0),
+                            );
+                            // La cápsula exige height ≥ 2·radio + 0.02
+                            // (half_height = height/2 − radius ≥ 0.01, el
+                            // mínimo que el runtime garantiza al crearla).
+                            if resp.changed() && cc.height < cc.radius * 2.0 + 0.02 {
+                                cc.height = cc.radius * 2.0 + 0.02;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Height");
+                            // Mínimo conjunto con el radio: la cápsula no
+                            // puede bajar de 2·radio + 0.02 (ver Radius).
+                            let min_h = cc.radius * 2.0 + 0.02;
+                            ui.add(
+                                egui::DragValue::new(&mut cc.height)
+                                    .speed(0.01)
+                                    .range(min_h..=10.0),
+                            );
+                        });
+                        ui.checkbox(&mut cc.detect_collisions, "Detect Collisions");
+                        if ui.button("🗑 Quitar Character Controller").clicked() {
+                            remove_character = true;
+                        }
+                    });
+                }
+                if remove_character {
+                    entity.character = None;
+                    entity.components.retain(|c| c != "CharacterController");
                 }
 
                 // ==========================================
@@ -769,16 +1147,52 @@ impl InspectorPanel {
                 // ==========================================
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
+                    if !self.show_add_component_menu && !self.busqueda_componente.is_empty() {
+                        // Cierre centralizado: cualquier camino que cierre
+                        // el menú (toggle o elegir un componente) deja la
+                        // búsqueda limpia para la próxima apertura.
+                        self.busqueda_componente.clear();
+                    }
                     if ui.button("➕ Añadir Componente").clicked() {
                         self.show_add_component_menu = !self.show_add_component_menu;
+                        if !self.show_add_component_menu {
+                            self.busqueda_componente.clear();
+                        }
                     }
                 });
 
                 if self.show_add_component_menu {
                     ui.group(|ui| {
                         ui.label(RichText::new("Selecciona Componente a Añadir:").strong());
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.busqueda_componente)
+                                .hint_text("Buscar componente…"),
+                        );
 
-                        if entity.mesh.is_none() && ui.button("🎨 MeshRenderer & Material").clicked() {
+                        let q = self.busqueda_componente.trim().to_lowercase();
+                        let coincide = |nombre: &str| q.is_empty() || nombre.to_lowercase().contains(&q);
+
+                        let mut hay_resultados = false;
+                        hay_resultados |= coincide("MeshRenderer");
+                        hay_resultados |= coincide("Rigidbody");
+                        hay_resultados |= coincide("Collider");
+                        hay_resultados |= coincide("Script");
+                        hay_resultados |= coincide("AudioSource");
+                        hay_resultados |= coincide("CharacterController");
+                        hay_resultados |= coincide("Camera");
+                        hay_resultados |= coincide("Light");
+                        hay_resultados |= coincide("Canvas");
+                        hay_resultados |= coincide("RectTransform");
+                        hay_resultados |= coincide("Text");
+                        hay_resultados |= coincide("Button");
+                        hay_resultados |= coincide("Image");
+                        hay_resultados |= coincide("DragDrop");
+
+                        if !hay_resultados && !q.is_empty() {
+                            ui.label(RichText::new("Sin componentes que coincidan.").weak());
+                        }
+
+                        if coincide("MeshRenderer") && entity.mesh.is_none() && ui.button("🎨 MeshRenderer & Material").clicked() {
                             entity.mesh = Some(MeshData::default());
                             entity.components.push("MeshRenderer".into());
                             entity.components.push("Material".into());
@@ -786,7 +1200,8 @@ impl InspectorPanel {
                         }
 
                         if entity.physics.is_none() {
-                            if ui.button("⚙ Rigidbody").clicked() {
+                            // Filtro en la cadena if/else: con "coll" se dibuja Collider; sin filtro, ambos como antes.
+                            if coincide("Rigidbody") && ui.button("⚙ Rigidbody").clicked() {
                                 entity.physics = Some(PhysicsData {
                                     has_rigidbody: true,
                                     has_collider: false,
@@ -794,7 +1209,7 @@ impl InspectorPanel {
                                 });
                                 entity.components.push("RigidBody".into());
                                 self.show_add_component_menu = false;
-                            } else if ui.button("🧊 Collider").clicked() {
+                            } else if coincide("Collider") && ui.button("🧊 Collider").clicked() {
                                 entity.physics = Some(PhysicsData {
                                     body_type: "Static".into(),
                                     has_rigidbody: false,
@@ -805,56 +1220,62 @@ impl InspectorPanel {
                                 self.show_add_component_menu = false;
                             }
                         } else if let Some(ref mut phys) = entity.physics {
-                            if !phys.has_rigidbody && ui.button("⚙ Añadir Rigidbody").clicked() {
+                            if coincide("Rigidbody") && !phys.has_rigidbody && ui.button("⚙ Añadir Rigidbody").clicked() {
                                 phys.has_rigidbody = true;
                                 entity.components.push("RigidBody".into());
                                 self.show_add_component_menu = false;
                             }
-                            if !phys.has_collider && ui.button("🧊 Añadir Collider").clicked() {
+                            if coincide("Collider") && !phys.has_collider && ui.button("🧊 Añadir Collider").clicked() {
                                 phys.has_collider = true;
                                 entity.components.push("Collider".into());
                                 self.show_add_component_menu = false;
                             }
                         }
 
-                        if entity.script.is_none() && ui.button("📜 Script C# (.NET CoreCLR)").clicked() {
+                        if coincide("Script") && entity.script.is_none() && ui.button("📜 Script C# (.NET CoreCLR)").clicked() {
                             entity.script = Some("GlassEngine.Core.Scripts.PlayerController".into());
                             entity.script_data = Some(ScriptComponentData::default());
                             entity.components.push("Script".into());
                             self.show_add_component_menu = false;
                         }
 
-                        if entity.audio.is_none() && ui.button("♫ AudioSource").clicked() {
+                        if coincide("AudioSource") && entity.audio.is_none() && ui.button("♫ AudioSource").clicked() {
                             entity.audio = Some(AudioSourceData::default());
                             entity.components.push("AudioSource".into());
                             self.show_add_component_menu = false;
                         }
 
-                        if entity.camera.is_none() && ui.button("🎥 Cámara (Camera)").clicked() {
+                        if coincide("CharacterController") && entity.character.is_none() && ui.button("🚶 Character Controller").clicked() {
+                            entity.character = Some(CharacterData::default());
+                            entity.components.push("CharacterController".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if coincide("Camera") && entity.camera.is_none() && ui.button("🎥 Cámara (Camera)").clicked() {
                             entity.camera = Some(CameraData::default());
                             entity.components.push("Camera".into());
                             self.show_add_component_menu = false;
                         }
 
-                        if entity.light.is_none() && ui.button("☼ Luz (Light)").clicked() {
+                        if coincide("Light") && entity.light.is_none() && ui.button("☼ Luz (Light)").clicked() {
                             entity.light = Some(LightData::default());
                             entity.components.push("Light".into());
                             self.show_add_component_menu = false;
                         }
 
-                        if entity.canvas.is_none() && ui.button("🖼 Canvas").clicked() {
+                        if coincide("Canvas") && entity.canvas.is_none() && ui.button("🖼 Canvas").clicked() {
                             entity.canvas = Some(CanvasData::default());
                             entity.components.push("Canvas".into());
                             self.show_add_component_menu = false;
                         }
 
-                        if entity.rect_transform.is_none() && ui.button("⊡ RectTransform").clicked() {
+                        if coincide("RectTransform") && entity.rect_transform.is_none() && ui.button("⊡ RectTransform").clicked() {
                             entity.rect_transform = Some(RectTransformData::default());
                             entity.components.push("RectTransform".into());
                             self.show_add_component_menu = false;
                         }
 
-                        if entity.ui_text.is_none() && ui.button("🔤 Text (TMP)").clicked() {
+                        if coincide("Text") && entity.ui_text.is_none() && ui.button("🔤 Text (TMP)").clicked() {
                             entity.ui_text = Some(UITextData::default());
                             entity.components.push("Text".into());
                             self.show_add_component_menu = false;

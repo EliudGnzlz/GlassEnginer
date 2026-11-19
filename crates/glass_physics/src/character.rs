@@ -75,6 +75,43 @@ pub const MAX_CHARACTER_HITS: usize = 16;
 
 impl PhysicsWorld {
     pub fn create_character(&mut self, entity_id: u64, pos: [f32; 3], cfg: CharacterConfig) -> bool {
+        // El CC autorado en el editor manda: el FFI de scripts no puede reemplazarlo.
+        if self.characters_autorados.contains(&entity_id) {
+            return false;
+        }
+        self.crear_personaje(entity_id, pos, cfg)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_character_autorado(
+        &mut self,
+        entity_id: u64,
+        pos: [f32; 3],
+        cfg: CharacterConfig,
+        center: [f32; 3],
+        min_move_distance: f32,
+        detect_collisions: bool,
+        enabled: bool,
+    ) -> bool {
+        let creado = self.crear_personaje(entity_id, pos, cfg);
+        // La marca se inserta solo si la creación tuvo éxito (un fallo no
+        // debe dejar la entidad bloqueada para el FFI): crear_personaje
+        // destruye el CC previo (si lo había) con destroy_character, que
+        // retira la marca, así que insertarla aquí tras el éxito también
+        // cubre la recreación.
+        if creado {
+            self.characters_autorados.insert(entity_id);
+            if let Some(state) = self.characters.get_mut(&entity_id) {
+                state.center = center;
+                state.min_move_distance = min_move_distance;
+                state.detect_collisions = detect_collisions;
+                state.enabled = enabled;
+            }
+        }
+        creado
+    }
+
+    fn crear_personaje(&mut self, entity_id: u64, pos: [f32; 3], cfg: CharacterConfig) -> bool {
         if self.characters.contains_key(&entity_id) {
             self.destroy_character(entity_id);
         }
@@ -681,6 +718,7 @@ impl PhysicsWorld {
     }
 
     pub fn destroy_character(&mut self, entity_id: u64) -> bool {
+        self.characters_autorados.remove(&entity_id);
         if let Some(state) = self.characters.remove(&entity_id) {
             self.remove_rigid_body(state.body);
             true

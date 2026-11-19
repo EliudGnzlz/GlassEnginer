@@ -381,7 +381,7 @@ mod tests_resolver_blender {
             .join("Blender")
             .join("blender.exe");
 
-        let lista = candidatos_windows(&[base.clone()]);
+        let lista = candidatos_windows(std::slice::from_ref(&base));
 
         assert_eq!(lista.first(), Some(&v42));
         assert!(lista.contains(&v36));
