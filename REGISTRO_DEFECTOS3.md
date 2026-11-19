@@ -1607,4 +1607,4 @@ APTO, y test físico por el camino real en Linux simulando el caso de Windows
 GLASS_BLENDER): soltar `campfire_voxel_v3.blend` en la escena convirtió y el modelo
 real sustituyó al cubo. **El test en un Windows real queda pendiente de D3m3tr10
 con la v0.10.19.1-beta** — no verificado en Windows desde esta VM Linux.
-Consumo del arreglo: Opus 20.042 · DeepSeek flash 4.156 · Kimi 5.869.
+Consumo del arreglo: Opus 20.042 · DeepSeek flash 4.156 · Kimi 5.869. Pipeline local 844/844 y CI #184 SUCCESS.
