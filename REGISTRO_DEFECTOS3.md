@@ -1608,3 +1608,52 @@ GLASS_BLENDER): soltar `campfire_voxel_v3.blend` en la escena convirtió y el mo
 real sustituyó al cubo. **El test en un Windows real queda pendiente de D3m3tr10
 con la v0.10.19.1-beta** — no verificado en Windows desde esta VM Linux.
 Consumo del arreglo: Opus 20.042 · DeepSeek flash 4.156 · Kimi 5.869. Pipeline local 844/844 y CI #184 SUCCESS.
+
+## Bloque Inspector estilo Unity — CERRADO (2026-11-19)
+
+Commits `21b0564` (bloque) y `ed0295e` (arreglo del driver cazado por el test
+físico). Pipeline local exacto de ci.yml en verde dos veces (840/840 tests,
+cada paso con código de salida 0) y CI real SUCCESS en ambos commits
+(#185 `21b0564` y #186 `ed0295e`).
+
+Contenido: (a) Rigidbody estilo Unity completo sobre los campos reales del
+runtime (Tipo de Cuerpo, Masa, Drag, Angular Drag, Use Gravity, Is Kinematic,
+Interpolate, Collision Detection, Freeze Position/Rotation XYZ, velocidad en
+vivo); (b) Collider con selector de tipo sobre el tipo EFECTIVO (el inferido
+de la primitiva si no hay specs), campos Unity por tipo (Center y Size
+completos con el nuevo `PhysicsData.box_offset`, Radius, Height total con
+mínimo dinámico 2·radio), materialización perezosa de specs y botón «Ajustar
+a la malla» con las cotas locales del modelo; (c) buscador en vivo en «Añadir
+Componente» con limpieza al cerrar; (d) CharacterController autorado:
+`CharacterData` en la entidad, guarda en PhysicsWorld (el FFI de scripts no
+reemplaza al autorado), creación al entrar en Play y destrucción exacta al
+salir, driver de prueba WASD tras el paso de física. Dos auditorías de Kimi
+(NO APTO con 7 y 3 hallazgos) corregidas antes del cierre, y lints
+preexistentes de MeshForge que el clippy del CI marca.
+
+Test físico en el editor real, control a control: panel RB completo; Play con
+caída y velocidad en vivo; Use Gravity off → el cuerpo flota (Y clavada en
+4.00); tipo inferido Sphere con Radius 0.50 en la esfera; «Ajustar a la
+malla» lleva la fogata de Size (10,1,10) a (6.00, 1.3130, 6.00) con Center
+(0, 0.1665, 0); buscador «char» filtra hasta el Character Controller y este se
+añade desde el picker; el CC autorado cae y aterriza a la altura exacta
+(suelo 0.5 + media altura 1.0 + skin 0.08 = 1.5801), se mueve con WASD y sube
+el escalón de 0.25 m (Step Offset 0.3); Stop restaura la escena autorada.
+Barrido anti-regresión: primitivas y colliders del cierre de 2026-11-05 y
+RB/Collider como componentes separados se comportan igual; paneles vecinos
+sin regresión.
+
+Defecto cazado por el test físico (cerrado en `ed0295e`): el driver leía el
+retorno de `move_character` como posición absoluta, pero su contrato es el
+DESPLAZAMIENTO aplicado en el frame; la entidad se teletransportaba al
+origen. El driver ahora lee el centro con `character_info` tras mover.
+Diagnóstico con sondas temporales (creación correcta en (6,3,3); el estado
+físico caía bien; el retorno era el `desired`).
+
+Nota de sesión: el pipeline del bloque terminó a las ~12:26 (-04) y su log
+quedó guardado y válido; un reinicio del entorno (~14:10) cortó la sesión
+antes de encadenar el commit. Al retomar se verificó el resultado parcial
+antes de relanzar nada y se completó la cadena.
+
+Consumo del bloque: Opus 66.277 · DeepSeek flash 10.694 · Kimi 33.252
+(≈ 110.223). El arreglo del driver fue directo de Rayo (0 tokens de API).
