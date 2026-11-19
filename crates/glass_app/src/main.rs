@@ -5298,7 +5298,12 @@ let resueltos = if body.has_collider {
                             vy -= 9.81 * DT;
                         }
                         let desired = [dx * vel * DT, vy * DT, dz * vel * DT];
-                        physics.move_character(id, desired, DT)
+                        // Ojo al contrato: move_character devuelve el
+                        // desplazamiento APLICADO, no la posición. El
+                        // centro absoluto de la cápsula vive en el estado
+                        // del personaje y se lee con character_info.
+                        let _ = physics.move_character(id, desired, DT);
+                        physics.character_info(id)
                     }
                     Err(_) => None,
                 };
