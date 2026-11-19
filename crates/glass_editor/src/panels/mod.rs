@@ -2,6 +2,7 @@ pub mod console;
 pub mod gizmo_3d;
 pub mod hierarchy;
 pub mod inspector;
+pub mod mesh_birth;
 pub mod mesh_keymap;
 pub mod mesh_tool;
 pub mod miniatura_modelo;

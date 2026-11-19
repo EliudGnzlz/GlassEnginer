@@ -1,31 +1,48 @@
-//! Panel «Herramienta 3D»: mini modelador sobre `MeshSession` con preview
-//! wireframe dibujado con el painter de egui (sin Vulkan).
+//! Panel «MeshForge»: edición de malla sobre `MeshSession` nacida de la
+//! entidad seleccionada en la escena (modelo ProBuilder). La vista 3D propia
+//! se retira: picking, gizmo y grab vuelven en R2 contra la vista de escena.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use glass_core::scene::{EntityData, MeshColliderMode, SceneState};
 use glass_mesh_edit::{
-    project_edges, project_point, read_glb, BooleanOp, MeshCommand, MeshEditError, MeshSession,
-    MirrorAxis, OrbitCamera,
+    read_glb, BooleanOp, MeshCommand, MeshEditError, MeshSession, MirrorAxis,
 };
 
-use crate::panels::mesh_keymap::{action_for, help_text, plane_point, MeshKeyAction};
+use crate::panels::mesh_birth::{self, Editabilidad};
+use crate::panels::mesh_keymap::{action_for, help_text, MeshKeyAction};
 use crate::tool_prefs::{ShortcutScheme, ToolPrefs};
 
+/// Respuesta de las acciones de teclado que necesitan selección sub-objeto.
+const AVISO_SELECCION: &str =
+    "La selección de vértices/caras llega con la edición en la vista de escena.";
 
-const FOV_DEG: f32 = 60.0;
-const QUANT: f32 = 1e-4;
+/// Entidad seleccionada en la escena, tal como la ve el panel (la construye docking).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EntidadSeleccionada {
+    pub id: u64,
+    pub nombre: String,
+    /// None = la entidad no tiene componente de malla.
+    pub modelo: Option<String>,
+    pub tiene_mesh_collider: bool,
+}
+
+/// Asignación de modelo pendiente de aplicar sobre la escena: la deja
+/// «Hornear y salir» y la aplica la capa de docking (la entidad pasa al
+/// modelo horneado; si adapta_collider, el motor reconstruye el mesh
+/// collider desde la nueva geometría por la vía de carga de modelos).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelAssign {
+    pub entity_id: u64,
+    pub new_model: String,
+    pub adapta_collider: bool,
+}
 
 pub struct MeshToolPanel {
     pub session: Option<MeshSession>,
-    /// Ruta del .glb a abrir, relativa al proyecto (p. ej. "assets/cube.glb").
-    pub path_input: String,
     /// Último resultado o error, en texto plano.
     pub status: String,
-    pub camera: OrbitCamera,
-    pub show_vertices: bool,
     pub dims: [f32; 3],
     pub array_count: u32,
     pub array_offset: [f32; 3],
@@ -34,17 +51,6 @@ pub struct MeshToolPanel {
     pub weld_tolerance: f32,
     pub boolean_path: String,
     pub boolean_op: BooleanOp,
-    pub selection_mode: SelectionMode,
-    pub selected_verts: std::collections::HashSet<u32>,
-    pub selected_faces: std::collections::HashSet<u32>,
-    pub snap_enabled: bool,
-    pub snap_step: f32,
-    gizmo_axis: Option<usize>,
-    gizmo_start: [f32; 2],
-    gizmo_delta: [f32; 3],
-    gizmo_commit_pending: bool,
-    pending_pick: Option<(f32, f32, f32, f32, bool)>,
-    selection_overlay: Option<(egui::Rect, Vec<egui::Shape>)>,
     /// Preferencias de la herramienta (esquema de atajos elegido).
     pub prefs: ToolPrefs,
     /// Archivo donde se persisten las preferencias.
@@ -52,29 +58,22 @@ pub struct MeshToolPanel {
     /// El puntero está sobre el panel (según el rect del frame anterior).
     pub panel_hovered: bool,
     last_rect: Option<egui::Rect>,
-    grab: Option<GrabState>,
-    grab_requested: bool,
-    grab_commit_pending: bool,
-    /// Ids de entidades con Mesh Collider a la espera de respuesta.
-    collider_prompt: Option<Vec<u64>>,
+    /// Pregunta del Mesh Collider abierta, a la espera de respuesta.
+    collider_prompt_open: bool,
     /// Checkbox «No volver a preguntar» de la pregunta en curso.
     collider_prompt_no_ask: bool,
-    /// Adaptación del collider que aplica la capa de docking al cerrar.
-    pub pending_collider_adapt: Option<ColliderAdapt>,
-    /// Herramientas disponibles según el registro (las pasa docking en cada frame).
-    pub herramientas: Vec<crate::herramientas::HerramientaInfo>,
-    /// Herramienta activa del espacio (la fija docking; la lee la zona de identidad).
-    pub herramienta_activa: String,
-    /// Cambio de herramienta pedido desde la lista lateral; lo drena docking.
-    pub peticion_herramienta: Option<String>,
-}
-
-/// Estado del modo «agarrar»: plano de cámara fijo por el centroide.
-struct GrabState {
-    centroid: [f32; 3],
-    normal: [f32; 3],
-    start: [f32; 3],
-    delta: [f32; 3],
+    /// Raíz de Assets del proyecto abierto (la fija docking cada frame).
+    pub assets_root: std::path::PathBuf,
+    /// Entidad de la que nació la sesión en curso.
+    pub target_entity: Option<u64>,
+    /// Nombre visible de esa entidad (para la cabecera).
+    pub target_entity_name: String,
+    /// Modelo base de la sesión (stem normalizado).
+    pub base_model: String,
+    /// «Trabajar en la escena» pedido desde la tarjeta del espacio.
+    pub peticion_trabajar_escena: bool,
+    /// Asignación de modelo que aplica docking al hornear y salir.
+    pub pending_model_assign: Option<ModelAssign>,
 }
 
 impl Default for MeshToolPanel {
@@ -82,34 +81,19 @@ impl Default for MeshToolPanel {
         let prefs_file = crate::tool_prefs::prefs_path();
         Self {
             session: None,
-            selection_mode: SelectionMode::Verts,
-            selected_verts: std::collections::HashSet::new(),
-            selected_faces: std::collections::HashSet::new(),
-            snap_enabled: true,
-            snap_step: 0.25,
-            gizmo_axis: None,
-            gizmo_start: [0.0; 2],
-            gizmo_delta: [0.0; 3],
-            gizmo_commit_pending: false,
-            pending_pick: None,
-            selection_overlay: None,
             prefs: ToolPrefs::load_from(&prefs_file),
             prefs_file,
             panel_hovered: false,
             last_rect: None,
-            grab: None,
-            grab_requested: false,
-            grab_commit_pending: false,
-            collider_prompt: None,
+            collider_prompt_open: false,
             collider_prompt_no_ask: false,
-            pending_collider_adapt: None,
-            herramientas: Vec::new(),
-            herramienta_activa: "meshforge".to_string(),
-            peticion_herramienta: None,
-            path_input: String::new(),
-            status: "Sin sesión: abre un .glb de assets/.".to_owned(),
-            camera: OrbitCamera::new([0.0, 0.0, 0.0]),
-            show_vertices: true,
+            assets_root: PathBuf::from("assets"),
+            target_entity: None,
+            target_entity_name: String::new(),
+            base_model: String::new(),
+            peticion_trabajar_escena: false,
+            pending_model_assign: None,
+            status: "Sin sesión: selecciona un objeto en la escena.".to_owned(),
             dims: [2.0, 2.0, 2.0],
             array_count: 2,
             array_offset: [2.0, 0.0, 0.0],
@@ -122,25 +106,13 @@ impl Default for MeshToolPanel {
     }
 }
 
-/// Acción pedida desde la UI; se ejecuta tras soltar los préstamos de `render`.
+/// Acción pedida desde la UI; se ejecuta tras soltar los préstamos de `render_panel`.
 enum Action {
-    Open,
     Undo,
     Redo,
-    Bake,
     SetDims,
     Cmd(MeshCommand),
     Boolean,
-}
-
-/// Adaptación del Mesh Collider pendiente de aplicar sobre la escena:
-/// la deja el panel al cerrar con «Sí, adaptar» y la aplica la capa de
-/// docking (las entidades pasan al modelo editado y el motor reconstruye
-/// el collider desde la nueva geometría por la vía de carga de modelos).
-#[derive(Debug, Clone, PartialEq)]
-pub struct ColliderAdapt {
-    pub entity_ids: Vec<u64>,
-    pub new_model: String,
 }
 
 /// Normaliza el nombre de modelo: "" equivale a la primitiva "cube".
@@ -173,14 +145,6 @@ pub fn entities_with_mesh_collider(entities: &[EntityData], model: &str) -> Vec<
 /// cambios en vigor y sin el «no volver a preguntar».
 pub fn should_prompt_collider(has_mesh_collider: bool, history_len: usize, no_ask: bool) -> bool {
     has_mesh_collider && history_len > 0 && !no_ask
-}
-
-fn quantize(p: [f32; 3]) -> [i64; 3] {
-    [
-        (p[0] / QUANT).round() as i64,
-        (p[1] / QUANT).round() as i64,
-        (p[2] / QUANT).round() as i64,
-    ]
 }
 
 /// `<dir>/<stem>_edited.<ext>` y `<dir>/<stem>_edited.mesh.json`; sin ruta de
@@ -224,26 +188,20 @@ impl MeshToolPanel {
         Self::default()
     }
 
+    /// Abre una sesión desde un .glb por ruta (API pública; ya no está en la UI).
+    /// La sesión no nace de ninguna entidad: al hornear y salir no se asigna nada.
     pub fn open(&mut self, path: &str) -> Result<(), MeshEditError> {
-        self.clear_selection();
         match MeshSession::enter_from_glb(Path::new(path)) {
             Ok(mut session) => {
                 let (stats, _) = session.stats();
-                let center = [
-                    (stats.bbox_min[0] + stats.bbox_max[0]) * 0.5,
-                    (stats.bbox_min[1] + stats.bbox_max[1]) * 0.5,
-                    (stats.bbox_min[2] + stats.bbox_max[2]) * 0.5,
-                ];
-                let extent = (0..3)
-                    .map(|i| stats.bbox_max[i] - stats.bbox_min[i])
-                    .fold(0.0_f32, f32::max);
-                let mut camera = OrbitCamera::new(center);
-                camera.dist = (2.5 * extent.max(1.0)).clamp(1.0, 50.0);
-                self.camera = camera;
                 self.status = format!(
                     "Abierto {}: {} vértices, {} caras.",
                     session.name, stats.verts, stats.faces
                 );
+                self.target_entity = None;
+                self.target_entity_name.clear();
+                self.base_model = session.name.clone();
+                self.collider_prompt_open = false;
                 self.session = Some(session);
                 Ok(())
             }
@@ -255,44 +213,143 @@ impl MeshToolPanel {
     }
 
     pub fn close(&mut self) {
-        self.clear_selection();
         self.session = None;
+        self.target_entity = None;
+        self.target_entity_name.clear();
+        self.base_model.clear();
+        self.collider_prompt_open = false;
         self.status = "Sesión cerrada.".to_owned();
     }
 
-    /// Cierre pedido desde «Cerrar»: si el modelo editado tenía un Mesh
-    /// Collider puesto y hay cambios en vigor, pregunta antes de cerrar;
-    /// en cualquier otro caso cierra directamente, sin decir nada.
-    fn request_close(&mut self, scene_state: &Arc<Mutex<SceneState>>) {
-        let Some((name, history_len)) = self
-            .session
-            .as_ref()
-            .map(|s| (s.name.clone(), s.history.len()))
-        else {
-            self.close();
+    /// Editabilidad de `modelo` según las raíces de modelos del proyecto.
+    fn editabilidad_de(&self, modelo: &str) -> Editabilidad {
+        let raices = mesh_birth::raices_modelos(&self.assets_root);
+        let raices: Vec<&Path> = raices.iter().map(PathBuf::as_path).collect();
+        mesh_birth::editabilidad(modelo, &raices)
+    }
+
+    /// Abre la sesión de edición desde la entidad seleccionada en la escena.
+    pub fn editar_entidad(&mut self, sel: &EntidadSeleccionada) {
+        if self.session.is_some() {
+            self.status =
+                "Ya hay una sesión de edición abierta: hornea o descarta antes de editar otra entidad."
+                    .to_owned();
+            return;
+        }
+        let Some(modelo) = sel.modelo.as_deref() else {
+            self.status = format!(
+                "La entidad «{}» no tiene malla: no se puede editar.",
+                sel.nombre
+            );
             return;
         };
-        // Bloqueo mínimo: se copian los ids y se suelta el mutex.
-        let ids = {
-            let scene = scene_state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            entities_with_mesh_collider(&scene.entities, &name)
+        let raices = mesh_birth::raices_modelos(&self.assets_root);
+        let raices: Vec<&Path> = raices.iter().map(PathBuf::as_path).collect();
+        if let Editabilidad::NoEditable(motivo) = mesh_birth::editabilidad(modelo, &raices) {
+            self.status = motivo;
+            return;
+        }
+        match mesh_birth::abrir_sesion(modelo, &raices) {
+            Ok(mut session) => {
+                let (stats, _) = session.stats();
+                self.status = format!(
+                    "Editando «{}» ({modelo}): {} vértices, {} caras.",
+                    sel.nombre, stats.verts, stats.faces
+                );
+                self.target_entity = Some(sel.id);
+                self.target_entity_name = sel.nombre.clone();
+                self.base_model = mesh_birth::normalize_model(modelo).to_owned();
+                self.collider_prompt_open = false;
+                self.session = Some(session);
+            }
+            Err(e) => self.status = e,
+        }
+    }
+
+    /// ¿La entidad destino tiene ahora mismo un Mesh Collider en la escena?
+    /// Si ya no existe, cuenta como sin collider.
+    fn target_tiene_mesh_collider(&self, scene_state: &Arc<Mutex<SceneState>>) -> bool {
+        let Some(id) = self.target_entity else {
+            return false;
         };
-        if should_prompt_collider(!ids.is_empty(), history_len, self.prefs.collider_no_ask) {
-            self.collider_prompt = Some(ids);
-            self.collider_prompt_no_ask = false;
-            self.status = "El modelo tenía un Mesh Collider.".to_string();
-        } else {
+        let scene = scene_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        scene
+            .entities
+            .iter()
+            .find(|e| e.id == id)
+            .and_then(|e| e.physics.as_ref())
+            .is_some_and(|p| p.mesh_collider != MeshColliderMode::None)
+    }
+
+    /// Cierra la sesión sin escribir archivos ni tocar la escena.
+    fn descartar(&mut self) {
+        self.close();
+        self.status = "Sesión descartada: la escena no se ha tocado.".to_owned();
+    }
+
+    /// «Hornear y salir»: con Mesh Collider en la entidad destino pregunta
+    /// antes (o respeta el «no volver a preguntar»); sin él hornea y asigna.
+    fn hornear_y_salir(&mut self, scene_state: &Arc<Mutex<SceneState>>) {
+        let Some(history_len) = self.session.as_ref().map(|s| s.history.len()) else {
+            return;
+        };
+        if history_len == 0 {
             self.close();
+            self.status = "Sin cambios: nada que hornear.".to_owned();
+            return;
+        }
+        if self.target_tiene_mesh_collider(scene_state) {
+            if should_prompt_collider(true, history_len, self.prefs.collider_no_ask) {
+                self.collider_prompt_open = true;
+                self.collider_prompt_no_ask = false;
+                self.status = "El modelo tenía un Mesh Collider.".to_owned();
+            } else {
+                self.close();
+                self.status = "Sesión cerrada sin adaptar el collider (preferencia guardada: no volver a preguntar).".to_owned();
+            }
+            return;
+        }
+        if let Ok(Some(nombre)) = self.hornear_y_asignar(false) {
+            self.status = format!("Horneado y asignado a «{nombre}».");
+        }
+    }
+
+    /// Hornea al directorio del proyecto, cierra y deja la asignación para
+    /// docking. Devuelve el nombre de la entidad destino (None si la sesión
+    /// no nació de una entidad). Si el horneado falla, la sesión sigue abierta
+    /// y el error queda en el status.
+    fn hornear_y_asignar(&mut self, adapta_collider: bool) -> Result<Option<String>, MeshEditError> {
+        self.bake_escena()?;
+        let target = self
+            .target_entity
+            .map(|id| (id, self.target_entity_name.clone()));
+        let new_model = format!("{}_edited", self.base_model);
+        let horneado = std::mem::take(&mut self.status);
+        self.close();
+        match target {
+            Some((entity_id, nombre)) => {
+                self.pending_model_assign = Some(ModelAssign {
+                    entity_id,
+                    new_model,
+                    adapta_collider,
+                });
+                Ok(Some(nombre))
+            }
+            None => {
+                self.status = horneado;
+                Ok(None)
+            }
         }
     }
 
     /// Aplica la respuesta a la pregunta del Mesh Collider.
-    fn answer_collider_prompt(&mut self, adapt: bool) {
-        let Some(ids) = self.collider_prompt.take() else {
+    fn responder_collider(&mut self, adaptar: bool) {
+        if !self.collider_prompt_open {
             return;
-        };
+        }
+        self.collider_prompt_open = false;
         let mut prefs_error = None;
         if self.collider_prompt_no_ask {
             self.prefs.collider_no_ask = true;
@@ -300,23 +357,12 @@ impl MeshToolPanel {
                 prefs_error = Some(e);
             }
         }
-        if adapt {
-            // El nombre se captura antes de cerrar; tras bake() la sesión
-            // sigue abierta.
-            let Some(name) = self.session.as_ref().map(|s| s.name.clone()) else {
-                self.close();
-                return;
-            };
-            if self.bake().is_err() {
+        if adaptar {
+            if self.hornear_y_asignar(true).is_err() {
                 // La pregunta se descarta y la sesión sigue abierta;
-                // bake() ya dejó el error en el status.
+                // bake_escena() ya dejó el error en el status.
                 return;
             }
-            self.close();
-            self.pending_collider_adapt = Some(ColliderAdapt {
-                entity_ids: ids,
-                new_model: format!("{name}_edited"),
-            });
             self.status =
                 "Sesión cerrada: el mesh collider se adaptará al nuevo modelo.".to_string();
         } else {
@@ -329,25 +375,6 @@ impl MeshToolPanel {
     }
 
     pub fn apply_cmd(&mut self, cmd: MeshCommand) {
-        if matches!(cmd, MeshCommand::MoveVerts { .. }) {
-            self.apply_cmd_inner(cmd);
-            return;
-        }
-        let before = self
-            .session
-            .as_ref()
-            .map(|s| (s.mesh.verts.clone(), s.mesh.faces.clone()));
-        self.apply_cmd_inner(cmd);
-        let changed = match (before, self.session.as_ref()) {
-            (Some((verts, faces)), Some(s)) => verts != s.mesh.verts || faces != s.mesh.faces,
-            _ => false,
-        };
-        if changed {
-            self.clear_selection();
-        }
-    }
-
-    fn apply_cmd_inner(&mut self, cmd: MeshCommand) {
         let Some(session) = self.session.as_mut() else {
             self.status = "Sin sesión.".to_owned();
             return;
@@ -399,6 +426,35 @@ impl MeshToolPanel {
         }
     }
 
+    /// Horneado de la sesión de escena al directorio de modelos del proyecto:
+    /// `<dir_horneado>/<base_model>_edited.glb` + `.mesh.json`.
+    fn bake_escena(&mut self) -> Result<(PathBuf, PathBuf), MeshEditError> {
+        let Some(session) = self.session.as_ref() else {
+            self.status = "Sin sesión: nada que hornear.".to_owned();
+            return Err(MeshEditError::Gltf("sin sesión".into()));
+        };
+        let dir = mesh_birth::dir_horneado(&self.assets_root);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            self.status = format!("No se pudo crear {}: {e}", dir.display());
+            return Err(MeshEditError::Gltf(format!(
+                "no se pudo crear {}: {e}",
+                dir.display()
+            )));
+        }
+        let glb = dir.join(format!("{}_edited.glb", self.base_model));
+        let recipe = dir.join(format!("{}_edited.mesh.json", self.base_model));
+        match session.save(&glb, &recipe) {
+            Ok(()) => {
+                self.status = format!("Horneado: {} + {}.", glb.display(), recipe.display());
+                Ok((glb, recipe))
+            }
+            Err(e) => {
+                self.status = format!("Error al hornear: {e}");
+                Err(e)
+            }
+        }
+    }
+
     fn apply_dimensions(&mut self) {
         let dims = self.dims;
         let Some(session) = self.session.as_mut() else {
@@ -435,15 +491,8 @@ impl MeshToolPanel {
 
     fn run(&mut self, action: Action) {
         match action {
-            Action::Open => {
-                let path = self.path_input.trim().to_owned();
-                let _ = self.open(&path);
-            }
             Action::Undo => self.undo(),
             Action::Redo => self.redo(),
-            Action::Bake => {
-                let _ = self.bake();
-            }
             Action::SetDims => self.apply_dimensions(),
             Action::Cmd(cmd) => self.apply_cmd(cmd),
             Action::Boolean => self.apply_boolean(),
@@ -475,405 +524,126 @@ impl MeshToolPanel {
                     axis: self.mirror_axis,
                 });
             }
-            MeshKeyAction::DeleteSelection => {
-                let indices = self.selection_vert_indices();
-                if indices.is_empty() {
-                    self.status = "Sin selección que eliminar.".to_string();
-                } else {
-                    self.apply_cmd(MeshCommand::DeleteVerts { indices });
-                }
-            }
-            MeshKeyAction::ModeVerts => self.selection_mode = SelectionMode::Verts,
-            MeshKeyAction::ModeFaces => self.selection_mode = SelectionMode::Faces,
-            MeshKeyAction::Grab => {
-                if self.session.is_some() && !self.selection_vert_indices().is_empty() {
-                    self.grab_requested = true;
-                    self.status = "Moviendo la selección: mueve el ratón sobre el viewport y haz clic para confirmar · Esc para cancelar.".to_string();
-                } else {
-                    self.status = "Selecciona vértices o caras antes de mover.".to_string();
-                }
+            // Sin selección en el panel: vuelven con la vista de escena (R2).
+            MeshKeyAction::DeleteSelection
+            | MeshKeyAction::ModeVerts
+            | MeshKeyAction::ModeFaces
+            | MeshKeyAction::Grab => {
+                self.status = AVISO_SELECCION.to_string();
             }
         }
     }
 
-    /// Fila de elección/cambio del esquema de atajos (visible haya o no sesión).
-    /// Zona de apertura (sin sesión): la fila «Ruta .glb / Abrir .glb».
-    fn zona_abrir(&mut self, ui: &mut egui::Ui, action: &mut Option<Action>) {
-        ui.label("Ruta .glb:");
-        ui.text_edit_singleline(&mut self.path_input);
-        if ui.button("Abrir .glb").clicked() {
-            *action = Some(Action::Open);
-        }
-    }
-
-    /// Zona de sesión (barra lateral): nombre y acciones de la sesión abierta.
+    /// Fila de sesión: deshacer/rehacer y las dos salidas.
     fn zona_sesion(
-        &mut self,
+        &self,
         ui: &mut egui::Ui,
-        nombre: &str,
         action: &mut Option<Action>,
-        close_requested: &mut bool,
+        hornear_salir: &mut bool,
+        descartar: &mut bool,
     ) {
-            ui.horizontal_wrapped(|ui| {
-                ui.strong(nombre);
-                if ui.button("Deshacer").clicked() {
-                    *action = Some(Action::Undo);
-                }
-                if ui.button("Rehacer").clicked() {
-                    *action = Some(Action::Redo);
-                }
-                if ui.button("Cerrar").clicked() {
-                    *close_requested = true;
-                }
-                if ui.button("Hornear (.glb + receta)").clicked() {
-                    *action = Some(Action::Bake);
-                }
-            });
-    }
-
-    /// Zona de operadores (columna derecha): Dimensiones y Operadores.
-    fn zona_operadores(&mut self, ui: &mut egui::Ui, action: &mut Option<Action>, num_verts: usize) {
-            ui.separator();
-            ui.label("Dimensiones");
-            ui.horizontal_wrapped(|ui| {
-                drag_vec3(ui, &mut self.dims, 0.05);
-                if ui.button("Aplicar dimensiones").clicked() {
-                    *action = Some(Action::SetDims);
-                }
-            });
-
-            ui.separator();
-            ui.label("Operadores");
-            if ui.button("Subdividir").clicked() {
-                *action = Some(Action::Cmd(MeshCommand::Subdivide { levels: 1 }));
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Deshacer").clicked() {
+                *action = Some(Action::Undo);
             }
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.mirror_axis, MirrorAxis::X, "X");
-                ui.selectable_value(&mut self.mirror_axis, MirrorAxis::Y, "Y");
-                ui.selectable_value(&mut self.mirror_axis, MirrorAxis::Z, "Z");
-                if ui.button("Espejo").clicked() {
-                    *action = Some(Action::Cmd(MeshCommand::Mirror {
-                        axis: self.mirror_axis,
-                    }));
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Tolerancia");
-                ui.add(
-                    egui::DragValue::new(&mut self.weld_tolerance)
-                        .speed(1e-5)
-                        .max_decimals(6),
-                );
-                if ui.button("Soldar").clicked() {
-                    *action = Some(Action::Cmd(MeshCommand::Weld {
-                        tolerance: self.weld_tolerance.max(0.0),
-                    }));
-                }
-            });
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Copias");
-                ui.add(egui::DragValue::new(&mut self.array_count).speed(0.1));
-                ui.label("Offset");
-                drag_vec3(ui, &mut self.array_offset, 0.05);
-                if ui.button("Array").clicked() {
-                    *action = Some(Action::Cmd(MeshCommand::Array {
-                        count: self.array_count,
-                        offset: self.array_offset,
-                    }));
-                }
-            });
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Delta");
-                drag_vec3(ui, &mut self.move_delta, 0.05);
-                if ui.button("Mover todos").clicked() {
-                    let indices = (0..num_verts)
-                        .filter_map(|i| u32::try_from(i).ok())
-                        .collect();
-                    *action = Some(Action::Cmd(MeshCommand::MoveVerts {
-                        indices,
-                        delta: self.move_delta,
-                    }));
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Otro .glb:");
-                ui.text_edit_singleline(&mut self.boolean_path);
-            });
-            ui.horizontal_wrapped(|ui| {
-                ui.selectable_value(&mut self.boolean_op, BooleanOp::Union, "Unión");
-                ui.selectable_value(&mut self.boolean_op, BooleanOp::Difference, "Resta");
-                ui.selectable_value(
-                    &mut self.boolean_op,
-                    BooleanOp::Intersection,
-                    "Intersección",
-                );
-                if ui.button("Booleana").clicked() {
-                    *action = Some(Action::Boolean);
-                }
-            });
-    }
-
-    /// Zona de vista (centro): franja de selección/snap y la vista previa
-    /// wireframe con su picking, su arrastre y su gizmo.
-    fn zona_vista(&mut self, ui: &mut egui::Ui) {
-        if let Some(session) = self.session.as_mut() {
-                ui.separator();
-                ui.checkbox(&mut self.show_vertices, "Vértices");
-                let selection_text = match self.selection_mode {
-                    SelectionMode::Verts => format!("{} vértices", self.selected_verts.len()),
-                    SelectionMode::Faces => format!("{} caras", self.selected_faces.len()),
-                };
-                let mut clear_clicked = false;
-                let selection_mode = &mut self.selection_mode;
-                ui.horizontal(|ui| {
-                    ui.label("Selección");
-                    ui.selectable_value(&mut *selection_mode, SelectionMode::Verts, "Vértices");
-                    ui.selectable_value(&mut *selection_mode, SelectionMode::Faces, "Caras");
-                    ui.label(selection_text);
-                    clear_clicked = ui.button("Limpiar").clicked();
-                });
-                if clear_clicked {
-                    self.selected_verts.clear();
-                    self.selected_faces.clear();
-                    self.gizmo_axis = None;
-                    self.gizmo_start = [0.0; 2];
-                    self.gizmo_delta = [0.0; 3];
-                }
-                let snap_enabled = &mut self.snap_enabled;
-                let snap_step = &mut self.snap_step;
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut *snap_enabled, "Snap");
-                    ui.label("Paso");
-                    ui.add(
-                        egui::DragValue::new(&mut *snap_step)
-                            .speed(0.05)
-                            .max_decimals(2),
-                    );
-                });
-                self.snap_step = self.snap_step.clamp(0.01, 2.0);
-
-                let size = egui::vec2(ui.available_width().max(1.0), ui.available_height().max(1.0));
-                let (response, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
-                let rect = response.rect;
-                painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(24, 24, 28));
-
-                let vp_w = rect.width();
-                let vp_h = rect.height();
-                let sel_indices = selection_indices_for(
-                    self.selection_mode,
-                    &self.selected_verts,
-                    &self.selected_faces,
-                    Some(session.mesh.faces.as_slice()),
-                );
-                let sel_set: std::collections::HashSet<u32> = sel_indices.iter().copied().collect();
-                let gizmo_centroid =
-                    glass_mesh_edit::preview::selection_centroid(&session.mesh.verts, &sel_set);
-                let gizmo_len = 0.6 * bbox_extent(&session.mesh.verts).max(0.5);
-                let mut gizmo_busy = false;
-                if let Some(axis) = self.gizmo_axis {
-                    gizmo_busy = true;
-                    if response.dragged_by(egui::PointerButton::Primary) {
-                        if let (Some(centroid), Some(pos)) =
-                            (gizmo_centroid, response.interact_pointer_pos())
-                        {
-                            let drag = [
-                                pos.x - rect.min.x - self.gizmo_start[0],
-                                pos.y - rect.min.y - self.gizmo_start[1],
-                            ];
-                            let amount =
-                                gizmo_world_amount(&self.camera, centroid, axis, drag, vp_w, vp_h);
-                            let mut delta = [0.0; 3];
-                            if let Some(slot) = delta.get_mut(axis) {
-                                *slot = amount;
-                            }
-                            self.gizmo_delta = if self.snap_enabled {
-                                glass_mesh_edit::preview::snap_delta(delta, self.snap_step)
-                            } else {
-                                delta
-                            };
-                        }
-                    } else if response.drag_stopped_by(egui::PointerButton::Primary) {
-                        self.gizmo_commit_pending = true;
-                    }
-                } else if let Some(centroid) = gizmo_centroid {
-                    if self.grab.is_none()
-                        && response.drag_started_by(egui::PointerButton::Primary)
-                    {
-                        let origin = ui
-                            .input(|i| i.pointer.press_origin())
-                            .or_else(|| response.interact_pointer_pos());
-                        if let Some(origin) = origin {
-                            let start = [origin.x - rect.min.x, origin.y - rect.min.y];
-                            if let Some(axis) =
-                                hit_gizmo_axis(&self.camera, centroid, gizmo_len, start, vp_w, vp_h)
-                            {
-                                self.gizmo_axis = Some(axis);
-                                self.gizmo_start = start;
-                                self.gizmo_delta = [0.0; 3];
-                                gizmo_busy = true;
-                            }
-                        }
-                    }
-                }
-                if self.gizmo_axis.is_none() && response.clicked() {
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        let additive = ui.input(|i| i.modifiers.shift);
-                        self.pending_pick =
-                            Some((pos.x - rect.min.x, pos.y - rect.min.y, vp_w, vp_h, additive));
-                    }
-                }
-                if !gizmo_busy
-                    && self.grab.is_none()
-                    && response.dragged_by(egui::PointerButton::Primary)
-                {
-                    let d = response.drag_delta();
-                    self.camera.yaw += d.x * 0.01;
-                    self.camera.pitch = (self.camera.pitch + d.y * 0.01).clamp(-1.4, 1.4);
-                }
-                if response.hovered() {
-                    let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-                    if scroll != 0.0 {
-                        self.camera.dist =
-                            (self.camera.dist * (1.0 - scroll * 0.002)).clamp(1.0, 50.0);
-                    }
-                }
-
-                // Modo «agarrar»: arranque y seguimiento del puntero sobre el
-                // plano de cámara que pasa por el centroide de la selección.
-                let grab_puntero = response
-                    .hover_pos()
-                    .map(|p| (p.x - rect.min.x, p.y - rect.min.y));
-                if self.grab_requested && self.grab.is_none() {
-                    if let (Some(centroid), Some((px, py))) = (gizmo_centroid, grab_puntero) {
-                        let hacia = sub3(centroid, self.camera.eye());
-                        let largo = len3(hacia);
-                        if largo > 1e-6 {
-                            let normal = scale3(hacia, 1.0 / largo);
-                            let (origen, dir) = glass_mesh_edit::preview::screen_ray(
-                                &self.camera, px, py, vp_w, vp_h, FOV_DEG,
-                            );
-                            if let Some(start) = plane_point(origen, dir, centroid, normal) {
-                                self.grab = Some(GrabState {
-                                    centroid,
-                                    normal,
-                                    start,
-                                    delta: [0.0; 3],
-                                });
-                            }
-                        }
-                    }
-                }
-                if let (Some(g), Some((px, py))) = (self.grab.as_mut(), grab_puntero) {
-                    let (origen, dir) = glass_mesh_edit::preview::screen_ray(
-                        &self.camera, px, py, vp_w, vp_h, FOV_DEG,
-                    );
-                    if let Some(p) = plane_point(origen, dir, g.centroid, g.normal) {
-                        let mut delta = sub3(p, g.start);
-                        if self.snap_enabled {
-                            delta = glass_mesh_edit::preview::snap_delta(delta, self.snap_step);
-                        }
-                        g.delta = delta;
-                    }
-                }
-                if self.grab.is_some() && response.clicked() {
-                    // El clic confirma el movimiento; el picking de este frame se descarta.
-                    self.grab_commit_pending = true;
-                }
-                let drag_offset = self
-                    .gizmo_axis
-                    .is_some()
-                    .then_some(self.gizmo_delta)
-                    .or_else(|| self.grab.as_ref().map(|g| g.delta));
-                let mut baked = session.bake();
-                if let Some(offset) = drag_offset {
-                    displace_positions(
-                        &mut baked.positions,
-                        &session.mesh.verts,
-                        &sel_indices,
-                        offset,
-                    );
-                }
-                let overlay = selection_overlay(&SelectionOverlay {
-                    camera: &self.camera,
-                    rect,
-                    verts: &session.mesh.verts,
-                    faces: &session.mesh.faces,
-                    selected_faces: &self.selected_faces,
-                    sel_indices: &sel_indices,
-                    sel_set: &sel_set,
-                    offset: drag_offset,
-                    centroid: gizmo_centroid,
-                    len: gizmo_len,
-                    active_axis: self.gizmo_axis,
-                });
-                self.selection_overlay = Some((rect, overlay));
-                let to_pos = |p: [f32; 2]| egui::pos2(rect.min.x + p[0], rect.min.y + p[1]);
-                let edge_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(220));
-                for (a, b) in
-                    project_edges(&baked, &self.camera, rect.width(), rect.height(), FOV_DEG)
-                {
-                    painter.line_segment([to_pos(a), to_pos(b)], edge_stroke);
-                }
-                if self.show_vertices {
-                    let vert_color = egui::Color32::from_rgb(255, 180, 60);
-                    let mut seen = HashSet::new();
-                    for &p in &baked.positions {
-                        if !seen.insert(quantize(p)) {
-                            continue;
-                        }
-                        if let Some(s) =
-                            project_point(p, &self.camera, rect.width(), rect.height(), FOV_DEG)
-                        {
-                            painter.circle_filled(to_pos(s), 2.5, vert_color);
-                        }
-                    }
-                }
-        }
-    }
-
-    /// Zona de identidad (barra lateral): la herramienta activa del espacio.
-    fn zona_identidad(&mut self, ui: &mut egui::Ui) {
-        if let Some(activa) = self
-            .herramientas
-            .iter()
-            .find(|h| h.id == self.herramienta_activa.as_str())
-        {
-            ui.strong(format!("{} {}", activa.icono, activa.nombre));
-            ui.weak(activa.descripcion);
-        }
-        ui.separator();
-        ui.weak("Herramientas");
-        let mut pedida: Option<String> = None;
-        for herramienta in &self.herramientas {
+            if ui.button("Rehacer").clicked() {
+                *action = Some(Action::Redo);
+            }
             if ui
-                .selectable_label(
-                    herramienta.id == self.herramienta_activa.as_str(),
-                    format!("{} {}", herramienta.icono, herramienta.nombre),
-                )
+                .add_enabled(!self.collider_prompt_open, egui::Button::new("Hornear y salir"))
                 .clicked()
             {
-                pedida = Some(herramienta.id.to_string());
+                *hornear_salir = true;
             }
-        }
-        if let Some(id) = pedida {
-            self.peticion_herramienta = Some(id);
-        }
-        if self.herramientas.len() < 2 {
-            ui.weak("Más herramientas en camino");
-        }
-    }
-
-    /// Zona central sin sesión: el aviso de que hay que abrir un .glb.
-    fn zona_sin_sesion(&mut self, ui: &mut egui::Ui) {
-        let alto = ui.available_height();
-        let _ = ui.allocate_space(egui::vec2(1.0, (alto - 40.0) / 2.0));
-        ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new("🧊").size(44.0));
-            ui.strong("Sin sesión");
-            ui.weak("Abre un .glb de assets/ desde la barra lateral para empezar a editar.");
+            if ui.button("Descartar").clicked() {
+                *descartar = true;
+            }
         });
     }
 
+    /// Zona de operadores: Dimensiones y Operadores.
+    fn zona_operadores(&mut self, ui: &mut egui::Ui, action: &mut Option<Action>, num_verts: usize) {
+        ui.separator();
+        ui.label("Dimensiones");
+        ui.horizontal_wrapped(|ui| {
+            drag_vec3(ui, &mut self.dims, 0.05);
+            if ui.button("Aplicar dimensiones").clicked() {
+                *action = Some(Action::SetDims);
+            }
+        });
+
+        ui.separator();
+        ui.label("Operadores");
+        if ui.button("Subdividir").clicked() {
+            *action = Some(Action::Cmd(MeshCommand::Subdivide { levels: 1 }));
+        }
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.mirror_axis, MirrorAxis::X, "X");
+            ui.selectable_value(&mut self.mirror_axis, MirrorAxis::Y, "Y");
+            ui.selectable_value(&mut self.mirror_axis, MirrorAxis::Z, "Z");
+            if ui.button("Espejo").clicked() {
+                *action = Some(Action::Cmd(MeshCommand::Mirror {
+                    axis: self.mirror_axis,
+                }));
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Tolerancia");
+            ui.add(
+                egui::DragValue::new(&mut self.weld_tolerance)
+                    .speed(1e-5)
+                    .max_decimals(6),
+            );
+            if ui.button("Soldar").clicked() {
+                *action = Some(Action::Cmd(MeshCommand::Weld {
+                    tolerance: self.weld_tolerance.max(0.0),
+                }));
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Copias");
+            ui.add(egui::DragValue::new(&mut self.array_count).speed(0.1));
+            ui.label("Offset");
+            drag_vec3(ui, &mut self.array_offset, 0.05);
+            if ui.button("Array").clicked() {
+                *action = Some(Action::Cmd(MeshCommand::Array {
+                    count: self.array_count,
+                    offset: self.array_offset,
+                }));
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Delta");
+            drag_vec3(ui, &mut self.move_delta, 0.05);
+            if ui.button("Mover todos").clicked() {
+                let indices = (0..num_verts)
+                    .filter_map(|i| u32::try_from(i).ok())
+                    .collect();
+                *action = Some(Action::Cmd(MeshCommand::MoveVerts {
+                    indices,
+                    delta: self.move_delta,
+                }));
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Otro .glb:");
+            ui.text_edit_singleline(&mut self.boolean_path);
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut self.boolean_op, BooleanOp::Union, "Unión");
+            ui.selectable_value(&mut self.boolean_op, BooleanOp::Difference, "Resta");
+            ui.selectable_value(
+                &mut self.boolean_op,
+                BooleanOp::Intersection,
+                "Intersección",
+            );
+            if ui.button("Booleana").clicked() {
+                *action = Some(Action::Boolean);
+            }
+        });
+    }
+
+    /// Fila de elección/cambio del esquema de atajos (visible haya o no sesión).
     fn render_scheme_prefs(&mut self, ui: &mut egui::Ui) {
         let mut elegido: Option<ShortcutScheme> = None;
         match self.prefs.scheme {
@@ -907,21 +677,11 @@ impl MeshToolPanel {
         }
     }
 
-    /// Lee como mucho una acción de teclado por frame. Con «agarrar» activo,
-    /// solo Esc (cancelar) tiene efecto; sin el ratón sobre el panel, ninguna
-    /// tecla es de la malla (son del resto del editor).
+    /// Lee como mucho una acción de teclado por frame. Sin el ratón sobre el
+    /// panel, ninguna tecla es de la malla (son del resto del editor).
     fn read_mesh_key(&mut self, ui: &egui::Ui) -> Option<MeshKeyAction> {
         let scheme = self.prefs.scheme?;
         if self.session.is_none() || ui.ctx().egui_wants_keyboard_input() {
-            return None;
-        }
-        if self.grab.is_some() {
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.grab = None;
-                self.grab_requested = false;
-                self.status = "Movimiento cancelado.".to_string();
-            }
-            // Durante el movimiento no se aceptan otras acciones (cambiarían los índices).
             return None;
         }
         if !self.panel_hovered {
@@ -948,799 +708,198 @@ impl MeshToolPanel {
         })
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui, scene_state: &Arc<Mutex<SceneState>>) {
+    /// Pestaña lateral «🧊 MeshForge» del editor: sin sesión ofrece editar la
+    /// entidad seleccionada; con sesión, la cabecera, la salida y los operadores.
+    pub fn render_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        scene_state: &Arc<Mutex<SceneState>>,
+        seleccion: Option<&EntidadSeleccionada>,
+    ) {
         // Hover determinista: rect del panel en el frame anterior.
         self.panel_hovered = ui
             .input(|i| i.pointer.hover_pos())
             .zip(self.last_rect)
             .is_some_and(|(p, r)| r.contains(p));
         self.render_scheme_prefs(ui);
-        let mut key_action = self.read_mesh_key(ui);
-        if key_action == Some(MeshKeyAction::Grab) {
-            // «Agarrar» solo pone la bandera: el viewport debe verla en este mismo frame.
-            self.run_key_action(MeshKeyAction::Grab);
-            key_action = None;
-        }
+        let key_action = self.read_mesh_key(ui);
         let mut action: Option<Action> = None;
-        let mut close_requested = false;
+        let mut hornear_salir = false;
+        let mut descartar = false;
         let mut collider_answer: Option<bool> = None;
+        let mut preguntar_de_nuevo = false;
+        let mut editar = false;
 
         // Foto de cabecera: stats() exige &mut, ámbito cerrado para soltar el préstamo.
         let cabecera = self.session.as_mut().map(|s| {
             let (stats, report) = s.stats();
-            (s.name.clone(), stats, report, s.recipe.commands.len(), s.mesh.verts.len())
+            (stats, report, s.recipe.commands.len(), s.mesh.verts.len())
         });
 
-        if let Some((_, stats, report, receta_len, _)) = &cabecera {
-            ui.label(format!(
-                "Vértices: {} · Caras: {} · Aristas: {} · bbox [{:.3}, {:.3}, {:.3}] – [{:.3}, {:.3}, {:.3}] · Área: {:.3} · Manifold: {} · Receta: {} comandos",
-                stats.verts,
-                stats.faces,
-                stats.edges,
-                stats.bbox_min[0],
-                stats.bbox_min[1],
-                stats.bbox_min[2],
-                stats.bbox_max[0],
-                stats.bbox_max[1],
-                stats.bbox_max[2],
-                stats.surface_area,
-                if report.is_closed_manifold { "sí" } else { "no" },
-                receta_len,
-            ));
-
-            // Pregunta del Mesh Collider pendiente de respuesta.
-            if self.collider_prompt.is_some() {
-                ui.group(|ui| {
-                    ui.label(
-                        egui::RichText::new(
-                            "¿Quieres adaptar el mesh collider al nuevo modelo?",
-                        )
-                        .strong(),
-                    );
-                    ui.checkbox(&mut self.collider_prompt_no_ask, "No volver a preguntar");
-                    ui.horizontal(|ui| {
-                        if ui.button("Sí, adaptar").clicked() {
-                            collider_answer = Some(true);
+        match &cabecera {
+            None => {
+                ui.heading("🧊 MeshForge");
+                match seleccion {
+                    None => {
+                        ui.label("Selecciona un objeto en la escena para editar su malla.");
+                    }
+                    Some(sel) => {
+                        ui.strong(sel.nombre.as_str());
+                        match sel.modelo.as_deref() {
+                            None => {
+                                ui.weak(format!(
+                                    "La entidad «{}» no tiene malla: no se puede editar.",
+                                    sel.nombre
+                                ));
+                            }
+                            Some(modelo) => {
+                                ui.label(format!("Modelo: {modelo}"));
+                                match self.editabilidad_de(modelo) {
+                                    Editabilidad::Editable => {
+                                        if ui.button("Editar malla").clicked() {
+                                            editar = true;
+                                        }
+                                    }
+                                    Editabilidad::NoEditable(motivo) => {
+                                        ui.weak(motivo);
+                                    }
+                                }
+                            }
                         }
-                        if ui.button("No").clicked() {
-                            collider_answer = Some(false);
+                    }
+                }
+            }
+            Some((stats, report, receta_len, num_verts)) => {
+                ui.label(format!(
+                    "Vértices: {} · Caras: {} · Aristas: {} · bbox [{:.3}, {:.3}, {:.3}] – [{:.3}, {:.3}, {:.3}] · Área: {:.3} · Manifold: {} · Receta: {} comandos",
+                    stats.verts,
+                    stats.faces,
+                    stats.edges,
+                    stats.bbox_min[0],
+                    stats.bbox_min[1],
+                    stats.bbox_min[2],
+                    stats.bbox_max[0],
+                    stats.bbox_max[1],
+                    stats.bbox_max[2],
+                    stats.surface_area,
+                    if report.is_closed_manifold { "sí" } else { "no" },
+                    receta_len,
+                ));
+                ui.label(format!(
+                    "Editando: {} (modelo {})",
+                    self.target_entity_name, self.base_model
+                ));
+
+                // Solo se consulta la escena cuando la preferencia lo hace relevante.
+                if self.prefs.collider_no_ask && self.target_tiene_mesh_collider(scene_state) {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.weak("Mesh Collider: al salir no se adaptará (no volver a preguntar).");
+                        if ui.button("Preguntar de nuevo").clicked() {
+                            preguntar_de_nuevo = true;
                         }
                     });
-                });
-            }
-        }
+                }
 
-        // Solo nombre y nº de vértices llegan a las zonas (préstamo de `cabecera`, no de `self`).
-        let sesion: Option<(&str, usize)> = cabecera
-            .as_ref()
-            .map(|(nombre, _, _, _, num_verts)| (nombre.as_str(), *num_verts));
+                self.zona_sesion(ui, &mut action, &mut hornear_salir, &mut descartar);
 
-        // Tres zonas con rects absolutos sobre el espacio restante.
-        let resto = ui.available_rect_before_wrap();
-        let ancho_izq = 208.0_f32.min(resto.width() * 0.30);
-        let ancho_der = 264.0_f32.min(resto.width() * 0.30);
-        let gap = 6.0_f32;
-        let rect_izq = egui::Rect::from_min_size(resto.min, egui::vec2(ancho_izq, resto.height()));
-        let rect_der = egui::Rect::from_min_max(
-            egui::pos2(resto.max.x - ancho_der, resto.min.y),
-            resto.max,
-        );
-        let rect_centro = egui::Rect::from_min_max(
-            egui::pos2(rect_izq.max.x + gap, resto.min.y),
-            egui::pos2(rect_der.min.x - gap, resto.max.y),
-        );
+                // Pregunta del Mesh Collider pendiente de respuesta.
+                if self.collider_prompt_open {
+                    ui.group(|ui| {
+                        ui.label(
+                            egui::RichText::new(
+                                "¿Quieres adaptar el mesh collider al nuevo modelo?",
+                            )
+                            .strong(),
+                        );
+                        ui.checkbox(&mut self.collider_prompt_no_ask, "No volver a preguntar");
+                        ui.horizontal(|ui| {
+                            if ui.button("Sí, adaptar").clicked() {
+                                collider_answer = Some(true);
+                            }
+                            if ui.button("No").clicked() {
+                                collider_answer = Some(false);
+                            }
+                        });
+                    });
+                }
 
-        let separador = ui.visuals().widgets.noninteractive.bg_stroke;
-        ui.painter().vline(
-            rect_izq.max.x + gap * 0.5,
-            resto.min.y..=resto.max.y,
-            separador,
-        );
-        ui.painter().vline(
-            rect_der.min.x - gap * 0.5,
-            resto.min.y..=resto.max.y,
-            separador,
-        );
-
-        let layout = egui::Layout::top_down(egui::Align::Min);
-
-        // Izquierda: herramienta + sesión + estado.
-        let mut ui_izq = ui.new_child(egui::UiBuilder::new().max_rect(rect_izq).layout(layout));
-        self.zona_identidad(&mut ui_izq);
-        ui_izq.separator();
-        match sesion {
-            Some((nombre, _)) => {
-                self.zona_sesion(&mut ui_izq, nombre, &mut action, &mut close_requested);
-            }
-            None => {
-                self.zona_abrir(&mut ui_izq, &mut action);
-            }
-        }
-        ui_izq.separator();
-        ui_izq.add(egui::Label::new(self.status.as_str()).wrap());
-
-        // Centro: vista wireframe.
-        let mut ui_centro =
-            ui.new_child(egui::UiBuilder::new().max_rect(rect_centro).layout(layout));
-        if sesion.is_some() {
-            self.zona_vista(&mut ui_centro);
-        } else {
-            self.zona_sin_sesion(&mut ui_centro);
-        }
-
-        // Derecha: operadores con scroll propio.
-        let mut ui_der = ui.new_child(egui::UiBuilder::new().max_rect(rect_der).layout(layout));
-        match sesion {
-            Some((_, num_verts)) => {
+                // Hueco reservado abajo para el status.
+                let alto = (ui.available_height() - 60.0).max(80.0);
                 egui::ScrollArea::vertical()
                     .id_salt("mesh_ops")
-                    .show(&mut ui_der, |ui| {
-                        self.zona_operadores(ui, &mut action, num_verts);
+                    .max_height(alto)
+                    .show(ui, |ui| {
+                        self.zona_operadores(ui, &mut action, *num_verts);
                     });
-            }
-            None => {
-                ui_der.label(egui::RichText::new("Sin sesión").weak());
             }
         }
 
+        if editar {
+            if let Some(sel) = seleccion {
+                self.editar_entidad(sel);
+            }
+        }
         if let Some(action) = action {
             self.run(action);
         }
-        if close_requested {
-            self.request_close(scene_state);
+        if hornear_salir {
+            self.hornear_y_salir(scene_state);
         }
-        if let Some(adapt) = collider_answer {
-            self.answer_collider_prompt(adapt);
+        if descartar {
+            self.descartar();
         }
-
-        ui.separator();
-        if let Some((clip, shapes)) = self.selection_overlay.take() {
-            if self.session.is_some() {
-                ui.painter().with_clip_rect(clip).extend(shapes);
-            }
+        if let Some(adaptar) = collider_answer {
+            self.responder_collider(adaptar);
         }
-        if let Some((px, py, w, h, additive)) =
-            self.pending_pick.take().filter(|_| !self.grab_commit_pending)
-        {
-            self.pick_at(px, py, w, h, additive);
+        if preguntar_de_nuevo {
+            self.prefs.collider_no_ask = false;
+            self.status = match self.prefs.save_to(&self.prefs_file) {
+                Ok(()) => "Se volverá a preguntar por el Mesh Collider al salir.".to_string(),
+                Err(e) => format!("No se pudo guardar la preferencia: {e}"),
+            };
         }
-        if self.gizmo_commit_pending {
-            self.gizmo_commit_pending = false;
-            self.commit_gizmo_drag();
-        }
-        if self.grab_commit_pending {
-            self.grab_commit_pending = false;
-            if let Some(g) = self.grab.take() {
-                if g.delta != [0.0; 3] {
-                    let indices = self.selection_vert_indices();
-                    self.apply_cmd(MeshCommand::MoveVerts {
-                        indices,
-                        delta: g.delta,
-                    });
-                } else {
-                    self.status = "Sin desplazamiento.".to_string();
-                }
-            }
-        }
-        self.grab_requested = false;
         if let Some(accion) = key_action {
             self.run_key_action(accion);
         }
+
+        ui.separator();
+        ui.add(egui::Label::new(self.status.as_str()).wrap());
         self.last_rect = Some(ui.max_rect());
     }
-}
 
-/// Modo de selección sub-objeto.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelectionMode {
-    Verts,
-    Faces,
-}
-
-const SEL_QUANT: f32 = 1e-4;
-const VERT_PICK_PX: f32 = 14.0;
-const GIZMO_PICK_PX: f32 = 12.0;
-const GIZMO_AXES: [([f32; 3], egui::Color32); 3] = [
-    ([1.0, 0.0, 0.0], egui::Color32::from_rgb(220, 60, 60)),
-    ([0.0, 1.0, 0.0], egui::Color32::from_rgb(60, 200, 60)),
-    ([0.0, 0.0, 1.0], egui::Color32::from_rgb(60, 120, 230)),
-];
-
-impl MeshToolPanel {
-    /// Vacía la selección y cancela el arrastre del gizmo.
-    pub fn clear_selection(&mut self) {
-        self.grab = None;
-        self.grab_requested = false;
-        self.grab_commit_pending = false;
-        self.selected_verts.clear();
-        self.selected_faces.clear();
-        self.gizmo_axis = None;
-        self.gizmo_start = [0.0; 2];
-        self.gizmo_delta = [0.0; 3];
-        self.gizmo_commit_pending = false;
-    }
-
-    /// Índices de vértices lógicos de la selección, ordenados y sin duplicados.
-    pub fn selection_vert_indices(&self) -> Vec<u32> {
-        selection_indices_for(
-            self.selection_mode,
-            &self.selected_verts,
-            &self.selected_faces,
-            self.session.as_ref().map(|s| s.mesh.faces.as_slice()),
-        )
-    }
-
-    /// Selección por clic en (px, py) del viewport de tamaño width x height.
-    pub fn pick_at(&mut self, px: f32, py: f32, width: f32, height: f32, additive: bool) {
-        use glass_mesh_edit::preview::{pick_face, pick_vertex, screen_ray};
-
-        let Some(session) = self.session.as_ref() else {
+    /// Tarjeta de MeshForge en el espacio Herramientas (docking pinta la lista).
+    pub fn render_espacio(&mut self, ui: &mut egui::Ui, _scene_state: &Arc<Mutex<SceneState>>) {
+        let Some(info) = crate::herramientas::herramientas_disponibles()
+            .into_iter()
+            .find(|h| h.id == "meshforge")
+        else {
             return;
         };
-        let (origin, dir) = screen_ray(&self.camera, px, py, width, height, FOV_DEG);
-        match pick_face(&session.mesh.verts, &session.mesh.faces, origin, dir) {
-            Some((face, t)) => match self.selection_mode {
-                SelectionMode::Faces => toggle_or_set(
-                    &mut self.selected_faces,
-                    &mut self.selected_verts,
-                    face,
-                    additive,
-                ),
-                SelectionMode::Verts => {
-                    let hit_point = add3(origin, scale3(dir, t));
-                    let picked = pick_vertex(
-                        &session.mesh.verts,
-                        &self.camera,
-                        [px, py],
-                        [width, height],
-                        FOV_DEG,
-                        VERT_PICK_PX,
-                    )
-                    .or_else(|| {
-                        session.mesh.faces.get(face as usize).and_then(|f| {
-                            f.iter()
-                                .copied()
-                                .filter_map(|v| {
-                                    session
-                                        .mesh
-                                        .verts
-                                        .get(v as usize)
-                                        .map(|p| (v, len3(sub3(*p, hit_point))))
-                                })
-                                .min_by(|a, b| a.1.total_cmp(&b.1))
-                                .map(|(v, _)| v)
-                        })
-                    });
-                    if let Some(v) = picked {
-                        toggle_or_set(
-                            &mut self.selected_verts,
-                            &mut self.selected_faces,
-                            v,
-                            additive,
-                        );
-                    }
-                }
-            },
-            None => {
-                if !additive {
-                    self.selected_verts.clear();
-                    self.selected_faces.clear();
-                }
-            }
-        }
-        self.status = selection_status(
-            self.selection_mode,
-            self.selected_verts.len(),
-            self.selected_faces.len(),
-        );
-    }
-
-    /// Aplica el arrastre del gizmo como un único MoveVerts y limpia el estado de arrastre.
-    pub fn commit_gizmo_drag(&mut self) {
-        let axis = self.gizmo_axis.take();
-        let raw = self.gizmo_delta;
-        self.gizmo_delta = [0.0; 3];
-        self.gizmo_start = [0.0; 2];
-        self.gizmo_commit_pending = false;
-        if axis.is_none() || self.session.is_none() {
-            return;
-        }
-        let Some(delta) = gizmo_commit_delta(raw, self.snap_enabled, self.snap_step) else {
-            return;
-        };
-        let indices = self.selection_vert_indices();
-        if indices.is_empty() {
-            return;
-        }
-        self.apply_cmd(MeshCommand::MoveVerts { indices, delta });
-    }
-}
-
-fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-fn scale3(a: [f32; 3], s: f32) -> [f32; 3] {
-    [a[0] * s, a[1] * s, a[2] * s]
-}
-
-fn len3(a: [f32; 3]) -> f32 {
-    (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
-}
-
-fn selection_indices_for(
-    mode: SelectionMode,
-    verts: &std::collections::HashSet<u32>,
-    faces: &std::collections::HashSet<u32>,
-    mesh_faces: Option<&[[u32; 3]]>,
-) -> Vec<u32> {
-    let mut out: Vec<u32> = match mode {
-        SelectionMode::Verts => verts.iter().copied().collect(),
-        SelectionMode::Faces => match mesh_faces {
-            Some(mesh_faces) => faces
-                .iter()
-                .filter_map(|&f| mesh_faces.get(f as usize))
-                .flat_map(|f| f.iter().copied())
-                .collect(),
-            None => Vec::new(),
-        },
-    };
-    out.sort_unstable();
-    out.dedup();
-    out
-}
-
-fn toggle_or_set(
-    active: &mut std::collections::HashSet<u32>,
-    other: &mut std::collections::HashSet<u32>,
-    id: u32,
-    additive: bool,
-) {
-    if additive {
-        if !active.remove(&id) {
-            active.insert(id);
-        }
-    } else {
-        active.clear();
-        other.clear();
-        active.insert(id);
-    }
-}
-
-fn selection_status(mode: SelectionMode, verts: usize, faces: usize) -> String {
-    match mode {
-        SelectionMode::Verts if verts > 0 => format!("Seleccionado: {verts} vértices."),
-        SelectionMode::Faces if faces > 0 => format!("Seleccionado: {faces} caras."),
-        _ => "Sin selección.".to_string(),
-    }
-}
-
-/// Delta final del gizmo (con snap si está activo). None si queda a cero.
-fn gizmo_commit_delta(delta: [f32; 3], snap_enabled: bool, step: f32) -> Option<[f32; 3]> {
-    let delta = if snap_enabled {
-        glass_mesh_edit::preview::snap_delta(delta, step)
-    } else {
-        delta
-    };
-    if delta.iter().all(|v| v.abs() <= 1e-6) {
-        None
-    } else {
-        Some(delta)
-    }
-}
-
-/// Mayor extensión por eje del bbox de `verts`; 0 si está vacío.
-fn bbox_extent(verts: &[[f32; 3]]) -> f32 {
-    let mut iter = verts.iter();
-    let Some(first) = iter.next() else {
-        return 0.0;
-    };
-    let mut min = *first;
-    let mut max = *first;
-    for p in iter {
-        for k in 0..3 {
-            min[k] = min[k].min(p[k]);
-            max[k] = max[k].max(p[k]);
-        }
-    }
-    (max[0] - min[0]).max(max[1] - min[1]).max(max[2] - min[2])
-}
-
-fn point_segment_dist(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
-    let ab = [b[0] - a[0], b[1] - a[1]];
-    let ap = [p[0] - a[0], p[1] - a[1]];
-    let len2 = ab[0] * ab[0] + ab[1] * ab[1];
-    let t = if len2 <= f32::EPSILON {
-        0.0
-    } else {
-        ((ap[0] * ab[0] + ap[1] * ab[1]) / len2).clamp(0.0, 1.0)
-    };
-    let c = [a[0] + ab[0] * t - p[0], a[1] + ab[1] * t - p[1]];
-    (c[0] * c[0] + c[1] * c[1]).sqrt()
-}
-
-/// Eje del gizmo cuya flecha pasa a menos de GIZMO_PICK_PX de `point` (el más cercano).
-fn hit_gizmo_axis(
-    camera: &OrbitCamera,
-    centroid: [f32; 3],
-    len: f32,
-    point: [f32; 2],
-    width: f32,
-    height: f32,
-) -> Option<usize> {
-    let project =
-        |p: [f32; 3]| glass_mesh_edit::preview::project_point(p, camera, width, height, FOV_DEG);
-    let base = project(centroid)?;
-    let mut best: Option<(usize, f32)> = None;
-    for (axis, (dir, _)) in GIZMO_AXES.iter().enumerate() {
-        let Some(tip) = project(add3(centroid, scale3(*dir, len))) else {
-            continue;
-        };
-        let d = point_segment_dist(point, base, tip);
-        if d >= GIZMO_PICK_PX {
-            continue;
-        }
-        let better = match best {
-            None => true,
-            Some((_, best_d)) => d < best_d,
-        };
-        if better {
-            best = Some((axis, d));
-        }
-    }
-    best.map(|(axis, _)| axis)
-}
-
-/// Desplazamiento en mundo a lo largo de `axis` para un arrastre de pantalla `drag`.
-fn gizmo_world_amount(
-    camera: &OrbitCamera,
-    centroid: [f32; 3],
-    axis: usize,
-    drag: [f32; 2],
-    width: f32,
-    height: f32,
-) -> f32 {
-    let Some((dir, _)) = GIZMO_AXES.get(axis) else {
-        return 0.0;
-    };
-    let project =
-        |p: [f32; 3]| glass_mesh_edit::preview::project_point(p, camera, width, height, FOV_DEG);
-    let (Some(a), Some(b)) = (project(centroid), project(add3(centroid, *dir))) else {
-        return 0.0;
-    };
-    let screen = [b[0] - a[0], b[1] - a[1]];
-    let screen_len = (screen[0] * screen[0] + screen[1] * screen[1]).sqrt();
-    if screen_len <= 1e-6 {
-        return 0.0;
-    }
-    let along = (drag[0] * screen[0] + drag[1] * screen[1]) / screen_len;
-    let dist = len3(sub3(centroid, camera.eye()));
-    let focal = (height * 0.5) / (FOV_DEG.to_radians() * 0.5).tan();
-    if !focal.is_finite() || focal <= 0.0 {
-        return 0.0;
-    }
-    along * dist / focal
-}
-
-fn sel_quantize(p: [f32; 3]) -> [i64; 3] {
-    [
-        (p[0] / SEL_QUANT).round() as i64,
-        (p[1] / SEL_QUANT).round() as i64,
-        (p[2] / SEL_QUANT).round() as i64,
-    ]
-}
-
-/// Suma `offset` a las esquinas horneadas que coinciden (cuantizadas) con vértices seleccionados.
-fn displace_positions(
-    positions: &mut [[f32; 3]],
-    verts: &[[f32; 3]],
-    indices: &[u32],
-    offset: [f32; 3],
-) {
-    let keys: std::collections::HashSet<[i64; 3]> = indices
-        .iter()
-        .filter_map(|&i| verts.get(i as usize))
-        .map(|p| sel_quantize(*p))
-        .collect();
-    if keys.is_empty() {
-        return;
-    }
-    for p in positions.iter_mut() {
-        if keys.contains(&sel_quantize(*p)) {
-            *p = add3(*p, offset);
-        }
-    }
-}
-
-struct SelectionOverlay<'a> {
-    camera: &'a OrbitCamera,
-    rect: egui::Rect,
-    verts: &'a [[f32; 3]],
-    faces: &'a [[u32; 3]],
-    selected_faces: &'a std::collections::HashSet<u32>,
-    sel_indices: &'a [u32],
-    sel_set: &'a std::collections::HashSet<u32>,
-    offset: Option<[f32; 3]>,
-    centroid: Option<[f32; 3]>,
-    len: f32,
-    active_axis: Option<usize>,
-}
-
-/// Formas de highlight (caras, vértices seleccionados) y gizmo, en coordenadas absolutas.
-fn selection_overlay(ov: &SelectionOverlay<'_>) -> Vec<egui::Shape> {
-    let width = ov.rect.width();
-    let height = ov.rect.height();
-    let origin = ov.rect.min;
-    let offset = ov.offset.unwrap_or([0.0; 3]);
-    let world = |i: u32| -> Option<[f32; 3]> {
-        let p = *ov.verts.get(i as usize)?;
-        if ov.sel_set.contains(&i) {
-            Some(add3(p, offset))
+        let estado = if self.session.is_some() {
+            format!(
+                "Editando «{}» ({}) — la edición sigue en el panel del Editor.",
+                self.target_entity_name, self.base_model
+            )
         } else {
-            Some(p)
-        }
-    };
-    let screen = |p: [f32; 3]| {
-        glass_mesh_edit::preview::project_point(p, ov.camera, width, height, FOV_DEG)
-            .map(|s| egui::pos2(origin.x + s[0], origin.y + s[1]))
-    };
-    let highlight = egui::Color32::from_rgb(255, 180, 60);
-    let fill = egui::Color32::from_rgba_unmultiplied(255, 180, 60, 60);
-    let selected_color = egui::Color32::from_rgb(255, 140, 0);
-    let mut shapes = Vec::new();
-
-    let mut faces: Vec<u32> = ov.selected_faces.iter().copied().collect();
-    faces.sort_unstable();
-    for face_index in faces {
-        let Some(face) = ov.faces.get(face_index as usize) else {
-            continue;
+            "Sin sesión de edición.".to_string()
         };
-        let points: Option<Vec<egui::Pos2>> =
-            face.iter().map(|&v| world(v).and_then(screen)).collect();
-        if let Some(points) = points {
-            shapes.push(egui::Shape::convex_polygon(
-                points,
-                fill,
-                egui::Stroke::new(2.0, highlight),
-            ));
-        }
-    }
-
-    for &v in ov.sel_indices {
-        if let Some(p) = world(v).and_then(screen) {
-            shapes.push(egui::Shape::circle_filled(p, 5.0, selected_color));
-        }
-    }
-
-    if let Some(centroid) = ov.centroid {
-        let base = add3(centroid, offset);
-        for (axis, (dir, color)) in GIZMO_AXES.iter().enumerate() {
-            let tip = add3(base, scale3(*dir, ov.len));
-            if let (Some(a), Some(b)) = (screen(base), screen(tip)) {
-                let (stroke, radius) = if ov.active_axis == Some(axis) {
-                    (3.0, 6.0)
-                } else {
-                    (2.0, 4.0)
-                };
-                shapes.push(egui::Shape::line_segment(
-                    [a, b],
-                    egui::Stroke::new(stroke, *color),
-                ));
-                shapes.push(egui::Shape::circle_filled(b, radius, *color));
+        let mut trabajar = false;
+        ui.group(|ui| {
+            ui.strong(format!("{} {}", info.icono, info.nombre));
+            ui.weak(info.descripcion);
+            ui.separator();
+            ui.label(estado);
+            if ui.button("Trabajar en la escena").clicked() {
+                trabajar = true;
             }
+            ui.weak("Selecciona un objeto en la vista de escena y pulsa «Editar malla» en el panel.");
+        });
+        if trabajar {
+            self.peticion_trabajar_escena = true;
         }
     }
-    shapes
 }
 
-#[cfg(test)]
-mod selection_tests {
-    use super::*;
-    use glass_mesh_edit::{write_glb, MeshData};
-    use std::collections::HashSet;
-
-    #[test]
-    fn indices_de_caras_unen_sus_vertices() {
-        let mesh_faces = [[0, 1, 2], [2, 3, 0], [4, 5, 6]];
-        let faces: HashSet<u32> = [0, 1, 99].into_iter().collect();
-        let verts: HashSet<u32> = [7, 3].into_iter().collect();
-        let out = selection_indices_for(SelectionMode::Faces, &verts, &faces, Some(&mesh_faces));
-        assert_eq!(out, vec![0, 1, 2, 3]);
-        let out = selection_indices_for(SelectionMode::Faces, &verts, &faces, None);
-        assert!(out.is_empty());
-        let out = selection_indices_for(SelectionMode::Verts, &verts, &faces, None);
-        assert_eq!(out, vec![3, 7]);
-    }
-
-    #[test]
-    fn commit_delta_aplica_snap() {
-        let d = gizmo_commit_delta([0.26, 0.0, 0.0], true, 0.25).expect("delta");
-        assert!((d[0] - 0.25).abs() < 1e-6);
-        assert!(gizmo_commit_delta([0.1, 0.0, 0.0], true, 0.25).is_none());
-        assert!(gizmo_commit_delta([0.0; 3], false, 0.25).is_none());
-    }
-
-    #[test]
-    fn commit_delta_sin_snap_es_exacto() {
-        let d = gizmo_commit_delta([0.26, 0.0, 0.0], false, 0.25).unwrap();
-        assert!((d[0] - 0.26).abs() < 1e-6, "d[0] = {}", d[0]);
-        assert!(d[1].abs() < 1e-6);
-        assert!(d[2].abs() < 1e-6);
-    }
-
-    #[test]
-    fn panel_seleccion_cara_y_vertice() {
-        let dir =
-            std::env::temp_dir().join(format!("glass_mesh_tool_bd_sel_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let src = dir.join("cube.glb");
-        write_glb(&MeshData::cube(2.0), &src).unwrap();
-        let mut panel = MeshToolPanel::new();
-        panel.open(src.to_str().unwrap()).unwrap();
-
-        panel.selection_mode = SelectionMode::Faces;
-        panel.pick_at(400.0, 160.0, 800.0, 320.0, false);
-        assert!(
-            !panel.selected_faces.is_empty(),
-            "no se seleccionó ninguna cara"
-        );
-        assert!(
-            panel.status.starts_with("Seleccionado:"),
-            "status: {}",
-            panel.status
-        );
-
-        panel.clear_selection();
-        panel.selection_mode = SelectionMode::Verts;
-        panel.pick_at(400.0, 160.0, 800.0, 320.0, false);
-        assert!(
-            !panel.selected_verts.is_empty(),
-            "no se seleccionó ningún vértice"
-        );
-        assert!(
-            panel.status.starts_with("Seleccionado:"),
-            "status: {}",
-            panel.status
-        );
-
-        panel.pick_at(5.0, 5.0, 800.0, 320.0, false);
-        assert!(panel.selected_verts.is_empty());
-        assert!(panel.selected_faces.is_empty());
-        assert_eq!(panel.status, "Sin selección.");
-
-        panel.selection_mode = SelectionMode::Faces;
-        panel.pick_at(400.0, 160.0, 800.0, 320.0, false);
-        let antes = panel.selected_faces.len();
-        assert!(antes > 0, "el primer pick no seleccionó nada");
-        panel.pick_at(400.0, 160.0, 800.0, 320.0, true);
-        assert!(
-            panel.selected_faces.is_empty(),
-            "el toggle con Shift no quitó la cara"
-        );
-        panel.pick_at(400.0, 160.0, 800.0, 320.0, true);
-        assert_eq!(
-            panel.selected_faces.len(),
-            antes,
-            "el toggle con Shift no volvió a añadir la cara"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn panel_gizmo_mueve_seleccion_con_snap() {
-        let dir =
-            std::env::temp_dir().join(format!("glass_mesh_tool_bd_gizmo_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let src = dir.join("cube.glb");
-        write_glb(&MeshData::cube(2.0), &src).unwrap();
-        let mut panel = MeshToolPanel::new();
-        panel.open(src.to_str().unwrap()).unwrap();
-
-        let orig = panel.session.as_ref().unwrap().mesh.verts[0];
-        panel.selected_verts.insert(0);
-        panel.gizmo_delta = [0.26, 0.0, 0.0];
-        panel.gizmo_axis = Some(0);
-        panel.commit_gizmo_drag();
-
-        let movido = panel.session.as_ref().unwrap().mesh.verts[0];
-        assert!(
-            (movido[0] - (orig[0] + 0.25)).abs() < 1e-5,
-            "x = {}",
-            movido[0]
-        );
-        assert!((movido[1] - orig[1]).abs() < 1e-5);
-        assert!((movido[2] - orig[2]).abs() < 1e-5);
-        assert_eq!(panel.session.as_ref().unwrap().recipe.commands.len(), 1);
-
-        panel.undo();
-        let restaurado = panel.session.as_ref().unwrap().mesh.verts[0];
-        assert!((restaurado[0] - orig[0]).abs() < 1e-5);
-        assert!((restaurado[1] - orig[1]).abs() < 1e-5);
-        assert!((restaurado[2] - orig[2]).abs() < 1e-5);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn panel_seleccion_se_limpia_al_subdividir() {
-        let dir =
-            std::env::temp_dir().join(format!("glass_mesh_tool_bd_sub_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let src = dir.join("cube.glb");
-        write_glb(&MeshData::cube(2.0), &src).unwrap();
-        let mut panel = MeshToolPanel::new();
-        panel.open(src.to_str().unwrap()).unwrap();
-
-        panel.selected_verts.insert(0);
-        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
-        assert!(
-            panel.selected_verts.is_empty(),
-            "la selección sobrevivió a Subdivide"
-        );
-        assert!(panel.selected_faces.is_empty());
-
-        panel.selected_verts.insert(0);
-        panel.apply_cmd(MeshCommand::MoveVerts {
-            indices: vec![0],
-            delta: [0.1, 0.0, 0.0],
-        });
-        assert!(
-            !panel.selected_verts.is_empty(),
-            "MoveVerts limpió la selección"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn panel_snap_redondea() {
-        let dir =
-            std::env::temp_dir().join(format!("glass_mesh_tool_bd_snap_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let src = dir.join("cube.glb");
-        write_glb(&MeshData::cube(2.0), &src).unwrap();
-        let mut panel = MeshToolPanel::new();
-        panel.open(src.to_str().unwrap()).unwrap();
-
-        let orig = panel.session.as_ref().unwrap().mesh.verts[0];
-        panel.selected_verts.insert(0);
-
-        panel.snap_enabled = true;
-        panel.snap_step = 0.25;
-        panel.gizmo_delta = [0.26, 0.0, 0.0];
-        panel.gizmo_axis = Some(0);
-        panel.commit_gizmo_drag();
-        let con_snap = panel.session.as_ref().unwrap().mesh.verts[0];
-        assert!(
-            (con_snap[0] - (orig[0] + 0.25)).abs() < 1e-5,
-            "x con snap = {}",
-            con_snap[0]
-        );
-
-        panel.undo();
-        let restaurado = panel.session.as_ref().unwrap().mesh.verts[0];
-        assert!((restaurado[0] - orig[0]).abs() < 1e-5);
-
-        panel.selected_verts.insert(0);
-        panel.snap_enabled = false;
-        panel.gizmo_delta = [0.26, 0.0, 0.0];
-        panel.gizmo_axis = Some(0);
-        panel.commit_gizmo_drag();
-        let sin_snap = panel.session.as_ref().unwrap().mesh.verts[0];
-        assert!(
-            (sin_snap[0] - (orig[0] + 0.26)).abs() < 1e-5,
-            "x sin snap = {}",
-            sin_snap[0]
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1864,44 +1023,22 @@ mod tests {
     }
 
     #[test]
-    fn accion_eliminar_borra_seleccion() {
-        let dir =
-            std::env::temp_dir().join(format!("glass_mesh_tool_be1_del_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let src = dir.join("cube.glb");
-        write_glb(&MeshData::cube(2.0), &src).unwrap();
-
-        let mut panel = MeshToolPanel::new();
-        panel.open(src.to_str().unwrap()).unwrap();
-        let antes = panel.session.as_ref().expect("sesión").mesh.verts.len();
-        panel.selection_mode = SelectionMode::Verts;
-        panel.selected_verts.insert(0);
-        panel.run_key_action(MeshKeyAction::DeleteSelection);
-        let sesion = panel.session.as_ref().expect("sesión");
-        assert!(sesion.mesh.verts.len() < antes);
-        assert_eq!(sesion.recipe.commands.len(), 1);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn accion_modo_cambia_modo() {
+    fn acciones_de_seleccion_solo_avisan() {
         let mut panel = MeshToolPanel::default();
-        panel.run_key_action(MeshKeyAction::ModeFaces);
-        assert_eq!(panel.selection_mode, SelectionMode::Faces);
-        panel.run_key_action(MeshKeyAction::ModeVerts);
-        assert_eq!(panel.selection_mode, SelectionMode::Verts);
+        for accion in [
+            MeshKeyAction::Grab,
+            MeshKeyAction::DeleteSelection,
+            MeshKeyAction::ModeVerts,
+            MeshKeyAction::ModeFaces,
+        ] {
+            panel.status.clear();
+            panel.run_key_action(accion);
+            assert_eq!(panel.status, AVISO_SELECCION);
+        }
+        assert!(panel.session.is_none());
     }
 
-    #[test]
-    fn grab_sin_seleccion_no_arranca() {
-        let mut panel = MeshToolPanel::default();
-        panel.run_key_action(MeshKeyAction::Grab);
-        assert!(!panel.grab_requested);
-        assert_eq!(panel.status, "Selecciona vértices o caras antes de mover.");
-    }
-
-    // --- B-E2: pregunta del Mesh Collider al cerrar ---
+    // --- Nacimiento desde la entidad y salida (regla del collider de B-E2) ---
 
     fn entidad_escena(
         id: u64,
@@ -1930,18 +1067,53 @@ mod tests {
         Arc::new(Mutex::new(scene))
     }
 
-    fn panel_con_cubo(sufijo: &str) -> (MeshToolPanel, std::path::PathBuf) {
+    fn seleccion(id: u64, modelo: Option<&str>, collider: bool) -> EntidadSeleccionada {
+        EntidadSeleccionada {
+            id,
+            nombre: format!("E{id}"),
+            modelo: modelo.map(str::to_string),
+            tiene_mesh_collider: collider,
+        }
+    }
+
+    /// Panel con preferencias y assets_root temporales (sin tocar los del usuario).
+    fn panel_temporal(sufijo: &str) -> (MeshToolPanel, std::path::PathBuf) {
         let dir =
-            std::env::temp_dir().join(format!("glass_mesh_tool_be2_{sufijo}_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let src = dir.join("cube.glb");
-        write_glb(&MeshData::cube(2.0), &src).unwrap();
+            std::env::temp_dir().join(format!("glass_mesh_tool_r1_{sufijo}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
         let mut panel = MeshToolPanel::new();
-        // Preferencias deterministas, sin tocar las del usuario.
         panel.prefs_file = dir.join("tool_prefs.json");
         panel.prefs = ToolPrefs::default();
-        panel.open(src.to_str().unwrap()).unwrap();
+        panel.assets_root = dir.join("assets");
         (panel, dir)
+    }
+
+    /// Sesión nacida de la entidad 99 (primitiva "cube") con la física dada.
+    fn panel_editando(
+        sufijo: &str,
+        physics: Option<glass_core::scene::PhysicsData>,
+    ) -> (MeshToolPanel, Arc<Mutex<SceneState>>, std::path::PathBuf) {
+        let (mut panel, dir) = panel_temporal(sufijo);
+        // El test es autocontenido: el cubo vive en el assets_root
+        // temporal, sin depender del cwd desde el que corra cargo test.
+        write_glb(&MeshData::cube(2.0), &panel.assets_root.join("cube.glb"))
+            .expect("escribir cube.glb");
+        let con_collider = physics
+            .as_ref()
+            .is_some_and(|p| p.mesh_collider != MeshColliderMode::None);
+        let scene = escena_con(entidad_escena(99, "cube", physics));
+        panel.editar_entidad(&seleccion(99, Some("cube"), con_collider));
+        assert!(panel.session.is_some(), "status: {}", panel.status);
+        (panel, scene, dir)
+    }
+
+    fn horneado(panel: &MeshToolPanel) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = mesh_birth::dir_horneado(&panel.assets_root);
+        (
+            dir.join("cube_edited.glb"),
+            dir.join("cube_edited.mesh.json"),
+        )
     }
 
     #[test]
@@ -1973,81 +1145,193 @@ mod tests {
     }
 
     #[test]
-    fn cerrar_con_mesh_collider_pregunta() {
-        let (mut panel, dir) = panel_con_cubo("pregunta");
-        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
-        let scene = escena_con(entidad_escena(99, "cube", fisica(MeshColliderMode::TriMesh)));
-        panel.request_close(&scene);
-        assert!(panel.session.is_some(), "no debía cerrar todavía");
-        assert_eq!(panel.collider_prompt, Some(vec![99]));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn responder_no_cierra_sin_tocar_escena() {
-        let (mut panel, dir) = panel_con_cubo("responde_no");
-        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
-        let scene = escena_con(entidad_escena(99, "cube", fisica(MeshColliderMode::TriMesh)));
-        panel.request_close(&scene);
-        panel.answer_collider_prompt(false);
+    fn editar_entidad_sin_malla_no_abre() {
+        let (mut panel, dir) = panel_temporal("sin_malla");
+        panel.editar_entidad(&seleccion(7, None, false));
         assert!(panel.session.is_none());
-        assert!(panel.pending_collider_adapt.is_none());
-        let sc = scene.lock().unwrap();
-        let e = sc.entities.iter().find(|e| e.id == 99).unwrap();
-        assert_eq!(e.mesh.as_ref().unwrap().model, "cube");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn responder_si_hornea_y_deja_pendiente() {
-        let (mut panel, dir) = panel_con_cubo("responde_si");
-        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
-        let scene = escena_con(entidad_escena(99, "cube", fisica(MeshColliderMode::TriMesh)));
-        panel.request_close(&scene);
-        panel.answer_collider_prompt(true);
-        assert!(panel.session.is_none());
-        assert!(dir.join("cube_edited.glb").exists());
         assert_eq!(
-            panel.pending_collider_adapt,
-            Some(ColliderAdapt {
-                entity_ids: vec![99],
-                new_model: "cube_edited".to_string(),
-            })
+            panel.status,
+            "La entidad «E7» no tiene malla: no se puede editar."
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn sin_mesh_collider_cierre_directo() {
-        let (mut panel, dir) = panel_con_cubo("sin_mesh");
-        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
-        let scene = escena_con(entidad_escena(99, "cube", fisica(MeshColliderMode::None)));
-        panel.request_close(&scene);
+    fn editar_entidad_modelo_no_resoluble_no_abre() {
+        let (mut panel, dir) = panel_temporal("no_resoluble");
+        panel.editar_entidad(&seleccion(8, Some("no_existe_r1_xyz"), false));
         assert!(panel.session.is_none());
-        assert!(panel.collider_prompt.is_none());
+        assert!(panel.target_entity.is_none());
+        assert!(!panel.status.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn sin_cambios_no_pregunta() {
-        let (mut panel, dir) = panel_con_cubo("sin_cambios");
-        let scene = escena_con(entidad_escena(99, "cube", fisica(MeshColliderMode::TriMesh)));
-        panel.request_close(&scene);
+    fn editar_entidad_primitiva_abre_con_destino() {
+        let (mut panel, dir) = panel_temporal("primitiva");
+        panel.editar_entidad(&seleccion(5, Some("sphere"), false));
+        assert!(panel.session.is_some(), "status: {}", panel.status);
+        assert_eq!(panel.target_entity, Some(5));
+        assert_eq!(panel.target_entity_name, "E5");
+        assert_eq!(panel.base_model, "sphere");
+        assert!(
+            panel.status.starts_with("Editando «E5» (sphere):"),
+            "{}",
+            panel.status
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn salir_con_mesh_collider_pregunta() {
+        let (mut panel, scene, dir) = panel_editando("pregunta", fisica(MeshColliderMode::TriMesh));
+        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
+        panel.hornear_y_salir(&scene);
+        assert!(panel.session.is_some(), "no debía cerrar todavía");
+        assert!(panel.collider_prompt_open);
+        assert!(panel.pending_model_assign.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn responder_no_cierra_sin_tocar_escena() {
+        let (mut panel, scene, dir) =
+            panel_editando("responde_no", fisica(MeshColliderMode::TriMesh));
+        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
+        panel.hornear_y_salir(&scene);
+        panel.responder_collider(false);
         assert!(panel.session.is_none());
-        assert!(panel.collider_prompt.is_none());
+        assert!(panel.pending_model_assign.is_none());
+        assert!(!horneado(&panel).0.exists());
+        let sc = scene.lock().unwrap();
+        let e = sc.entities.iter().find(|e| e.id == 99).unwrap();
+        assert_eq!(e.mesh.as_ref().unwrap().model, "cube");
+        drop(sc);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn responder_si_hornea_y_deja_asignacion() {
+        let (mut panel, scene, dir) =
+            panel_editando("responde_si", fisica(MeshColliderMode::TriMesh));
+        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
+        panel.hornear_y_salir(&scene);
+        panel.responder_collider(true);
+        assert!(panel.session.is_none());
+        let (glb, receta) = horneado(&panel);
+        assert!(glb.exists());
+        assert!(receta.exists());
+        assert_eq!(
+            panel.pending_model_assign,
+            Some(ModelAssign {
+                entity_id: 99,
+                new_model: "cube_edited".to_string(),
+                adapta_collider: true,
+            })
+        );
+        assert_eq!(
+            panel.status,
+            "Sesión cerrada: el mesh collider se adaptará al nuevo modelo."
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collider_primitivo_no_pregunta() {
+        let primitivos = glass_core::scene::PhysicsData {
+            box_extents: [1.0, 1.0, 1.0],
+            mesh_collider: MeshColliderMode::None,
+            ..Default::default()
+        };
+        for (sufijo, physics) in [("primitivo", Some(primitivos)), ("sin_fisica", None)] {
+            let (mut panel, scene, dir) = panel_editando(sufijo, physics);
+            panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
+            panel.hornear_y_salir(&scene);
+            assert!(panel.session.is_none(), "{sufijo}: {}", panel.status);
+            assert!(!panel.collider_prompt_open);
+            assert_eq!(
+                panel.pending_model_assign.as_ref().map(|a| a.adapta_collider),
+                Some(false)
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn no_ask_cierra_sin_asignar() {
+        let (mut panel, scene, dir) = panel_editando("no_ask", fisica(MeshColliderMode::TriMesh));
+        panel.prefs.collider_no_ask = true;
+        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
+        panel.hornear_y_salir(&scene);
+        assert!(panel.session.is_none());
+        assert!(!panel.collider_prompt_open);
+        assert!(panel.pending_model_assign.is_none());
+        assert!(!horneado(&panel).0.exists());
+        assert_eq!(
+            panel.status,
+            "Sesión cerrada sin adaptar el collider (preferencia guardada: no volver a preguntar)."
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn no_volver_a_preguntar_se_persiste() {
-        let (mut panel, dir) = panel_con_cubo("no_preguntar");
+        let (mut panel, scene, dir) =
+            panel_editando("no_preguntar", fisica(MeshColliderMode::TriMesh));
         panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
-        let scene = escena_con(entidad_escena(99, "cube", fisica(MeshColliderMode::TriMesh)));
-        panel.request_close(&scene);
-        assert!(panel.collider_prompt.is_some());
+        panel.hornear_y_salir(&scene);
+        assert!(panel.collider_prompt_open);
         panel.collider_prompt_no_ask = true;
-        panel.answer_collider_prompt(false);
+        panel.responder_collider(false);
         assert!(ToolPrefs::load_from(&panel.prefs_file).collider_no_ask);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn salir_sin_cambios_no_hornea() {
+        let (mut panel, scene, dir) =
+            panel_editando("sin_cambios", fisica(MeshColliderMode::TriMesh));
+        panel.hornear_y_salir(&scene);
+        assert!(panel.session.is_none());
+        assert!(!panel.collider_prompt_open);
+        assert!(panel.pending_model_assign.is_none());
+        assert_eq!(panel.status, "Sin cambios: nada que hornear.");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn salir_sin_collider_hornea_y_asigna() {
+        let (mut panel, scene, dir) = panel_editando("sin_collider", None);
+        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
+        panel.hornear_y_salir(&scene);
+        assert!(panel.session.is_none());
+        assert!(panel.target_entity.is_none());
+        let (glb, receta) = horneado(&panel);
+        assert!(glb.exists());
+        assert!(receta.exists());
+        assert_eq!(
+            panel.pending_model_assign,
+            Some(ModelAssign {
+                entity_id: 99,
+                new_model: "cube_edited".to_string(),
+                adapta_collider: false,
+            })
+        );
+        assert_eq!(panel.status, "Horneado y asignado a «E99».");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn descartar_no_escribe_ni_asigna() {
+        let (mut panel, _scene, dir) = panel_editando("descartar", None);
+        panel.apply_cmd(MeshCommand::Subdivide { levels: 1 });
+        panel.descartar();
+        assert!(panel.session.is_none());
+        assert!(panel.target_entity.is_none());
+        assert!(panel.base_model.is_empty());
+        assert!(panel.pending_model_assign.is_none());
+        assert!(!horneado(&panel).0.exists());
+        assert_eq!(panel.status, "Sesión descartada: la escena no se ha tocado.");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

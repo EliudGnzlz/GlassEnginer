@@ -17,6 +17,7 @@ pub enum EditorTab {
     Project,
     ShaderGraph,
     Frametime,
+    MeshForge,
 }
 
 /// Contenido compacto de la pestaña «Frametime»: FPS, fases principales, GPU y memoria.
@@ -674,6 +675,11 @@ impl EditorDockingLayout {
             }
         }
 
+        // El panel de MeshForge resuelve los modelos y hornea contra los
+        // Assets del proyecto abierto: los mismos que muestra el panel
+        // Proyecto.
+        self.mesh_tool.assets_root = self.project.assets_root.clone();
+
         // --- 1. BARRA DE MENÚS PRINCIPAL ESTILO UNITY / UNREAL ---
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
@@ -1074,6 +1080,17 @@ impl EditorDockingLayout {
                     self.set_frametime_visible(ver_frametime);
                     ui.close();
                 }
+                // MeshForge es un panel del Editor (lateral, sobre la
+                // escena), pero solo existe si su complemento está activo:
+                // la misma puerta del registro que abre el espacio
+                // Herramientas. Sin herramienta disponible, ni menú.
+                if disponibles.iter().any(|h| h.id == "meshforge") {
+                    let mut ver_meshforge = self.tab_visible(&EditorTab::MeshForge);
+                    if ui.checkbox(&mut ver_meshforge, "🧊 MeshForge").changed() {
+                        self.set_tab_visible(EditorTab::MeshForge, ver_meshforge);
+                        ui.close();
+                    }
+                }
             });
 
             ui.menu_button("Help", |ui| {
@@ -1268,6 +1285,8 @@ impl EditorDockingLayout {
             console: &mut self.console,
             project: &mut self.project,
             shader_graph: &mut self.shader_graph,
+            mesh_tool: &mut self.mesh_tool,
+
             scene_texture_id,
             game_texture_id,
             selected_entity_id: &mut selected_id,
@@ -1276,20 +1295,61 @@ impl EditorDockingLayout {
         };
 
         if espacio == EspacioTrabajo::Herramientas {
-            // Espacio de herramientas: manda la herramienta activa, a
-            // cuerpo completo, y el dock del editor ni se dibuja (su estado
-            // queda intacto para la vuelta). Hoy la única registrada es
-            // MeshForge y su panel es el que se dibuja; el despacho por
-            // herramienta vivirá aquí cuando haya más paneles. El panel
-            // recibe el registro y su petición de cambio se drena después.
-            // Todo lo demás de este render (atajos, pendientes del panel
-            // Proyecto, adaptación del collider, diálogos) corre igual en
-            // los dos espacios.
-            self.mesh_tool.herramientas = disponibles.clone();
-            self.mesh_tool.herramienta_activa = self.herramienta_activa.clone();
-            self.mesh_tool.render(ui, scene_state);
-            if let Some(id) = self.mesh_tool.peticion_herramienta.take() {
-                self.herramienta_activa = id;
+            // Espacio de herramientas: docking es el anfitrión (lista del
+            // registro a la izquierda, página de la activa a la derecha) y
+            // el dock del editor ni se dibuja (su estado queda intacto
+            // para la vuelta). Las páginas ya no son cuerpos de trabajo:
+            // MeshForge trabaja sobre la escena y su página es una tarjeta
+            // de estado con el salto a su panel. Todo lo demás de este
+            // render (atajos, pendientes, diálogos) corre igual en los
+            // dos espacios.
+            let resto = ui.available_rect_before_wrap();
+            let ancho_lista = 208.0_f32.min(resto.width() * 0.30);
+            let gap = 6.0_f32;
+            let rect_lista =
+                egui::Rect::from_min_size(resto.min, egui::vec2(ancho_lista, resto.height()));
+            let rect_pagina = egui::Rect::from_min_max(
+                egui::pos2(rect_lista.max.x + gap, resto.min.y),
+                resto.max,
+            );
+            let separador = ui.visuals().widgets.noninteractive.bg_stroke;
+            ui.painter().vline(
+                rect_lista.max.x + gap * 0.5,
+                resto.min.y..=resto.max.y,
+                separador,
+            );
+            let layout_col = egui::Layout::top_down(egui::Align::Min);
+            let mut ui_lista =
+                ui.new_child(egui::UiBuilder::new().max_rect(rect_lista).layout(layout_col));
+            ui_lista.weak("Herramientas");
+            for herramienta in &disponibles {
+                if ui_lista
+                    .selectable_label(
+                        herramienta.id == self.herramienta_activa.as_str(),
+                        format!("{} {}", herramienta.icono, herramienta.nombre),
+                    )
+                    .clicked()
+                {
+                    self.herramienta_activa = herramienta.id.to_string();
+                }
+            }
+            if disponibles.len() < 2 {
+                ui_lista.weak("Más herramientas en camino");
+            }
+            let mut ui_pagina =
+                ui.new_child(egui::UiBuilder::new().max_rect(rect_pagina).layout(layout_col));
+            match self.herramienta_activa.as_str() {
+                "meshforge" => self.mesh_tool.render_espacio(&mut ui_pagina, scene_state),
+                _ => {
+                    ui_pagina.weak("Esta herramienta aún no tiene página.");
+                }
+            }
+            // «Trabajar en la escena» de la tarjeta: salta al Editor y
+            // muestra el panel de MeshForge.
+            if self.mesh_tool.peticion_trabajar_escena {
+                self.mesh_tool.peticion_trabajar_escena = false;
+                self.espacio = EspacioTrabajo::Editor;
+                self.set_tab_visible(EditorTab::MeshForge, true);
             }
         } else {
             DockArea::new(&mut self.dock_state)
@@ -1345,28 +1405,36 @@ impl EditorDockingLayout {
             self.status_message = Some((mensaje, std::time::Instant::now()));
         }
 
-        // --- PENDIENTE DE LA HERRAMIENTA 3D: ADAPTAR EL MESH COLLIDER ---
-        // Al cerrar aceptando la pregunta, el panel deja las entidades y el
-        // modelo editado; aquí se aplica sobre la escena. El collider de
-        // malla se reconstruye desde la nueva geometría por la vía que el
-        // motor ya usa al cargar el modelo de la entidad.
-        if let Some(adapt) = self.mesh_tool.pending_collider_adapt.take() {
+        // --- PENDIENTE DE MeshForge: ASIGNAR EL MODELO HORNEADO ---
+        // Al «Hornear y salir», el panel deja la entidad editada y el
+        // modelo horneado; aquí se aplica sobre la escena. Si la
+        // asignación adapta el collider, el mesh collider se reconstruye
+        // desde la nueva geometría por la vía que el motor ya usa al
+        // cargar el modelo de la entidad.
+        if let Some(asignacion) = self.mesh_tool.pending_model_assign.take() {
             let mensaje = match scene_state.lock() {
                 Ok(mut sc) => {
                     let mut tocadas = 0usize;
                     for e in sc.entities.iter_mut() {
-                        if adapt.entity_ids.contains(&e.id) {
+                        if e.id == asignacion.entity_id {
                             if let Some(m) = e.mesh.as_mut() {
-                                m.model = adapt.new_model.clone();
+                                m.model = asignacion.new_model.clone();
                                 tocadas += 1;
                             }
                         }
                     }
-                    format!(
-                        "Mesh collider adaptado al nuevo modelo en {tocadas} entidad(es)"
-                    )
+                    if asignacion.adapta_collider {
+                        format!(
+                            "Mesh collider adaptado al nuevo modelo en {tocadas} entidad(es)"
+                        )
+                    } else {
+                        format!(
+                            "Modelo actualizado a {} en {tocadas} entidad(es)",
+                            asignacion.new_model
+                        )
+                    }
                 }
-                Err(_) => "SceneState bloqueado; no se adaptó el mesh collider".to_string(),
+                Err(_) => "SceneState bloqueado; no se asignó el modelo horneado".to_string(),
             };
             self.status_message = Some((mensaje, std::time::Instant::now()));
         }
@@ -1744,6 +1812,8 @@ struct EditorTabViewer<'a> {
     console: &'a mut ConsolePanel,
     project: &'a mut ProjectPanel,
     shader_graph: &'a mut ShaderGraphEditorPanel,
+    mesh_tool: &'a mut MeshToolPanel,
+
     scene_texture_id: Option<egui::TextureId>,
     game_texture_id: Option<egui::TextureId>,
     selected_entity_id: &'a mut Option<u64>,
@@ -1768,6 +1838,8 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             EditorTab::Project => "📁 Proyecto / Assets".into(),
             EditorTab::ShaderGraph => "🎨 Grafo de Shaders".into(),
             EditorTab::Frametime => "⏱ Frametime".into(),
+            EditorTab::MeshForge => "🧊 MeshForge".into(),
+
         }
     }
 
@@ -1798,6 +1870,28 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             }
             EditorTab::ShaderGraph => {
                 self.shader_graph.render(ui);
+            }
+            EditorTab::MeshForge => {
+                // El panel edita la malla de la entidad seleccionada: se
+                // le pasa su foto (nombre, modelo, mesh collider) leída
+                // de la escena con un bloqueo mínimo.
+                let seleccion = (*self.selected_entity_id).and_then(|id| {
+                    self.scene_state.lock().ok().and_then(|sc| {
+                        sc.entities.iter().find(|e| e.id == id).map(|e| {
+                            crate::panels::mesh_tool::EntidadSeleccionada {
+                                id: e.id,
+                                nombre: e.name.clone(),
+                                modelo: e.mesh.as_ref().map(|m| m.model.clone()),
+                                tiene_mesh_collider: e.physics.as_ref().is_some_and(|p| {
+                                    p.mesh_collider
+                                        != glass_core::scene::MeshColliderMode::None
+                                }),
+                            }
+                        })
+                    })
+                });
+                self.mesh_tool
+                    .render_panel(ui, self.scene_state, seleccion.as_ref());
             }
         }
     }
@@ -1831,6 +1925,29 @@ mod tests_puerta_herramienta_3d {
         layout.set_tab_visible(super::EditorTab::Hierarchy, true);
         layout.set_tab_visible(super::EditorTab::Hierarchy, false);
         assert!(!layout.tab_visible(&super::EditorTab::Hierarchy));
+    }
+
+    #[test]
+    fn panel_meshforge_se_muestra_y_se_oculta_desde_window() {
+        let mut layout = super::EditorDockingLayout::new();
+
+        // Nace oculto: solo entra en el dock cuando Window lo pide.
+        assert!(layout.dock_state.find_tab(&super::EditorTab::MeshForge).is_none());
+
+        layout.set_tab_visible(super::EditorTab::MeshForge, true);
+        assert!(layout.dock_state.find_tab(&super::EditorTab::MeshForge).is_some());
+
+        // Mostrarlo otra vez no añade una segunda pestaña.
+        layout.set_tab_visible(super::EditorTab::MeshForge, true);
+        let apariciones = layout
+            .dock_state
+            .iter_all_tabs()
+            .filter(|(_, tab)| **tab == super::EditorTab::MeshForge)
+            .count();
+        assert_eq!(apariciones, 1);
+
+        layout.set_tab_visible(super::EditorTab::MeshForge, false);
+        assert!(layout.dock_state.find_tab(&super::EditorTab::MeshForge).is_none());
     }
 
     #[test]
