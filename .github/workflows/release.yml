@@ -8,14 +8,19 @@
 # directorio de trabajo, aunque el binario Rust sea release.
 #
 # Familias de release (S8): el motor se publica con tags `v*` y el Hub con tags
-# `hub-v*` (la versión del Hub tiene vida propia). Cada job monta DOS stagings con
-# el mismo contenido: `dist/hub` (lo que instala el setup y lo que llevan el
-# AppImage y el zip del Launcher) y `dist/engine` (el payload del motor
-# gestionado). Este workflow SÍ genera un .zip de Windows, pero solo el del
-# MOTOR: GlassEnginer-Engine-<versión>-windows-x64.zip, con el payload en la
-# raíz (contrato de updates.rs). El .zip del Launcher para Windows sigue sin
-# existir: en Windows el Launcher se instala con el setup .exe, que además
-# siembra el motor en la zona de datos (engines/<versión>/ + engines.json).
+# `hub-v*` (la versión del Hub tiene vida propia). La familia se calcula una sola
+# vez en `env.FAMILY` ('hub' o 'engine'). Desde V5 las familias montan payloads
+# DISTINTOS: `dist/hub` es SOLO el programa Hub (`glass_hub`, renombrado a
+# GlassHub.exe en Windows; sus fuentes van incrustadas en el binario) y es lo que
+# instala el setup y lo que llevan el AppImage y el zip del Launcher;
+# `dist/engine` es el payload del motor gestionado (glass_app + managed + assets
+# + tools) y solo se monta en la familia engine. En la familia hub no se monta
+# `dist/engine`. Este workflow SÍ genera un .zip de Windows, pero solo el del
+# MOTOR (familia engine): GlassEnginer-Engine-<versión>-windows-x64.zip, con el
+# payload en la raíz (contrato de updates.rs). El .zip del Launcher para Windows
+# sigue sin existir: en Windows el Hub se instala con el setup .exe, que en los
+# releases del motor además siembra el motor en la zona de datos
+# (engines/<versión>/ + engines.json).
 
 name: Release
 
@@ -37,6 +42,8 @@ permissions:
 env:
   # Tag efectivo: input en workflow_dispatch, nombre del tag en push.
   TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  # Familia del release: 'hub' para hub-v*, 'engine' para el resto.
+  FAMILY: ${{ startsWith(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, 'hub-v') && 'hub' || 'engine' }}
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -57,41 +64,54 @@ jobs:
           $version = $env:TAG -replace '^hub-v', '' -replace '^v', ''
           "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Compilar glass_hub (release)
+        run: cargo build --release -p glass_hub --locked
+
       - name: Compilar glass_app (release)
+        if: env.FAMILY == 'engine'
         run: cargo build --release -p glass_app --locked
 
       - name: Compilar GlassEngine.Core (sin -c, queda en bin/Debug/net8.0)
+        if: env.FAMILY == 'engine'
         run: dotnet build managed/GlassEngine.Core/GlassEngine.Core.csproj
 
-      - name: Montar payloads en dist/hub y dist/engine
+      - name: Montar payload del Hub en dist/hub
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($payload in @('dist/hub', 'dist/engine')) {
-            New-Item -ItemType Directory -Force -Path $payload | Out-Null
+          New-Item -ItemType Directory -Force -Path 'dist/hub' | Out-Null
+          # Solo el programa Hub: sus fuentes van incrustadas en el binario.
+          Copy-Item 'target/release/glass_hub.exe' -Destination 'dist/hub/GlassHub.exe'
 
-            # Binario
-            Copy-Item 'target/release/glass_app.exe' -Destination $payload
+      - name: Montar payload del motor en dist/engine
+        if: env.FAMILY == 'engine'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $payload = 'dist/engine'
+          New-Item -ItemType Directory -Force -Path $payload | Out-Null
 
-            # Carpeta managed completa (DLL + runtimeconfig + dependencias)
-            $managedParent = "$payload/managed/GlassEngine.Core/bin/Debug"
-            New-Item -ItemType Directory -Force -Path $managedParent | Out-Null
-            Copy-Item 'managed/GlassEngine.Core/bin/Debug/net8.0' -Destination $managedParent -Recurse
+          # Binario
+          Copy-Item 'target/release/glass_app.exe' -Destination $payload
 
-            # Recursos de runtime, sin las fuentes crudas del pack
-            Copy-Item 'assets' -Destination "$payload/assets" -Recurse
-            $proto = "$payload/assets/polygon-prototype"
-            if (Test-Path $proto) { Remove-Item $proto -Recurse -Force }
+          # Carpeta managed completa (DLL + runtimeconfig + dependencias)
+          $managedParent = "$payload/managed/GlassEngine.Core/bin/Debug"
+          New-Item -ItemType Directory -Force -Path $managedParent | Out-Null
+          Copy-Item 'managed/GlassEngine.Core/bin/Debug/net8.0' -Destination $managedParent -Recurse
 
-            # El bridge de conversión .blend/.fbx -> .glb: sin él en el
-            # payload, la build instalada no puede convertir modelos al
-            # soltarlos en la escena (regresión detectada el 2026-11-18).
-            New-Item -ItemType Directory -Force -Path "$payload/tools" | Out-Null
-            Copy-Item 'tools/headless_blender_bridge.py' -Destination "$payload/tools"
+          # Recursos de runtime, sin las fuentes crudas del pack
+          Copy-Item 'assets' -Destination "$payload/assets" -Recurse
+          $proto = "$payload/assets/polygon-prototype"
+          if (Test-Path $proto) { Remove-Item $proto -Recurse -Force }
 
-            if (-not (Test-Path "$payload/managed/GlassEngine.Core/bin/Debug/net8.0/GlassEngine.Core.dll")) {
-              throw "Falta GlassEngine.Core.dll en el payload $payload"
-            }
+          # El bridge de conversión .blend/.fbx -> .glb: sin él en el
+          # payload, la build instalada no puede convertir modelos al
+          # soltarlos en la escena (regresión detectada el 2026-11-18).
+          New-Item -ItemType Directory -Force -Path "$payload/tools" | Out-Null
+          Copy-Item 'tools/headless_blender_bridge.py' -Destination "$payload/tools"
+
+          if (-not (Test-Path "$payload/managed/GlassEngine.Core/bin/Debug/net8.0/GlassEngine.Core.dll")) {
+            throw "Falta GlassEngine.Core.dll en el payload $payload"
           }
 
       - name: Compilar instalador con Inno Setup
@@ -112,6 +132,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ISCC falló con código $LASTEXITCODE" }
 
       - name: Crear zip del motor (payload en la raíz)
+        if: env.FAMILY == 'engine'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -160,47 +181,63 @@ jobs:
           v="${TAG#hub-v}"
           echo "VERSION=${v#v}" >> "$GITHUB_ENV"
 
+      - name: Compilar glass_hub (release)
+        run: cargo build --release -p glass_hub --locked
+
       - name: Compilar glass_app (release)
+        if: env.FAMILY == 'engine'
         run: cargo build --release -p glass_app --locked
 
       - name: Compilar GlassEngine.Core (sin -c, queda en bin/Debug/net8.0)
+        if: env.FAMILY == 'engine'
         run: dotnet build managed/GlassEngine.Core/GlassEngine.Core.csproj
 
-      - name: Montar payloads en dist/hub y dist/engine
+      - name: Montar payload del Hub en dist/hub
         run: |
           set -euo pipefail
-          for payload in dist/hub dist/engine; do
-            mkdir -p "$payload/managed/GlassEngine.Core/bin/Debug"
+          mkdir -p dist/hub
+          # Solo el programa Hub: sus fuentes van incrustadas en el binario.
+          cp target/release/glass_hub dist/hub/
 
-            # Binario
-            cp target/release/glass_app "$payload/"
+      - name: Montar payload del motor en dist/engine
+        if: env.FAMILY == 'engine'
+        run: |
+          set -euo pipefail
+          payload=dist/engine
+          mkdir -p "$payload/managed/GlassEngine.Core/bin/Debug"
 
-            # Carpeta managed completa
-            cp -a managed/GlassEngine.Core/bin/Debug/net8.0 "$payload/managed/GlassEngine.Core/bin/Debug/"
+          # Binario
+          cp target/release/glass_app "$payload/"
 
-            # Recursos de runtime, sin las fuentes crudas del pack
-            cp -a assets "$payload/assets"
-            rm -rf "$payload/assets/polygon-prototype"
+          # Carpeta managed completa
+          cp -a managed/GlassEngine.Core/bin/Debug/net8.0 "$payload/managed/GlassEngine.Core/bin/Debug/"
 
-            # El bridge de conversión .blend/.fbx -> .glb: sin él en el
-            # payload, la build instalada no puede convertir modelos al
-            # soltarlos en la escena (regresión detectada el 2026-11-18).
-            mkdir -p "$payload/tools"
-            cp tools/headless_blender_bridge.py "$payload/tools/"
+          # Recursos de runtime, sin las fuentes crudas del pack
+          cp -a assets "$payload/assets"
+          rm -rf "$payload/assets/polygon-prototype"
 
-            test -f "$payload/managed/GlassEngine.Core/bin/Debug/net8.0/GlassEngine.Core.dll"
-          done
+          # El bridge de conversión .blend/.fbx -> .glb: sin él en el
+          # payload, la build instalada no puede convertir modelos al
+          # soltarlos en la escena (regresión detectada el 2026-11-18).
+          mkdir -p "$payload/tools"
+          cp tools/headless_blender_bridge.py "$payload/tools/"
+
+          test -f "$payload/managed/GlassEngine.Core/bin/Debug/net8.0/GlassEngine.Core.dll"
 
       - name: Crear zips (payload en la raíz)
         run: |
           set -euo pipefail
           launcher_zip="GlassEnginer-Launcher-${VERSION}-linux-x64.zip"
           (cd dist/hub && zip -r -q "../${launcher_zip}" .)
-          engine_zip="GlassEnginer-Engine-${VERSION}-linux-x64.zip"
-          (cd dist/engine && zip -r -q "../${engine_zip}" .)
-          # El instalador del motor exige el ejecutable en la raíz del paquete.
-          unzip -Z1 "dist/${engine_zip}" | grep -qx 'glass_app'
-          ls -l "dist/${launcher_zip}" "dist/${engine_zip}"
+          if [ "$FAMILY" = "engine" ]; then
+            engine_zip="GlassEnginer-Engine-${VERSION}-linux-x64.zip"
+            (cd dist/engine && zip -r -q "../${engine_zip}" .)
+            # El instalador del motor exige el ejecutable en la raíz del paquete.
+            unzip -Z1 "dist/${engine_zip}" | grep -qx 'glass_app'
+            ls -l "dist/${launcher_zip}" "dist/${engine_zip}"
+          else
+            ls -l "dist/${launcher_zip}"
+          fi
 
       - name: Montar AppDir
         run: |
@@ -288,8 +325,8 @@ jobs:
           hace clic para actualizar: nada se instala automáticamente.
 
           Artefactos:
-          - Instalador de Windows (.exe): instala el Hub y siembra el motor incluido.
-          - AppImage de Linux: ejecutable portable del Hub.
+          - Instalador de Windows (.exe): instala el Hub (GlassHub).
+          - AppImage de Linux: ejecutable portable del Hub (GlassHub).
 
           checksums.txt contiene los SHA-256 de los artefactos.
           EOF

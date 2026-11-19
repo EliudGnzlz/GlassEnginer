@@ -31,7 +31,7 @@ ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-UninstallDisplayIcon={app}\glass_app.exe
+UninstallDisplayIcon={app}\GlassHub.exe
 #if FileExists(IconFile)
 SetupIconFile={#IconFile}
 #endif
@@ -49,12 +49,12 @@ Source: "{#EngineSeedDir}\*"; DestDir: "{code:GetDataRoot}\engines\{#AppVersion}
 #endif
 
 [Icons]
-Name: "{group}\GlassEnginer"; Filename: "{app}\glass_app.exe"; WorkingDir: "{app}"
+Name: "{group}\GlassEnginer"; Filename: "{app}\GlassHub.exe"; WorkingDir: "{app}"
 Name: "{group}\{cm:UninstallProgram,GlassEnginer}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\GlassEnginer"; Filename: "{app}\glass_app.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\GlassEnginer"; Filename: "{app}\GlassHub.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\glass_app.exe"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,GlassEnginer}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\GlassHub.exe"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,GlassEnginer}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 function GetDataRoot(Param: String): String;

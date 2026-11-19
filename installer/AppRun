@@ -1,7 +1,7 @@
 #!/bin/sh
 # Punto de entrada del AppImage.
-# El payload (glass_app, managed/ y assets/) vive en usr/bin, así que el directorio
-# de trabajo debe ser usr/bin para que la app resuelva sus rutas relativas.
+# El payload es solo el Hub (glass_hub) y vive en usr/bin; el directorio
+# de trabajo debe ser usr/bin.
 HERE="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
 cd "$HERE/usr/bin" || exit 1
-exec ./glass_app "$@"
+exec ./glass_hub "$@"
