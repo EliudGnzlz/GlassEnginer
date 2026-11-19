@@ -82,6 +82,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path 'dist/hub' | Out-Null
           # Solo el programa Hub: sus fuentes van incrustadas en el binario.
           Copy-Item 'target/release/glass_hub.exe' -Destination 'dist/hub/GlassHub.exe'
+          # SHIM DE MIGRACIÓN V6: el actualizador de la instalación viva hub-v0.1.1
+          # relanza un programa llamado glass_app con --hub; esta copia hace que el
+          # relanzado aterrice en el Hub (glass_hub acepta --hub).
+          # RETIRAR en la siguiente release del Hub.
+          if ($env:FAMILY -eq 'hub') {
+            Copy-Item 'target/release/glass_hub.exe' -Destination 'dist/hub/glass_app.exe'
+          }
 
       - name: Montar payload del motor en dist/engine
         if: env.FAMILY == 'engine'
@@ -198,6 +205,13 @@ jobs:
           mkdir -p dist/hub
           # Solo el programa Hub: sus fuentes van incrustadas en el binario.
           cp target/release/glass_hub dist/hub/
+          # SHIM DE MIGRACIÓN V6: el actualizador de la instalación viva hub-v0.1.1
+          # relanza un programa llamado glass_app con --hub; esta copia hace que el
+          # relanzado aterrice en el Hub (glass_hub acepta --hub).
+          # RETIRAR en la siguiente release del Hub.
+          if [ "$FAMILY" = "hub" ]; then
+            cp target/release/glass_hub dist/hub/glass_app
+          fi
 
       - name: Montar payload del motor en dist/engine
         if: env.FAMILY == 'engine'
