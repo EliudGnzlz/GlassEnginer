@@ -1477,8 +1477,31 @@ impl LauncherPanel {
                 format!("esta copia es {texto_actual}")
             };
             ui.label(RichText::new(format!("⬆ Hay una versión nueva: {tag} ({detalle}).")).size(13.0).strong().color(TEXT_MAIN));
-            if glass_launcher::updates::is_installed(&self.update_store, &tag) {
-                ui.label(RichText::new("Ya está descargada en este equipo (mira la lista de arriba).").size(12.5).color(TEXT_DIM));
+            if tag.strip_prefix('v').unwrap_or(&tag) == store_motor.en_uso.as_deref().unwrap_or("") {
+                ui.label(RichText::new("Ya es la versión que está en uso.").size(12.5).color(TEXT_DIM));
+            } else if glass_launcher::updates::motor_en_disco(&tag) {
+                ui.label(RichText::new("Está descargada en este equipo, pero aún no está activada.").size(12.5).color(TEXT_DIM));
+                if !ocupado && ui.button(RichText::new(format!("✔ Activar {tag}")).size(13.0)).clicked() {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.update_rx = Some(rx);
+                    self.update_state = UpdateUiState::Working(format!("Activando {tag}…"));
+                    let tag2 = tag.clone();
+                    std::thread::spawn(move || {
+                        let store = glass_launcher::updates::LauncherStore::load();
+                        let proyectos: Vec<std::path::PathBuf> = store
+                            .projects
+                            .iter()
+                            .map(|p| std::path::PathBuf::from(&p.path))
+                            .collect();
+                        let version = tag2.strip_prefix('v').unwrap_or(&tag2).to_string();
+                        let r = glass_launcher::updates::completar_instalacion_en_disco(
+                            &glass_launcher::updates::data_root(),
+                            &version,
+                            &proyectos,
+                        );
+                        let _ = tx.send(UpdateMsg::Installed(r));
+                    });
+                }
             } else if !ocupado && ui.button(RichText::new(format!("⬇ Descargar e instalar {tag}")).size(13.0)).clicked() {
                 let (tx, rx) = std::sync::mpsc::channel();
                 self.update_rx = Some(rx);

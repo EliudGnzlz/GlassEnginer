@@ -971,10 +971,9 @@ pub struct ResumenInstalacionMotor {
 /// Instala el motor `version` desde un .zip ya descargado (y con el
 /// SHA-256 ya verificado por el llamante) bajo la raiz de datos
 /// `root`: extrae a engines/.staging-<version>, valida que el paquete
-/// trae el ejecutable en su raiz, lo renombra a engines/<version>,
-/// aplica el plan de retirada sobre el EngineStore (lo que no se
-/// pueda borrar queda en pendientes_borrar, sin fallar) y sella los
-/// proyectos dados con la version nueva. Devuelve el resumen.
+/// trae el ejecutable en su raiz, lo renombra a engines/<version> y
+/// delega en `registrar_motor_en_uso` (registro, retirada y sellado).
+/// Devuelve el resumen.
 pub fn instalar_motor_desde_zip(
     root: &std::path::Path,
     zip: &std::path::Path,
@@ -1007,31 +1006,99 @@ pub fn instalar_motor_desde_zip(
         let _ = std::fs::remove_dir_all(&staging);
         return Err(e);
     }
+    registrar_motor_en_uso(root, version, proyectos)
+}
+
+/// Registra en `engines.json` (bajo `root`) la versión `version`, cuya
+/// carpeta ya está en engines/<version>, como el motor en uso. Orden
+/// seguro: primero guarda el registro (desde ese momento el registro
+/// manda y apunta a una carpeta que existe); después borra las
+/// versiones retiradas sin sesión activa (las que no se puedan borrar
+/// quedan en pendientes_borrar, sin fallar) y por último sella los
+/// proyectos dados con la versión nueva. Devuelve el resumen.
+pub fn registrar_motor_en_uso(
+    root: &std::path::Path,
+    version: &str,
+    proyectos: &[std::path::PathBuf],
+) -> Result<ResumenInstalacionMotor, String> {
+    registrar_motor_en_uso_int(root, version, proyectos, false)
+}
+
+/// Como `registrar_motor_en_uso`; con `conservar_previa` (la vía de
+/// adopción) la versión que estaba en uso NUNCA se borra: queda como
+/// conservada, para no destruir la última versión sana conocida si
+/// la carpeta adoptada resultara estar dañada.
+fn registrar_motor_en_uso_int(
+    root: &std::path::Path,
+    version: &str,
+    proyectos: &[std::path::PathBuf],
+    conservar_previa: bool,
+) -> Result<ResumenInstalacionMotor, String> {
+    // El registro nunca apunta a una carpeta que no está en disco:
+    // esa fue la mitad del defecto original.
+    if !exe_en_disco_in(root, version) {
+        return Err(format!(
+            "La versión {} no está en disco: no se puede registrar como motor en uso.",
+            version
+        ));
+    }
+    let engines = engines_dir_in(root);
     let mut store = EngineStore::load_in(root);
-    let plan = plan_retirada(store.en_uso.as_deref(), store.conservada.as_deref(), version);
-    let mut retiradas = Vec::new();
+    let mut plan = plan_retirada(store.en_uso.as_deref(), store.conservada.as_deref(), version);
+    if conservar_previa {
+        if let Some(prev) = store.en_uso.clone() {
+            if prev != version {
+                plan.borrar.retain(|v| v != &prev);
+                plan.conservada = Some(prev);
+            }
+        }
+    }
     let mut diferidas = Vec::new();
+    let mut por_borrar = Vec::new();
     for v in &plan.borrar {
         if version_con_sesion_activa_en(root, v) {
             diferidas.push(v.clone());
             if !store.pendientes_borrar.contains(v) {
                 store.pendientes_borrar.push(v.clone());
             }
-            continue;
-        }
-        match std::fs::remove_dir_all(engines.join(v)) {
-            Ok(()) => retiradas.push(v.clone()),
-            Err(_) => {
-                diferidas.push(v.clone());
-                if !store.pendientes_borrar.contains(v) {
-                    store.pendientes_borrar.push(v.clone());
-                }
-            }
+        } else {
+            por_borrar.push(v.clone());
         }
     }
     store.en_uso = Some(version.to_string());
     store.conservada = plan.conservada.clone();
+    let conservada_final = store.conservada.clone();
+    store.pendientes_borrar.retain(|v| {
+        v != version && Some(v.as_str()) != conservada_final.as_deref()
+    });
     store.save_in(root)?;
+    let mut retiradas = Vec::new();
+    let mut pendientes_cambiadas = false;
+    for v in por_borrar {
+        match std::fs::remove_dir_all(engines.join(&v)) {
+            Ok(()) => retiradas.push(v),
+            // Si la carpeta ya no está (borrada a mano o por un
+            // proceso anterior), el objetivo está cumplido: cuenta
+            // como retirada, no como diferida.
+            Err(_) if !engines.join(&v).exists() => retiradas.push(v),
+            Err(_) => {
+                if !store.pendientes_borrar.contains(&v) {
+                    store.pendientes_borrar.push(v.clone());
+                    pendientes_cambiadas = true;
+                }
+                diferidas.push(v);
+            }
+        }
+    }
+    if pendientes_cambiadas {
+        // Best-effort: la activación ya está guardada; si este segundo
+        // guardado falla, las pendientes se reconcilian al arrancar.
+        // Devolver Err aquí diría «la activación falló» cuando el
+        // motor en uso ya cambió: un error engañoso.
+        if let Err(e) = store.save_in(root) {
+            log::warn!("No se pudo guardar engines.json tras retirar versiones: {e}");
+        }
+    }
     let mut migrados = 0;
     for dir in proyectos {
         if let Ok(true) = sellar_proyecto(dir, version) {
@@ -1045,6 +1112,44 @@ pub fn instalar_motor_desde_zip(
         diferidas,
         conservada: plan.conservada,
     })
+}
+
+/// Completa una instalación que quedó a medias: la carpeta
+/// engines/<version> ya se renombró pero el registro no llegó a
+/// actualizarse. La carpeta renombrada es íntegra por construcción,
+/// porque el renombrado solo ocurre tras extraer el zip completo y
+/// comprobar el ejecutable. Si el ejecutable de `version` no está en
+/// disco bajo `root`, devuelve error; si está, delega en
+/// `registrar_motor_en_uso`.
+pub fn completar_instalacion_en_disco(
+    root: &std::path::Path,
+    version: &str,
+    proyectos: &[std::path::PathBuf],
+) -> Result<ResumenInstalacionMotor, String> {
+    if !exe_en_disco_in(root, version) {
+        return Err(format!(
+            "La versión {} no está descargada en este equipo.",
+            version
+        ));
+    }
+    // Integridad mínima de la carpeta adoptada: el paquete del motor
+    // trae siempre managed/ (el C#) y tools/ junto al ejecutable. Si
+    // faltan, la carpeta está dañada (borrado parcial posterior) y
+    // adoptarla dejaría al equipo con un motor que no arranca: se
+    // rechaza y el panel vuelve a ofrecer la descarga completa.
+    let dir = engines_dir_in(root).join(version);
+    if !dir.join("managed").is_dir() || !dir.join("tools").is_dir() {
+        return Err(format!(
+            "La copia descargada de la versión {} está incompleta (faltan managed/ o tools/): no se activó. Descárgala de nuevo.",
+            version
+        ));
+    }
+    registrar_motor_en_uso_int(root, version, proyectos, true)
+}
+
+/// El ejecutable del motor `version` está en disco bajo `root`.
+fn exe_en_disco_in(root: &std::path::Path, version: &str) -> bool {
+    motor_exe_in(root, version).is_file()
 }
 
 /// Barre los residuos de instalaciones interrumpidas bajo `root`:
@@ -1240,6 +1345,14 @@ pub fn reconciliar_huerfanas_en(root: &std::path::Path) -> Vec<String> {
         if store.pendientes_borrar.iter().any(|p| p == &nombre) {
             continue;
         }
+        // Una carpeta con el ejecutable del motor dentro es una
+        // instalación COMPLETA cuyo registro pudo quedar a medias
+        // (la adopción del panel la completa): no es una huérfana
+        // para borrar. Solo se reconcilian como basura las carpetas
+        // de versión sin ejecutable (restos sin motor dentro).
+        if exe_en_disco_in(root, &nombre) {
+            continue;
+        }
         candidatas.push(nombre);
     }
 
@@ -1285,9 +1398,29 @@ pub fn procesar_pendientes_borrar_en(root: &std::path::Path) -> Vec<String> {
     }
     let engines = engines_dir_in(root);
     let mut borradas = Vec::new();
+    let pendientes_antes = store.pendientes_borrar.len();
     store.pendientes_borrar.retain(|v| {
         if version_con_sesion_activa_en(root, v) {
             return true;
+        }
+        // Firma de instalación varada (carpeta completa, registro a
+        // medias): tiene ejecutable y es más nueva que la en uso — o
+        // no hay versión en uso con la que comparar (registro ausente
+        // o ilegible). Ante la duda no se destruye la única copia
+        // completa: SALE de pendientes sin borrarse (deja de ser una
+        // retirada diferida) y el panel la ofrecerá en adopción si
+        // vuelve a ser la versión buscada.
+        if exe_en_disco_in(root, v) {
+            let protegida = match en_uso.as_deref() {
+                None => true,
+                Some(uso) => match (tag_version(v), tag_version(uso)) {
+                    (Ok(clave_v), Ok(clave_uso)) => clave_v > clave_uso,
+                    _ => true,
+                },
+            };
+            if protegida {
+                return false;
+            }
         }
         match std::fs::remove_dir_all(engines.join(v)) {
             Ok(()) => {
@@ -1301,7 +1434,10 @@ pub fn procesar_pendientes_borrar_en(root: &std::path::Path) -> Vec<String> {
             Err(_) => true,
         }
     });
-    if !borradas.is_empty() || purgadas > 0 {
+    // Se guarda si cambió algo: borradas, purgadas o salidas de la
+    // lista sin borrado (la varada que se protege deja de ser una
+    // retirada diferida: sin este guardado seguiría en el archivo).
+    if !borradas.is_empty() || purgadas > 0 || store.pendientes_borrar.len() != pendientes_antes {
         let _ = store.save_in(root);
     }
     borradas
@@ -1379,9 +1515,146 @@ pub fn install_release(
     resultado
 }
 
-pub fn is_installed(_store: &LauncherStore, tag: &str) -> bool {
+/// La carpeta de esta versión está en disco; puede no estar registrada
+/// ni en uso — el registro manda en `engines.json`.
+pub fn motor_en_disco(tag: &str) -> bool {
     let version = tag.strip_prefix('v').unwrap_or(tag);
-    motor_exe_in(&data_root(), version).is_file()
+    exe_en_disco_in(&data_root(), version)
+}
+
+#[cfg(test)]
+mod tests_completar_instalacion {
+    use super::*;
+
+    fn raiz_temporal(sufijo: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir()
+            .join(format!("glass_hubfix_{}_{}", std::process::id(), sufijo));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn registrar_en_uso(root: &std::path::Path, version: &str) {
+        std::fs::create_dir_all(engines_dir_in(root).join(version)).unwrap();
+        let mut store = EngineStore::load_in(root);
+        store.en_uso = Some(version.to_string());
+        store.save_in(root).unwrap();
+    }
+
+    #[test]
+    fn completar_instalacion_activa_la_version_en_disco() {
+        let root = raiz_temporal("activa");
+        registrar_en_uso(&root, "0.10.18.1-beta");
+        let exe = motor_exe_in(&root, "0.10.18.2-beta");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        // La carpeta adoptada íntegra trae managed/ y tools/.
+        let dir = engines_dir_in(&root).join("0.10.18.2-beta");
+        std::fs::create_dir_all(dir.join("managed")).unwrap();
+        std::fs::create_dir_all(dir.join("tools")).unwrap();
+
+        let resumen = completar_instalacion_en_disco(&root, "0.10.18.2-beta", &[]).unwrap();
+
+        assert_eq!(resumen.version, "0.10.18.2-beta");
+        let store = EngineStore::load_in(&root);
+        assert_eq!(store.en_uso.as_deref(), Some("0.10.18.2-beta"));
+        // La adopción nunca destruye la última versión sana: la
+        // previa queda conservada y su carpeta intacta.
+        assert_eq!(store.conservada.as_deref(), Some("0.10.18.1-beta"));
+        assert!(engines_dir_in(&root).join("0.10.18.1-beta").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reconciliar_no_marca_la_instalacion_varada() {
+        // La varada tiene ejecutable: es adoptable, no basura. La
+        // carpeta de versión SIN ejecutable sí se reconcilia.
+        let root = raiz_temporal("reconciliar");
+        registrar_en_uso(&root, "0.10.18.1-beta");
+        let exe = motor_exe_in(&root, "0.10.18.2-beta");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        std::fs::create_dir_all(engines_dir_in(&root).join("0.10.17.0-beta")).unwrap();
+
+        let anadidas = reconciliar_huerfanas_en(&root);
+
+        assert_eq!(anadidas, vec!["0.10.17.0-beta".to_string()]);
+        let store = EngineStore::load_in(&root);
+        assert!(!store.pendientes_borrar.iter().any(|v| v == "0.10.18.2-beta"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn procesar_no_borra_la_varada_aunque_este_en_pendientes() {
+        // Pendientes heredada de un código anterior que sí la marcó:
+        // siendo más nueva que la en uso y con ejecutable, sobrevive.
+        let root = raiz_temporal("procesar");
+        registrar_en_uso(&root, "0.10.18.1-beta");
+        let exe = motor_exe_in(&root, "0.10.18.2-beta");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        let mut store = EngineStore::load_in(&root);
+        store.pendientes_borrar.push("0.10.18.2-beta".to_string());
+        store.save_in(&root).unwrap();
+
+        let borradas = procesar_pendientes_borrar_en(&root);
+
+        assert!(borradas.is_empty());
+        assert!(engines_dir_in(&root).join("0.10.18.2-beta").exists());
+        // Y sale de la lista: ya no es una retirada diferida.
+        let store = EngineStore::load_in(&root);
+        assert!(!store.pendientes_borrar.iter().any(|v| v == "0.10.18.2-beta"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn completar_carpeta_incompleta_es_error() {
+        // Ejecutable presente pero sin managed/: carpeta dañada por
+        // un borrado parcial. Adoptarla dejaría un motor que no
+        // arranca y destruiría la previa: se rechaza.
+        let root = raiz_temporal("incompleta");
+        registrar_en_uso(&root, "0.10.18.1-beta");
+        let exe = motor_exe_in(&root, "0.10.18.2-beta");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+
+        assert!(completar_instalacion_en_disco(&root, "0.10.18.2-beta", &[]).is_err());
+        let store = EngineStore::load_in(&root);
+        assert_eq!(store.en_uso.as_deref(), Some("0.10.18.1-beta"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn registrar_sin_carpeta_en_disco_es_error() {
+        // El registro nunca apunta a una carpeta inexistente.
+        let root = raiz_temporal("registrar");
+        registrar_en_uso(&root, "0.10.18.1-beta");
+
+        assert!(registrar_motor_en_uso(&root, "0.10.18.2-beta", &[]).is_err());
+        let store = EngineStore::load_in(&root);
+        assert_eq!(store.en_uso.as_deref(), Some("0.10.18.1-beta"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn completar_sin_carpeta_es_error() {
+        let root = raiz_temporal("sin_carpeta");
+        registrar_en_uso(&root, "0.10.18.1-beta");
+
+        let r = completar_instalacion_en_disco(&root, "0.10.18.2-beta", &[]);
+
+        assert!(r.is_err());
+        let store = EngineStore::load_in(&root);
+        assert_eq!(store.en_uso.as_deref(), Some("0.10.18.1-beta"));
+        assert!(engines_dir_in(&root).join("0.10.18.1-beta").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 /// Qué debe hacer el Hub tras aplicar su propia actualización (lo ejecuta main.rs).

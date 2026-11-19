@@ -273,6 +273,9 @@ impl Estado {
         .map_err(|e| format!("No se pudo crear el renderer de egui: {e:?}"))?;
 
         let mut panel = LauncherPanel::new();
+        // Este binario ES el Hub: el panel nace en personalidad Hub
+        // (gestiona el motor registrado, no a sí mismo como combinado).
+        panel.es_hub = true;
         panel.gpu_aviso = vk_ctx.gpu_aviso.clone();
 
         Ok(Self {
