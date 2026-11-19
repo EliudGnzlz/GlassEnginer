@@ -78,6 +78,54 @@ fn nombre_sin_sufijo(nombre: &str, sufijos: &[&str]) -> String {
     nombre.to_string()
 }
 
+/// Indica si `nombre` es un `.glb` generado automáticamente a partir de una
+/// fuente (`.fbx` / `.blend`) presente en la misma carpeta, y que por tanto
+/// debe ocultarse en el panel para no mostrar el mismo modelo dos veces.
+///
+/// Regla (deben cumplirse todas):
+/// - `nombre` termina en `.glb` (extensión sin distinguir mayúsculas).
+/// - El stem no termina en `_edited`: los `*_edited.glb` de MeshForge son
+///   copias deliberadas del usuario y se muestran siempre.
+/// - Existe `dir/<nombre>.meta.json`, se lee y parsea como JSON, y su campo
+///   `source` (string) es exactamente `<stem>.fbx` o `<stem>.blend`.
+/// - La fuente indicada existe como fichero en el mismo `dir`.
+///
+/// Es segura porque cualquier fallo devuelve `false` y el `.glb` se muestra.
+/// Un `.glb` sin sidecar se ve siempre, y si el usuario borra la fuente el
+/// `.glb` reaparece. Nunca entra en pánico.
+pub fn es_glb_gemelo_oculto(dir: &Path, nombre: &str) -> bool {
+    let ruta = Path::new(nombre);
+
+    let es_glb = ruta
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("glb"));
+    if !es_glb {
+        return false;
+    }
+
+    let Some(stem) = ruta.file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    if stem.ends_with("_edited") {
+        return false;
+    }
+
+    let sidecar = dir.join(format!("{nombre}.meta.json"));
+    let Ok(texto) = std::fs::read_to_string(&sidecar) else {
+        return false;
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&texto) else {
+        return false;
+    };
+    let Some(source) = json.get("source").and_then(|v| v.as_str()) else {
+        return false;
+    };
+
+    let es_su_fuente = source == format!("{stem}.fbx") || source == format!("{stem}.blend");
+    es_su_fuente && dir.join(source).is_file()
+}
+
 /// Lista un directorio: carpetas primero y luego alfabético (ignora ocultos).
 pub fn listar_directorio(dir: &Path) -> Result<Vec<Entrada>, String> {
     let rd = std::fs::read_dir(dir)
@@ -93,6 +141,10 @@ pub fn listar_directorio(dir: &Path) -> Result<Vec<Entrada>, String> {
             continue;
         }
         let es_dir = item.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        // Oculta el .glb generado cuando su fuente (.fbx/.blend) está al lado.
+        if !es_dir && es_glb_gemelo_oculto(dir, &nombre) {
+            continue;
+        }
         let bytes = item.metadata().map(|m| m.len()).unwrap_or(0);
         entradas.push(Entrada { nombre, es_dir, bytes });
     }
@@ -2857,6 +2909,175 @@ mod tests {
         assert!(nombres.contains(&"a.glb".to_string()));
         assert!(nombres.contains(&"b.txt".to_string()));
         assert!(!nombres.contains(&"a.glb.meta.json".to_string()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn vista_unica_oculta_el_glb_gemelo_de_un_fbx() {
+        let dir = std::env::temp_dir().join(format!(
+            "glass_test_{}_f0_gemelo_fbx",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("casa.fbx"), b"fbx").unwrap();
+        std::fs::write(dir.join("casa.glb"), b"glb").unwrap();
+        std::fs::write(
+            dir.join("casa.glb.meta.json"),
+            br#"{"source":"casa.fbx","source_sha256":"x"}"#,
+        )
+        .unwrap();
+
+        let entradas = listar_directorio(&dir).unwrap();
+        let nombres: Vec<_> = entradas.iter().map(|e| e.nombre.clone()).collect();
+        assert!(nombres.contains(&"casa.fbx".to_string()));
+        assert!(!nombres.contains(&"casa.glb".to_string()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn vista_unica_oculta_el_glb_gemelo_de_un_blend() {
+        let dir = std::env::temp_dir().join(format!(
+            "glass_test_{}_f0_gemelo_blend",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("arbol.blend"), b"blend").unwrap();
+        std::fs::write(dir.join("arbol.glb"), b"glb").unwrap();
+        std::fs::write(
+            dir.join("arbol.glb.meta.json"),
+            br#"{"source":"arbol.blend"}"#,
+        )
+        .unwrap();
+
+        let entradas = listar_directorio(&dir).unwrap();
+        let nombres: Vec<_> = entradas.iter().map(|e| e.nombre.clone()).collect();
+        assert!(nombres.contains(&"arbol.blend".to_string()));
+        assert!(!nombres.contains(&"arbol.glb".to_string()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn vista_unica_muestra_un_glb_sin_sidecar() {
+        let dir = std::env::temp_dir().join(format!(
+            "glass_test_{}_f0_glb_sin_sidecar",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("suelto.glb"), b"glb").unwrap();
+
+        let entradas = listar_directorio(&dir).unwrap();
+        let nombres: Vec<_> = entradas.iter().map(|e| e.nombre.clone()).collect();
+        assert!(nombres.contains(&"suelto.glb".to_string()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn vista_unica_muestra_el_glb_si_la_fuente_se_borro() {
+        let dir = std::env::temp_dir().join(format!(
+            "glass_test_{}_f0_glb_fuente_borrada",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("huerfano.glb"), b"glb").unwrap();
+        std::fs::write(
+            dir.join("huerfano.glb.meta.json"),
+            br#"{"source":"huerfano.fbx"}"#,
+        )
+        .unwrap();
+
+        let entradas = listar_directorio(&dir).unwrap();
+        let nombres: Vec<_> = entradas.iter().map(|e| e.nombre.clone()).collect();
+        assert!(nombres.contains(&"huerfano.glb".to_string()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn vista_unica_nunca_oculta_un_edited() {
+        let dir = std::env::temp_dir().join(format!(
+            "glass_test_{}_f0_glb_edited",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("casa_edited.fbx"), b"fbx").unwrap();
+        std::fs::write(dir.join("casa_edited.glb"), b"glb").unwrap();
+        std::fs::write(
+            dir.join("casa_edited.glb.meta.json"),
+            br#"{"source":"casa_edited.fbx"}"#,
+        )
+        .unwrap();
+
+        let entradas = listar_directorio(&dir).unwrap();
+        let nombres: Vec<_> = entradas.iter().map(|e| e.nombre.clone()).collect();
+        assert!(nombres.contains(&"casa_edited.fbx".to_string()));
+        assert!(nombres.contains(&"casa_edited.glb".to_string()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn vista_unica_muestra_el_glb_si_el_sidecar_es_de_otro() {
+        let dir = std::env::temp_dir().join(format!(
+            "glass_test_{}_f0_sidecar_de_otro",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.glb"), b"glb").unwrap();
+        std::fs::write(dir.join("b.fbx"), b"fbx").unwrap();
+        std::fs::write(
+            dir.join("a.glb.meta.json"),
+            br#"{"source":"b.fbx"}"#,
+        )
+        .unwrap();
+
+        let entradas = listar_directorio(&dir).unwrap();
+        let nombres: Vec<_> = entradas.iter().map(|e| e.nombre.clone()).collect();
+        assert!(nombres.contains(&"a.glb".to_string()));
+        assert!(nombres.contains(&"b.fbx".to_string()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn vista_unica_muestra_el_glb_si_el_sidecar_esta_roto() {
+        let dir = std::env::temp_dir().join(format!(
+            "glass_test_{}_f0_sidecar_roto",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("roto.glb"), b"glb").unwrap();
+        std::fs::write(dir.join("roto.fbx"), b"fbx").unwrap();
+        std::fs::write(dir.join("roto.glb.meta.json"), b"no es json").unwrap();
+
+        let entradas = listar_directorio(&dir).unwrap();
+        let nombres: Vec<_> = entradas.iter().map(|e| e.nombre.clone()).collect();
+        assert!(nombres.contains(&"roto.glb".to_string()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn vista_unica_el_predicado_directo() {
+        let dir = std::env::temp_dir().join(format!(
+            "glass_test_{}_f0_predicado_directo",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("casa.fbx"), b"fbx").unwrap();
+        std::fs::write(dir.join("casa.glb"), b"glb").unwrap();
+        std::fs::write(
+            dir.join("casa.glb.meta.json"),
+            br#"{"source":"casa.fbx"}"#,
+        )
+        .unwrap();
+
+        assert!(es_glb_gemelo_oculto(&dir, "casa.glb"));
+        assert!(!es_glb_gemelo_oculto(&dir, "casa.fbx"));
+        assert!(!es_glb_gemelo_oculto(&dir, "casa"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

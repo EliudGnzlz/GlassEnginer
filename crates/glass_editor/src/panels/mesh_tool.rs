@@ -1031,11 +1031,14 @@ impl MeshToolPanel {
                             Some(modelo) => {
                                 ui.label(format!("Modelo: {modelo}"));
                                 match self.editabilidad_de(modelo) {
-                                    Editabilidad::Editable => {
-                                        if ui.button("Editar malla").clicked() {
-                                            editar = true;
+                                                                            Editabilidad::Editable => {
+                                            if ui.button("Editar malla").clicked() {
+                                                editar = true;
+                                            }
+                                            ui.weak(format!(
+                                                "Se edita una copia: al hornear se crea «{modelo}_edited.glb» y el modelo original no se toca."
+                                            ));
                                         }
-                                    }
                                     Editabilidad::NoEditable(motivo) => {
                                         ui.weak(motivo);
                                     }
