@@ -1715,3 +1715,49 @@ probador cargando) queda para D3m3tr10 y el probador con la release.
 
 Consumo del lote: Opus 22.664 · DeepSeek flash 4.778 · Kimi 1.948
 (≈ 29.390 tokens).
+
+## BLOQUE GIZMOS COMO UNITY — CERRADO (2026-11-19, commit `3348fe4`)
+
+**Reporte (2026-11-19 12:22):** el menú «Gizmos ▾» del editor solo tenía
+2 opciones (Rejilla, Nombres) y un «próximamente»; en Unity hay muchas
+más. Inventario fino previo contra el manual oficial de Unity («Gizmos
+menu») y el código real, en `~/workspace/glass-engine/inventario_gizmos.md`.
+
+**Hecho:**
+- Menú completo: Iconos 3D + deslizador de tamaño (0,25–3,0), Rejilla,
+  Nombres de objetos, Contorno de selección, Contornos de collider
+  siempre y tabla Icono/Gizmo por componente (Cámara, Luz, Collider sin
+  icono como en Unity, Character Controller). Fuera el «próximamente».
+- Con Iconos 3D el tamaño escala con la distancia (referencia 10 m,
+  clamp 8–96 px); sin marcar, tamaño fijo siempre visible. Limitación
+  declarada: el overlay de egui no tiene test de profundidad, la
+  oclusión de Unity no se reproduce.
+- Contornos de collider VERDES resueltos exactamente como la física:
+  lista de especificaciones de la entidad, o forma inferida con
+  `glass_physics::collider_shape_for_builtin` (glass_editor gana la
+  dependencia; sin ciclos) con `box_offset`; modelo con Mesh Collider
+  → caja de cotas en verde (aproximación declarada). Cápsula del
+  Character Controller en CIAN. Al seleccionar (resaltado) o siempre.
+- Persistencia en `<data_root>/gizmo_prefs.json` con el patrón de
+  `tool_prefs.rs` (módulo nuevo `gizmo_prefs.rs`); la rejilla del bucle
+  principal lee `viewport.gizmos.show_grid`.
+- Fuera de alcance declarado: Selection Wire (el viewport no recibe
+  geometría, solo cotas), sección Scripts (la API C# no tiene
+  OnDrawGizmos), Recently Changed, gizmos en la vista de juego.
+
+**Verificación:** pipeline local exacto en verde (build/clippy/ndf/
+dotnet/tests en 0; 855 tests, +11 nuevos del bloque); CI de GitHub
+44623828718 SUCCESS. Test físico completo en el editor real con escena
+de prueba (cámara, luz puntual, cubo/esfera con Rigidbody, escalón,
+JugadorCC, fogata): menú completo, deslizador arrastrado a 3,00 con el
+icono de la luz creciendo en pantalla, tabla apagando el icono de la
+luz (desaparece y se guarda), contornos verdes de caja/esfera y cápsula
+cian al seleccionar y en modo siempre, caja de cotas de la fogata,
+rejilla y nombres apagándose, y persistencia comprobada tras reiniciar
+el editor (menú y viewport con los valores guardados). Barrido
+anti-regresión por el camino real: caja de selección, gizmo de
+transformación, placas, esfera de rango de la luz, Camera Preview y
+frustum al seleccionar la cámara, e Inspector intactos.
+
+**Consumo del bloque: Opus 60.024 · DeepSeek flash 6.969 · Kimi 8.880
+(≈ 75.873 tokens).**
