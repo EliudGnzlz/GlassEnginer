@@ -24,5 +24,8 @@ thiserror.workspace = true
 raw-window-handle.workspace = true
 texpresso = "2.0"
 
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
 [dev-dependencies]
 image.workspace = true

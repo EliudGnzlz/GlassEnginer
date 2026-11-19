@@ -872,9 +872,10 @@ impl EditorDockingLayout {
                 });
                 ui.separator();
                 if ui.button("🔄 Recompile C# Scripts").clicked() {
-                    let res = std::process::Command::new("dotnet")
-                        .args(["build", "managed/GlassEngine.Core/GlassEngine.Core.csproj"])
-                        .status();
+                    let mut comando = std::process::Command::new("dotnet");
+                    comando.args(["build", "managed/GlassEngine.Core/GlassEngine.Core.csproj"]);
+                    glass_core::proceso::sin_consola(&mut comando);
+                    let res = comando.status();
                     if let Ok(status) = res {
                         if status.success() {
                             self.status_message = Some(("✅ C# Scripts recompilados exitosamente (0 errores)".into(), std::time::Instant::now()));

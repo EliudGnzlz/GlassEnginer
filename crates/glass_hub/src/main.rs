@@ -14,6 +14,12 @@
 //!   `set_textures`/`free_textures` sobre los slices de `TexturesDelta`, porque `Vec::drain()`
 //!   sin rango no compila.
 
+// En Windows, el Hub es una aplicación de ventana: sin consola (la CMD
+// que el probador veía al arrancar). Si se invoca con argumentos desde
+// una terminal, main adjunta la consola del padre para que el error de
+// argumentos se lea igual que antes.
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -118,7 +124,33 @@ fn validar_argumentos_hub(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Adjunta la consola del proceso padre (solo Windows) para que los
+/// mensajes de error se vean cuando el Hub se invoca desde una
+/// terminal. Sin consola padre (doble clic, actualizador, el propio
+/// motor al relanzar el Hub) la llamada falla en silencio y no aparece
+/// ninguna ventana: es justo lo que se quiere.
+#[cfg(target_os = "windows")]
+fn adjuntar_consola_del_padre() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn AttachConsole(dwProcessId: u32) -> i32;
+    }
+    // ATTACH_PARENT_PROCESS vale (DWORD)-1.
+    let _ = unsafe { AttachConsole(u32::MAX) };
+}
+
+#[cfg(not(target_os = "windows"))]
+fn adjuntar_consola_del_padre() {}
+
 fn main() {
+    // Con argumentos hay una terminal (o un lanzador) detrás: en
+    // Windows se adjunta su consola ANTES de inicializar el log y de
+    // validar, para que un error de argumentos no quede mudo. Sin
+    // argumentos (arranque gráfico normal) no se toca nada.
+    if std::env::args_os().len() > 1 {
+        adjuntar_consola_del_padre();
+    }
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args: Vec<String> = std::env::args().collect();

@@ -195,6 +195,155 @@ fn candidatos_windows(bases: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
     out
 }
 
+/// Token de un fichero VDF de Valve: cadena entre comillas (sin desescapar)
+/// o llave de apertura/cierre de bloque.
+enum TokenVdf {
+    Cadena(String),
+    Llave,
+}
+
+/// Tokeniza un VDF. Dentro de una cadena, `\` escapa el carácter siguiente
+/// (así `\"` no la cierra); el contenido se devuelve tal cual, sin desescapar.
+fn tokens_vdf(contenido: &str) -> Vec<TokenVdf> {
+    let mut tokens = Vec::new();
+    let mut chars = contenido.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                let mut cadena = String::new();
+                while let Some(c) = chars.next() {
+                    match c {
+                        '"' => break,
+                        '\\' => {
+                            cadena.push('\\');
+                            if let Some(siguiente) = chars.next() {
+                                cadena.push(siguiente);
+                            }
+                        }
+                        _ => cadena.push(c),
+                    }
+                }
+                tokens.push(TokenVdf::Cadena(cadena));
+            }
+            '{' | '}' => tokens.push(TokenVdf::Llave),
+            '/' if chars.peek() == Some(&'/') => {
+                // Comentario hasta el final de la línea.
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    tokens
+}
+
+/// Convierte `\\` en `\`; una barra solitaria se conserva.
+fn desescapar_vdf(crudo: &str) -> String {
+    let mut out = String::with_capacity(crudo.len());
+    let mut chars = crudo.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' && chars.peek() == Some(&'\\') {
+            chars.next();
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Indica si el valor parece una ruta absoluta de Windows (unidad o UNC).
+fn parece_ruta_windows(valor: &str) -> bool {
+    valor.contains(":\\") || valor.contains(":/") || valor.starts_with("\\\\")
+}
+
+/// Añade la ruta al final de la lista si aún no está.
+fn anadir_sin_duplicar(lista: &mut Vec<std::path::PathBuf>, ruta: std::path::PathBuf) {
+    if !lista.contains(&ruta) {
+        lista.push(ruta);
+    }
+}
+
+/// Rutas de biblioteca declaradas en un `libraryfolders.vdf`, en orden de
+/// aparición y sin duplicados. Admite el formato moderno (clave "path") y el
+/// antiguo (clave numérica seguida directamente de la ruta).
+fn bibliotecas_de_vdf(contenido: &str) -> Vec<std::path::PathBuf> {
+    let tokens = tokens_vdf(contenido);
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        let (TokenVdf::Cadena(clave), Some(TokenVdf::Cadena(valor))) =
+            (&tokens[i], tokens.get(i + 1))
+        else {
+            // Llave o clave de bloque: no forma par clave/valor.
+            i += 1;
+            continue;
+        };
+        let ruta = desescapar_vdf(valor);
+        let es_path = clave.eq_ignore_ascii_case("path");
+        let es_antigua = !clave.is_empty()
+            && clave.bytes().all(|b| b.is_ascii_digit())
+            && parece_ruta_windows(&ruta);
+        if (es_path || es_antigua) && !ruta.is_empty() {
+            anadir_sin_duplicar(&mut out, std::path::PathBuf::from(ruta));
+        }
+        i += 2;
+    }
+    out
+}
+
+/// Candidatos `steamapps/common/Blender/blender.exe` de cada biblioteca.
+fn candidatos_desde_bibliotecas(bibliotecas: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for bib in bibliotecas {
+        anadir_sin_duplicar(
+            &mut out,
+            bib.join("steamapps")
+                .join("common")
+                .join("Blender")
+                .join("blender.exe"),
+        );
+    }
+    out
+}
+
+/// Bibliotecas de Steam: cada raíz cuenta como biblioteca, seguida de las que
+/// declare su `steamapps/libraryfolders.vdf` si existe. Orden estable.
+fn bibliotecas_steam_en_raices(raices: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for raiz in raices {
+        anadir_sin_duplicar(&mut out, raiz.clone());
+        let vdf = raiz.join("steamapps").join("libraryfolders.vdf");
+        if let Ok(contenido) = std::fs::read_to_string(&vdf) {
+            for bib in bibliotecas_de_vdf(&contenido) {
+                anadir_sin_duplicar(&mut out, bib);
+            }
+        }
+    }
+    out
+}
+
+/// Raíz del cliente de Steam según el registro (`HKCU\Software\Valve\Steam`).
+#[cfg(target_os = "windows")]
+fn ruta_steam_desde_registro() -> Option<std::path::PathBuf> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    let clave = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(r"Software\Valve\Steam")
+        .ok()?;
+    let ruta = clave.get_value::<String, _>("SteamPath").ok()?;
+    let ruta = ruta.replace('/', "\\");
+    (!ruta.is_empty()).then(|| std::path::PathBuf::from(ruta))
+}
+
+/// Fuera de Windows no hay registro: no hay raíz de Steam que consultar.
+#[cfg(not(target_os = "windows"))]
+fn ruta_steam_desde_registro() -> Option<std::path::PathBuf> {
+    None
+}
+
 /// Rutas de instalación habituales según la plataforma.
 fn candidatos_instalacion() -> Vec<std::path::PathBuf> {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
@@ -210,7 +359,23 @@ fn candidatos_instalacion() -> Vec<std::path::PathBuf> {
                 .unwrap_or_else(|| std::path::PathBuf::from(respaldo))
         })
         .collect();
-        candidatos_windows(&bases)
+        let mut lista = candidatos_windows(&bases);
+        // Bibliotecas de Steam fuera de la ruta por defecto (otros
+        // discos): el registro da la raíz del cliente aunque Steam no
+        // viva en Program Files, y el libraryfolders.vdf de cada raíz
+        // declara las bibliotecas adicionales.
+        let mut raices: Vec<std::path::PathBuf> =
+            bases.iter().map(|b| b.join("Steam")).collect();
+        if let Some(raiz) = ruta_steam_desde_registro() {
+            raices.push(raiz);
+        }
+        let bibliotecas = bibliotecas_steam_en_raices(&raices);
+        for candidato in candidatos_desde_bibliotecas(&bibliotecas) {
+            if !lista.contains(&candidato) {
+                lista.push(candidato);
+            }
+        }
+        lista
     } else if cfg!(target_os = "macos") {
         let mut v = vec![std::path::PathBuf::from(
             "/Applications/Blender.app/Contents/MacOS/Blender",
@@ -243,12 +408,15 @@ pub fn ejecutar_bridge_con_blender(
     glb_path: &Path,
 ) -> Result<SalidaBridge, String> {
     let blender = resolver_blender().ok_or_else(|| MENSAJE_SIN_BLENDER.to_string())?;
-    let res = Command::new(&blender)
+    let mut comando = Command::new(&blender);
+    comando
         .args(["-b", "--python-exit-code", "1", "--python"])
         .arg(bridge_script)
         .arg("--")
         .arg(input_path)
-        .arg(glb_path)
+        .arg(glb_path);
+    glass_core::proceso::sin_consola(&mut comando);
+    let res = comando
         .output()
         .map_err(|e| format!("No se pudo lanzar Blender ({}): {}", blender.display(), e))?;
     Ok(SalidaBridge {
@@ -387,6 +555,102 @@ mod tests_resolver_blender {
         assert!(lista.contains(&v36));
         assert!(lista.contains(&steam));
         assert!(!lista.iter().any(|p| p.starts_with(fundacion.join("Otros"))));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn vdf_moderno_extrae_bibliotecas_en_orden_y_desescapa() {
+        let vdf = r#""libraryfolders"
+{
+    "0"
+    {
+        "path"        "C:\\Program Files (x86)\\Steam"
+        "label"        ""
+        "contentid"        "1234567890"
+        "totalsize"        "0"
+        "apps"
+        {
+            "228980"        "123456"
+        }
+    }
+    "1"
+    {
+        "path"        "D:\\SteamLibrary"
+        "label"        ""
+        "apps"
+        {
+            "365670"        "987654"
+        }
+    }
+}
+"#;
+        assert_eq!(
+            bibliotecas_de_vdf(vdf),
+            vec![
+                std::path::PathBuf::from(r"C:\Program Files (x86)\Steam"),
+                std::path::PathBuf::from(r"D:\SteamLibrary"),
+            ]
+        );
+    }
+
+    #[test]
+    fn vdf_antiguo_extrae_bibliotecas() {
+        let vdf = r#""LibraryFolders"
+{
+    "TimeNextStatsReport"        "1600000000"
+    "ContentStatsID"        "-123456789"
+    "1"        "D:\\SteamLibrary"
+    "2"        "E:\\Juegos\\Steam"
+}
+"#;
+        assert_eq!(
+            bibliotecas_de_vdf(vdf),
+            vec![
+                std::path::PathBuf::from(r"D:\SteamLibrary"),
+                std::path::PathBuf::from(r"E:\Juegos\Steam"),
+            ]
+        );
+    }
+
+    #[test]
+    fn vdf_ignora_valores_que_no_son_rutas() {
+        let vdf = r#""LibraryFolders"
+{
+    "1"        "12345"
+    "2"        "F:\\Steam"
+}
+"#;
+        assert_eq!(
+            bibliotecas_de_vdf(vdf),
+            vec![std::path::PathBuf::from(r"F:\Steam")]
+        );
+    }
+
+    #[test]
+    fn bibliotecas_en_raices_resuelve_el_caso_del_probador() {
+        let base = dir_temporal("steam_bibliotecas_probador");
+        let raiz = base.join("cliente_steam");
+        let biblioteca = base.join("otro_disco").join("SteamLibrary");
+        let escapar = |p: &std::path::Path| p.display().to_string().replace('\\', "\\\\");
+        let vdf = format!(
+            "\"libraryfolders\"\n{{\n    \"0\"\n    {{\n        \"path\"        \"{}\"\n    }}\n    \"1\"\n    {{\n        \"path\"        \"{}\"\n    }}\n}}\n",
+            escapar(&raiz),
+            escapar(&biblioteca)
+        );
+        std::fs::create_dir_all(raiz.join("steamapps")).unwrap();
+        std::fs::write(raiz.join("steamapps").join("libraryfolders.vdf"), vdf).unwrap();
+        let exe = biblioteca
+            .join("steamapps")
+            .join("common")
+            .join("Blender")
+            .join("blender.exe");
+        tocar(&exe);
+
+        let candidatos =
+            candidatos_desde_bibliotecas(&bibliotecas_steam_en_raices(std::slice::from_ref(&raiz)));
+        assert!(candidatos.contains(&exe));
+        assert_eq!(resolver_blender_desde(None, &[], &candidatos), Some(exe));
 
         let _ = std::fs::remove_dir_all(&base);
     }

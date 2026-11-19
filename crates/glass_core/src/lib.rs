@@ -13,6 +13,7 @@ pub mod primitives;
 pub mod project;
 pub mod scenes;
 pub mod portal;
+pub mod proceso;
 pub mod scene;
 pub mod particle_stats;
 pub mod transform_stats;
