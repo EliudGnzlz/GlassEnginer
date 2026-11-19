@@ -141,6 +141,8 @@ pub struct ViewportPanel {
     // Vuelo en curso: derecho pulsado sobre el viewport y aún no soltado.
     // Sobrevive a que el cursor salga del rect.
     pub fly_active: bool,
+    // El puntero está sobre la vista de escena.
+    pub scene_hovered: bool,
     // Cotas locales de las mallas (clave → (min, max)) que la app
     // refresca desde el AssetCache antes de cada render: las usan el
     // picking y la caja de selección para trabajar con la geometría
@@ -178,6 +180,7 @@ impl Default for ViewportPanel {
             game_view_rect: None,
             fly_speed: 10.0,
             fly_active: false,
+            scene_hovered: false,
             mesh_bounds: std::collections::HashMap::new(),
             pending_conversion: None,
         }
@@ -212,6 +215,7 @@ impl ViewportPanel {
         game_texture_id: Option<TextureId>,
         selected_entity_id: &mut Option<u64>,
         scene_state: &Arc<Mutex<SceneState>>,
+        mut mesh: Option<(&mut super::mesh_tool::MeshToolPanel, u64)>,
     ) {
         self.active_tab = ViewportTab::SceneView;
 
@@ -256,9 +260,11 @@ impl ViewportPanel {
         // Far 1000: con dist hasta 200 el pivote no debe quedar recortado.
         let proj = gizmo_3d::perspective_matrix(45.0_f32.to_radians(), (self.scene_width / self.scene_height).max(0.1), 0.1, 1000.0);
         let view_proj = gizmo_3d::matmul(&proj, &view);
+        let malla_activa = mesh.is_some();
 
         Frame::canvas(ui.style()).show(ui, |ui| {
             let (rect, response) = ui.allocate_exact_size(vec2(self.scene_width, self.scene_height), egui::Sense::click_and_drag());
+            self.scene_hovered = response.hovered();
             let mouse_pos = ui.input(|i| i.pointer.hover_pos());
 
             if let Some(id) = texture_id {
@@ -298,6 +304,27 @@ impl ViewportPanel {
                 .lock()
                 .map(|s| s.compute_world_matrices())
                 .unwrap_or_default();
+
+            // Mundo e inversa de la entidad cuya malla se edita. Sin alguna
+            // de las dos no hay overlay ni entrada de malla en este frame.
+            let mesh_world_inv = mesh.as_ref().and_then(|(_, entity_id)| {
+                gizmo_world_matrices
+                    .get(entity_id)
+                    .copied()
+                    .or_else(|| {
+                        scene_state.lock().ok().and_then(|s| {
+                            s.entities.iter().find(|e| e.id == *entity_id).map(|ent| {
+                                glass_core::mat4_from_trs_euler(
+                                    ent.transform.position,
+                                    ent.transform.rotation(),
+                                    ent.transform.scale,
+                                )
+                            })
+                        })
+                    })
+            }).and_then(|world| {
+                glass_core::mat4_inverse_affine(world).map(|inv| (world, inv))
+            });
 
             if let Ok(state) = scene_state.lock() {
                 for ent in &state.entities {
@@ -353,9 +380,61 @@ impl ViewportPanel {
                 }
             }
 
-            // Dibujar Gizmo 3D interactivo si hay un objeto seleccionado
+            // Overlay de la malla en edición, incluida la previsualización
+            // del desplazamiento del gizmo o del agarre.
+            if let (Some((panel, _)), Some((world, inv))) = (&mut mesh, mesh_world_inv) {
+                if let Some(session) = panel.session.as_ref() {
+                    let delta = if panel.view.gizmo_axis.is_some() {
+                        panel.view.drag_delta_world
+                    } else if let Some(g) = panel.view.grab.as_ref() {
+                        g.delta_world
+                    } else {
+                        [0.0; 3]
+                    };
+                    let offset_local = if delta == [0.0; 3] {
+                        [0.0; 3]
+                    } else {
+                        let origen_local = glass_core::mat4_transform_point(inv, [0.0; 3]);
+                        let destino_local = glass_core::mat4_transform_point(inv, delta);
+                        panel.snap_local([
+                            destino_local[0] - origen_local[0],
+                            destino_local[1] - origen_local[1],
+                            destino_local[2] - origen_local[2],
+                        ])
+                    };
+                    let sel_set: std::collections::HashSet<u32> =
+                        panel.selection_vert_indices().into_iter().collect();
+                    let project = |p_local| {
+                        gizmo_3d::world_to_screen(
+                            glass_core::mat4_transform_point(world, p_local),
+                            &view_proj,
+                            rect,
+                        )
+                    };
+                    let depth = |p_local| {
+                        let p = glass_core::mat4_transform_point(world, p_local);
+                        let d = [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]];
+                        (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+                    };
+                    painter.extend(super::mesh_view::overlay_shapes(
+                        &session.mesh.verts,
+                        &session.mesh.faces,
+                        &panel.selected_faces,
+                        &sel_set,
+                        offset_local,
+                        panel.centroide_seleccion(),
+                        super::mesh_view::gizmo_len(&session.mesh.verts),
+                        panel.view.gizmo_axis,
+                        &project,
+                        &depth,
+                    ));
+                }
+            }
+
+            // Dibujar Gizmo 3D interactivo si hay un objeto seleccionado.
+            // La edición de malla suspende el gizmo de transform.
             let mut hovered_gizmo_axis = GizmoAxis::None;
-            if self.gizmo_mode != GizmoMode::View {
+            if !malla_activa && self.gizmo_mode != GizmoMode::View {
                 let selected_pos = if let Some(target_id) = *selected_entity_id {
                     // El gizmo va donde el objeto está en el mundo; para un hijo,
                     // su `position` local lo dibujaría descolocado.
@@ -448,8 +527,204 @@ impl ViewportPanel {
                 ui.ctx().request_repaint();
             }
 
+            // Entrada de la malla: agarre, gizmo propio y picking local.
+            if let (Some((panel, _)), Some((world, inv))) = (&mut mesh, mesh_world_inv) {
+                if panel.session.is_some() {
+                    let (primary_pressed, primary_released, primary_down, is_alt, additive) =
+                        ui.input(|i| {
+                            (
+                                i.pointer.button_pressed(egui::PointerButton::Primary),
+                                i.pointer.button_released(egui::PointerButton::Primary),
+                                i.pointer.primary_down(),
+                                i.modifiers.alt,
+                                i.modifiers.shift,
+                            )
+                        });
+                    let normalizar = |v: [f32; 3]| {
+                        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+                            .sqrt()
+                            .max(1e-6);
+                        [v[0] / len, v[1] / len, v[2] / len]
+                    };
+                    let a_local = |d: [f32; 3]| {
+                        let cero = glass_core::mat4_transform_point(inv, [0.0; 3]);
+                        let p = glass_core::mat4_transform_point(inv, d);
+                        [p[0] - cero[0], p[1] - cero[1], p[2] - cero[2]]
+                    };
+                    let project_rel = |p_local| {
+                        gizmo_3d::world_to_screen(
+                            glass_core::mat4_transform_point(world, p_local),
+                            &view_proj,
+                            rect,
+                        )
+                        .map(|p| [p.x - rect.min.x, p.y - rect.min.y])
+                    };
+
+                    // Arranque del agarre sobre el plano perpendicular a la vista.
+                    if panel.view.grab_requested && panel.view.grab.is_none() {
+                        if let (Some(centroide_local), Some(pos)) =
+                            (panel.centroide_seleccion(), mouse_pos)
+                        {
+                            let centroid_world =
+                                glass_core::mat4_transform_point(world, centroide_local);
+                            let normal = normalizar([
+                                centroid_world[0] - eye[0],
+                                centroid_world[1] - eye[1],
+                                centroid_world[2] - eye[2],
+                            ]);
+                            if let Some((o_w, d_w)) =
+                                gizmo_3d::screen_ray(pos, &view_proj, rect)
+                            {
+                                if let Some(start) = super::mesh_keymap::plane_point(
+                                    o_w,
+                                    d_w,
+                                    centroid_world,
+                                    normal,
+                                ) {
+                                    panel.view.grab = Some(super::mesh_view::GrabView {
+                                        centroid_world,
+                                        normal_world: normal,
+                                        start_world: start,
+                                        delta_world: [0.0; 3],
+                                    });
+                                    panel.view.grab_requested = false;
+                                }
+                            }
+                        }
+                    }
+
+                    // Seguimiento del agarre sobre su plano original.
+                    if let (Some(g), Some(pos)) = (panel.view.grab.as_mut(), mouse_pos) {
+                        if let Some((o_w, d_w)) = gizmo_3d::screen_ray(pos, &view_proj, rect) {
+                            if let Some(p) = super::mesh_keymap::plane_point(
+                                o_w,
+                                d_w,
+                                g.centroid_world,
+                                g.normal_world,
+                            ) {
+                                g.delta_world = [
+                                    p[0] - g.start_world[0],
+                                    p[1] - g.start_world[1],
+                                    p[2] - g.start_world[2],
+                                ];
+                                ui.ctx().request_repaint();
+                            }
+                        }
+                    }
+
+                    // El eje del gizmo de malla se captura al pulsar.
+                    if primary_pressed
+                        && response.hovered()
+                        && !is_alt
+                        && panel.view.grab.is_none()
+                    {
+                        if let (Some(centroide_local), Some(pos), Some(session)) = (
+                            panel.centroide_seleccion(),
+                            mouse_pos,
+                            panel.session.as_ref(),
+                        ) {
+                            if let Some(axis) = super::mesh_view::hit_gizmo_axis(
+                                centroide_local,
+                                super::mesh_view::gizmo_len(&session.mesh.verts),
+                                [pos.x - rect.min.x, pos.y - rect.min.y],
+                                &project_rel,
+                            ) {
+                                panel.view.gizmo_axis = Some(axis);
+                                panel.view.gizmo_start = [pos.x, pos.y];
+                                panel.view.drag_delta_world = [0.0; 3];
+                            }
+                        }
+                    }
+
+                    // Avance total sobre el eje transformado a mundo.
+                    if let (Some(axis), Some(pos)) = (panel.view.gizmo_axis, mouse_pos) {
+                        if primary_down {
+                            if let Some(centroide_local) = panel.centroide_seleccion() {
+                                let eje_local = match axis {
+                                    0 => [1.0, 0.0, 0.0],
+                                    1 => [0.0, 1.0, 0.0],
+                                    _ => [0.0, 0.0, 1.0],
+                                };
+                                let origen_world =
+                                    glass_core::mat4_transform_point(world, [0.0; 3]);
+                                let extremo_world =
+                                    glass_core::mat4_transform_point(world, eje_local);
+                                let dir_world = normalizar([
+                                    extremo_world[0] - origen_world[0],
+                                    extremo_world[1] - origen_world[1],
+                                    extremo_world[2] - origen_world[2],
+                                ]);
+                                let centroid_world =
+                                    glass_core::mat4_transform_point(world, centroide_local);
+                                let start = panel.view.gizmo_start;
+                                let amount = gizmo_3d::avance_arrastre_eje(
+                                    centroid_world,
+                                    dir_world,
+                                    &view_proj,
+                                    rect,
+                                    egui::vec2(pos.x - start[0], pos.y - start[1]),
+                                );
+                                panel.view.drag_delta_world = [
+                                    dir_world[0] * amount,
+                                    dir_world[1] * amount,
+                                    dir_world[2] * amount,
+                                ];
+                                ui.ctx().request_repaint();
+                            }
+                        }
+                    }
+
+                    // Al soltar se consolida el arrastre en la sesión.
+                    if primary_released && panel.view.gizmo_axis.is_some() {
+                        panel.commit_drag_local(a_local(panel.view.drag_delta_world));
+                        panel.view.gizmo_axis = None;
+                        panel.view.drag_delta_world = [0.0; 3];
+                        ui.ctx().request_repaint();
+                    }
+
+                    // Un clic confirma el agarre; sin agarre, selecciona malla.
+                    if response.clicked() && !is_alt {
+                        if let Some(g) = panel.view.grab.take() {
+                            panel.commit_drag_local(a_local(g.delta_world));
+                            ui.ctx().request_repaint();
+                        } else if let Some(pos) = mouse_pos {
+                            if let Some((o_w, d_w)) =
+                                gizmo_3d::screen_ray(pos, &view_proj, rect)
+                            {
+                                let o_l = glass_core::mat4_transform_point(inv, o_w);
+                                let fin_l = glass_core::mat4_transform_point(
+                                    inv,
+                                    [o_w[0] + d_w[0], o_w[1] + d_w[1], o_w[2] + d_w[2]],
+                                );
+                                let d_l = [
+                                    fin_l[0] - o_l[0],
+                                    fin_l[1] - o_l[1],
+                                    fin_l[2] - o_l[2],
+                                ];
+                                let project_pick = |p_local| {
+                                    let rel = project_rel(p_local)?;
+                                    let p = glass_core::mat4_transform_point(world, p_local);
+                                    let d = [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]];
+                                    let depth =
+                                        (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                                    Some((rel, depth))
+                                };
+                                panel.pick_viewport(
+                                    o_l,
+                                    d_l,
+                                    [pos.x - rect.min.x, pos.y - rect.min.y],
+                                    &project_pick,
+                                    additive,
+                                );
+                                ui.ctx().request_repaint();
+                            }
+                        }
+                    }
+                }
+            }
+
             // Selección por Raycasting al hacer clic en Scene View (¡HABILITADO EN EDIT Y PLAY!)
-            if response.clicked() && hovered_gizmo_axis == GizmoAxis::None && self.gizmo_mode != GizmoMode::View && !ui.input(|i| i.modifiers.alt) {
+            if !malla_activa && response.clicked() && hovered_gizmo_axis == GizmoAxis::None && self.gizmo_mode != GizmoMode::View && !ui.input(|i| i.modifiers.alt) {
                 if let Some(pos) = mouse_pos {
                     if let Ok(state) = scene_state.lock() {
                         let world_matrices = state.compute_world_matrices();
@@ -473,7 +748,8 @@ impl ViewportPanel {
             // un primer movimiento brusco puede haber sacado ya el puntero
             // de un eje muy escorzado (pocos píxeles en pantalla) y la
             // captura se pierde en silencio.
-            if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
+            if !malla_activa
+                && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
                 && !ui.input(|i| i.modifiers.alt)
             {
                 self.press_axis = hovered_gizmo_axis;
@@ -481,7 +757,8 @@ impl ViewportPanel {
             if ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary)) {
                 self.press_axis = GizmoAxis::None;
             }
-            if response.drag_started()
+            if !malla_activa
+                && response.drag_started()
                 && ui.input(|i| i.pointer.primary_down())
                 && self.gizmo_mode != GizmoMode::View
                 && !ui.input(|i| i.modifiers.alt) {
@@ -717,7 +994,7 @@ impl ViewportPanel {
                         let boost = if is_shift { 3.0 } else { 1.0 };
                         self.editor_cam_dist = (self.editor_cam_dist * (1.0 - v * 0.005 * boost)).clamp(0.5, 200.0);
                         ui.ctx().request_repaint();
-                    } else if middle_down || (primary_down && !is_alt && self.gizmo_mode == GizmoMode::View) {
+                    } else if middle_down || (primary_down && !is_alt && self.gizmo_mode == GizmoMode::View && !malla_activa) {
                         // Central en cualquier modo, o izquierdo sin Alt con la herramienta Mano: pan.
                         // Mundo por punto = 2·d·tan(fov/2)/alto, así el plano del
                         // pivote sigue exactamente al cursor. Shift ×4.
@@ -1225,7 +1502,7 @@ impl ViewportPanel {
         scene_state: &Arc<Mutex<SceneState>>,
     ) {
         match self.active_tab {
-            ViewportTab::SceneView => self.render_scene_tab(ui, texture_id, None, selected_entity_id, scene_state),
+            ViewportTab::SceneView => self.render_scene_tab(ui, texture_id, None, selected_entity_id, scene_state, None),
             ViewportTab::GameView => self.render_game_tab(ui, texture_id, scene_state),
         }
     }

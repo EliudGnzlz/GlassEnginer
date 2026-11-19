@@ -5532,6 +5532,13 @@ let resueltos = if body.has_collider {
                 .dispatch_state_event(*entidad, &cambio.state, cambio.entered);
         }
         if let Some(cube_mesh) = cache.meshes.get("cube") {
+            // Supresión MeshForge (R2): la entidad en edición de malla no
+            // se dibuja en la textura de escena (el overlay del viewport
+            // la sustituye); la vista de juego la sigue mostrando.
+            #[cfg(feature = "editor")]
+            let excluir_mesh = self.editor_layout.mesh_tool.entidad_en_edicion();
+            #[cfg(not(feature = "editor"))]
+            let excluir_mesh: Option<u64> = None;
             let mut scene_batches: Vec<glass_renderer::MeshDrawItem<'_>> = Vec::new();
             let mut game_batches: Vec<glass_renderer::MeshDrawItem<'_>> = Vec::new();
             let mut scene_skinned: Vec<glass_renderer::SkinnedDrawItem> = Vec::new();
@@ -5651,7 +5658,7 @@ let resueltos = if body.has_collider {
                             ([-1.0, -1.0, -1.0], [1.0, 1.0, 1.0])
                         };
                         let (wmin, wmax) = glass_core::math::aabb_transform(lmin, lmax, &model);
-                        let vis_scene = frustum_scene.intersects_aabb(wmin, wmax);
+                        let vis_scene = excluir_mesh != Some(ent.id) && frustum_scene.intersects_aabb(wmin, wmax);
                         let vis_game = frustum_game
                             .map(|f| f.intersects_aabb(wmin, wmax))
                             .unwrap_or(true);

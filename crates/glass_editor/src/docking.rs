@@ -593,9 +593,13 @@ impl EditorDockingLayout {
         // Con la Herramienta 3D abierta, un esquema de malla elegido y el
         // ratón encima del panel, mandan los atajos de ese esquema (los lee
         // el propio panel); en el resto del editor, los de Unity.
+        // El panel lee el hover del viewport del frame anterior (mismo
+        // patrón que su propio panel_hovered): con sesión activa, los
+        // atajos de malla también mandan sobre la vista de escena (R2).
+        self.mesh_tool.viewport_hovered = self.viewport.scene_hovered;
         let malla_manda = self.mesh_tool.session.is_some()
             && self.mesh_tool.prefs.scheme.is_some()
-            && self.mesh_tool.panel_hovered;
+            && (self.mesh_tool.panel_hovered || self.viewport.scene_hovered);
         if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::B)) {
             self.request_build_and_run = true;
         }
@@ -1849,7 +1853,15 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 self.hierarchy.render(ui, self.scene_state);
             }
             EditorTab::SceneView => {
-                self.viewport.render_scene_tab(ui, self.scene_texture_id, self.game_texture_id, self.selected_entity_id, self.scene_state);
+                // Con sesión de malla activa, el viewport recibe el panel
+                // y la entidad en edición: dibuja el overlay y enruta la
+                // entrada a la malla (R2). Sin sesión, None (flujo normal).
+                let objetivo = self.mesh_tool.target_entity;
+                let mesh = match (self.mesh_tool.session.is_some(), objetivo) {
+                    (true, Some(id)) => Some((&mut *self.mesh_tool, id)),
+                    _ => None,
+                };
+                self.viewport.render_scene_tab(ui, self.scene_texture_id, self.game_texture_id, self.selected_entity_id, self.scene_state, mesh);
             }
             EditorTab::GameView => {
                 self.viewport.render_game_tab(ui, self.game_texture_id, self.scene_state);

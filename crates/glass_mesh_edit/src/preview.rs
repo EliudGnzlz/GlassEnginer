@@ -371,6 +371,42 @@ pub fn pick_vertex(
     best.map(|(index, _, _)| index)
 }
 
+/// Como `pick_vertex`, pero la proyección la da el llamador: `project` mapea un
+/// punto a (píxel relativo al viewport, profundidad de cámara) o None si queda
+/// detrás. Gana la menor distancia de pantalla; en empate, la menor profundidad.
+pub fn pick_vertex_with(
+    verts: &[[f32; 3]],
+    point: [f32; 2],
+    max_dist_px: f32,
+    project: &dyn Fn([f32; 3]) -> Option<([f32; 2], f32)>,
+) -> Option<u32> {
+    let (px, py) = (point[0], point[1]);
+    let mut best: Option<(u32, f32, f32)> = None;
+    for (i, v) in verts.iter().enumerate() {
+        let Ok(index) = u32::try_from(i) else {
+            break;
+        };
+        let Some((s, depth)) = project(*v) else {
+            continue;
+        };
+        let dist = ((s[0] - px).powi(2) + (s[1] - py).powi(2)).sqrt();
+        if dist >= max_dist_px {
+            continue;
+        }
+        let better = match best {
+            None => true,
+            Some((_, best_dist, best_depth)) => {
+                dist < best_dist - PICK_TIE_EPS
+                    || ((dist - best_dist).abs() <= PICK_TIE_EPS && depth < best_depth)
+            }
+        };
+        if better {
+            best = Some((index, dist, depth));
+        }
+    }
+    best.map(|(index, _, _)| index)
+}
+
 /// Redondea al múltiplo de `step` más cercano. Con step <= 0 (o NaN) devuelve `value`.
 pub fn snap_value(value: f32, step: f32) -> f32 {
     if step.is_nan() || step <= 0.0 {
@@ -479,6 +515,27 @@ mod picking_tests {
         let cam = OrbitCamera::new([0.0, 0.0, 0.0]);
         let (verts, _) = cube();
         assert!(pick_vertex(&verts, &cam, [5.0, 5.0], [W, H], FOV, 14.0).is_none());
+    }
+
+    #[test]
+    fn pick_vertex_with_usa_proyector_del_llamador() {
+        let cam = OrbitCamera::new([0.0, 0.0, 0.0]);
+        let (verts, _) = cube();
+        let project = |p: [f32; 3]| project_point(p, &cam, W, H, FOV).map(|s| (s, p[2]));
+        let s = project(verts[0]).expect("proyecta").0;
+        let picked = pick_vertex_with(&verts, s, 14.0, &project).expect("vértice");
+        let p = verts[picked as usize];
+        for k in 0..3 {
+            assert!((p[k] - verts[0][k]).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn pick_vertex_with_lejos_devuelve_none() {
+        let cam = OrbitCamera::new([0.0, 0.0, 0.0]);
+        let (verts, _) = cube();
+        let project = |p: [f32; 3]| project_point(p, &cam, W, H, FOV).map(|s| (s, p[2]));
+        assert!(pick_vertex_with(&verts, [5.0, 5.0], 14.0, &project).is_none());
     }
 
     #[test]

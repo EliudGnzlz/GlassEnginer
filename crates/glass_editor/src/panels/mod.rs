@@ -5,6 +5,7 @@ pub mod inspector;
 pub mod mesh_birth;
 pub mod mesh_keymap;
 pub mod mesh_tool;
+pub mod mesh_view;
 pub mod miniatura_modelo;
 pub mod project;
 pub mod shader_graph;

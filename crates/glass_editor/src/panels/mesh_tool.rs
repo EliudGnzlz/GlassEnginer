@@ -14,9 +14,12 @@ use crate::panels::mesh_birth::{self, Editabilidad};
 use crate::panels::mesh_keymap::{action_for, help_text, MeshKeyAction};
 use crate::tool_prefs::{ShortcutScheme, ToolPrefs};
 
-/// Respuesta de las acciones de teclado que necesitan selección sub-objeto.
-const AVISO_SELECCION: &str =
-    "La selección de vértices/caras llega con la edición en la vista de escena.";
+/// Modo de selección sub-objeto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionMode {
+    Verts,
+    Faces,
+}
 
 /// Entidad seleccionada en la escena, tal como la ve el panel (la construye docking).
 #[derive(Debug, Clone, PartialEq)]
@@ -74,6 +77,20 @@ pub struct MeshToolPanel {
     pub peticion_trabajar_escena: bool,
     /// Asignación de modelo que aplica docking al hornear y salir.
     pub pending_model_assign: Option<ModelAssign>,
+    /// Modo de selección sub-objeto.
+    pub selection_mode: SelectionMode,
+    /// Vértices seleccionados.
+    pub selected_verts: std::collections::HashSet<u32>,
+    /// Caras seleccionadas.
+    pub selected_faces: std::collections::HashSet<u32>,
+    /// Snap activo para los desplazamientos del gizmo.
+    pub snap_enabled: bool,
+    /// Paso de snap.
+    pub snap_step: f32,
+    /// Estado de arrastre/gizmo contra la vista de escena.
+    pub view: crate::panels::mesh_view::MeshViewState,
+    /// El puntero está sobre el viewport (lo fija docking cada frame).
+    pub viewport_hovered: bool,
 }
 
 impl Default for MeshToolPanel {
@@ -93,6 +110,13 @@ impl Default for MeshToolPanel {
             base_model: String::new(),
             peticion_trabajar_escena: false,
             pending_model_assign: None,
+            selection_mode: SelectionMode::Verts,
+            selected_verts: std::collections::HashSet::new(),
+            selected_faces: std::collections::HashSet::new(),
+            snap_enabled: true,
+            snap_step: 0.25,
+            view: crate::panels::mesh_view::MeshViewState::default(),
+            viewport_hovered: false,
             status: "Sin sesión: selecciona un objeto en la escena.".to_owned(),
             dims: [2.0, 2.0, 2.0],
             array_count: 2,
@@ -147,6 +171,67 @@ pub fn should_prompt_collider(has_mesh_collider: bool, history_len: usize, no_as
     has_mesh_collider && history_len > 0 && !no_ask
 }
 
+fn selection_indices_for(
+    mode: SelectionMode,
+    verts: &std::collections::HashSet<u32>,
+    faces: &std::collections::HashSet<u32>,
+    mesh_faces: Option<&[[u32; 3]]>,
+) -> Vec<u32> {
+    let mut out: Vec<u32> = match mode {
+        SelectionMode::Verts => verts.iter().copied().collect(),
+        SelectionMode::Faces => match mesh_faces {
+            Some(mesh_faces) => faces
+                .iter()
+                .filter_map(|&f| mesh_faces.get(f as usize))
+                .flat_map(|f| f.iter().copied())
+                .collect(),
+            None => Vec::new(),
+        },
+    };
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+fn toggle_or_set(
+    active: &mut std::collections::HashSet<u32>,
+    other: &mut std::collections::HashSet<u32>,
+    id: u32,
+    additive: bool,
+) {
+    if additive {
+        if !active.remove(&id) {
+            active.insert(id);
+        }
+    } else {
+        active.clear();
+        other.clear();
+        active.insert(id);
+    }
+}
+
+fn selection_status(mode: SelectionMode, verts: usize, faces: usize) -> String {
+    match mode {
+        SelectionMode::Verts if verts > 0 => format!("Seleccionado: {verts} vértices."),
+        SelectionMode::Faces if faces > 0 => format!("Seleccionado: {faces} caras."),
+        _ => "Sin selección.".to_string(),
+    }
+}
+
+/// Delta final del gizmo (con snap si está activo). None si queda a cero.
+fn gizmo_commit_delta(delta: [f32; 3], snap_enabled: bool, step: f32) -> Option<[f32; 3]> {
+    let delta = if snap_enabled {
+        glass_mesh_edit::preview::snap_delta(delta, step)
+    } else {
+        delta
+    };
+    if delta.iter().all(|v| v.abs() <= 1e-6) {
+        None
+    } else {
+        Some(delta)
+    }
+}
+
 /// `<dir>/<stem>_edited.<ext>` y `<dir>/<stem>_edited.mesh.json`; sin ruta de
 /// origen, `assets/<nombre>_edited.glb` y `assets/<nombre>_edited.mesh.json`.
 fn bake_paths(session: &MeshSession) -> (PathBuf, PathBuf) {
@@ -188,6 +273,159 @@ impl MeshToolPanel {
         Self::default()
     }
 
+    /// Limpia la selección sub-objeto y el estado de arrastre del gizmo.
+    pub fn clear_selection(&mut self) {
+        self.selected_verts.clear();
+        self.selected_faces.clear();
+        self.view.grab = None;
+        self.view.grab_requested = false;
+        self.view.gizmo_axis = None;
+        self.view.drag_delta_world = [0.0; 3];
+    }
+
+    /// Índices de vértice que abarca la selección actual (caras expandidas).
+    pub fn selection_vert_indices(&self) -> Vec<u32> {
+        selection_indices_for(
+            self.selection_mode,
+            &self.selected_verts,
+            &self.selected_faces,
+            self.session.as_ref().map(|s| s.mesh.faces.as_slice()),
+        )
+    }
+
+    /// Centroide de los vértices seleccionados en espacio local.
+    pub fn centroide_seleccion(&self) -> Option<[f32; 3]> {
+        let session = self.session.as_ref()?;
+        let indices: std::collections::HashSet<u32> =
+            self.selection_vert_indices().into_iter().collect();
+        glass_mesh_edit::preview::selection_centroid(&session.mesh.verts, &indices)
+    }
+
+    /// Aplica el snap configurado a un desplazamiento local.
+    pub fn snap_local(&self, d: [f32; 3]) -> [f32; 3] {
+        if self.snap_enabled {
+            glass_mesh_edit::preview::snap_delta(d, self.snap_step)
+        } else {
+            d
+        }
+    }
+
+    /// Picking sub-objeto contra el rayo local que llega del viewport.
+    pub fn pick_viewport(
+        &mut self,
+        origin_local: [f32; 3],
+        dir_local: [f32; 3],
+        point_rel: [f32; 2],
+        project: &dyn Fn([f32; 3]) -> Option<([f32; 2], f32)>,
+        additive: bool,
+    ) {
+        let (face_pick, vert_pick, hubo_impacto) = {
+            let Some(session) = self.session.as_ref() else {
+                return;
+            };
+            match glass_mesh_edit::preview::pick_face(
+                &session.mesh.verts,
+                &session.mesh.faces,
+                origin_local,
+                dir_local,
+            ) {
+                Some((face, _t)) if self.selection_mode == SelectionMode::Faces => {
+                    (Some(face), None, true)
+                }
+                Some((face, t)) => {
+                    let vertice = glass_mesh_edit::preview::pick_vertex_with(
+                        &session.mesh.verts,
+                        point_rel,
+                        14.0,
+                        project,
+                    )
+                    .or_else(|| {
+                        let impacto = [
+                            origin_local[0] + dir_local[0] * t,
+                            origin_local[1] + dir_local[1] * t,
+                            origin_local[2] + dir_local[2] * t,
+                        ];
+                        let mut mejor: Option<(u32, f32)> = None;
+                        let indices_cara = session
+                            .mesh
+                            .faces
+                            .get(face as usize)
+                            .copied()
+                            .unwrap_or([0; 3]);
+                        for indice in indices_cara {
+                            let Some(p) = session.mesh.verts.get(indice as usize) else {
+                                continue;
+                            };
+                            let dx = p[0] - impacto[0];
+                            let dy = p[1] - impacto[1];
+                            let dz = p[2] - impacto[2];
+                            let d2 = dx * dx + dy * dy + dz * dz;
+                            let mejor_candidato = match mejor {
+                                None => true,
+                                Some((_, mejor_d2)) => d2 < mejor_d2,
+                            };
+                            if mejor_candidato {
+                                mejor = Some((indice, d2));
+                            }
+                        }
+                        mejor.map(|(indice, _)| indice)
+                    });
+                    (None, vertice, true)
+                }
+                None => (None, None, false),
+            }
+        };
+
+        match (face_pick, vert_pick) {
+            (Some(face), _) => {
+                toggle_or_set(
+                    &mut self.selected_faces,
+                    &mut self.selected_verts,
+                    face,
+                    additive,
+                );
+            }
+            (_, Some(vertice)) => {
+                toggle_or_set(
+                    &mut self.selected_verts,
+                    &mut self.selected_faces,
+                    vertice,
+                    additive,
+                );
+            }
+            _ => {
+                if !additive && !hubo_impacto {
+                    self.selected_verts.clear();
+                    self.selected_faces.clear();
+                }
+            }
+        }
+
+        self.status = selection_status(
+            self.selection_mode,
+            self.selected_verts.len(),
+            self.selected_faces.len(),
+        );
+    }
+
+    /// Confirma el arrastre del gizmo con el delta local ya calculado.
+    pub fn commit_drag_local(&mut self, raw_local: [f32; 3]) {
+        let Some(delta) = gizmo_commit_delta(raw_local, self.snap_enabled, self.snap_step) else {
+            self.status = "Sin desplazamiento.".to_string();
+            return;
+        };
+        let indices = self.selection_vert_indices();
+        if indices.is_empty() {
+            return;
+        }
+        self.apply_cmd(MeshCommand::MoveVerts { indices, delta });
+    }
+
+    /// Entidad de escena cuya malla se está editando, si hay sesión.
+    pub fn entidad_en_edicion(&self) -> Option<u64> {
+        self.session.is_some().then(|| self.target_entity).flatten()
+    }
+
     /// Abre una sesión desde un .glb por ruta (API pública; ya no está en la UI).
     /// La sesión no nace de ninguna entidad: al hornear y salir no se asigna nada.
     pub fn open(&mut self, path: &str) -> Result<(), MeshEditError> {
@@ -219,6 +457,7 @@ impl MeshToolPanel {
         self.base_model.clear();
         self.collider_prompt_open = false;
         self.status = "Sesión cerrada.".to_owned();
+        self.clear_selection();
     }
 
     /// Editabilidad de `modelo` según las raíces de modelos del proyecto.
@@ -261,6 +500,7 @@ impl MeshToolPanel {
                 self.base_model = mesh_birth::normalize_model(modelo).to_owned();
                 self.collider_prompt_open = false;
                 self.session = Some(session);
+                self.clear_selection();
             }
             Err(e) => self.status = e,
         }
@@ -524,12 +764,26 @@ impl MeshToolPanel {
                     axis: self.mirror_axis,
                 });
             }
-            // Sin selección en el panel: vuelven con la vista de escena (R2).
-            MeshKeyAction::DeleteSelection
-            | MeshKeyAction::ModeVerts
-            | MeshKeyAction::ModeFaces
-            | MeshKeyAction::Grab => {
-                self.status = AVISO_SELECCION.to_string();
+            MeshKeyAction::DeleteSelection => {
+                let indices = self.selection_vert_indices();
+                if indices.is_empty() {
+                    self.status = "Sin selección que eliminar.".to_string();
+                } else {
+                    self.apply_cmd(MeshCommand::DeleteVerts { indices });
+                    self.selected_verts.clear();
+                    self.selected_faces.clear();
+                }
+            }
+            MeshKeyAction::ModeVerts => self.selection_mode = SelectionMode::Verts,
+            MeshKeyAction::ModeFaces => self.selection_mode = SelectionMode::Faces,
+            MeshKeyAction::Grab => {
+                let hay_seleccion = !self.selection_vert_indices().is_empty();
+                if self.session.is_some() && hay_seleccion {
+                    self.view.grab_requested = true;
+                    self.status = "Moviendo la selección: mueve el ratón y haz clic en la vista de escena para confirmar · Esc para cancelar.".to_string();
+                } else {
+                    self.status = "Selecciona vértices o caras antes de mover.".to_string();
+                }
             }
         }
     }
@@ -684,7 +938,13 @@ impl MeshToolPanel {
         if self.session.is_none() || ui.ctx().egui_wants_keyboard_input() {
             return None;
         }
-        if !self.panel_hovered {
+        if self.view.grab.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.view.grab = None;
+            self.view.grab_requested = false;
+            self.status = "Movimiento cancelado.".to_string();
+            return None;
+        }
+        if !self.panel_hovered && !self.viewport_hovered {
             return None;
         }
         const CANDIDATAS: [egui::Key; 10] = [
@@ -801,6 +1061,36 @@ impl MeshToolPanel {
                 }
 
                 self.zona_sesion(ui, &mut action, &mut hornear_salir, &mut descartar);
+
+                let mut limpiar_seleccion = false;
+                ui.horizontal(|ui| {
+                    ui.label("Selección");
+                    ui.selectable_value(&mut self.selection_mode, SelectionMode::Verts, "Vértices");
+                    ui.selectable_value(&mut self.selection_mode, SelectionMode::Faces, "Caras");
+                    let conteo = match self.selection_mode {
+                        SelectionMode::Verts => {
+                            format!("{} vértices", self.selected_verts.len())
+                        }
+                        SelectionMode::Faces => format!("{} caras", self.selected_faces.len()),
+                    };
+                    ui.label(conteo);
+                    if ui.button("Limpiar").clicked() {
+                        limpiar_seleccion = true;
+                    }
+                });
+                if limpiar_seleccion {
+                    self.clear_selection();
+                }
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.snap_enabled, "Snap");
+                    ui.label("Paso");
+                    ui.add(
+                        egui::DragValue::new(&mut self.snap_step)
+                            .speed(0.05)
+                            .max_decimals(2),
+                    );
+                });
+                self.snap_step = self.snap_step.clamp(0.01, 2.0);
 
                 // Pregunta del Mesh Collider pendiente de respuesta.
                 if self.collider_prompt_open {
@@ -1023,19 +1313,88 @@ mod tests {
     }
 
     #[test]
-    fn acciones_de_seleccion_solo_avisan() {
+    fn acciones_de_seleccion_sin_sesion() {
         let mut panel = MeshToolPanel::default();
-        for accion in [
-            MeshKeyAction::Grab,
-            MeshKeyAction::DeleteSelection,
-            MeshKeyAction::ModeVerts,
-            MeshKeyAction::ModeFaces,
-        ] {
-            panel.status.clear();
-            panel.run_key_action(accion);
-            assert_eq!(panel.status, AVISO_SELECCION);
-        }
+        panel.run_key_action(MeshKeyAction::ModeFaces);
+        assert_eq!(panel.selection_mode, SelectionMode::Faces);
+        panel.run_key_action(MeshKeyAction::ModeVerts);
+        assert_eq!(panel.selection_mode, SelectionMode::Verts);
+
+        panel.status.clear();
+        panel.run_key_action(MeshKeyAction::Grab);
+        assert_eq!(
+            panel.status,
+            "Selecciona vértices o caras antes de mover."
+        );
+
+        panel.status.clear();
+        panel.run_key_action(MeshKeyAction::DeleteSelection);
+        assert_eq!(panel.status, "Sin selección que eliminar.");
         assert!(panel.session.is_none());
+    }
+
+    #[test]
+    fn pick_viewport_selecciona_cara_y_vertice() {
+        let (mut panel, _scene, dir) = panel_editando("pick_viewport", None);
+
+        panel.selection_mode = SelectionMode::Faces;
+        let sin_proyeccion = |_: [f32; 3]| -> Option<([f32; 2], f32)> { None };
+        panel.pick_viewport(
+            [0.0, 0.0, 5.0],
+            [0.0, 0.0, -1.0],
+            [0.0, 0.0],
+            &sin_proyeccion,
+            false,
+        );
+        assert_eq!(panel.selected_faces.len(), 1);
+        assert!(panel.selected_verts.is_empty());
+        assert_eq!(panel.status, "Seleccionado: 1 caras.");
+
+        panel.clear_selection();
+        panel.selection_mode = SelectionMode::Verts;
+        let objetivo = panel.session.as_ref().unwrap().mesh.verts[0];
+        let proyeccion = move |p: [f32; 3]| {
+            let profundidad = if p == objetivo { -1.0 } else { 0.0 };
+            Some(([p[0] * 100.0, p[1] * 100.0], profundidad))
+        };
+        let punto = [objetivo[0] * 100.0, objetivo[1] * 100.0];
+        panel.pick_viewport(
+            [0.0, 0.0, 5.0],
+            [0.0, 0.0, -1.0],
+            punto,
+            &proyeccion,
+            false,
+        );
+        assert!(panel.selected_verts.contains(&0));
+        assert_eq!(panel.selected_verts.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn commit_drag_local_aplica_snap_y_ignora_delta_nulo() {
+        let (mut panel, _scene, dir) = panel_editando("commit_drag", None);
+        panel.selection_mode = SelectionMode::Verts;
+        panel.selected_verts.insert(0);
+        panel.snap_enabled = true;
+        panel.snap_step = 0.25;
+
+        let antes = panel.session.as_ref().unwrap().mesh.verts[0];
+        let receta_antes = panel.session.as_ref().unwrap().recipe.commands.len();
+        panel.commit_drag_local([0.26, 0.0, 0.0]);
+        let despues = panel.session.as_ref().unwrap().mesh.verts[0];
+        assert!((despues[0] - antes[0] - 0.25).abs() < 1e-6);
+        let receta_despues = panel.session.as_ref().unwrap().recipe.commands.len();
+        assert_eq!(receta_despues, receta_antes + 1);
+
+        panel.commit_drag_local([0.1, 0.0, 0.0]);
+        assert_eq!(
+            panel.session.as_ref().unwrap().recipe.commands.len(),
+            receta_despues
+        );
+        assert_eq!(panel.status, "Sin desplazamiento.");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // --- Nacimiento desde la entidad y salida (regla del collider de B-E2) ---
