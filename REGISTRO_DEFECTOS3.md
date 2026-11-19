@@ -1657,3 +1657,61 @@ antes de relanzar nada y se completó la cadena.
 
 Consumo del bloque: Opus 66.277 · DeepSeek flash 10.694 · Kimi 33.252
 (≈ 110.223). El arreglo del driver fue directo de Rayo (0 tokens de API).
+
+## Lote cero consolas en Windows + Blender de Steam en cualquier disco — CERRADO (2026-11-19)
+
+Commit `2007f49`. Pipeline local exacto de ci.yml en verde (844/844 tests,
+cada paso con código de salida 0) y CI real SUCCESS.
+
+Cero consolas (defecto reportado el 2026-11-19 con captura: CMD al abrir el
+Hub y otra CMD al cargar un modelo; exigencia final: «que no salga ni se
+dispare ninguna CMD por nada»). Auditoría exhaustiva previa: los únicos
+hijos de consola del producto eran Blender (watcher.rs, sitio único
+compartido por el vigía y el MCP) y el `dotnet` del botón «Recompile C#
+Scripts» (docking.rs). Cambios:
+- Nuevo `glass_core::proceso::sin_consola` (CREATE_NO_WINDOW en Windows,
+  no-op en el resto), aplicado en ambos lanzamientos. Los stdout/stderr
+  heredados no cambian (la conversión sigue registrando su salida y el
+  botón sigue leyendo el exit status).
+- `glass_hub` gana `#![cfg_attr(target_os = "windows",
+  windows_subsystem = "windows")]` como ya tenía glass_app. Para no dejar
+  mudo el error de argumentos (exit 2 de V4), `main` adjunta la consola
+  del padre (AttachConsole) SOLO si hay argumentos y ANTES de validar;
+  sin argumentos o sin consola padre no aparece ninguna ventana. El
+  contrato CLI se verificó en Linux: mensajes exactos y exit 2 intactos.
+- Sin cambios: `explorer`, el instalador Inno, relanzar el Hub, lanzar el
+  motor, «Volver al Hub», la sonda GPU y el standalone son procesos GUI;
+  no existe ni un `cmd /c` ni `start` en el producto. El lado Hub viaja en
+  hub-v0.2.1; el lado motor, en la v0.10.19.2-beta.
+
+Blender de Steam (el probador seguía viendo cubos con Blender por Steam):
+el resolver generaba la ruta Steam por defecto bajo Program Files pero no
+bibliotecas en otros discos ni clientes fuera de la ruta estándar. Ahora:
+`ruta_steam_desde_registro` (HKCU\Software\Valve\Steam → SteamPath, con
+winreg solo en Windows), `bibliotecas_de_vdf` (parser de
+libraryfolders.vdf: formato moderno con clave "path" y antiguo con clave
+numérica, desescape de barras, sin duplicados, y descarte de valores que
+no parecen rutas — los ids de app del bloque "apps" no cuelan),
+`bibliotecas_steam_en_raices` y `candidatos_desde_bibliotecas` generan el
+`steamapps/common/Blender/blender.exe` de cada biblioteca, añadidos tras
+los candidatos actuales y sin duplicar. Tests con fixtures de ambos
+formatos y el caso completo del probador (biblioteca en otra carpeta
+resuelta hasta el ejecutable por `resolver_blender_desde`).
+
+Verificación específica de Windows desde esta VM Linux: `cargo check
+--target x86_64-pc-windows-msvc` en verde para glass_core y
+glass_renderer (winreg y CommandExt incluidos) y `cargo check --target
+x86_64-pc-windows-gnu` en verde para glass_hub completo; el FFI de
+AttachConsole y el atributo se compilaron además sueltos con rustc para
+MSVC. glass_editor y glass_app no se pueden cruzar-compilar desde aquí
+por scripts de dependencias ajenas (ring/zstd-sys piden la toolchain
+MSVC; nethost-sys rechaza el target GNU): limitación del entorno, no del
+código; el cambio de docking.rs es código neutro que llama al helper.
+Test físico en el editor real: conversión campfire .blend → .glb por el
+camino del vigía con el nuevo lanzamiento (el primer intento falló por el
+symlink /opt/blender perdido en un reemplazo de la VM, restaurado; no era
+el código). La confirmación en Windows real (sin CMD y modelos del
+probador cargando) queda para D3m3tr10 y el probador con la release.
+
+Consumo del lote: Opus 22.664 · DeepSeek flash 4.778 · Kimi 1.948
+(≈ 29.390 tokens).
