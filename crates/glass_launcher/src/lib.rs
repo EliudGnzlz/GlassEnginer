@@ -6,6 +6,7 @@
 //! portón de complementos y datos del lanzador).
 
 pub mod archivos;
+pub mod tipos;
 pub mod plugins;
 pub mod updates;
 

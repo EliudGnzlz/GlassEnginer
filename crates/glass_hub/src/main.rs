@@ -31,15 +31,37 @@ use glass_launcher::updates::AccionHub;
 use glass_renderer::context::{VulkanConfig, VulkanContext};
 use glass_renderer::swapchain::{SwapchainContext, SwapchainTarget};
 
+/// Mantenimiento de instalaciones al arrancar el Hub (S4): la
+/// reconciliación de huérfanas, los borrados diferidos y la
+/// limpieza del respaldo viven SOLO en el proceso del Hub (un
+/// motor hijo no escribe engines.json, D1). Antes vivía en el
+/// modo Hub de glass_app; con la separación verdadera es de
+/// este binario.
+fn mantenimiento_instalaciones(tras_actualizar: bool) {
+    let huerfanas = glass_launcher::updates::reconciliar_huerfanas();
+    if !huerfanas.is_empty() {
+        log::info!(
+            "Instalaciones huérfanas reconciliadas como pendientes de borrar: {:?}",
+            huerfanas
+        );
+    }
+    let retiradas = glass_launcher::updates::procesar_pendientes_borrar();
+    if tras_actualizar {
+        glass_hub::launcher::anunciar_arranque_tras_actualizacion_hub();
+    }
+    glass_launcher::updates::limpiar_respaldo_hub();
+    if !retiradas.is_empty() {
+        log::info!("Borrados diferidos completados al arrancar: {:?}", retiradas);
+    }
+}
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args: Vec<String> = std::env::args().collect();
     // `--hub` se acepta como no-op por compatibilidad con los lanzadores antiguos.
     let _ = args.iter().any(|a| a == "--hub");
-    if args.iter().any(|a| a == "--tras-actualizar-hub") {
-        glass_hub::launcher::anunciar_arranque_tras_actualizacion_hub();
-    }
+    mantenimiento_instalaciones(args.iter().any(|a| a == "--tras-actualizar-hub"));
 
     #[allow(unused_mut)]
     let mut builder = EventLoop::builder();
@@ -250,7 +272,8 @@ impl Estado {
         )
         .map_err(|e| format!("No se pudo crear el renderer de egui: {e:?}"))?;
 
-        let panel = LauncherPanel::new();
+        let mut panel = LauncherPanel::new();
+        panel.gpu_aviso = vk_ctx.gpu_aviso.clone();
 
         Ok(Self {
             egui_renderer,

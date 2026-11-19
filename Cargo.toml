@@ -55,4 +55,3 @@ glass_physics = { path = "crates/glass_physics" }
 glass_particles = { path = "crates/glass_particles" }
 glass_mesh_edit = { path = "crates/glass_mesh_edit" }
 glass_launcher = { path = "crates/glass_launcher" }
-glass_hub = { path = "crates/glass_hub" }

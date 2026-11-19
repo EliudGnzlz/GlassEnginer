@@ -9,7 +9,6 @@ license.workspace = true
 default = ["editor"]
 editor = [
     "dep:glass_editor",
-    "dep:glass_hub",
     "dep:glass_launcher",
     "dep:egui",
     "dep:egui-winit",
@@ -32,7 +31,6 @@ env_logger.workspace = true
 
 # Dependencias opcionales exclusivas del Modo Editor (desactivadas en Standalone Game Runtime)
 glass_editor = { workspace = true, optional = true }
-glass_hub = { workspace = true, optional = true }
 glass_launcher = { workspace = true, optional = true }
 glass_mcp.workspace = true
 egui = { workspace = true, optional = true }

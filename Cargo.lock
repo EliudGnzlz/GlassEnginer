@@ -1893,7 +1893,6 @@ dependencies = [
  "glass_audio",
  "glass_core",
  "glass_editor",
- "glass_hub",
  "glass_launcher",
  "glass_mcp",
  "glass_particles",

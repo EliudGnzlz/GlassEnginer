@@ -16,9 +16,25 @@ use glass_core::{GlassWindow, SceneManager, SceneState, WindowConfig};
 #[cfg(feature = "editor")]
 use glass_editor::EditorDockingLayout;
 #[cfg(feature = "editor")]
-use glass_hub::launcher::{
-    AppMode, LauncherAction, LauncherPanel, ProjectTemplate, SampleScenePreset,
-};
+use glass_launcher::tipos::{ProjectTemplate, SampleScenePreset};
+
+/// Acción de apertura pendiente: la siembra el arranque (la CLI:
+/// `--project`, `--sample`) y la consume el bucle de frame tras la
+/// precarga. Antes era la `LauncherAction` del panel del Hub; con
+/// la separación verdadera (V2) el motor ya no contiene el panel
+/// y usa este tipo propio con la misma forma.
+#[cfg(feature = "editor")]
+#[derive(Debug, Clone)]
+pub enum AccionApertura {
+    LoadSampleScene(SampleScenePreset),
+    CreateProject {
+        name: String,
+        path: std::path::PathBuf,
+        template: ProjectTemplate,
+    },
+    OpenProject(std::path::PathBuf),
+    OpenSceneFile(std::path::PathBuf),
+}
 #[cfg(feature = "editor")]
 use glass_mcp::McpServer;
 #[cfg(feature = "editor")]
@@ -1762,14 +1778,14 @@ struct GlassEngineApp {
     #[cfg(feature = "editor")]
     prev_play_state: glass_editor::PlayState,
     #[cfg(feature = "editor")]
-    pub app_mode: AppMode,
+    pub cargando: bool,
     #[cfg(feature = "editor")]
-    pub launcher: LauncherPanel,
+    pub carga_dibujada: bool,
     /// Arranque de la app: su elapsed es el tiempo que consumen los
     /// materiales de grafo (viaja en `light_color.w`, canal reservado).
     pub start_instant: std::time::Instant,
     #[cfg(feature = "editor")]
-    pub pending_launcher_action: Option<LauncherAction>,
+    pub pending_apertura: Option<AccionApertura>,
     /// Ruta absoluta del archivo de la escena abierta (open_scene_file o
     /// proyecto recién creado); None si la escena no tiene archivo (preset,
     /// por defecto o nueva): su guardado pasa por «Save Scene As».
@@ -1817,10 +1833,6 @@ struct GlassEngineApp {
     /// haya presentado al menos un frame.
     #[cfg(feature = "editor")]
     pub precarga_pendiente: bool,
-    /// Arranque con editor (--scene o pruebas): al terminar la precarga se
-    /// pasa a `AppMode::Editor`.
-    #[cfg(feature = "editor")]
-    pub entrar_editor_tras_precarga: bool,
     pub scene_state: Arc<Mutex<SceneState>>,
     /// Posiciones de mundo del frame anterior por entidad (bloque
     /// Portales): el pase de cruce compara el segmento prev->curr de
@@ -1885,9 +1897,6 @@ struct GlassEngineApp {
     pub is_standalone_test: bool,
     pub scene_to_load: Option<String>,
     pub proyecto_directo: Option<String>,
-    /// Arranque en modo Hub (--hub): sin runtime de editor en este
-    /// proceso (S5); los proyectos se abriran en procesos hijo (S6).
-    pub es_hub: bool,
     /// Raiz del payload del motor (managed/ y assets del motor): la
     /// calcula resolver_raiz_motor al arrancar.
     pub raiz_motor: std::path::PathBuf,
@@ -2117,7 +2126,6 @@ impl GlassEngineApp {
         flags: LaunchFlags,
         scene_to_load: Option<String>,
         proyecto_directo: Option<String>,
-        es_hub: bool,
     ) -> Self {
         let _ = &proyecto_directo;
         let LaunchFlags {
@@ -2236,12 +2244,6 @@ impl GlassEngineApp {
             || is_m8_test
             || is_m9_test
             || is_m10_test;
-        // Con editor se arranca siempre en el Hub: si se pidió el editor
-        // (--scene o pruebas), el paso a Editor lo hace la precarga diferida
-        // del bucle de frame al terminar.
-        #[cfg(feature = "editor")]
-        let app_mode = AppMode::Launcher;
-
         Self {
             window_config: WindowConfig::default(),
             vulkan_config: VulkanConfig::default(),
@@ -2272,23 +2274,18 @@ impl GlassEngineApp {
             play_snapshot: None,
             #[cfg(feature = "editor")]
             prev_play_state: glass_editor::PlayState::Edit,
+            // Arranque directo al editor: la pantalla de carga se ve
+            // desde el primer frame, antes de que bloquee la precarga.
             #[cfg(feature = "editor")]
-            app_mode,
+            cargando: start_in_editor,
             #[cfg(feature = "editor")]
-            launcher: {
-                let mut panel = LauncherPanel::new();
-                // Arranque directo al editor: la pantalla de carga se ve
-                // desde el primer frame, antes de que bloquee la precarga.
-                panel.mostrar_carga = start_in_editor;
-                panel.es_hub = es_hub;
-                panel
-            },
+            carga_dibujada: false,
             start_instant: std::time::Instant::now(),
             #[cfg(feature = "editor")]
-            pending_launcher_action: proyecto_directo.as_ref().and_then(|dir| {
+            pending_apertura: proyecto_directo.as_ref().and_then(|dir| {
                 let ruta = std::path::PathBuf::from(dir);
                 if ruta.join("project.glass").is_file() {
-                    Some(LauncherAction::OpenProject(ruta))
+                    Some(AccionApertura::OpenProject(ruta))
                 } else {
                     log::error!("--project: {:?} no contiene project.glass; se ignora.", ruta);
                     None
@@ -2314,8 +2311,6 @@ impl GlassEngineApp {
             precarga_hecha: false,
             #[cfg(feature = "editor")]
             precarga_pendiente: start_in_editor,
-            #[cfg(feature = "editor")]
-            entrar_editor_tras_precarga: start_in_editor,
             scene_state,
             portal_prev_pos: std::collections::HashMap::new(),
             ui_images_key: String::new(),
@@ -2352,7 +2347,6 @@ impl GlassEngineApp {
             is_standalone_test,
             scene_to_load,
             proyecto_directo,
-            es_hub,
             raiz_motor: raiz_motor_actual(),
             player_script_handle: None,
             keys_pressed: HashSet::new(),
@@ -3135,91 +3129,6 @@ impl GlassEngineApp {
         }
     }
 
-    /// Lanza el motor gestionado en uso como proceso hijo con los
-    /// argumentos dados (S6). El hijo comparte la raíz de datos
-    /// (GLASS_LAUNCHER_HOME) pero NO hereda los overrides GLASS_*
-    /// de prueba/desarrollo del entorno del Hub (p. ej.
-    /// GLASS_UPDATE_API): se retiran todos menos
-    /// GLASS_LAUNCHER_HOME (auditoría S6). Un hilo recoge al hijo
-    /// al salir para no dejar procesos zombi.
-    #[cfg(feature = "editor")]
-    fn lanzar_motor_hijo(&mut self, args: &[&str]) {
-        match glass_editor::updates::objetivo_sonda() {
-            Some((exe, _)) => {
-                let mut cmd = std::process::Command::new(&exe);
-                cmd.args(args);
-                for (k, _) in std::env::vars() {
-                    if k.starts_with("GLASS_") && k != "GLASS_LAUNCHER_HOME" {
-                        cmd.env_remove(&k);
-                    }
-                }
-                // El hijo es el ejecutable del motor en engines/, no el AppImage del Hub:
-                // si hereda APPIMAGE, cualquier lógica que localice «su» ejecutable apuntaría al Hub.
-                cmd.env_remove("APPIMAGE");
-                // APPDIR (la raíz del montaje del AppImage del Hub) es
-                // el mismo problema por otra puerta (auditoría S10).
-                cmd.env_remove("APPDIR");
-                match cmd.spawn() {
-                    Ok(hijo) => {
-                        log::info!("Motor lanzado ({}, pid {}) con {:?}", exe.display(), hijo.id(), args);
-                        let mut hijo = hijo;
-                        std::thread::spawn(move || {
-                            let _ = hijo.wait();
-                        });
-                    }
-                    Err(e) => {
-                        self.launcher.status_message =
-                            Some(format!("⚠ No se pudo lanzar el motor: {e}"));
-                    }
-                }
-            }
-            None => {
-                self.launcher.status_message = Some(
-                    "⚠ No hay motor instalado: ve a Instalaciones y descarga el motor.".into(),
-                );
-            }
-        }
-    }
-
-    /// Ejecuta una acción del Launcher en modo Hub (S6): todo se
-    /// lanza como proceso del motor gestionado; este proceso no
-    /// abre nada en el editor. El registro de la apertura lo hace
-    /// el propio hijo en su abrir_proyecto (escritor único del
-    /// registro: si el Hub también registrara al lanzar, los dos
-    /// guardados se pisarían — auditoría S6).
-    #[cfg(feature = "editor")]
-    fn ejecutar_accion_hub(&mut self, action: LauncherAction) {
-        match action {
-            LauncherAction::OpenProject(path) => {
-                let abs = absolutizar(&path);
-                let ruta = abs.to_string_lossy().into_owned();
-                self.lanzar_motor_hijo(&["--project", ruta.as_str()]);
-            }
-            LauncherAction::CreateProject { name, path, template } => {
-                match Self::crear_proyecto_en_disco(&name, &path, template) {
-                    Ok(dir) => {
-                        log::info!("Proyecto '{}' creado en disco: {:?}", name, dir);
-                        let ruta = dir.to_string_lossy().into_owned();
-                        self.lanzar_motor_hijo(&["--project", ruta.as_str()]);
-                    }
-                    Err(e) => {
-                        log::error!("No se pudo crear el proyecto '{}': {}", name, e);
-                        self.launcher.status_message =
-                            Some(format!("⚠ No se pudo crear el proyecto: {e}"));
-                    }
-                }
-            }
-            LauncherAction::LoadSampleScene(preset) => {
-                self.lanzar_motor_hijo(&["--sample", clave_de_sample(preset)]);
-            }
-            LauncherAction::OpenSceneFile(ruta) => {
-                let abs = absolutizar(&ruta);
-                let ruta = abs.to_string_lossy().into_owned();
-                self.lanzar_motor_hijo(&["--scene", ruta.as_str()]);
-            }
-        }
-    }
-
     /// Abre una escena desde un archivo .scene.json por la misma vía
     /// probada del arranque con --scene: load_from_json + bootstrap
     /// de scripts y física.
@@ -3287,7 +3196,7 @@ impl GlassEngineApp {
     /// de los dos aquí dentro cuelga la app: ni Mutex ni RwLock de std son
     /// reentrantes (cazado en vivo dos veces durante este bloque).
     /// Apertura de un proyecto por su carpeta: la UNICA via, la use el
-    /// Hub (LauncherAction::OpenProject) o el arranque con --project
+    /// Hub (AccionApertura::OpenProject) o el arranque con --project
     /// (que siembra esa misma accion). Selecciona la escena (campo
     /// "scene" de project.glass o el primer *.scene.json), la carga o
     /// deja la escena vacia, apunta el panel y el vigia a los assets
@@ -3362,13 +3271,11 @@ impl GlassEngineApp {
         // Registrar el proyecto abierto para que aparezca en el Hub,
         // con el nombre de su project.glass (no el de la carpeta).
         let nombre = glass_launcher::archivos::nombre_proyecto(path);
-        self.launcher
-            .update_store
-            .register_project(&nombre, path);
-        if let Err(e) = self.launcher.update_store.save() {
+        let mut store = glass_launcher::updates::LauncherStore::load();
+        store.register_project(&nombre, path);
+        if let Err(e) = store.save() {
             log::error!("No se pudo guardar el registro de proyectos: {}", e);
         }
-        self.app_mode = AppMode::Editor;
     }
 
     /// Calentamiento de assets: textura por defecto del PBR, esquemas de
@@ -4562,7 +4469,7 @@ let resueltos = if body.has_collider {
         // mientras la precarga bloquea este frame.
         #[cfg(feature = "editor")]
         if self.precarga_pendiente {
-            if self.launcher.carga_dibujada {
+            if self.carga_dibujada {
                 // Renderer y contexto salen de `self` para poder llamar al
                 // método `&mut self`; vuelven siempre a su sitio.
                 let lista = match (self.renderer.take(), self.vulkan_context.take()) {
@@ -4582,12 +4489,8 @@ let resueltos = if body.has_collider {
                 if lista {
                     self.precarga_pendiente = false;
                     self.precarga_hecha = true;
-                    self.launcher.mostrar_carga = false;
-                    self.launcher.carga_dibujada = false;
-                    if self.entrar_editor_tras_precarga {
-                        self.entrar_editor_tras_precarga = false;
-                        self.app_mode = AppMode::Editor;
-                    }
+                    self.cargando = false;
+                    self.carga_dibujada = false;
                 }
             } else if let Some(window) = self.window.as_ref() {
                 // La pantalla de carga se dibuja en este frame: se pide el
@@ -4596,42 +4499,23 @@ let resueltos = if body.has_collider {
             }
         }
 
-        // Modo Hub: las acciones de abrir/crear/ejemplo/escena lanzan el
-        // motor en uso como proceso hijo; nunca entran al editor en proceso
-        // ni se aplazan por precarga.
-        #[cfg(feature = "editor")]
-        if self.es_hub
-            && matches!(
-                self.pending_launcher_action,
-                Some(
-                    LauncherAction::LoadSampleScene(..)
-                        | LauncherAction::CreateProject { .. }
-                        | LauncherAction::OpenProject(..)
-                        | LauncherAction::OpenSceneFile(..)
-                )
-            )
-        {
-            if let Some(action) = self.pending_launcher_action.take() {
-                self.ejecutar_accion_hub(action);
-            }
-        }
         // Una acción que entra al editor antes de la precarga se aplaza:
         // se enciende la pantalla de carga y se reprocesa al terminar.
         #[cfg(feature = "editor")]
-        let accion_lista = match self.pending_launcher_action.take() {
+        let accion_lista = match self.pending_apertura.take() {
             Some(action)
                 if !self.precarga_hecha
                     && matches!(
                         action,
-                        LauncherAction::LoadSampleScene(..)
-                            | LauncherAction::CreateProject { .. }
-                            | LauncherAction::OpenProject(..)
-                            | LauncherAction::OpenSceneFile(..)
+                        AccionApertura::LoadSampleScene(..)
+                            | AccionApertura::CreateProject { .. }
+                            | AccionApertura::OpenProject(..)
+                            | AccionApertura::OpenSceneFile(..)
                     ) =>
             {
-                self.launcher.mostrar_carga = true;
+                self.cargando = true;
                 self.precarga_pendiente = true;
-                self.pending_launcher_action = Some(action);
+                self.pending_apertura = Some(action);
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -4642,7 +4526,7 @@ let resueltos = if body.has_collider {
         #[cfg(feature = "editor")]
         if let Some(action) = accion_lista {
             match action {
-                LauncherAction::LoadSampleScene(preset) => {
+                AccionApertura::LoadSampleScene(preset) => {
                     self.ruta_escena_actual = None;
                     self.raiz_proyecto_actual = None;
                     match preset {
@@ -4659,18 +4543,15 @@ let resueltos = if body.has_collider {
                             self.setup_complete_sample_game_scene();
                         }
                     }
-                    self.app_mode = AppMode::Editor;
                 }
-                LauncherAction::CreateProject { name, path, template } => {
+                AccionApertura::CreateProject { name, path, template } => {
                     self.create_project_and_open(&name, &path, template);
-                    self.app_mode = AppMode::Editor;
                 }
-                LauncherAction::OpenProject(path) => {
+                AccionApertura::OpenProject(path) => {
                     self.abrir_proyecto(&path);
                 }
-                LauncherAction::OpenSceneFile(ruta) => {
+                AccionApertura::OpenSceneFile(ruta) => {
                     self.open_scene_file(&ruta.to_string_lossy());
-                    self.app_mode = AppMode::Editor;
                 }
             }
         }
@@ -7084,66 +6965,63 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 editor_layout.ruta_escena_actual = ruta_clonada;
                 editor_layout.nombre_escena_con_ruta = nombre_clonado;
             }
-            let launcher = &mut self.launcher;
-            let app_mode = self.app_mode;
+            // Pantalla que el editor muestra mientras precarga.
+            fn pantalla_carga_motor(ui: &mut egui::Ui) {
+                use egui::{Color32, RichText};
+                const ACENTO: Color32 = Color32::from_rgb(0, 120, 215);
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::new().fill(Color32::from_rgb(242, 242, 242)))
+                    .show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            let alto = ui.available_height();
+                            ui.add_space((alto * 0.5 - 80.0).max(0.0));
+                            ui.label(
+                                RichText::new("GlassEnginer")
+                                    .size(42.0)
+                                    .color(Color32::from_rgb(30, 30, 30)),
+                            );
+                            ui.add_space(12.0);
+                            let (linea, _) =
+                                ui.allocate_exact_size(egui::vec2(64.0, 3.0), egui::Sense::hover());
+                            ui.painter().rect_filled(linea, 0.0, ACENTO);
+                            ui.add_space(18.0);
+                            ui.label(RichText::new("Cargando el motor…").size(15.0).color(ACENTO));
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new("Preparando modelos y materiales")
+                                    .size(12.0)
+                                    .color(Color32::from_rgb(120, 120, 120)),
+                            );
+                        });
+                    });
+            }
+
+            let cargando = self.cargando;
             let scene_state = &self.scene_state;
             let scene_manager = &self.scene_manager;
             let scene_tid = self.viewport_texture_id;
             let game_tid = self.game_viewport_texture_id;
 
-            let mut launcher_action = None;
             let mut full_output = self.egui_ctx.run_ui(raw_input, |ui| {
-                match app_mode {
-                    AppMode::Launcher => {
-                        launcher_action = launcher.render(ui);
-                    }
-                    AppMode::Editor => {
-                        editor_layout.render(
-                            ui,
-                            scene_tid,
-                            game_tid,
-                            scene_state,
-                            scene_manager,
-                        );
-                    }
+                if cargando {
+                    pantalla_carga_motor(ui);
+                } else {
+                    editor_layout.render(
+                        ui,
+                        scene_tid,
+                        game_tid,
+                        scene_state,
+                        scene_manager,
+                    );
                 }
             });
             egui_winit.handle_platform_output(&window.inner, full_output.platform_output);
 
-            if let Some(action) = launcher_action {
-                self.pending_launcher_action = Some(action);
+            if cargando {
+                // La carga ya está dibujada: la precarga puede bloquear en
+                // el frame siguiente.
+                self.carga_dibujada = true;
                 self.egui_ctx.request_repaint();
-            }
-
-            // S9: aplicar la actualización del Hub ya descargada y
-            // verificada por el panel. Se lanza el Hub nuevo (o el
-            // instalador en Windows) y este proceso sale con el patrón
-            // de `salir_del_proceso`. Un editor hijo abierto no se toca:
-            // es otro proceso y vive en engines/, no en el ejecutable
-            // del Hub. Si el lanzamiento falla, NO se sale: este proceso
-            // sigue con el Hub anterior en memoria (en Linux el archivo
-            // ya está reemplazado y se usará en el próximo arranque).
-            if let Some(accion) = launcher.accion_hub_pendiente.take() {
-                let lanzado = match &accion {
-                    glass_editor::updates::AccionHub::Relanzar { programa } => {
-                        std::process::Command::new(programa)
-                            .args(["--hub", "--tras-actualizar-hub"])
-                            .spawn()
-                    }
-                    glass_editor::updates::AccionHub::LanzarInstalador { setup } => {
-                        std::process::Command::new(setup).spawn()
-                    }
-                };
-                match lanzado {
-                    Ok(_) => self.salir_del_proceso = true,
-                    Err(e) => {
-                        log::error!("No se pudo relanzar el Hub tras actualizarlo ({accion:?}): {e}");
-                        launcher.hub_update_state =
-                            glass_hub::launcher::UpdateUiState::Error(format!(
-                                "No se pudo reiniciar el Hub: {e}"
-                            ));
-                    }
-                }
             }
 
             if editor_layout.request_launcher {
@@ -7156,11 +7034,7 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                     self.volver_al_hub_pendiente = true;
                     editor_layout.dialogo_guardar_cierre = true;
                 } else {
-                    if self.proyecto_directo.is_some() {
-                        self.salir_del_proceso = true;
-                    } else {
-                        self.app_mode = AppMode::Launcher;
-                    }
+                    self.salir_del_proceso = true;
                 }
                 self.egui_ctx.request_repaint();
             }
@@ -7237,11 +7111,7 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                                 Ok(()) => {
                                     self.ultimo_autoguardado = std::time::Instant::now();
                                     self.volver_al_hub_pendiente = false;
-                                    if self.proyecto_directo.is_some() {
-                        self.salir_del_proceso = true;
-                    } else {
-                        self.app_mode = AppMode::Launcher;
-                    }
+                                    self.salir_del_proceso = true;
                                     self.egui_ctx.request_repaint();
                                 }
                                 Err(e) => {
@@ -7270,11 +7140,7 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                             editor_layout.marcar_guardada(&sc);
                         }
                         self.volver_al_hub_pendiente = false;
-                        if self.proyecto_directo.is_some() {
                         self.salir_del_proceso = true;
-                    } else {
-                        self.app_mode = AppMode::Launcher;
-                    }
                         self.egui_ctx.request_repaint();
                     }
                     glass_editor::DecisionCierre::Cancelar => {
@@ -7292,11 +7158,7 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 let volver = self.volver_al_hub_pendiente;
                 self.volver_al_hub_pendiente = false;
                 if volver && !sucia {
-                    if self.proyecto_directo.is_some() {
-                        self.salir_del_proceso = true;
-                    } else {
-                        self.app_mode = AppMode::Launcher;
-                    }
+                    self.salir_del_proceso = true;
                     self.egui_ctx.request_repaint();
                 }
             }
@@ -7593,13 +7455,10 @@ impl ApplicationHandler for GlassEngineApp {
         // instalada el bridge se buscaba relativo al directorio de
         // trabajo del proceso y la conversión .blend/.fbx al soltar en
         // la escena nunca ocurría (regresión de la separación, 2026-11-18).
-        if !self.es_hub {
-            glass_renderer::fijar_bridge_desde_raiz(&raiz_motor_actual());
-        }
+        glass_renderer::fijar_bridge_desde_raiz(&raiz_motor_actual());
 
         // 6. Iniciar AssetWatcher en segundo plano sobre assets/
-        // (en modo Hub no: este proceso no vigila assets de nadie).
-        if !self.es_hub && Path::new("assets").exists() {
+        if Path::new("assets").exists() {
             log::info!("main: Iniciando AssetWatcher...");
             // Sin la carpeta models/: la registra la precarga diferida
             // (ver `escanear_fuentes` en el vigía).
@@ -7626,16 +7485,6 @@ impl ApplicationHandler for GlassEngineApp {
         }
 
         self.renderer = Some(renderer);
-        #[cfg(feature = "editor")]
-        {
-            // El aviso de GPU (si lo hay) se muestra como banda en el Hub.
-            self.launcher.gpu_aviso = vk_ctx.gpu_aviso.clone();
-            // El diagnóstico de la sonda manda sobre el aviso de selección:
-            // es el problema confirmado por el hijo, no el posible.
-            if let Some(Some(diagnostico)) = DIAGNOSTICO_SONDA.get() {
-                self.launcher.gpu_aviso = Some(diagnostico.clone());
-            }
-        }
         self.vulkan_context = Some(vk_ctx);
         self.window = Some(window);
         #[cfg(feature = "editor")]
@@ -7662,9 +7511,7 @@ impl ApplicationHandler for GlassEngineApp {
         let managed_dir = self
             .raiz_motor
             .join("managed/GlassEngine.Core/bin/Debug/net8.0");
-        // En modo Hub (--hub) el ScriptHost NO se inicializa: este
-        // proceso no ejecuta scripts; los editores hijo lo haran.
-        if !self.es_hub && managed_dir.exists() {
+        if managed_dir.exists() {
             match self.script_host.initialize(&managed_dir) {
                 Ok(()) => {
                     log::info!("main: ScriptHost C# (.NET CoreCLR) inicializado exitosamente.");
@@ -7855,8 +7702,6 @@ impl ApplicationHandler for GlassEngineApp {
                     log::info!("Iniciando escena de juego por defecto en Standalone...");
                     self.setup_complete_sample_game_scene();
                 }
-            } else if self.es_hub {
-                log::info!("Arranque en modo Hub (--hub): sin escena demo ni runtime de editor.");
             } else if self.proyecto_directo.is_some() {
                 log::info!("Arranque con --project: sin escena demo; el proyecto se abre tras la precarga.");
             } else {
@@ -8495,15 +8340,13 @@ impl ApplicationHandler for GlassEngineApp {
 
         match event {
             WindowEvent::CloseRequested => {
-                // Defecto del probador: al cerrar la ventana del EDITOR se
-                // cerraba también el Launcher, porque ambos son el mismo
-                // proceso y esto salía sin más. Ahora, cerrar en modo
-                // editor vuelve al Launcher (que queda vivo en segundo
-                // plano, igual que con el botón «Hub» del editor); solo
-                // se sale del todo cerrando desde el propio Launcher o
-                // en modo standalone/juego.
+                // Cerrar la ventana del editor cierra este proceso:
+                // desde la separación verdadera el Hub es un programa
+                // aparte (glass_hub) y sigue vivo por su cuenta. Con
+                // cambios sin guardar se pide decisión antes de salir
+                // (Guardar / No guardar / Cancelar).
                 #[cfg(feature = "editor")]
-                if self.app_mode == AppMode::Editor && !self.is_standalone {
+                if !self.is_standalone {
                     // Con cambios sin guardar no se vuelve al Launcher a
                     // secas: se pide decisión (Guardar / No guardar /
                     // Cancelar) y la ventana se queda abierta.
@@ -8516,13 +8359,8 @@ impl ApplicationHandler for GlassEngineApp {
                         self.egui_ctx.request_repaint();
                         return;
                     }
-                    if self.proyecto_directo.is_some() {
-                        log::info!("Cierre de ventana en el editor hijo: salida ordenada.");
-                        event_loop.exit();
-                        return;
-                    }
-                    log::info!("Cierre de ventana en el editor: volviendo al Launcher.");
-                    self.app_mode = AppMode::Launcher;
+                    log::info!("Cierre de ventana en el editor: saliendo del proceso (el Hub es un programa aparte).");
+                    event_loop.exit();
                     return;
                 }
                 log::info!("Cierre de ventana solicitado.");
@@ -8635,9 +8473,6 @@ fn is_standalone_launch(pure_build: bool, args: &[String]) -> bool {
     pure_build || args.iter().any(|arg| arg == "--standalone" || arg == "--game")
 }
 
-/// Modo Hub (separacion Hub/motor): la cascara que gestiona motores y
-/// lanza el editor como proceso propio. Por ahora solo se reconoce el
-/// argumento; el comportamiento llega en sub-bloques posteriores.
 /// Contrato de los modos de arranque. Pura: solo mira `args`, no lee el entorno.
 fn validar_argumentos(args: &[String]) -> Result<(), String> {
     const CON_VALOR: [(&str, &str); 3] = [
@@ -8663,48 +8498,12 @@ fn validar_argumentos(args: &[String]) -> Result<(), String> {
 
     let tiene = |flag: &str| args.iter().any(|a| a == flag);
 
-    // El Hub no abre nada en su propio proceso: eso es el modo hijo.
-    if tiene("--hub") {
-        for (flag, _) in CON_VALOR {
-            if tiene(flag) {
-                return Err(format!("argumentos incompatibles: --hub con {flag}"));
-            }
-        }
-    }
-
     // Dos formas distintas de abrir: la escena suelta va sin proyecto o desde el Hub.
     if tiene("--project") && tiene("--scene") {
         return Err("argumentos incompatibles: --project con --scene".to_string());
     }
 
     Ok(())
-}
-
-fn es_modo_hub(args: &[String]) -> bool {
-    args.iter().any(|arg| arg == "--hub")
-}
-
-/// Ruta absoluta de `p` (las relativas se resuelven contra el CWD
-/// del Hub): los procesos hijo del motor no deben depender del
-/// directorio desde el que se invocó al Hub.
-#[cfg(feature = "editor")]
-fn absolutizar(p: &std::path::Path) -> std::path::PathBuf {
-    if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        std::env::current_dir().unwrap_or_default().join(p)
-    }
-}
-
-/// Clave corta de un ejemplo para `--sample <clave>` (D6).
-#[cfg(feature = "editor")]
-fn clave_de_sample(p: SampleScenePreset) -> &'static str {
-    match p {
-        SampleScenePreset::PlatformerDemo => "plataformas",
-        SampleScenePreset::PhysicsPlayground => "fisica",
-        SampleScenePreset::AudioLightingShowcase => "luces",
-        SampleScenePreset::FullSampleGame => "juego",
-    }
 }
 
 /// Proyecto a abrir directamente (`--project <dir>`), la via con la que
@@ -9566,7 +9365,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let is_standalone = is_standalone_launch(!cfg!(feature = "editor"), &args);
     let is_standalone_test = args.iter().any(|arg| arg == "--test-standalone");
     let scene_to_load = args.iter().position(|a| a == "--scene").and_then(|idx| args.get(idx + 1)).cloned();
-    let es_hub = es_modo_hub(&args);
     let proyecto_directo = proyecto_de_args(&args);
     // Contrato de modos de arranque (S5 ampliado): valores obligatorios y
     // combinaciones excluyentes. Ver validar_argumentos.
@@ -9589,6 +9387,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .any(|arg| arg == "--test-init" || arg == "--check-vulkan" || arg == "--test-m3" || arg == "--test-m4");
 
+    // D-V3a (separación verdadera): el motor sin destino no arranca.
+    // El Hub es un programa aparte (glass_hub): sin --project, ni
+    // --scene, ni --sample, ni un modo de prueba/standalone que lo
+    // justifique, se sale con un error claro en vez de abrir el
+    // antiguo Hub en proceso. `--hub` aquí ya no significa nada.
+    #[cfg(feature = "editor")]
+    {
+        let sin_destino = !is_standalone
+            && !is_standalone_test
+            && !is_headless_test
+            && !is_m5_test
+            && !is_m6_test
+            && !is_m7_test
+            && !is_m8_test
+            && !is_m9_test
+            && !is_m10_test
+            && !is_platformer_test
+            && !is_sample_game_test
+            && proyecto_directo.is_none()
+            && scene_to_load.is_none()
+            && !args.iter().any(|a| a == "--sample")
+            && !args.iter().any(|a| a == "--mcp" || a == "--mcp-stdio" || a == "--mcp-live");
+        if args.iter().any(|a| a == "--hub") || sin_destino {
+            let msg = "Este ejecutable es el motor de GlassEnginer: necesita un proyecto (--project <ruta>), una escena (--scene <ruta>) o un ejemplo (--sample <clave>). Para gestionar proyectos abre el Hub (GlassHub).";
+            log::error!("{msg}");
+            return Err(msg.into());
+        }
+        if let Some(dir) = &proyecto_directo {
+            if !std::path::Path::new(dir).join("project.glass").is_file() {
+                let msg = format!("--project: la carpeta {dir} no contiene project.glass; no es un proyecto de GlassEnginer.");
+                log::error!("{msg}");
+                return Err(msg.into());
+            }
+        }
+        if let Some(i) = args.iter().position(|a| a == "--sample") {
+            let clave = args.get(i + 1).map(String::as_str).unwrap_or("");
+            if !matches!(clave, "plataformas" | "fisica" | "luces" | "juego") {
+                let msg = format!("--sample: clave desconocida «{clave}» (válidas: plataformas, fisica, luces, juego).");
+                log::error!("{msg}");
+                return Err(msg.into());
+            }
+        }
+    }
+
     // Sonda de GPU en proceso hijo: solo en el arranque normal del editor
     // (ni standalone, ni tests headless, ni modos de prueba).
     #[cfg(feature = "editor")]
@@ -9609,6 +9451,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             None
         };
+        if let Some(texto) = &diagnostico {
+            log::warn!("Sonda GPU: {texto}");
+        }
         let _ = DIAGNOSTICO_SONDA.set(diagnostico);
     }
 
@@ -9639,13 +9484,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         scene_to_load,
         proyecto_directo,
-        es_hub,
     );
     // MCP sobre la escena viva: con la feature de editor, el servidor MCP
     // de la app sirve su stdio en un hilo dedicado (ver
     // `start_live_mcp_stdio` para la decisión de arranque y sus porqués).
     #[cfg(feature = "editor")]
-    app.start_live_mcp_stdio(args.iter().any(|arg| arg == "--mcp-live") && !es_hub);
+    app.start_live_mcp_stdio(args.iter().any(|arg| arg == "--mcp-live"));
     // Lado receptor de --sample <clave> (D6): siembra la misma
     // acción que produce la pestaña Ejemplos del Hub.
     #[cfg(feature = "editor")]
@@ -9663,7 +9507,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         match preset {
             Some(p) => {
-                app.pending_launcher_action = Some(LauncherAction::LoadSampleScene(p));
+                app.pending_apertura = Some(AccionApertura::LoadSampleScene(p));
             }
             None => log::error!("--sample: clave desconocida «{clave}»; se ignora."),
         }
@@ -9674,26 +9518,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // guarda vive hasta que run_app vuelve.
     #[cfg(feature = "editor")]
     let _lock_sesion = glass_editor::updates::bloquear_sesion_si_gestionado();
-    // S4: borrados diferidos de instalaciones pasadas, SOLO desde
-    // el proceso del Hub (un hijo no escribe engines.json, D1): si
-    // alguna version pendiente ya no tiene sesion viva, se retira.
-    #[cfg(feature = "editor")]
-    if es_hub && app.proyecto_directo.is_none() && !app.is_standalone {
-        // Orden contractual: reconciliar → procesar. Las huérfanas pasan a pendientes
-        // y procesar_pendientes_borrar las borra si no tienen sesión.
-        let huerfanas = glass_editor::updates::reconciliar_huerfanas();
-        if !huerfanas.is_empty() {
-            log::info!("Instalaciones huérfanas reconciliadas como pendientes de borrar: {:?}", huerfanas);
-        }
-        let retiradas = glass_editor::updates::procesar_pendientes_borrar();
-        if std::env::args().any(|a| a == "--tras-actualizar-hub") {
-            glass_hub::launcher::anunciar_arranque_tras_actualizacion_hub();
-        }
-        glass_editor::updates::limpiar_respaldo_hub();
-        if !retiradas.is_empty() {
-            log::info!("Borrados diferidos completados al arrancar: {:?}", retiradas);
-        }
-    }
     event_loop.run_app(&mut app)?;
 
     Ok(())
@@ -9973,21 +9797,8 @@ mod standalone_launch_tests {
 
     #[test]
     fn validar_argumentos_rechaza_las_parejas_incompatibles() {
-        let err = validar_argumentos(&args(&["glass_app", "--hub", "--project", "/tmp/p"])).unwrap_err();
-        assert!(err.contains("--hub") && err.contains("--project"), "{err}");
-        let err = validar_argumentos(&args(&["glass_app", "--hub", "--scene", "e.json"])).unwrap_err();
-        assert!(err.contains("--hub") && err.contains("--scene"), "{err}");
-        let err = validar_argumentos(&args(&["glass_app", "--hub", "--sample", "fisica"])).unwrap_err();
-        assert!(err.contains("--hub") && err.contains("--sample"), "{err}");
         let err = validar_argumentos(&args(&["glass_app", "--project", "/tmp/p", "--scene", "e.json"])).unwrap_err();
         assert!(err.contains("--project") && err.contains("--scene"), "{err}");
-    }
-
-    #[test]
-    fn modo_hub_se_detecta() {
-        assert!(es_modo_hub(&args(&["glass_app", "--hub"])));
-        assert!(!es_modo_hub(&args(&["glass_app"])));
-        assert!(!es_modo_hub(&args(&["glass_app", "--standalone"])));
     }
 
     #[test]
