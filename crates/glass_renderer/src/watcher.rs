@@ -101,18 +101,167 @@ fn resumen_bridge(stdout: &str) -> String {
     stdout.chars().skip(n.saturating_sub(300)).collect()
 }
 
+/// Salida de una ejecución del bridge bajo Blender.
+pub struct SalidaBridge {
+    pub exito: bool,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+const MENSAJE_SIN_BLENDER: &str =
+    "No se encontró el ejecutable de Blender: define GLASS_BLENDER con su ruta o instala Blender.";
+
+/// Resuelve el ejecutable de Blender: `GLASS_BLENDER` (si es un
+/// archivo) → búsqueda en el PATH → rutas de instalación habituales
+/// de la plataforma. `None` si no hay Blender localizable.
+pub fn resolver_blender() -> Option<std::path::PathBuf> {
+    let env_val = std::env::var("GLASS_BLENDER").ok();
+    let dirs_path: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    resolver_blender_desde(env_val.as_deref(), &dirs_path, &candidatos_instalacion())
+}
+
+/// Núcleo puro de `resolver_blender`: env → PATH → candidatos.
+/// Un valor solo cuenta si apunta a un archivo existente.
+fn resolver_blender_desde(
+    env_val: Option<&str>,
+    dirs_path: &[std::path::PathBuf],
+    candidatos: &[std::path::PathBuf],
+) -> Option<std::path::PathBuf> {
+    if let Some(v) = env_val {
+        let p = std::path::PathBuf::from(v);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Some(p) = buscar_blender_en_path(dirs_path) {
+        return Some(p);
+    }
+    candidatos.iter().find(|c| c.is_file()).cloned()
+}
+
+/// Busca `blender` (y en Windows también `blender.exe`) en los directorios dados.
+fn buscar_blender_en_path(dirs_path: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+    let nombres: &[&str] = if cfg!(windows) {
+        &["blender.exe", "blender"]
+    } else {
+        &["blender"]
+    };
+    dirs_path
+        .iter()
+        .flat_map(|d| nombres.iter().map(move |n| d.join(n)))
+        .find(|p| p.is_file())
+}
+
+/// Componentes numéricos de "Blender X.Y" para ordenar por versión (4.10 > 4.2).
+fn clave_version_blender(nombre: &str) -> Vec<u64> {
+    nombre
+        .trim_start_matches("Blender ")
+        .split('.')
+        .map(|s| s.trim().parse().unwrap_or(0))
+        .collect()
+}
+
+/// Candidatos de instalación en Windows a partir de las bases de Program Files.
+fn candidatos_windows(bases: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for base in bases {
+        let mut subs: Vec<(String, std::path::PathBuf)> =
+            std::fs::read_dir(base.join("Blender Foundation"))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                .filter_map(|e| {
+                    let nombre = e.file_name().to_string_lossy().into_owned();
+                    nombre.starts_with("Blender ").then(|| (nombre, e.path()))
+                })
+                .collect();
+        subs.sort_by(|(a, _), (b, _)| {
+            clave_version_blender(b)
+                .cmp(&clave_version_blender(a))
+                .then_with(|| b.cmp(a))
+        });
+        out.extend(subs.into_iter().map(|(_, sub)| sub.join("blender.exe")));
+        out.push(
+            base.join("Steam")
+                .join("steamapps")
+                .join("common")
+                .join("Blender")
+                .join("blender.exe"),
+        );
+    }
+    out
+}
+
+/// Rutas de instalación habituales según la plataforma.
+fn candidatos_instalacion() -> Vec<std::path::PathBuf> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    if cfg!(windows) {
+        let bases: Vec<std::path::PathBuf> = [
+            ("ProgramFiles", r"C:\Program Files"),
+            ("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+        ]
+        .iter()
+        .map(|(var, respaldo)| {
+            std::env::var_os(var)
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from(respaldo))
+        })
+        .collect();
+        candidatos_windows(&bases)
+    } else if cfg!(target_os = "macos") {
+        let mut v = vec![std::path::PathBuf::from(
+            "/Applications/Blender.app/Contents/MacOS/Blender",
+        )];
+        if let Some(h) = home {
+            v.push(h.join("Applications/Blender.app/Contents/MacOS/Blender"));
+        }
+        v
+    } else {
+        let mut v = vec![
+            std::path::PathBuf::from("/usr/bin/blender"),
+            std::path::PathBuf::from("/usr/local/bin/blender"),
+            std::path::PathBuf::from("/snap/bin/blender"),
+        ];
+        if let Some(h) = home {
+            v.push(h.join(".local/bin/blender"));
+        }
+        v.push(std::path::PathBuf::from("/opt/blender/blender"));
+        v
+    }
+}
+
+/// Ejecuta el bridge UNA vez con el Python del propio Blender
+/// (`blender -b --python-exit-code 1 --python <bridge> -- <in> <out>`).
+/// Err solo si Blender no se encuentra o no se puede lanzar; si el
+/// proceso corrió, Ok con su salida y si salió bien.
+pub fn ejecutar_bridge_con_blender(
+    bridge_script: &Path,
+    input_path: &Path,
+    glb_path: &Path,
+) -> Result<SalidaBridge, String> {
+    let blender = resolver_blender().ok_or_else(|| MENSAJE_SIN_BLENDER.to_string())?;
+    let res = Command::new(&blender)
+        .args(["-b", "--python-exit-code", "1", "--python"])
+        .arg(bridge_script)
+        .arg("--")
+        .arg(input_path)
+        .arg(glb_path)
+        .output()
+        .map_err(|e| format!("No se pudo lanzar Blender ({}): {}", blender.display(), e))?;
+    Ok(SalidaBridge {
+        exito: res.status.success(),
+        stdout: String::from_utf8_lossy(&res.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&res.stderr).into_owned(),
+    })
+}
+
 /// Ejecuta el bridge una vez; true si tuvo éxito.
 fn ejecutar_bridge(bridge_script: &Path, input_path: &Path, glb_path: &Path) -> bool {
-    let output = Command::new("python3")
-        .args([
-            bridge_script.to_string_lossy().into_owned(),
-            input_path.to_string_lossy().into_owned(),
-            glb_path.to_string_lossy().into_owned(),
-        ])
-        .output();
-
-    match output {
-        Ok(res) if res.status.success() => {
+    match ejecutar_bridge_con_blender(bridge_script, input_path, glb_path) {
+        Ok(salida) if salida.exito => {
             log::info!(
                 "Conversión headless exitosa: {:?} -> {:?}",
                 input_path,
@@ -120,20 +269,126 @@ fn ejecutar_bridge(bridge_script: &Path, input_path: &Path, glb_path: &Path) -> 
             );
             true
         }
-        Ok(res) => {
-            let stdout = String::from_utf8_lossy(&res.stdout);
+        Ok(salida) => {
             log::error!(
                 "Fallo en conversión Blender ({:?}): {}\nstderr:\n{}",
                 input_path,
-                resumen_bridge(&stdout),
-                String::from_utf8_lossy(&res.stderr)
+                resumen_bridge(&salida.stdout),
+                salida.stderr
             );
             false
         }
         Err(e) => {
-            log::error!("Fallo al invocar python bridge: {}", e);
+            log::error!("Fallo al invocar el bridge de Blender: {}", e);
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests_resolver_blender {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    fn dir_temporal(nombre: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "glass_blender_{}_{}",
+            nombre,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn tocar(p: &Path) {
+        if let Some(padre) = p.parent() {
+            std::fs::create_dir_all(padre).unwrap();
+        }
+        std::fs::write(p, b"").unwrap();
+    }
+
+    #[test]
+    fn prefiere_glass_blender_y_cae_al_path_si_no_existe() {
+        let d = dir_temporal("env");
+        let env_bin = d.join("mi_blender");
+        tocar(&env_bin);
+        let dir_path = d.join("path");
+        let en_path = dir_path.join("blender");
+        tocar(&en_path);
+        let dirs = [dir_path.clone()];
+
+        assert_eq!(
+            resolver_blender_desde(Some(env_bin.to_str().unwrap()), &dirs, &[]),
+            Some(env_bin.clone())
+        );
+        let inexistente = d.join("no_existe");
+        assert_eq!(
+            resolver_blender_desde(Some(inexistente.to_str().unwrap()), &dirs, &[]),
+            Some(en_path.clone())
+        );
+
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn encuentra_blender_en_el_path() {
+        let d = dir_temporal("path");
+        let vacio = d.join("vacio");
+        std::fs::create_dir_all(&vacio).unwrap();
+        let con_blender = d.join("bin");
+        let bin = con_blender.join("blender");
+        tocar(&bin);
+
+        assert_eq!(
+            resolver_blender_desde(None, &[vacio, con_blender], &[]),
+            Some(bin)
+        );
+
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn sin_env_ni_path_usa_el_primer_candidato_existente() {
+        let d = dir_temporal("candidatos");
+        let falta = d.join("falta").join("blender");
+        let primero = d.join("uno").join("blender");
+        let segundo = d.join("dos").join("blender");
+        tocar(&primero);
+        tocar(&segundo);
+
+        assert_eq!(
+            resolver_blender_desde(None, &[], &[falta, primero.clone(), segundo]),
+            Some(primero)
+        );
+
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn candidatos_windows_ordena_por_version_e_incluye_steam() {
+        let base = dir_temporal("windows");
+        let fundacion = base.join("Blender Foundation");
+        let v42 = fundacion.join("Blender 4.2").join("blender.exe");
+        let v36 = fundacion.join("Blender 3.6").join("blender.exe");
+        tocar(&v42);
+        tocar(&v36);
+        std::fs::create_dir_all(fundacion.join("Otros")).unwrap();
+        let steam = base
+            .join("Steam")
+            .join("steamapps")
+            .join("common")
+            .join("Blender")
+            .join("blender.exe");
+
+        let lista = candidatos_windows(&[base.clone()]);
+
+        assert_eq!(lista.first(), Some(&v42));
+        assert!(lista.contains(&v36));
+        assert!(lista.contains(&steam));
+        assert!(!lista.iter().any(|p| p.starts_with(fundacion.join("Otros"))));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
 

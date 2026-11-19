@@ -2953,18 +2953,14 @@ impl McpServer {
                 // y la recarga fallaba al abrir la app desde un
                 // acceso directo o un IDE (defecto de la Fase 10).
                 let raiz = raiz_proyecto();
-                let salida = std::process::Command::new("python3")
-                    .args([
-                        raiz.join("tools/headless_blender_bridge.py")
-                            .to_string_lossy()
-                            .into_owned(),
-                        raiz.join(path).to_string_lossy().into_owned(),
-                        raiz.join(&glb).to_string_lossy().into_owned(),
-                    ])
-                    .output();
+                let salida = glass_renderer::watcher::ejecutar_bridge_con_blender(
+                    &raiz.join("tools/headless_blender_bridge.py"),
+                    &raiz.join(path),
+                    &raiz.join(&glb),
+                );
                 match salida {
-                    Ok(res) => {
-                        let stdout = String::from_utf8_lossy(&res.stdout).to_string();
+                    Ok(salida) => {
+                        let stdout = salida.stdout;
                         let resultado = stdout
                             .lines()
                             .rev()

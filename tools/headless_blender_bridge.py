@@ -129,6 +129,14 @@ def _candidatos_blender():
 
 
 def resolver_blender():
+    try:
+        import bpy
+    except ImportError:
+        pass
+    else:
+        ejecutable = os.path.basename(sys.executable)
+        if ejecutable.lower().startswith("blender") and os.path.isfile(sys.executable):
+            return sys.executable
     env = os.environ.get("GLASS_BLENDER")
     if env and os.path.isfile(env):
         return env
@@ -326,11 +334,15 @@ def export_blend_to_glb(blend_path, glb_path):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
+    if "--" in sys.argv:
+        args = sys.argv[sys.argv.index("--") + 1:]
+    else:
+        args = sys.argv[1:]
+    if len(args) < 2:
         print("Uso: headless_blender_bridge.py <input.blend|input.fbx> <output.glb>")
         print('GLASS_BRIDGE_RESULT {"ok": false, "error": "faltan argumentos"}')
         sys.exit(1)
-    ok, msg, resultado = export_blend_to_glb(sys.argv[1], sys.argv[2])
+    ok, msg, resultado = export_blend_to_glb(args[0], args[1])
     print(msg)
     if not ok and not resultado:
         resultado = {"ok": False, "error": msg}

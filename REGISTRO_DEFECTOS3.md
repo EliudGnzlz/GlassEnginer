@@ -1585,3 +1585,26 @@ Diseño aprobado por D3m3tr10 con las opciones recomendadas (D-V1a Vulkan+egui s
 - **Auditoría Kimi: NO ejecutada — la API devolvió 429 «engine overloaded» y se paró según la regla** (sin reintentos ni sustitución). El diff son dos bloques condicionales de copia; quedaron verificados línea a línea por Rayo y el YAML validado con parser. El código no cambia respecto a `d3b65a8` (CI #175 en verde): el pipeline local no se repitió por ser un cambio solo de workflow, declarado tal cual.
 - **CI real #177 = SUCCESS.** **Consumo V6:** DeepSeek flash 1.773 (los dos bloques del shim) · Kimi 0 (429) · Opus 0. Total ≈ 1.773 tokens.
 - **Con V6 queda CERRADA la separación verdadera completa (V1–V6).** La release hub-v0.2.0 NO está cortada: se publica solo con la orden expresa de D3m3tr10, y es la que de verdad migrará su instalación viva (con el arreglo del Hub `1b46637` dentro, como decidió).
+
+## Defecto Windows .blend/.fbx (reportado 2026-11-19 en la 18.2) — ARREGLADO
+
+**Síntoma**: en Windows los .blend/.fbx no cargaban (cubos de reserva); en Linux, bien.
+**Causa raíz**: la cadena de conversión invocaba el bridge con `Command::new("python3")`
+(`glass_renderer::watcher` y `glass_mcp::server`), un comando que no existe en un
+Windows normal (Python ofrece `python`/`py`; sin Python instalado el proceso ni
+arranca). Verificado que NO era el payload (el bridge viaja en el paquete publicado
+de la 18.2, comprobado descargándolo) ni el descubrimiento de Blender del script
+(ya cubría `Program Files\Blender Foundation\Blender *` y Steam).
+**Arreglo**: fuera Python de la cadena. El bridge se ejecuta con el intérprete del
+propio Blender (`blender -b --python-exit-code 1 --python bridge.py -- in out.glb`);
+el motor resuelve Blender una sola vez (`glass_renderer::watcher::resolver_blender`:
+GLASS_BLENDER → PATH → rutas de instalación por plataforma) y lo comparten el vigía
+y el MCP. El bridge acepta los argumentos tras `--` y, corriendo bajo Blender, se
+reconoce a sí mismo como el Blender de la exportación. 9 tests nuevos de resolución.
+**Verificación**: pipeline local completo en verde (844/844 tests), auditoría Kimi
+APTO, y test físico por el camino real en Linux simulando el caso de Windows
+(Blender FUERA del PATH y solo en su ruta de instalación `/opt/blender`, sin
+GLASS_BLENDER): soltar `campfire_voxel_v3.blend` en la escena convirtió y el modelo
+real sustituyó al cubo. **El test en un Windows real queda pendiente de D3m3tr10
+con la v0.10.19.1-beta** — no verificado en Windows desde esta VM Linux.
+Consumo del arreglo: Opus 20.042 · DeepSeek flash 4.156 · Kimi 5.869.
