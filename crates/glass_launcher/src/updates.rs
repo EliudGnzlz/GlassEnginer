@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::Digest;
 
-pub const ENGINE_VERSION: &str = "0.10.18.1-beta";
+pub const ENGINE_VERSION: &str = "0.10.19.2-beta";
 /// Identidad propia del Hub (la cáscara fija). Solo cambia cuando cambia
 /// el Hub; hoy coincide con la del motor.
 pub const HUB_VERSION: &str = "0.2.0";
