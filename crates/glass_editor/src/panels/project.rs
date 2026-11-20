@@ -156,6 +156,33 @@ pub fn listar_directorio(dir: &Path) -> Result<Vec<Entrada>, String> {
     Ok(entradas)
 }
 
+/// Firma barata del contenido de un directorio (nombres, tipo, tamaño y
+/// mtime de cada entrada). Sirve para detectar cambios, no para mostrar:
+/// incluye también ocultos y `.meta.json`. Devuelve 0 si no se puede leer.
+pub fn firma_directorio(dir: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut items: Vec<std::fs::DirEntry> = rd.flatten().collect();
+    items.sort_by_key(|item| item.file_name());
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for item in &items {
+        item.file_name().hash(&mut hasher);
+        let es_dir = item.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        es_dir.hash(&mut hasher);
+        let meta = item.metadata().ok();
+        meta.as_ref().map(|m| m.len()).unwrap_or(0).hash(&mut hasher);
+        let mtime = meta
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .unwrap_or_default();
+        mtime.as_secs().hash(&mut hasher);
+        mtime.subsec_nanos().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// Crea una carpeta dentro de `dir`.
 pub fn crear_carpeta(dir: &Path, nombre: &str) -> Result<PathBuf, String> {
     let nombre = nombre.trim();
@@ -929,6 +956,10 @@ pub struct ProjectPanel {
     presupuesto_miniaturas_modelo: usize,
     /// Caché de colores de material ya leídos (clave: ruta del .material.json).
     colores_material: std::collections::HashMap<PathBuf, Option<egui::Color32>>,
+    /// Firma del directorio visible en el último `refrescar()`.
+    firma_directorio_actual: u64,
+    /// Momento de la última comprobación de cambios externos.
+    ultima_comprobacion_externa: std::time::Instant,
 }
 
 impl Default for ProjectPanel {
@@ -963,6 +994,8 @@ impl ProjectPanel {
             miniaturas_modelo: std::collections::HashMap::new(),
             presupuesto_miniaturas_modelo: 0,
             colores_material: std::collections::HashMap::new(),
+            firma_directorio_actual: 0,
+            ultima_comprobacion_externa: std::time::Instant::now(),
         };
         panel.refrescar();
         panel
@@ -1027,6 +1060,23 @@ impl ProjectPanel {
             Some(tipo) => buscar_por_tipo(&self.assets_root, tipo),
             None => Vec::new(),
         };
+        // Las operaciones internas dejan la firma al día: no disparan un
+        // segundo refresco en `comprobar_cambios_externos`.
+        self.firma_directorio_actual = firma_directorio(&self.current_dir);
+    }
+
+    /// Comprueba si el directorio visible cambió por fuera del panel
+    /// (una conversión terminada, una copia desde el explorador del
+    /// SO…) y refresca solo en ese caso. Barata: como mucho relee los
+    /// metadatos del directorio visible dos veces por segundo.
+    pub fn comprobar_cambios_externos(&mut self) {
+        if self.ultima_comprobacion_externa.elapsed() < std::time::Duration::from_millis(500) {
+            return;
+        }
+        self.ultima_comprobacion_externa = std::time::Instant::now();
+        if firma_directorio(&self.current_dir) != self.firma_directorio_actual {
+            self.refrescar();
+        }
     }
 
     /// Importa los archivos soltados desde el SO al directorio
@@ -1236,6 +1286,7 @@ impl ProjectPanel {
     // --- dibujo --------------------------------------------------------------
 
     pub fn render(&mut self, ui: &mut Ui) {
+        self.comprobar_cambios_externos();
         self.rect_ultimo = ui.max_rect();
         // --- Barra superior ---------------------------------------------------
         let en_raiz = self.en_raiz();
@@ -3290,4 +3341,64 @@ fn gemelos_convertidos_no_incluye_sidecar_sin_glb() {
 
     std::fs::remove_dir_all(proyecto).unwrap();
 }
+
+    #[test]
+    fn firma_directorio_detecta_altas_bajas_y_cambios() {
+        let dir = dir_temporal_creacion("firma_directorio");
+        let archivo = dir.join("Prueba.scene.json");
+
+        let firma_inicial = super::firma_directorio(&dir);
+
+        std::fs::write(&archivo, "{}").expect("debe escribirse");
+        let firma_alta = super::firma_directorio(&dir);
+        assert_ne!(firma_alta, firma_inicial, "un archivo nuevo debe cambiar la firma");
+
+        std::fs::write(&archivo, "{\"nombre\":\"otro tamaño\"}").expect("debe reescribirse");
+        let firma_cambio = super::firma_directorio(&dir);
+        assert_ne!(firma_cambio, firma_alta, "un cambio de tamaño debe cambiar la firma");
+
+        std::fs::remove_file(&archivo).expect("debe borrarse");
+        let firma_baja = super::firma_directorio(&dir);
+        assert_ne!(firma_baja, firma_cambio, "borrar el archivo debe cambiar la firma");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn panel_refresca_solo_ante_un_cambio_externo() {
+        let assets = dir_temporal_creacion("cambio_externo");
+        let mut panel = super::ProjectPanel::new();
+        panel.set_assets_root(assets.clone());
+        assert!(!panel.entradas.iter().any(|e| e.nombre == "Externo.scene.json"));
+
+        // Cambio externo: alguien escribe en el directorio visible.
+        std::fs::write(assets.join("Externo.scene.json"), "{}").expect("debe escribirse");
+        panel.ultima_comprobacion_externa =
+            std::time::Instant::now() - std::time::Duration::from_secs(1);
+        panel.comprobar_cambios_externos();
+        assert!(
+            panel.entradas.iter().any(|e| e.nombre == "Externo.scene.json"),
+            "el archivo externo debe aparecer tras la comprobación"
+        );
+
+        // Sin cambios externos, una segunda comprobación no altera el listado.
+        let antes: Vec<(String, bool, u64)> = panel
+            .entradas
+            .iter()
+            .map(|e| (e.nombre.clone(), e.es_dir, e.bytes))
+            .collect();
+        let firma_antes = panel.firma_directorio_actual;
+        panel.ultima_comprobacion_externa =
+            std::time::Instant::now() - std::time::Duration::from_secs(1);
+        panel.comprobar_cambios_externos();
+        let despues: Vec<(String, bool, u64)> = panel
+            .entradas
+            .iter()
+            .map(|e| (e.nombre.clone(), e.es_dir, e.bytes))
+            .collect();
+        assert_eq!(antes, despues);
+        assert_eq!(panel.firma_directorio_actual, firma_antes);
+
+        let _ = std::fs::remove_dir_all(&assets);
+    }
 }

@@ -77,6 +77,11 @@ pub struct EditorDockingLayout {
     /// (crear, renombrar, mover y mandar a papelera). Sustituye al
     /// navegador plano y de sólo lectura que vivía en ConsolePanel.
     pub project: ProjectPanel,
+    /// Archivos soltados desde el SO mientras la app mostraba la
+    /// pantalla de carga (el layout no se renderizaba y el drop se
+    /// habría perdido con el frame): la app los encola aquí y
+    /// `render` los importa en cuanto el editor está visible.
+    soltados_encolados: Vec<std::path::PathBuf>,
     pub shader_graph: ShaderGraphEditorPanel,
     pub mesh_tool: MeshToolPanel,
     /// Panel de edición de Canvas y UI.
@@ -185,6 +190,7 @@ impl EditorDockingLayout {
             inspector: InspectorPanel::new(),
             console: ConsolePanel::default(),
             project: ProjectPanel::new(),
+            soltados_encolados: Vec::new(),
             shader_graph: ShaderGraphEditorPanel::new(),
             mesh_tool: MeshToolPanel::new(),
             canvas_ui: CanvasPanel::new(),
@@ -490,6 +496,13 @@ impl EditorDockingLayout {
         }
     }
 
+    /// Encola archivos soltados desde el SO en un frame en el que el
+    /// layout no se renderizó (pantalla de carga): se importarán al
+    /// directorio visible del panel Proyecto en el próximo `render`.
+    pub fn encolar_soltados(&mut self, rutas: &[std::path::PathBuf]) {
+        self.soltados_encolados.extend_from_slice(rutas);
+    }
+
     pub fn render(
         &mut self,
         ui: &mut egui::Ui,
@@ -508,6 +521,13 @@ impl EditorDockingLayout {
             s.spacing.item_spacing = egui::vec2(6.0, 3.0);
             s.spacing.button_padding = egui::vec2(8.0, 3.0);
             s.spacing.indent = 14.0;
+        }
+
+        // Drops encolados durante la pantalla de carga: se importan
+        // ahora que el editor está visible (Bug F).
+        if !self.soltados_encolados.is_empty() {
+            let encolados = std::mem::take(&mut self.soltados_encolados);
+            self.project.importar_soltados(&encolados);
         }
 
         // --- Importación por arrastre desde el SO ---

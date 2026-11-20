@@ -7359,6 +7359,20 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
 
             let mut full_output = self.egui_ctx.run_ui(raw_input, |ui| {
                 if cargando {
+                    // Sin layout en pantalla, un drop de este frame se
+                    // perdería (egui descarta el RawInput al cerrar el
+                    // frame): se encola en el layout y se importa al
+                    // terminar la carga (Bug F).
+                    let soltados: Vec<std::path::PathBuf> = ui.ctx().input(|i| {
+                        i.raw
+                            .dropped_files
+                            .iter()
+                            .map(|f| f.path().to_path_buf())
+                            .collect()
+                    });
+                    if !soltados.is_empty() {
+                        editor_layout.encolar_soltados(&soltados);
+                    }
                     pantalla_carga_motor(ui);
                 } else {
                     editor_layout.hub_disponible = self.hub_disponible;
@@ -8691,6 +8705,21 @@ impl ApplicationHandler for GlassEngineApp {
                                 ElementState::Released => { self.keys_pressed.remove(&key_ev.physical_key); }
                             }
                         }
+                    }
+                    // Registro diagnóstico del Bug F: si en el log de campo DroppedFile
+                    // solo aparece al restaurar la ventana, la entrega de eventos OLE es
+                    // la culpable; si aparece al soltar, el fallo está dentro de la app.
+                    match &event {
+                        WindowEvent::HoveredFile(ruta) => {
+                            log::info!("Arrastre del SO: HoveredFile {ruta:?}");
+                        }
+                        WindowEvent::HoveredFileCancelled => {
+                            log::info!("Arrastre del SO: HoveredFileCancelled");
+                        }
+                        WindowEvent::DroppedFile(ruta) => {
+                            log::info!("Arrastre del SO: DroppedFile {ruta:?}");
+                        }
+                        _ => {}
                     }
                     // Pasar evento completo a egui (sin bloquear con consumed)
                     let _ = egui_winit.on_window_event(&window.inner, &event);
