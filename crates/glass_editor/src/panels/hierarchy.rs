@@ -724,7 +724,6 @@ impl HierarchyPanel {
                     vec![
                         "Transform".into(),
                         "MeshRenderer".into(),
-                        "RigidBody".into(),
                         "Collider".into(),
                     ],
                 );
@@ -742,7 +741,6 @@ impl HierarchyPanel {
                     vec![
                         "Transform".into(),
                         "MeshRenderer".into(),
-                        "RigidBody".into(),
                         "Collider".into(),
                     ],
                 );
@@ -765,7 +763,6 @@ impl HierarchyPanel {
                     vec![
                         "Transform".into(),
                         "MeshRenderer".into(),
-                        "RigidBody".into(),
                         "Collider".into(),
                     ],
                 );
@@ -788,7 +785,6 @@ impl HierarchyPanel {
                     vec![
                         "Transform".into(),
                         "MeshRenderer".into(),
-                        "RigidBody".into(),
                         "Collider".into(),
                     ],
                 );
@@ -840,6 +836,8 @@ impl HierarchyPanel {
                     // por encima del suelo.
                     ent.physics = Some(glass_core::PhysicsData {
                         body_type: "Static".into(),
+                        has_rigidbody: false,
+                        has_collider: true,
                         box_extents: [5.0, 0.5, 5.0],
                         colliders: vec![glass_core::ColliderSpec {
                             shape: "Box".into(),
@@ -921,5 +919,26 @@ impl HierarchyPanel {
                 id
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod preset_physics_tests {
+    use super::*;
+
+    #[test]
+    fn primitiva_nueva_nace_solo_con_collider() {
+        // Corrección de D3m3tr10 (2026-11-19): como en Unity, la
+        // primitiva nace con Collider y SIN Rigidbody (estática); el
+        // Rigidbody se añade a mano.
+        let mut scene = glass_core::SceneState::default();
+        let id = HierarchyPanel::instantiate_preset(&mut scene, EntityPreset::Cube);
+        let ent = scene.get_entity(id).expect("la primitiva existe");
+        assert!(!ent.components.iter().any(|c| c == "RigidBody"));
+        assert!(ent.components.iter().any(|c| c == "Collider"));
+        let phys = ent.physics.as_ref().expect("la primitiva trae física (collider)");
+        assert!(!phys.has_rigidbody);
+        assert!(phys.has_collider);
+        assert_eq!(phys.body_type, "Static");
     }
 }

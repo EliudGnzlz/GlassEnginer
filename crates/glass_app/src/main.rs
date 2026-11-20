@@ -872,6 +872,7 @@ impl SceneBridge for EngineSceneBridge {
                 if ent.physics.is_none() && spec.physics == SPAWN_PHYSICS_STATIC {
                     ent.physics = Some(glass_core::PhysicsData {
                         body_type: "Static".to_string(),
+                        has_rigidbody: false,
                         ..glass_core::PhysicsData::default()
                     });
                 }

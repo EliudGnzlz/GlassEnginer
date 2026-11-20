@@ -1032,7 +1032,7 @@ impl EditorDockingLayout {
                                 if let Some(ent) = sc.get_entity_mut(id) {
                                     if !ent.components.iter().any(|c| c == "RigidBody") {
                                         ent.components.push("RigidBody".into());
-                                        ent.physics = Some(glass_core::PhysicsData::default());
+                                        ent.physics = Some(glass_core::PhysicsData { has_rigidbody: true, ..glass_core::PhysicsData::default() });
                                     }
                                 }
                             }

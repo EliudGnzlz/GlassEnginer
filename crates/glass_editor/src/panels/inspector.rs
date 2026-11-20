@@ -1222,6 +1222,15 @@ impl InspectorPanel {
                         } else if let Some(ref mut phys) = entity.physics {
                             if coincide("Rigidbody") && !phys.has_rigidbody && ui.button("⚙ Añadir Rigidbody").clicked() {
                                 phys.has_rigidbody = true;
+                                // Un cuerpo que era «Static» SOLO por no
+                                // tener Rigidbody (el Collider solo nace
+                                // estático) pasa a dinámico al añadirlo,
+                                // como en Unity: si no, el Rigidbody nuevo
+                                // quedaría fijo y no caería. Un tipo
+                                // deliberado (Kinematic) no se toca.
+                                if phys.body_type == "Static" {
+                                    phys.body_type = "Dynamic".into();
+                                }
                                 entity.components.push("RigidBody".into());
                                 self.show_add_component_menu = false;
                             }

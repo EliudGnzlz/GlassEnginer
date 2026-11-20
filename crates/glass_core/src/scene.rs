@@ -357,7 +357,12 @@ impl Default for PhysicsData {
     fn default() -> Self {
         Self {
             body_type: "Dynamic".into(),
-            has_rigidbody: true,
+            // Corrección de D3m3tr10 (2026-11-19): un objeto nuevo nace
+            // SOLO con Collider, como en Unity; el Rigidbody se añade a
+            // mano. El Default de creación no trae Rigidbody (el default
+            // de CARGA serde es otro: los .json viejos sin el campo
+            // siguen cargando con RB, como fueron creados).
+            has_rigidbody: false,
             has_collider: true,
             interpolate: false,
             mass: 1.0,
@@ -2275,6 +2280,15 @@ mod regression_physics_tests {
         assert!(!phys.has_rigidbody);
         assert!(phys.has_collider);
         assert_eq!(phys.body_type, "Static");
+    }
+
+    #[test]
+    fn default_de_creacion_sin_rigidbody() {
+        // Corrección de D3m3tr10 (2026-11-19): el Default con el que se
+        // CREAN entidades no trae Rigidbody; sí Collider.
+        let phys = PhysicsData::default();
+        assert!(!phys.has_rigidbody);
+        assert!(phys.has_collider);
     }
 
     #[test]
