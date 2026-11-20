@@ -746,16 +746,6 @@ impl EditorDockingLayout {
                 }
             });
 
-            // Selector de escena activa, como la barra de herramientas de Unity:
-            // muestra el nombre actual y permite cambiar sin abrir el menú File.
-            let activa_actual = match scene_manager.lock() {
-                Ok(m) => m.active_scene_name().to_string(),
-                Err(_) => "?".to_string(),
-            };
-            ui.menu_button(format!("🎬 {activa_actual}"), |ui| {
-                self.scene_switcher_menu(ui, scene_manager);
-            });
-
             ui.menu_button("Edit", |ui| {
                 if ui.button("⚙ Preferencias...").clicked() {
                     self.show_preferences_dialog = true;
