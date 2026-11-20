@@ -13,6 +13,14 @@ pub struct RenderStatsSnapshot {
     pub game_draw_calls: u32,
     /// Draw calls emitidos para la vista de escena (editor).
     pub scene_draw_calls: u32,
+    /// Triángulos dibujados en la vista de escena (editor): suma de
+    /// `index_count / 3` de cada lote estático y skinned. u64: el máximo
+    /// de u32 (~4,29e9) cubre 1M × 320 = 3,2e8, pero bastan ~14M de esas
+    /// esferas para desbordarlo; con u64 no hay que saturar ni comprobar.
+    pub scene_triangles: u64,
+    /// Triángulos dibujados en la vista de juego: suma de
+    /// `index_count / 3` de cada lote estático y skinned.
+    pub game_triangles: u64,
     /// Draw calls del pase de sombras del sol.
     pub shadow_draw_calls: u32,
     /// Draw calls del pase de sombras con etapa de vértices de grafo
@@ -59,6 +67,8 @@ mod tests {
             entities_culled: 3,
             game_draw_calls: 7,
             scene_draw_calls: 10,
+            scene_triangles: 1_234,
+            game_triangles: 5_678,
             shadow_draw_calls: 5,
             graph_shadow_draw_calls: 3,
             outline_draw_calls: 2,

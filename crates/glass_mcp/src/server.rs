@@ -1478,7 +1478,9 @@ impl McpServer {
                     "culling_pct": pct,
                     "game_draw_calls": stats.game_draw_calls,
                     "scene_draw_calls": stats.scene_draw_calls,
-                    "shadow_draw_calls": stats.shadow_draw_calls
+                    "shadow_draw_calls": stats.shadow_draw_calls,
+                    "scene_triangles": stats.scene_triangles,
+                    "game_triangles": stats.game_triangles
                 });
                 if stats.entities_considered == 0 {
                     datos.as_object_mut().unwrap().insert(

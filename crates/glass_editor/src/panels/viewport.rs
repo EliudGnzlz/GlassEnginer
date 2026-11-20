@@ -25,6 +25,123 @@ fn frame_aabb(min: [f32; 3], max: [f32; 3]) -> ([f32; 3], f32) {
     (center, dist)
 }
 
+/// Formatea un conteo con puntos de miles (1.234.567), como se lee en español.
+pub fn fmt_miles(n: u64) -> String {
+    let digitos = n.to_string();
+    let mut resultado = String::with_capacity(digitos.len() + digitos.len() / 3);
+    for (indice, caracter) in digitos.chars().enumerate() {
+        if indice > 0 && (digitos.len() - indice).is_multiple_of(3) {
+            resultado.push('.');
+        }
+        resultado.push(caracter);
+    }
+    resultado
+}
+
+/// Contenido del desplegable «⏱ … ms ▾» de la vista de Escena (P8): los
+/// tiempos del frame y la memoria que antes vivían en la pestaña
+/// Frametime, más las estadísticas de render del último frame
+/// recolectado, con los polígonos por vista.
+fn menu_estadisticas_frame(ui: &mut Ui) {
+    const MIB: f64 = 1024.0 * 1024.0;
+
+    ui.set_min_width(240.0);
+
+    let snap = glass_core::profiling::frame_timing_snapshot();
+    let total_ms = snap.total.avg_us / 1000.0;
+    let fps = if snap.total.avg_us > 0.0 {
+        1_000_000.0 / snap.total.avg_us
+    } else {
+        0.0
+    };
+    ui.monospace(format!("FPS {fps:.0} · Total {total_ms:.2} ms"));
+
+    for (nombre, avg_us) in [
+        ("Update", snap.update.avg_us),
+        ("Physics", snap.physics.avg_us),
+        ("Render", snap.render.avg_us),
+    ] {
+        let avg_ms = avg_us / 1000.0;
+        ui.monospace(format!("{nombre:<8} {avg_ms:6.2} ms"));
+    }
+
+    if snap.gpu_samples > 0 {
+        let gpu_ms = snap.gpu_render.avg_us / 1000.0;
+        let nombre = "GPU";
+        ui.monospace(format!("{nombre:<8} {gpu_ms:6.2} ms"));
+    } else {
+        ui.monospace("GPU      sin datos");
+    }
+
+    let mem = glass_core::profiling::process_memory_snapshot();
+    let mut linea = match mem.rss_bytes {
+        Some(bytes) => {
+            let rss_mib = bytes as f64 / MIB;
+            format!("RSS {rss_mib:.1} MiB")
+        }
+        None => "RSS n/d".to_owned(),
+    };
+    if let Some(gpu) = glass_core::profiling::gpu_memory_snapshot() {
+        let usado = gpu.allocated_bytes as f64 / MIB;
+        let capacidad = gpu.capacity_bytes as f64 / MIB;
+        linea.push_str(&format!(" · GPU {usado:.0}/{capacidad:.0} MiB"));
+    }
+    ui.monospace(linea);
+
+    ui.separator();
+
+    let stats = glass_core::render_stats::render_stats_snapshot();
+    if stats.entities_considered == 0 {
+        ui.monospace("Render sin datos (aún sin frames)");
+        return;
+    }
+
+    ui.label(RichText::new("Render").strong());
+
+    let dibujadas = stats
+        .entities_considered
+        .saturating_sub(stats.entities_culled);
+    ui.monospace(format!(
+        "Entidades {}/{} (descartadas {})",
+        fmt_miles(u64::from(dibujadas)),
+        fmt_miles(u64::from(stats.entities_considered)),
+        fmt_miles(u64::from(stats.entities_culled)),
+    ));
+
+    let sombras = u64::from(stats.shadow_draw_calls) + u64::from(stats.graph_shadow_draw_calls);
+    ui.monospace("Draw calls");
+    ui.monospace(format!(
+        "  Escena   {}",
+        fmt_miles(u64::from(stats.scene_draw_calls))
+    ));
+    ui.monospace(format!(
+        "  Juego    {}",
+        fmt_miles(u64::from(stats.game_draw_calls))
+    ));
+    ui.monospace(format!("  Sombras  {}", fmt_miles(sombras)));
+    ui.monospace(format!(
+        "  Contorno {}",
+        fmt_miles(u64::from(stats.outline_draw_calls))
+    ));
+
+    ui.monospace(format!(
+        "Polígonos Escena {}",
+        fmt_miles(stats.scene_triangles)
+    ));
+    ui.monospace(format!(
+        "Polígonos Juego  {}",
+        fmt_miles(stats.game_triangles)
+    ));
+    ui.monospace(format!(
+        "Pipeline binds {}",
+        fmt_miles(u64::from(stats.pipeline_binds))
+    ));
+    ui.monospace(format!(
+        "Descriptor binds {}",
+        fmt_miles(u64::from(stats.descriptor_binds))
+    ));
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GizmoMode {
     View,      // [Q] Mano (Pan / Órbita de cámara)
@@ -289,6 +406,23 @@ impl ViewportPanel {
             // Botón «Gizmos» superpuesto (esquina superior derecha de la
             // vista): controla la rejilla, las placas de nombre y la
             // visibilidad de los gizmos de cada componente integrado.
+            // Botón «⏱ … ms ▾» superpuesto (a la izquierda de «Gizmos»):
+            // el tiempo del frame como desplegable con todas las
+            // estadísticas dentro, incluidos los polígonos (P8; sustituye
+            // a la antigua pestaña Frametime).
+            let total_ms_boton =
+                glass_core::profiling::frame_timing_snapshot().total.avg_us / 1000.0;
+            egui::Area::new(egui::Id::new("frame_stats_escena"))
+                .fixed_pos(rect.right_top() + egui::vec2(-226.0, 6.0))
+                .show(ui.ctx(), |ui| {
+                    // La etiqueta lleva el valor («⏱ 3405.34 ms ▾» con el
+                    // motor frío): sin esto, egui la parte en dos líneas.
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    ui.menu_button(format!("⏱ {total_ms_boton:.2} ms ▾"), |ui| {
+                        menu_estadisticas_frame(ui);
+                    });
+                });
+
             let gizmos_antes = self.gizmos.clone();
             egui::Area::new(egui::Id::new("gizmos_escena"))
                 .fixed_pos(rect.right_top() + egui::vec2(-96.0, 6.0))
@@ -1775,5 +1909,30 @@ impl ViewportPanel {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fmt_miles;
+
+    #[test]
+    fn fmt_miles_cero() {
+        assert_eq!(fmt_miles(0), "0");
+    }
+
+    #[test]
+    fn fmt_miles_sin_separador() {
+        assert_eq!(fmt_miles(999), "999");
+    }
+
+    #[test]
+    fn fmt_miles_con_separadores() {
+        assert_eq!(fmt_miles(1_234_567), "1.234.567");
+    }
+
+    #[test]
+    fn fmt_miles_mil() {
+        assert_eq!(fmt_miles(1000), "1.000");
     }
 }

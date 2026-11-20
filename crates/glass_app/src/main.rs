@@ -6657,11 +6657,24 @@ let resueltos = if body.has_collider {
             }
 
             // Fase 2: estadísticas del frame para la tool MCP.
+            // Triángulos por vista: cada item aporta index_count / 3
+            // (el rango .4 de los lotes es (first_index, index_count)).
+            fn triangulos<I: Iterator<Item = u32>>(index_counts: I) -> u64 {
+                index_counts.map(|n| u64::from(n / 3)).sum()
+            }
+            let scene_triangles = triangulos(
+                scene_batches.iter().map(|b| (b.4).1).chain(scene_skinned.iter().map(|s| (s.4).1)),
+            );
+            let game_triangles = triangulos(
+                game_batches.iter().map(|b| (b.4).1).chain(game_skinned.iter().map(|s| (s.4).1)),
+            );
             glass_core::render_stats::record_render_stats(glass_core::render_stats::RenderStatsSnapshot {
                 entities_considered: stats_considered,
                 entities_culled: stats_culled,
                 game_draw_calls: (game_batches.len() + game_skinned.len()) as u32,
                 scene_draw_calls: (scene_batches.len() + scene_skinned.len()) as u32,
+                scene_triangles,
+                game_triangles,
                 shadow_draw_calls: (shadow_statics.len() + shadow_skinned.len()) as u32,
                 graph_shadow_draw_calls: shadow_graph_statics.len() as u32,
                 outline_draw_calls: stats_outline,
