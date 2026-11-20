@@ -465,10 +465,17 @@ pub fn leer_escena(ruta: &std::path::Path) -> Result<crate::modelo::EscenaIr, cr
             [1.0; 4]
         };
         if mapa_factor.has_value {
-            let factor = vec4_f32(&mapa_factor.value_vec4);
-            for componente in 0..4 {
-                color_base[componente] *= factor[componente];
-            }
+            // El factor (difuso o de color base) es un ESCALAR en ufbx:
+            // vive en la unión del mapa como value_real, así que su vec4
+            // se lee (f, 0, 0, 0). Multiplicar por componentes dejaba el
+            // color en (r·f, 0, 0, 0) — materiales rojos sin verde ni
+            // azul y con alfa 0 (defecto cazado en el test físico de F3
+            // con el edificio Synty y el X Bot). Se escala solo el RGB;
+            // el alfa viene del propio color.
+            let factor = mapa_factor.value_vec4.x as f32;
+            color_base[0] *= factor;
+            color_base[1] *= factor;
+            color_base[2] *= factor;
         }
 
         let textura_base = if mapa_color.texture_enabled {

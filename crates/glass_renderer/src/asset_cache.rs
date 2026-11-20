@@ -197,6 +197,25 @@ impl AssetCache {
         self.animations.insert(key, animations);
     }
 
+    /// Retira la piel de un modelo: destruye su malla con piel y olvida
+    /// la piel y los clips. La usa la recarga en caliente cuando el
+    /// modelo nuevo ya no trae piel: sin esto, los datos viejos
+    /// sobrevivían en caché y la entidad se seguía dibujando por la
+    /// vía con piel con la malla y las articulaciones del modelo
+    /// anterior (en pantalla no se veía nada).
+    pub fn remove_skin(
+        &mut self,
+        device: &ash::Device,
+        allocator: &mut Allocator,
+        name: &str,
+    ) {
+        if let Some(mut mesh) = self.skinned_meshes.remove(name) {
+            mesh.destroy(device, allocator);
+        }
+        self.skins.remove(name);
+        self.animations.remove(name);
+    }
+
     /// Registra los datos CPU de un modelo importado (materiales e imágenes)
     /// bajo la misma clave que su malla GPU.
     pub fn insert_model_data(

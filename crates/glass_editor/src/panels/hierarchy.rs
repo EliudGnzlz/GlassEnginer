@@ -57,6 +57,10 @@ pub struct HierarchyPanel {
     /// Fuente .blend/.fbx soltada cuyo .glb falta o está desactualizado:
     /// la app pide su conversión al vigía que corresponda y la vacía.
     pub pending_conversion: Option<std::path::PathBuf>,
+    /// .glb de un asset soltado que no necesita conversión (el propio
+    /// .glb o el gemelo ya al día de una fuente): la app lo carga en la
+    /// caché y la vacía, como en el viewport.
+    pub pending_carga: Option<std::path::PathBuf>,
 }
 
 impl Default for HierarchyPanel {
@@ -70,6 +74,7 @@ impl Default for HierarchyPanel {
             drag_row_width: 0.0,
             hovered_drop: None,
             pending_conversion: None,
+            pending_carga: None,
         }
     }
 }
@@ -675,6 +680,20 @@ impl HierarchyPanel {
                             // sustituye al cubo de respaldo al llegar.
                             if glass_renderer::watcher::necesita_conversion(&ruta) {
                                 self.pending_conversion = Some(ruta.clone());
+                            } else {
+                                // Sin conversión pendiente: carga
+                                // directa del .glb, como en el viewport.
+                                let glb = if ruta
+                                    .extension()
+                                    .is_some_and(|e| e == "glb")
+                                {
+                                    ruta.clone()
+                                } else {
+                                    ruta.with_extension("glb")
+                                };
+                                if glb.exists() {
+                                    self.pending_carga = Some(glb);
+                                }
                             }
                             log::info!(
                                 "Asset '{}' instanciado como entidad {} en el origen",

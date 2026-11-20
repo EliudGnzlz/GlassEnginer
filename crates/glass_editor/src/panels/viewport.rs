@@ -148,6 +148,11 @@ pub struct ViewportPanel {
     // Fuente .blend/.fbx soltada cuyo .glb falta o está desactualizado:
     // la app pide su conversión al vigía que corresponda y la vacía.
     pub pending_conversion: Option<std::path::PathBuf>,
+    // .glb de un asset soltado que no necesita conversión (el propio
+    // .glb o el gemelo ya al día de una fuente): la app lo carga en la
+    // caché y la vacía. Sin esto, la entidad nacía con el cubo de
+    // respaldo y nadie cargaba su modelo hasta recargar la escena.
+    pub pending_carga: Option<std::path::PathBuf>,
 }
 
 impl Default for ViewportPanel {
@@ -179,6 +184,7 @@ impl Default for ViewportPanel {
             scene_hovered: false,
             mesh_bounds: std::collections::HashMap::new(),
             pending_conversion: None,
+            pending_carga: None,
         }
     }
 }
@@ -1370,6 +1376,26 @@ impl ViewportPanel {
                                     // y al llegar el modelo real la sustituye.
                                     if glass_renderer::watcher::necesita_conversion(&ruta) {
                                         self.pending_conversion = Some(ruta.clone());
+                                    } else {
+                                        // Sin conversión pendiente (el
+                                        // asset ES el .glb o su gemelo ya
+                                        // está al día): se pide la carga
+                                        // directa de ese .glb, porque la
+                                        // recarga bajo demanda de la app
+                                        // solo cubre modelos expulsados y
+                                        // la entidad se quedaría con el
+                                        // cubo de respaldo.
+                                        let glb = if ruta
+                                            .extension()
+                                            .is_some_and(|e| e == "glb")
+                                        {
+                                            ruta.clone()
+                                        } else {
+                                            ruta.with_extension("glb")
+                                        };
+                                        if glb.exists() {
+                                            self.pending_carga = Some(glb);
+                                        }
                                     }
                                     log::info!(
                                         "Asset '{}' instanciado como entidad {} en [{:.2}, {:.2}, {:.2}]",

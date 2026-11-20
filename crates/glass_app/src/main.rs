@@ -3678,7 +3678,15 @@ fn lanzar_hub_al_salir() {
         model: &glass_renderer::mesh::LoadedModel,
         stem: &str,
     ) {
-        let Some(skin) = &model.skin else { return };
+        let Some(skin) = &model.skin else {
+            // El modelo (ya) no trae piel: si la caché guarda la de una
+            // versión anterior del mismo stem (recarga en caliente de
+            // un modelo con piel a uno sin ella), hay que retirarla o
+            // la entidad se dibuja por la vía con piel con datos del
+            // modelo viejo y no se ve nada.
+            cache.remove_skin(&renderer.device, alloc, stem);
+            return;
+        };
         let upload_res = MeshLoader::upload_skinned_to_gpu(
             &renderer.device,
             alloc,
@@ -3777,6 +3785,21 @@ fn lanzar_hub_al_salir() {
                     log::info!("Conversión solicitada al soltar: {:?}", ruta);
                     watcher.solicitar_conversion(&ruta);
                 }
+            }
+            // Cargas directas: assets soltados cuyo .glb ya existe y
+            // está al día (el propio .glb o el gemelo de una fuente ya
+            // convertida). Sin conversión no hay evento del vigía, así
+            // que la carga se hace aquí, igual que la de una recarga.
+            let mut cargas: Vec<std::path::PathBuf> = Vec::new();
+            if let Some(p) = self.editor_layout.viewport.pending_carga.take() {
+                cargas.push(p);
+            }
+            if let Some(p) = self.editor_layout.hierarchy.pending_carga.take() {
+                cargas.push(p);
+            }
+            for ruta in cargas {
+                log::info!("Carga directa de modelo al soltar: {:?}", ruta);
+                self.cargar_modelo_desde_glb(&ruta);
             }
         }
     }
