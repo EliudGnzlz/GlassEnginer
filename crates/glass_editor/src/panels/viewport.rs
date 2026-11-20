@@ -549,7 +549,7 @@ impl ViewportPanel {
                                             ent.transform.scale,
                                         )
                                     });
-                                gizmo_3d::draw_selection_bounding_box(
+                                gizmo_3d::draw_selection_outline(
                                     painter,
                                     ent,
                                     &world,
@@ -1465,7 +1465,7 @@ impl ViewportPanel {
                         if let Some(w) = world.get(&id) {
                             // Pivote al centro de los bounds en mundo y distancia
                             // según su tamaño. Los extents salen de la misma
-                            // cuenta que draw_selection_bounding_box: medias
+                            // cuenta que draw_selection_outline: medias
                             // extensiones = |escala de mundo| · 0.5 y las 8
                             // esquinas locales transformadas por la matriz.
                             let scale = glass_core::mat4_scale(*w);

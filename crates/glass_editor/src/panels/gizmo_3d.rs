@@ -1016,9 +1016,62 @@ pub fn vertices_rejilla(
     vertices
 }
 
-/// Dibuja la caja delimitadora 3D orientada (12 aristas con halo y esquinas) estilo Unity
-/// para el GameObject seleccionado en la ventana de escena.
-pub fn draw_selection_bounding_box(
+/// Factor al que se reduce el contorno de selección respecto al tamaño
+/// real del objeto: un 25% más pequeño de como salía la caja delimitadora
+/// blanca que dibujaba antes (petición del usuario, P5).
+pub const FACTOR_CONTORNO_SELECCION: f32 = 0.75;
+
+/// Forma y centro del contorno de selección en espacio LOCAL, con el
+/// tamaño ya reducido a `FACTOR_CONTORNO_SELECCION`. La forma es la del
+/// PROPIO objeto según su nombre de modelo (misma coincidencia exacta
+/// que el resto del editor): "sphere" → bola, "capsule" → cápsula,
+/// "cylinder" → cilindro, cualquier otro → la caja de sus cotas.
+pub fn forma_contorno_seleccion(
+    modelo: &str,
+    lo: [f32; 3],
+    hi: [f32; 3],
+) -> (glass_physics::ColliderShape, [f32; 3]) {
+    use glass_physics::ColliderShape;
+    let k = FACTOR_CONTORNO_SELECCION;
+    let c = [
+        (lo[0] + hi[0]) * 0.5,
+        (lo[1] + hi[1]) * 0.5,
+        (lo[2] + hi[2]) * 0.5,
+    ];
+    let h = [
+        ((hi[0] - lo[0]) * 0.5).max(0.0),
+        ((hi[1] - lo[1]) * 0.5).max(0.0),
+        ((hi[2] - lo[2]) * 0.5).max(0.0),
+    ];
+    let forma = match modelo {
+        "sphere" => ColliderShape::Ball {
+            radius: h[0].max(h[1]).max(h[2]) * k,
+        },
+        "capsule" => {
+            // Cotas de la cápsula integrada: [r, hh + r, r].
+            let r = h[0];
+            ColliderShape::Capsule {
+                half_height: (h[1] - r).max(0.0) * k,
+                radius: r * k,
+            }
+        }
+        "cylinder" => ColliderShape::Cylinder {
+            half_height: h[1] * k,
+            radius: h[0] * k,
+        },
+        _ => ColliderShape::Cuboid {
+            half_extents: [h[0] * k, h[1] * k, h[2] * k],
+        },
+    };
+    (forma, c)
+}
+
+/// Dibuja el contorno de selección del GameObject seleccionado: la forma
+/// del propio objeto (bola/cápsula/cilindro/caja según su malla), en
+/// negro y un 25% más pequeña que su tamaño real. Sustituye a la caja
+/// delimitadora blanca (P5). La etiqueta con el nombre se conserva tal
+/// cual, anclada sobre la esquina más alta de la caja reducida.
+pub fn draw_selection_outline(
     painter: &Painter,
     entity: &EntityData,
     world: &[f32; 16],
@@ -1027,62 +1080,34 @@ pub fn draw_selection_bounding_box(
     bounds: &std::collections::HashMap<String, ([f32; 3], [f32; 3])>,
     mostrar_nombre: bool,
 ) {
-    // La caja envuelve la geometría real de la malla (sus cotas locales).
-    // Al transformarla por `world` hereda la rotación, la escala y la
-    // traslación del padre, igual que la malla que envuelve.
+    // Las cotas envuelven la geometría real de la malla (espacio local).
+    // Al transformar por `world` heredan la rotación, la escala y la
+    // traslación del padre, igual que la malla que envuelven.
     let (lo, hi) = entity_local_bounds(entity, bounds);
+    let modelo = entity.mesh.as_ref().map(|m| m.model.as_str()).unwrap_or("");
+    let (forma, centro) = forma_contorno_seleccion(modelo, lo, hi);
 
-    // 8 esquinas en espacio local
-    let corners_local = aabb_corners(lo, hi);
-
-    // Transformar cada esquina a coordenadas de mundo con la matriz ya
-    // resuelta (incluye la rotación del cuaternión autoritativo y la escala
-    // heredada del padre).
-    let mut corners_world = [[0.0f32; 3]; 8];
-    for (i, c) in corners_local.iter().enumerate() {
-        corners_world[i] = glass_core::mat4_transform_point(*world, *c);
-    }
-
-    // Proyectar las 8 esquinas a pantalla
-    let mut corners_screen: [Option<Pos2>; 8] = [None; 8];
-    for (i, p) in corners_world.iter().enumerate() {
-        corners_screen[i] = world_to_screen(*p, vp, rect);
-    }
-
-    // 12 aristas del paralelepípedo
-    const EDGES: [(usize, usize); 12] = [
-        (0, 1), (1, 2), (2, 3), (3, 0), // Base
-        (4, 5), (5, 6), (6, 7), (7, 4), // Techo
-        (0, 4), (1, 5), (2, 6), (3, 7), // Pilares verticales
-    ];
-
-    // Colores de la selección: blanco a petición del usuario (en lugar del naranja de Unity), líneas un 25% más finas
-    let halo_stroke = Stroke::new(2.6, Color32::from_rgba_unmultiplied(255, 255, 255, 120));
-    let main_stroke = Stroke::new(1.5, Color32::WHITE);
-    let corner_fill = Color32::WHITE;
-
-    // Dibujar las 12 aristas
-    for &(a, b) in &EDGES {
-        if let (Some(pa), Some(pb)) = (corners_screen[a], corners_screen[b]) {
-            painter.line_segment([pa, pb], halo_stroke);
-            painter.line_segment([pa, pb], main_stroke);
-        }
-    }
-
-    // Dibujar pequeños vértices ancla en las esquinas visibles
-    for opt_pt in &corners_screen {
-        if let Some(pt) = *opt_pt {
-            painter.circle_filled(pt, 2.25, corner_fill);
-            painter.circle_stroke(pt, 2.25, Stroke::new(0.75, Color32::BLACK));
-        }
-    }
+    dibujar_formas(painter, &[(forma, centro)], world, vp, rect, Color32::BLACK, 1.5);
 
     // Etiqueta flotante con el nombre del GameObject sobre el objeto
-    // (solo si el menú Gizmos la tiene activa).
+    // (solo si el menú Gizmos la tiene activa): se ancla en la esquina
+    // proyectada más alta de la caja reducida al 75%.
     if mostrar_nombre {
+        let k = FACTOR_CONTORNO_SELECCION;
+        let lo_r = [
+            centro[0] - ((hi[0] - lo[0]) * 0.5).max(0.0) * k,
+            centro[1] - ((hi[1] - lo[1]) * 0.5).max(0.0) * k,
+            centro[2] - ((hi[2] - lo[2]) * 0.5).max(0.0) * k,
+        ];
+        let hi_r = [
+            centro[0] + ((hi[0] - lo[0]) * 0.5).max(0.0) * k,
+            centro[1] + ((hi[1] - lo[1]) * 0.5).max(0.0) * k,
+            centro[2] + ((hi[2] - lo[2]) * 0.5).max(0.0) * k,
+        ];
         let mut top_screen_pos: Option<Pos2> = None;
-        for opt_pt in &corners_screen {
-            if let Some(pt) = *opt_pt {
+        for c in aabb_corners(lo_r, hi_r) {
+            let p_mundo = glass_core::mat4_transform_point(*world, c);
+            if let Some(pt) = world_to_screen(p_mundo, vp, rect) {
                 top_screen_pos = match top_screen_pos {
                     None => Some(pt),
                     Some(cur) => {
@@ -1196,7 +1221,7 @@ pub fn collider_dibujo(ent: &EntityData, world_scale: [f32; 3]) -> ColliderDibuj
 /// Dibuja las 12 aristas del paralelepípedo local [lo, hi] transformado por
 /// `world`, en una sola pasada (sin halo ni vértices ancla, a diferencia de
 /// la caja de selección). Mismo orden de esquinas y aristas que
-/// `draw_selection_bounding_box`.
+/// `draw_selection_outline`.
 #[allow(clippy::too_many_arguments)]
 pub fn dibujar_caja(
     painter: &Painter,
@@ -2112,6 +2137,252 @@ mod tests_picking {
             assert!(dist < 0.05, "el rayo no pasa por {p:?}: dist {dist}");
         }
     }
+
+fn aprox_p5(a: f32, b: f32) -> bool {
+    (a - b).abs() <= 1e-6
+}
+
+fn assert_centro_p5(centro: [f32; 3], esperado: [f32; 3], contexto: &str) {
+    for i in 0..3 {
+        assert!(
+            aprox_p5(centro[i], esperado[i]),
+            "{}: centro eje {} se esperaba {}, se obtuvo {}",
+            contexto,
+            i,
+            esperado[i],
+            centro[i]
+        );
+    }
+}
+
+#[test]
+fn contorno_seleccion_esfera_unitaria() {
+    let (forma, centro) = super::forma_contorno_seleccion(
+        "sphere",
+        [-0.5, -0.5, -0.5],
+        [0.5, 0.5, 0.5],
+    );
+
+    assert_centro_p5(centro, [0.0, 0.0, 0.0], "esfera unitaria");
+
+    match forma {
+        glass_physics::ColliderShape::Ball { radius } => {
+            assert!(
+                aprox_p5(radius, 0.375),
+                "esfera unitaria: radio se esperaba 0.375, se obtuvo {}",
+                radius
+            );
+        }
+        otra => panic!("esfera unitaria: se esperaba Ball, se obtuvo {:?}", otra),
+    }
+}
+
+#[test]
+fn contorno_seleccion_esfera_escalada_no_uniforme() {
+    let (forma, centro) = super::forma_contorno_seleccion(
+        "sphere",
+        [-1.0, -1.0, -1.0],
+        [1.0, 3.0, 1.0],
+    );
+
+    assert_centro_p5(centro, [0.0, 1.0, 0.0], "esfera escalada no uniforme");
+
+    match forma {
+        glass_physics::ColliderShape::Ball { radius } => {
+            assert!(
+                aprox_p5(radius, 1.5),
+                "esfera escalada no uniforme: radio se esperaba 1.5, se obtuvo {}",
+                radius
+            );
+        }
+        otra => panic!(
+            "esfera escalada no uniforme: se esperaba Ball, se obtuvo {:?}",
+            otra
+        ),
+    }
+}
+
+#[test]
+fn contorno_seleccion_capsula_preset() {
+    let (forma, centro) = super::forma_contorno_seleccion(
+        "capsule",
+        [-0.5, -2.0, -0.5],
+        [0.5, 2.0, 0.5],
+    );
+
+    assert_centro_p5(centro, [0.0, 0.0, 0.0], "cápsula preset");
+
+    match forma {
+        glass_physics::ColliderShape::Capsule {
+            half_height,
+            radius,
+        } => {
+            assert!(
+                aprox_p5(half_height, 1.125),
+                "cápsula preset: half_height se esperaba 1.125, se obtuvo {}",
+                half_height
+            );
+            assert!(
+                aprox_p5(radius, 0.375),
+                "cápsula preset: radius se esperaba 0.375, se obtuvo {}",
+                radius
+            );
+        }
+        otra => panic!("cápsula preset: se esperaba Capsule, se obtuvo {:?}", otra),
+    }
+}
+
+#[test]
+fn contorno_seleccion_cilindro() {
+    let (forma, centro) = super::forma_contorno_seleccion(
+        "cylinder",
+        [-0.5, -1.0, -0.5],
+        [0.5, 1.0, 0.5],
+    );
+
+    assert_centro_p5(centro, [0.0, 0.0, 0.0], "cilindro");
+
+    match forma {
+        glass_physics::ColliderShape::Cylinder {
+            half_height,
+            radius,
+        } => {
+            assert!(
+                aprox_p5(half_height, 0.75),
+                "cilindro: half_height se esperaba 0.75, se obtuvo {}",
+                half_height
+            );
+            assert!(
+                aprox_p5(radius, 0.375),
+                "cilindro: radius se esperaba 0.375, se obtuvo {}",
+                radius
+            );
+        }
+        otra => panic!("cilindro: se esperaba Cylinder, se obtuvo {:?}", otra),
+    }
+}
+
+#[test]
+fn contorno_seleccion_cubo_y_modelo_cualquiera_son_cuboid() {
+    let (forma_cubo, centro_cubo) = super::forma_contorno_seleccion(
+        "cube",
+        [-0.5, -0.5, -0.5],
+        [0.5, 0.5, 0.5],
+    );
+
+    assert_centro_p5(centro_cubo, [0.0, 0.0, 0.0], "cubo");
+
+    match forma_cubo {
+        glass_physics::ColliderShape::Cuboid { half_extents } => {
+            for (i, he) in half_extents.iter().enumerate() {
+                assert!(
+                    aprox_p5(*he, 0.375),
+                    "cubo: half_extents[{}] se esperaba 0.375, se obtuvo {}",
+                    i,
+                    he
+                );
+            }
+        }
+        otra => panic!("cubo: se esperaba Cuboid, se obtuvo {:?}", otra),
+    }
+
+    let (forma_xbot, centro_xbot) = super::forma_contorno_seleccion(
+        "xbot",
+        [-0.4, 0.0, -0.3],
+        [0.4, 1.8, 0.3],
+    );
+
+    assert_centro_p5(centro_xbot, [0.0, 0.9, 0.0], "xbot");
+
+    match forma_xbot {
+        glass_physics::ColliderShape::Cuboid { half_extents } => {
+            let esperado = [0.3, 0.675, 0.225];
+            for i in 0..3 {
+                assert!(
+                    aprox_p5(half_extents[i], esperado[i]),
+                    "xbot: half_extents[{}] se esperaba {}, se obtuvo {}",
+                    i,
+                    esperado[i],
+                    half_extents[i]
+                );
+            }
+        }
+        otra => panic!("xbot: se esperaba Cuboid, se obtuvo {:?}", otra),
+    }
+}
+
+#[test]
+fn contorno_seleccion_cotas_degeneradas_no_producen_nan() {
+    let lo = [1.0, 2.0, 3.0];
+    let hi = lo;
+
+    for modelo in ["sphere", "capsule", "cylinder", "cube", "xbot", ""] {
+        let contexto = format!("cotas degeneradas para {:?}", modelo);
+        let (forma, centro) = super::forma_contorno_seleccion(modelo, lo, hi);
+
+        assert_centro_p5(centro, [1.0, 2.0, 3.0], &contexto);
+
+        match forma {
+            glass_physics::ColliderShape::Ball { radius } => {
+                assert!(
+                    radius.is_finite() && radius >= 0.0 && aprox_p5(radius, 0.0),
+                    "{}: radio inválido o distinto de 0: {}",
+                    contexto,
+                    radius
+                );
+            }
+            glass_physics::ColliderShape::Capsule {
+                half_height,
+                radius,
+            } => {
+                assert!(
+                    half_height.is_finite()
+                        && half_height >= 0.0
+                        && aprox_p5(half_height, 0.0),
+                    "{}: half_height inválido o distinto de 0: {}",
+                    contexto,
+                    half_height
+                );
+                assert!(
+                    radius.is_finite() && radius >= 0.0 && aprox_p5(radius, 0.0),
+                    "{}: radio inválido o distinto de 0: {}",
+                    contexto,
+                    radius
+                );
+            }
+            glass_physics::ColliderShape::Cylinder {
+                half_height,
+                radius,
+            } => {
+                assert!(
+                    half_height.is_finite()
+                        && half_height >= 0.0
+                        && aprox_p5(half_height, 0.0),
+                    "{}: half_height inválido o distinto de 0: {}",
+                    contexto,
+                    half_height
+                );
+                assert!(
+                    radius.is_finite() && radius >= 0.0 && aprox_p5(radius, 0.0),
+                    "{}: radio inválido o distinto de 0: {}",
+                    contexto,
+                    radius
+                );
+            }
+            glass_physics::ColliderShape::Cuboid { half_extents } => {
+                for (i, he) in half_extents.iter().enumerate() {
+                    assert!(
+                        he.is_finite() && *he >= 0.0 && aprox_p5(*he, 0.0),
+                        "{}: half_extents[{}] inválido o distinto de 0: {}",
+                        contexto,
+                        i,
+                        he
+                    );
+                }
+            }
+        }
+    }
+}
 
     #[test]
     fn caja_de_seleccion_usa_las_cotas_reales() {
