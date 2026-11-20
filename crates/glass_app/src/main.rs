@@ -781,6 +781,7 @@ impl SceneBridge for EngineSceneBridge {
             0 => "Directional",
             1 => "Point",
             2 => "Spot",
+            3 => "Area",
             _ => return false,
         };
         light.light_type = nuevo_tipo.to_string();
@@ -9059,7 +9060,7 @@ fn recolectar_luces_puntuales(
             continue;
         }
         let Some(l) = ent.light.as_ref() else { continue };
-        if l.light_type != "Point" && l.light_type != "Spot" {
+        if l.light_type != "Point" && l.light_type != "Spot" && l.light_type != "Area" {
             continue;
         }
         let p = mundos
@@ -9144,7 +9145,7 @@ fn recolectar_luces_escena(
             continue;
         }
         let Some(l) = ent.light.as_ref() else { continue };
-        if l.light_type != "Point" && l.light_type != "Spot" {
+        if l.light_type != "Point" && l.light_type != "Spot" && l.light_type != "Area" {
             continue;
         }
         let m_opt = mundos.get(&ent.id);

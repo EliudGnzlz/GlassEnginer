@@ -1071,7 +1071,7 @@ impl InspectorPanel {
                 let mut accion_light = AccionCabecera::Nada;
                 let mut remove_light = false;
                 if let Some(ref mut light) = entity.light {
-                    seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, self.portapapeles.as_ref(), &mut accion_light, |ui| {
+seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, self.portapapeles.as_ref(), &mut accion_light, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Tipo de Luz:");
                             egui::ComboBox::from_id_salt(format!("light_type_{}", entity.id))
@@ -1080,6 +1080,7 @@ impl InspectorPanel {
                                     ui.selectable_value(&mut light.light_type, "Directional".into(), "☼ Directional (Sol / Luz infinita)");
                                     ui.selectable_value(&mut light.light_type, "Point".into(), "✦ Point (Luz omnidireccional)");
                                     ui.selectable_value(&mut light.light_type, "Spot".into(), "⎚ Spot (Foco cónico)");
+                                    ui.selectable_value(&mut light.light_type, "Area".into(), "▭ Area (Rectangular)");
                                 });
                         });
                         ui.horizontal(|ui| {
@@ -1094,6 +1095,42 @@ impl InspectorPanel {
                             ui.horizontal(|ui| {
                                 ui.label("Rango:");
                                 ui.add(DragValue::new(&mut light.range).speed(0.2).range(0.1..=100.0).suffix(" m"));
+                            });
+                        }
+                        if light.light_type == "Spot" {
+                            ui.horizontal(|ui| {
+                                ui.label("Ángulo exterior:");
+                                let respuesta = ui.add(
+                                    DragValue::new(&mut light.spot_outer_deg)
+                                        .speed(0.5)
+                                        .range(1.0..=179.0)
+                                        .suffix("°"),
+                                );
+                                if respuesta.changed() && light.spot_inner_deg > light.spot_outer_deg {
+                                    light.spot_inner_deg = light.spot_outer_deg;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Ángulo interior:");
+                                let respuesta = ui.add(
+                                    DragValue::new(&mut light.spot_inner_deg)
+                                        .speed(0.5)
+                                        .range(0.0..=179.0)
+                                        .suffix("°"),
+                                );
+                                if respuesta.changed() && light.spot_inner_deg > light.spot_outer_deg {
+                                    light.spot_inner_deg = light.spot_outer_deg;
+                                }
+                            });
+                        }
+                        if light.light_type == "Area" {
+                            ui.horizontal(|ui| {
+                                ui.label("Ancho:");
+                                ui.add(DragValue::new(&mut light.area_width).speed(0.1).range(0.1..=50.0).suffix(" m"));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Alto:");
+                                ui.add(DragValue::new(&mut light.area_height).speed(0.1).range(0.1..=50.0).suffix(" m"));
                             });
                         }
                     });

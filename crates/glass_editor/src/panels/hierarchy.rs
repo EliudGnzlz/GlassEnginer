@@ -15,6 +15,8 @@ pub enum EntityPreset {
     Plane,
     DirectionalLight,
     PointLight,
+    SpotLight,
+    AreaLight,
     AudioSource,
     Camera,
     Canvas,
@@ -174,6 +176,14 @@ impl HierarchyPanel {
             }
             if ui.button("✦ Luz Puntual (Point Light)").clicked() {
                 *pending_action = Some(HierarchyAction::Create(EntityPreset::PointLight));
+                ui.close();
+            }
+            if ui.button("⎚ Luz de Foco (Spot Light)").clicked() {
+                *pending_action = Some(HierarchyAction::Create(EntityPreset::SpotLight));
+                ui.close();
+            }
+            if ui.button("▭ Luz de Área (Area Light)").clicked() {
+                *pending_action = Some(HierarchyAction::Create(EntityPreset::AreaLight));
                 ui.close();
             }
         });
@@ -871,6 +881,43 @@ impl HierarchyPanel {
                 );
                 if let Some(ent) = scene.get_entity_mut(id) {
                     ent.transform.position = [0.0, 3.0, 0.0];
+                    // El tipo hay que fijarlo: la entidad nace con
+                    // LightData::default(), que es Directional.
+                    if let Some(l) = ent.light.as_mut() {
+                        l.light_type = "Point".into();
+                    }
+                }
+                id
+            }
+            EntityPreset::SpotLight => {
+                let id = scene.create_entity(
+                    "Spot Light".into(),
+                    vec!["Transform".into(), "Light".into()],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    ent.transform.position = [0.0, 3.0, 0.0];
+                    // El cono apunta a su forward (−Z); inclinado 45°
+                    // hacia abajo ilumina el suelo frente a él.
+                    ent.transform.set_rotation_euler([-45.0, 0.0, 0.0]);
+                    if let Some(l) = ent.light.as_mut() {
+                        l.light_type = "Spot".into();
+                    }
+                }
+                id
+            }
+            EntityPreset::AreaLight => {
+                let id = scene.create_entity(
+                    "Area Light".into(),
+                    vec!["Transform".into(), "Light".into()],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    ent.transform.position = [0.0, 3.0, 0.0];
+                    // El rectángulo emite por su forward (−Z); inclinado
+                    // 45° hacia abajo, como el foco.
+                    ent.transform.set_rotation_euler([-45.0, 0.0, 0.0]);
+                    if let Some(l) = ent.light.as_mut() {
+                        l.light_type = "Area".into();
+                    }
                 }
                 id
             }

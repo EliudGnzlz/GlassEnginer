@@ -1694,7 +1694,46 @@ pub fn draw_camera_gizmo(
     }
 }
 
-/// Dibuja el Gizmo 3D de una Luz: Icono simple, rayos/orientación de sol (Directional) o esfera de alcance (Point Light).
+/// Sanea el ángulo exterior COMPLETO de una Spot a [1°, 179°], igual que
+/// `spot_cone_cos()`. Un valor no finito cae al valor por defecto (45°).
+fn outer_saneado(outer_deg: f32) -> f32 {
+    if outer_deg.is_finite() {
+        outer_deg.clamp(1.0, 179.0)
+    } else {
+        45.0
+    }
+}
+
+/// Geometría del cono de una luz Spot: (longitud, radio de la base)
+/// para un alcance y un ángulo exterior COMPLETO en grados.
+pub fn cono_spot(range: f32, outer_deg: f32) -> (f32, f32) {
+    let medio = (outer_saneado(outer_deg) * 0.5).to_radians();
+    (range, range * medio.tan())
+}
+
+#[cfg(test)]
+mod tests_cono_spot {
+    use super::*;
+
+    #[test]
+    fn cono_spot_45_grados() {
+        let (longitud, radio) = cono_spot(10.0, 45.0);
+        assert!((longitud - 10.0).abs() < 1e-6);
+        // 10 × tan(22.5°) = 4.1421…
+        assert!((radio - 4.142).abs() < 1e-3, "radio = {radio}");
+    }
+
+    #[test]
+    fn cono_spot_acota_angulo_a_179() {
+        let (longitud, radio) = cono_spot(10.0, 200.0);
+        let esperado = 10.0 * (89.5_f32).to_radians().tan(); // ≈ 1145.9
+        assert!((longitud - 10.0).abs() < 1e-6);
+        assert!(((radio - esperado) / esperado).abs() < 1e-4, "radio = {radio}");
+        assert_eq!(cono_spot(10.0, 200.0), cono_spot(10.0, 179.0));
+    }
+}
+
+/// Dibuja el Gizmo 3D de una Luz: Icono simple, rayos/orientación de sol (Directional), esfera de alcance (Point Light), cono (Spot) o rectángulo emisor (Area).
 ///
 /// `icon_px` es el diámetro final del badge en píxeles (escala y distancia ya
 /// aplicadas por el llamador). `mostrar_icono` controla badge y nombre (sin
@@ -1797,6 +1836,148 @@ pub fn draw_light_gizmo(
                     painter.line_segment([pt, pt - arrow_dir * 7.0 + arrow_side * 3.5], ray_stroke);
                     painter.line_segment([pt, pt - arrow_dir * 7.0 - arrow_side * 3.5], ray_stroke);
                 }
+            }
+        } else if ltype == "Spot" {
+            // Mismo estilo que la esfera de alcance de Point.
+            let stroke = Stroke::new(1.4, Color32::from_rgba_unmultiplied(255, 215, 50, 180));
+            const CIRCLE_SEGS: usize = 32;
+
+            // Ángulo exterior con el mismo saneo [1°, 179°] que `spot_cone_cos()`.
+            let outer = outer_saneado(
+                light_entity.light.as_ref().map(|l| l.spot_outer_deg).unwrap_or(45.0),
+            );
+            let (longitud, radio) = cono_spot(range, outer);
+
+            // Centro de la base: pos + l_dir × longitud.
+            let centro = [
+                pos[0] + l_dir[0] * longitud,
+                pos[1] + l_dir[1] * longitud,
+                pos[2] + l_dir[2] * longitud,
+            ];
+
+            // Base ortonormal (u, v) del plano perpendicular a l_dir.
+            let cruz = |a: [f32; 3], b: [f32; 3]| -> [f32; 3] {
+                [
+                    a[1] * b[2] - a[2] * b[1],
+                    a[2] * b[0] - a[0] * b[2],
+                    a[0] * b[1] - a[1] * b[0],
+                ]
+            };
+            let normaliza = |a: [f32; 3]| -> [f32; 3] {
+                let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt().max(1e-6);
+                [a[0] / l, a[1] / l, a[2] / l]
+            };
+            let up_approx: [f32; 3] = if l_dir[1].abs() > 0.99 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+            let u = normaliza(cruz(l_dir, up_approx));
+            let v = normaliza(cruz(l_dir, u));
+
+            // Punto de la circunferencia base para un ángulo theta.
+            let punto_base = |theta: f32| -> [f32; 3] {
+                let (s, c) = theta.sin_cos();
+                [
+                    centro[0] + radio * (c * u[0] + s * v[0]),
+                    centro[1] + radio * (c * u[1] + s * v[1]),
+                    centro[2] + radio * (c * u[2] + s * v[2]),
+                ]
+            };
+
+            // Círculo base (mismo patrón prev_pt que la rama Point).
+            let mut prev_pt: Option<Pos2> = None;
+            for i in 0..=CIRCLE_SEGS {
+                let theta = (i as f32 / CIRCLE_SEGS as f32) * std::f32::consts::TAU;
+                if let Some(sc_pt) = world_to_screen(punto_base(theta), vp, rect) {
+                    if let Some(prev) = prev_pt {
+                        painter.line_segment([prev, sc_pt], stroke);
+                    }
+                    prev_pt = Some(sc_pt);
+                } else {
+                    prev_pt = None;
+                }
+            }
+
+            // 4 generatrices desde el vértice (pos) a 0°, 90°, 180° y 270°.
+            let sc_vertice = world_to_screen(pos, vp, rect);
+            for k in 0..4 {
+                let theta = k as f32 * std::f32::consts::FRAC_PI_2;
+                if let (Some(a), Some(b)) = (sc_vertice, world_to_screen(punto_base(theta), vp, rect)) {
+                    painter.line_segment([a, b], stroke);
+                }
+            }
+
+            // Etiqueta sobre el centro de la base.
+            if let Some(sc_centro) = world_to_screen(centro, vp, rect) {
+                painter.text(
+                    sc_centro - egui::vec2(0.0, 6.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    format!("⎚ Cono: {outer:.0}° · {range:.1} m"),
+                    egui::FontId::proportional(12.0),
+                    Color32::from_rgba_unmultiplied(255, 215, 50, 220),
+                );
+            }
+        } else if ltype == "Area" {
+            // Mismo estilo que la esfera de alcance de Point.
+            let stroke = Stroke::new(1.4, Color32::from_rgba_unmultiplied(255, 215, 50, 180));
+
+            // Tamaño del emisor (metros); se evita un rectángulo degenerado o NaN.
+            let (w, h) = light_entity
+                .light
+                .as_ref()
+                .map(|l| (l.area_width, l.area_height))
+                .unwrap_or((5.0, 3.0));
+            let (w, h) = (w.max(0.01), h.max(0.01));
+
+            // Ejes X/Y locales normalizados (columnas 0 y 1 de `world`),
+            // con un respaldo si la escala de la entidad es nula.
+            let normaliza_o = |a: [f32; 3], respaldo: [f32; 3]| -> [f32; 3] {
+                let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+                if l > 1e-6 { [a[0] / l, a[1] / l, a[2] / l] } else { respaldo }
+            };
+            let ex = normaliza_o([world[0], world[1], world[2]], [1.0, 0.0, 0.0]);
+            let ey = normaliza_o([world[4], world[5], world[6]], [0.0, 1.0, 0.0]);
+
+            // Esquina = pos + ex × (sx·w/2) + ey × (sy·h/2), con sx, sy ∈ {-1, +1}.
+            let esquina = |sx: f32, sy: f32| -> [f32; 3] {
+                let (hx, hy) = (sx * w * 0.5, sy * h * 0.5);
+                [
+                    pos[0] + ex[0] * hx + ey[0] * hy,
+                    pos[1] + ex[1] * hx + ey[1] * hy,
+                    pos[2] + ex[2] * hx + ey[2] * hy,
+                ]
+            };
+            let esquinas = [
+                world_to_screen(esquina(-1.0, -1.0), vp, rect),
+                world_to_screen(esquina(1.0, -1.0), vp, rect),
+                world_to_screen(esquina(1.0, 1.0), vp, rect),
+                world_to_screen(esquina(-1.0, 1.0), vp, rect),
+            ];
+
+            // Las 4 aristas (solo si ambos extremos se proyectan).
+            for i in 0..4 {
+                if let (Some(a), Some(b)) = (esquinas[i], esquinas[(i + 1) % 4]) {
+                    painter.line_segment([a, b], stroke);
+                }
+            }
+
+            // Sentido de emisión: segmento de 0.5 m desde el centro en l_dir.
+            let sc_centro = world_to_screen(pos, vp, rect);
+            let punta = [
+                pos[0] + l_dir[0] * 0.5,
+                pos[1] + l_dir[1] * 0.5,
+                pos[2] + l_dir[2] * 0.5,
+            ];
+            if let (Some(a), Some(b)) = (sc_centro, world_to_screen(punta, vp, rect)) {
+                painter.line_segment([a, b], stroke);
+            }
+
+            // Etiqueta sobre el centro del rectángulo.
+            if let Some(sc) = sc_centro {
+                painter.text(
+                    sc - egui::vec2(0.0, 6.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    format!("▭ Área: {w:.1} × {h:.1} m"),
+                    egui::FontId::proportional(12.0),
+                    Color32::from_rgba_unmultiplied(255, 215, 50, 220),
+                );
             }
         } else {
             // Point Light: esfera wireframe 3D limpia

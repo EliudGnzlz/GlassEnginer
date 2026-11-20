@@ -667,10 +667,12 @@ pub struct FogData {
 
 fn default_spot_outer_deg() -> f32 { 45.0 }
 fn default_spot_inner_deg() -> f32 { 35.0 }
+fn default_area_width() -> f32 { 5.0 }
+fn default_area_height() -> f32 { 3.0 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LightData {
-    pub light_type: String, // "Directional", "Point", "Spot"
+    pub light_type: String, // "Directional", "Point", "Spot", "Area"
     pub color: [f32; 3],
     pub intensity: f32,
     pub range: f32,
@@ -682,6 +684,12 @@ pub struct LightData {
     pub spot_outer_deg: f32,
     #[serde(default = "default_spot_inner_deg")]
     pub spot_inner_deg: f32,
+    /// Ancho del rectángulo emisor de una luz Area, en metros.
+    #[serde(default = "default_area_width")]
+    pub area_width: f32,
+    /// Alto del rectángulo emisor de una luz Area, en metros.
+    #[serde(default = "default_area_height")]
+    pub area_height: f32,
 }
 
 impl Default for LightData {
@@ -694,6 +702,8 @@ impl Default for LightData {
             cast_shadow: false,
             spot_outer_deg: 45.0,
             spot_inner_deg: 35.0,
+            area_width: 5.0,
+            area_height: 3.0,
         }
     }
 }
@@ -3390,6 +3400,14 @@ mod scene_index_tests {
         let light: LightData = serde_json::from_str(json).unwrap();
         assert_eq!(light.spot_outer_deg, 45.0);
         assert_eq!(light.spot_inner_deg, 35.0);
+    }
+
+    #[test]
+    fn luz_sin_campos_area_parsea_con_defaults() {
+        let json = r#"{"light_type":"Point","color":[1.0,1.0,1.0],"intensity":1.0,"range":10.0}"#;
+        let light = serde_json::from_str::<LightData>(json).unwrap();
+        assert_eq!(light.area_width, 5.0);
+        assert_eq!(light.area_height, 3.0);
     }
 
     #[test]
