@@ -216,6 +216,15 @@ pub enum ViewportTab {
     GameView,  // Vista de juego con aspect ratio y cámara de jugador
 }
 
+/// Alambres locales precalculados de un collider de malla: el casco
+/// convexo y las aristas características, con la firma de la geometría
+/// de la que salieron (nº de posiciones, nº de índices).
+pub struct AristasMalla {
+    pub casco: Vec<[[f32; 3]; 2]>,
+    pub caracteristicas: Vec<[[f32; 3]; 2]>,
+    pub firma: (usize, usize),
+}
+
 pub struct ViewportPanel {
     pub width: f32, // Para compatibilidad
     pub height: f32,
@@ -265,6 +274,16 @@ pub struct ViewportPanel {
     // picking y la caja de selección para trabajar con la geometría
     // real en vez de un cubo unidad supuesto.
     pub mesh_bounds: std::collections::HashMap<String, ([f32; 3], [f32; 3])>,
+    /// Alambres locales de los Mesh Colliders (casco y aristas
+    /// características por modelo), calculados por la app desde la
+    /// geometría retenida; la firma evita recalcular sin cambios.
+    pub mesh_wireframes: std::collections::HashMap<String, AristasMalla>,
+    /// ¿El componente de collider (o el Character Controller) de la
+    /// entidad seleccionada está EXPANDIDO en el Inspector? Solo
+    /// entonces se dibuja su contorno: seleccionar ya no basta
+    /// (decisión del usuario, 2026-11-20). Lo copia el docking desde
+    /// el Inspector antes de renderizar esta vista.
+    pub collider_en_edicion: bool,
     // Fuente .blend/.fbx soltada cuyo .glb falta o está desactualizado:
     // la app pide su conversión al vigía que corresponda y la vacía.
     pub pending_conversion: Option<std::path::PathBuf>,
@@ -304,6 +323,8 @@ impl Default for ViewportPanel {
             scene_hovered: false,
             rect_escena: egui::Rect::NOTHING,
             mesh_bounds: std::collections::HashMap::new(),
+            mesh_wireframes: std::collections::HashMap::new(),
+            collider_en_edicion: false,
             pending_conversion: None,
             pending_carga: None,
         }
@@ -581,10 +602,14 @@ impl ViewportPanel {
                         );
                     }
 
-                    // Los colliders se muestran siempre al seleccionar su
-                    // entidad; la opción global permite inspeccionarlos todos.
+                    // Regla del usuario (2026-11-20): el contorno del
+                    // collider NO se dibuja por estar seleccionada la
+                    // entidad; solo si su componente está expandido en
+                    // el Inspector (en edición) o si la opción global
+                    // «contornos siempre» está activa.
                     if self.gizmos.gizmo_collider
-                        && (is_sel || self.gizmos.colliders_always)
+                        && (self.gizmos.colliders_always
+                            || (is_sel && self.collider_en_edicion))
                     {
                         match gizmo_3d::collider_dibujo(
                             ent,
@@ -604,45 +629,108 @@ impl ViewportPanel {
                                 );
                             }
                             gizmo_3d::ColliderDibujo::Malla => {
-                                let (lo, hi) =
-                                    gizmo_3d::entity_local_bounds(ent, &self.mesh_bounds);
-                                gizmo_3d::dibujar_caja(
-                                    painter,
-                                    lo,
-                                    hi,
-                                    &world,
-                                    &view_proj,
-                                    rect,
-                                    egui::Color32::from_rgba_unmultiplied(
-                                        90,
-                                        255,
-                                        130,
-                                        if is_sel { 255 } else { 130 },
-                                    ),
-                                    if is_sel { 1.8 } else { 1.2 },
+                                let color = egui::Color32::from_rgba_unmultiplied(
+                                    90,
+                                    255,
+                                    130,
+                                    if is_sel { 255 } else { 130 },
                                 );
+                                let grosor = if is_sel { 1.8 } else { 1.2 };
+                                let alambre = ent
+                                    .mesh
+                                    .as_ref()
+                                    .and_then(|m| self.mesh_wireframes.get(&m.model));
+                                if let Some(alambre) = alambre {
+                                    let segmentos: &[[[f32; 3]; 2]] = match ent
+                                        .physics
+                                        .as_ref()
+                                        .map(|p| p.mesh_collider)
+                                    {
+                                        Some(glass_core::MeshColliderMode::Convex) => {
+                                            &alambre.casco
+                                        }
+                                        Some(glass_core::MeshColliderMode::TriMesh) => {
+                                            &alambre.caracteristicas
+                                        }
+                                        _ => &[],
+                                    };
+                                    gizmo_3d::dibujar_segmentos(
+                                        painter,
+                                        segmentos,
+                                        &world,
+                                        &view_proj,
+                                        rect,
+                                        color,
+                                        grosor,
+                                    );
+                                } else {
+                                    // Respaldo para modelos sin geometría CPU retenida.
+                                    let (lo, hi) =
+                                        gizmo_3d::entity_local_bounds(ent, &self.mesh_bounds);
+                                    gizmo_3d::dibujar_caja(
+                                        painter,
+                                        lo,
+                                        hi,
+                                        &world,
+                                        &view_proj,
+                                        rect,
+                                        color,
+                                        grosor,
+                                    );
+                                }
                             }
                             gizmo_3d::ColliderDibujo::MallaYFormas(formas) => {
-                                // La caja de la malla (cotas locales, matriz
-                                // completa) Y las formas de los specs (tamaño
-                                // de mundo, pose sin escala), como la física.
-                                let (lo, hi) =
-                                    gizmo_3d::entity_local_bounds(ent, &self.mesh_bounds);
-                                gizmo_3d::dibujar_caja(
-                                    painter,
-                                    lo,
-                                    hi,
-                                    &world,
-                                    &view_proj,
-                                    rect,
-                                    egui::Color32::from_rgba_unmultiplied(
-                                        90,
-                                        255,
-                                        130,
-                                        if is_sel { 255 } else { 130 },
-                                    ),
-                                    if is_sel { 1.8 } else { 1.2 },
+                                // El alambre de la malla usa la matriz completa;
+                                // las formas ya tienen tamaño de mundo y usan la
+                                // pose sin escala, exactamente como la física.
+                                let color = egui::Color32::from_rgba_unmultiplied(
+                                    90,
+                                    255,
+                                    130,
+                                    if is_sel { 255 } else { 130 },
                                 );
+                                let grosor = if is_sel { 1.8 } else { 1.2 };
+                                let alambre = ent
+                                    .mesh
+                                    .as_ref()
+                                    .and_then(|m| self.mesh_wireframes.get(&m.model));
+                                if let Some(alambre) = alambre {
+                                    let segmentos: &[[[f32; 3]; 2]] = match ent
+                                        .physics
+                                        .as_ref()
+                                        .map(|p| p.mesh_collider)
+                                    {
+                                        Some(glass_core::MeshColliderMode::Convex) => {
+                                            &alambre.casco
+                                        }
+                                        Some(glass_core::MeshColliderMode::TriMesh) => {
+                                            &alambre.caracteristicas
+                                        }
+                                        _ => &[],
+                                    };
+                                    gizmo_3d::dibujar_segmentos(
+                                        painter,
+                                        segmentos,
+                                        &world,
+                                        &view_proj,
+                                        rect,
+                                        color,
+                                        grosor,
+                                    );
+                                } else {
+                                    let (lo, hi) =
+                                        gizmo_3d::entity_local_bounds(ent, &self.mesh_bounds);
+                                    gizmo_3d::dibujar_caja(
+                                        painter,
+                                        lo,
+                                        hi,
+                                        &world,
+                                        &view_proj,
+                                        rect,
+                                        color,
+                                        grosor,
+                                    );
+                                }
                                 gizmo_3d::draw_collider_gizmo(
                                     painter,
                                     &formas,
@@ -656,8 +744,12 @@ impl ViewportPanel {
                         }
                     }
 
+                    // La cápsula sigue la misma regla que los colliders:
+                    // solo con su componente expandido o con la opción
+                    // global «contornos siempre».
                     if self.gizmos.gizmo_character
-                        && (is_sel || self.gizmos.colliders_always)
+                        && (self.gizmos.colliders_always
+                            || (is_sel && self.collider_en_edicion))
                     {
                         if let Some(ch) = &ent.character {
                             gizmo_3d::draw_character_gizmo(

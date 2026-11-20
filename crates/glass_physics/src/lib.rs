@@ -4,8 +4,10 @@ pub mod ffi;
 pub mod types;
 pub mod world;
 
+pub mod aristas;
 pub mod character;
 pub mod ragdoll;
+pub use aristas::{aristas_caracteristicas, aristas_casco_convexo};
 pub use ragdoll::{RagdollBoneSpec, RagdollState};
 pub use types::*;
 pub use world::*;

@@ -5823,6 +5823,9 @@ let resueltos = if body.has_collider {
             let mut game_batches: Vec<glass_renderer::MeshDrawItem<'_>> = Vec::new();
             let mut scene_skinned: Vec<glass_renderer::SkinnedDrawItem> = Vec::new();
             let mut game_skinned: Vec<glass_renderer::SkinnedDrawItem> = Vec::new();
+            // Contorno de selección con piel de la vista de Escena (editor).
+            #[cfg(feature = "editor")]
+            let mut scene_outline_skinned: Vec<glass_renderer::SkinnedDrawItem<'_>> = Vec::new();
             // Resolución de propiedades de grafo por entidad (Fase 2S):
             // cachea el set y los bytes ya subidos por entidad para no
             // recrear/actualizar el descriptor set si no cambiaron.
@@ -6319,6 +6322,39 @@ let resueltos = if body.has_collider {
                         let rangos_entidad: Vec<(u32, u32)> =
                             draw_items.iter().map(|it| it.3).collect();
                         let mut shadow_recorded = false;
+                        // Contorno de selección (vista de Escena): solo la
+                        // entidad seleccionada y con el gizmo activado.
+                        #[cfg(feature = "editor")]
+                        let es_sel = self.editor_layout.hierarchy.selected_entity == Some(ent.id)
+                            && self.editor_layout.viewport.gizmos.selection_outline;
+                        #[cfg(not(feature = "editor"))]
+                        let es_sel = false;
+                        // Grosor del casco en espacio de objeto: constante
+                        // en pantalla (proporcional a la distancia a la
+                        // cámara de escena) y deshecha la escala del
+                        // modelo, porque el shader expande en espacio de
+                        // objeto a lo largo de la normal.
+                        let grosor_obj = if es_sel {
+                            let col = |i: usize| {
+                                (model[i] * model[i]
+                                    + model[i + 1] * model[i + 1]
+                                    + model[i + 2] * model[i + 2])
+                                    .sqrt()
+                            };
+                            let escala_mundo = col(0).max(col(4)).max(col(8));
+                            let dx = model[12] - eye_scene[0];
+                            let dy = model[13] - eye_scene[1];
+                            let dz = model[14] - eye_scene[2];
+                            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                            let grosor_mundo = (dist * 0.004).clamp(0.003, 0.6);
+                            if escala_mundo > 1e-6 {
+                                grosor_mundo / escala_mundo
+                            } else {
+                                grosor_mundo
+                            }
+                        } else {
+                            0.0
+                        };
                         for (c, mp, tex_set, range, em_item, uv_item) in draw_items {
                             if !shadow_recorded {
                                 shadow_recorded = true;
@@ -6433,6 +6469,26 @@ let resueltos = if body.has_collider {
                                     emissive: em_item,
                                     uv_transform: uv_item,
                                 }, tex, joints_set, range, ranura_luz)); }
+                                // Contorno de selección con piel: el mismo
+                                // item con el grosor y el blanco del
+                                // contorno (solo editor).
+                                #[cfg(feature = "editor")]
+                                {
+                                    if es_sel && vis_scene {
+                                        scene_outline_skinned.push((skinned_mesh, glass_renderer::MeshPushConstants {
+                                            mvp: mvp_scene,
+                                            model,
+                                            light_dir,
+                                            light_color,
+                                            material_params: [grosor_obj, 0.0, 0.0, 0.0],
+                                            object_color: [1.0, 1.0, 1.0, 1.0],
+                                            camera_pos: eye_scene,
+                                            lm_params,
+                                            emissive: em_item,
+                                            uv_transform: uv_item,
+                                        }, tex, joints_set, range, ranura_luz));
+                                    }
+                                }
                                 if let Some(vp_game) = vp_game_opt.filter(|_| vis_game) {
                                     let mvp_game = matmul(&vp_game, &model);
                                     game_skinned.push((skinned_mesh, glass_renderer::MeshPushConstants {
@@ -6548,6 +6604,23 @@ let resueltos = if body.has_collider {
                                         emissive: em_item,
                                         uv_transform: uv_item,
                                     }, tex_set_grafo.unwrap_or(tex_set), Some(nombre_o.clone()), range, props_set, ranura_luz));
+                                }
+                                // Contorno de selección: casco invertido
+                                // blanco de la malla, sin escritura de
+                                // profundidad (no va a shadow_casters).
+                                if es_sel && vis_scene {
+                                    scene_batches.push((ent_mesh, glass_renderer::MeshPushConstants {
+                                        mvp: mvp_scene,
+                                        model,
+                                        light_dir,
+                                        light_color,
+                                        material_params: [grosor_obj, 0.0, 0.0, 0.0],
+                                        object_color: [1.0, 1.0, 1.0, 1.0],
+                                        camera_pos: eye_scene,
+                                        lm_params,
+                                        emissive: em_item,
+                                        uv_transform: uv_item,
+                                    }, tex_set_grafo.unwrap_or(tex_set), Some("__contorno_seleccion".to_string()), range, None, ranura_luz));
                                 }
 
                             if let Some(vp_game) = vp_game_opt.filter(|_| vis_game) {
@@ -7079,7 +7152,11 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 renderer.set_particle_frame(true, &o.game.0, &o.game.1);
                 o.vps
             });
-            renderer.render_views(vk_ctx.graphics_queue, FrameDraws { scene_meshes: &scene_batches, game_meshes: game_meshes_arg, scene_skinned: &scene_skinned, game_skinned: game_skinned_arg, shadow_casters: Some(&shadow_casters), scene_portal_draws: &scene_portal_draws, game_portal_draws: Some(&game_portal_draws), particle_vps })?;
+            #[cfg(feature = "editor")]
+            let scene_outline_skinned_arg: &[glass_renderer::SkinnedDrawItem<'_>] = &scene_outline_skinned;
+            #[cfg(not(feature = "editor"))]
+            let scene_outline_skinned_arg: &[glass_renderer::SkinnedDrawItem<'_>] = &[];
+            renderer.render_views(vk_ctx.graphics_queue, FrameDraws { scene_meshes: &scene_batches, game_meshes: game_meshes_arg, scene_skinned: &scene_skinned, game_skinned: game_skinned_arg, scene_outline_skinned: scene_outline_skinned_arg, shadow_casters: Some(&shadow_casters), scene_portal_draws: &scene_portal_draws, game_portal_draws: Some(&game_portal_draws), particle_vps })?;
 
             // Post-procesado de las vistas renderizadas (sin post
             // activo, estas llamadas no hacen nada). La vista de juego
@@ -7309,6 +7386,47 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
             // selección del editor (la caché las registra al cargar).
             if let Ok(cache) = self.asset_cache.read() {
                 self.editor_layout.viewport.mesh_bounds = cache.bounds_snapshot();
+                // Alambres de los Mesh Colliders (casco y aristas de la
+                // malla) para el dibujo del editor: se recalculan solo
+                // cuando cambia el tamaño de la geometría retenida.
+                if let Ok(scene) = self.scene_state.lock() {
+                    let viewport = &mut self.editor_layout.viewport;
+                    for ent in &scene.entities {
+                        let Some(physics) = ent.physics.as_ref() else {
+                            continue;
+                        };
+                        if physics.mesh_collider == glass_core::MeshColliderMode::None {
+                            continue;
+                        }
+                        let Some(mesh) = ent.mesh.as_ref() else {
+                            continue;
+                        };
+                        let Some((posiciones, indices)) = cache.geometries.get(&mesh.model)
+                        else {
+                            continue;
+                        };
+                        let firma = (posiciones.len(), indices.len());
+                        let necesita_calculo = viewport
+                            .mesh_wireframes
+                            .get(&mesh.model)
+                            .is_none_or(|aristas| aristas.firma != firma);
+                        if necesita_calculo {
+                            let aristas = glass_editor::panels::viewport::AristasMalla {
+                                casco: glass_physics::aristas_casco_convexo(posiciones),
+                                caracteristicas: glass_physics::aristas_caracteristicas(
+                                    posiciones,
+                                    indices,
+                                    30.0,
+                                ),
+                                firma,
+                            };
+                            viewport.mesh_wireframes.insert(mesh.model.clone(), aristas);
+                        }
+                    }
+                    viewport
+                        .mesh_wireframes
+                        .retain(|stem, _| cache.geometries.contains_key(stem));
+                }
             }
             // Se clona antes de tomar el préstamo mutable de editor_layout.
             #[cfg(feature = "editor")]

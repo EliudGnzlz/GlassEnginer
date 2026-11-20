@@ -657,6 +657,11 @@ pub struct InspectorPanel {
     /// pertenece (se suelta al cambiar la selección).
     escala_bloqueada: bool,
     escala_bloqueada_para: Option<u64>,
+    /// ¿Alguna sección de collider (heredada, P3 o Character Controller)
+    /// está EXPANDIDA en este frame? El viewport lo lee para dibujar el
+    /// contorno del collider solo en edición (decisión del usuario,
+    /// 2026-11-20). Se reinicia al principio de cada render.
+    pub collider_seccion_abierta: bool,
 }
 
 impl InspectorPanel {
@@ -668,6 +673,7 @@ impl InspectorPanel {
             model_names_for: None,
             model_names_dirty: true,
             rescan_for_model: None,
+            collider_seccion_abierta: false,
             portapapeles: None,
             escala_bloqueada: false,
             escala_bloqueada_para: None,
@@ -718,6 +724,7 @@ impl InspectorPanel {
         scene_state: &Arc<Mutex<SceneState>>,
         model_bounds: &std::collections::HashMap<String, ([f32; 3], [f32; 3])>,
     ) {
+        self.collider_seccion_abierta = false;
         ui.horizontal(|ui| {
             ui.heading("🔍 Inspector");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1495,6 +1502,15 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                             }
 
                         });
+                        if egui::collapsing_header::CollapsingState::load_with_default_open(
+                            ui.ctx(),
+                            ui.make_persistent_id(("seccion_componente", "collider")),
+                            false,
+                        )
+                        .is_open()
+                        {
+                            self.collider_seccion_abierta = true;
+                        }
                     } else if phys.has_collider {
                         // P3: cada collider es su propio componente, como
                         // en Unity. Fricción y elasticidad son del cuerpo
@@ -1507,6 +1523,15 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                     .weak(),
                             );
                         });
+                        if egui::collapsing_header::CollapsingState::load_with_default_open(
+                            ui.ctx(),
+                            ui.make_persistent_id(("seccion_componente", "colliders")),
+                            false,
+                        )
+                        .is_open()
+                        {
+                            self.collider_seccion_abierta = true;
+                        }
 
                         let mut acciones: Vec<AccionCollider> = Vec::new();
                         for i in 0..phys.colliders.len() {
@@ -1824,6 +1849,15 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         });
                         ui.checkbox(&mut cc.detect_collisions, "Detect Collisions");
                     });
+                    if egui::collapsing_header::CollapsingState::load_with_default_open(
+                        ui.ctx(),
+                        ui.make_persistent_id(("seccion_componente", "character")),
+                        false,
+                    )
+                    .is_open()
+                    {
+                        self.collider_seccion_abierta = true;
+                    }
                 }
                 if accion_character == AccionCabecera::Quitar {
                     remove_character = true;

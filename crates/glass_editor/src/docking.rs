@@ -1866,6 +1866,10 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 self.hierarchy.render(ui, self.scene_state);
             }
             EditorTab::SceneView => {
+                // El viewport dibuja el contorno del collider solo si su
+                // componente está expandido en el Inspector (regla del
+                // usuario, 2026-11-20): se copia el estado del frame.
+                self.viewport.collider_en_edicion = self.inspector.collider_seccion_abierta;
                 // Con sesión de malla activa, el viewport recibe el panel
                 // y la entidad en edición: dibuja el overlay y enruta la
                 // entrada a la malla (R2). Sin sesión, None (flujo normal).

@@ -22,6 +22,9 @@ const PBR_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/pbr.vert.spv
 const DEPTH_CLIP_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/depth_clip.frag.spv");
 const OUTLINE_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/outline.vert.spv");
 const OUTLINE_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/outline.frag.spv");
+/// Vértice del contorno de selección con piel (casco invertido deformado).
+const OUTLINE_SKINNED_VERT_SPV: &[u8] =
+    include_bytes!("../../../assets/shaders/outline_skinned.vert.spv");
 const PORTAL_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/portal.vert.spv");
 const PORTAL_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/portal.frag.spv");
 const PARTICLE_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/particles.vert.spv");
@@ -47,6 +50,9 @@ pub struct FrameDraws<'a> {
     pub game_meshes: Option<&'a [MeshDrawItem<'a>]>,
     pub scene_skinned: &'a [SkinnedDrawItem<'a>],
     pub game_skinned: Option<&'a [SkinnedDrawItem<'a>]>,
+    /// Contorno de selección con piel de la vista de Escena (vacío si
+    /// no hay selección con piel o sin editor).
+    pub scene_outline_skinned: &'a [SkinnedDrawItem<'a>],
     pub shadow_casters: Option<&'a ShadowCasters<'a>>,
     pub scene_portal_draws: &'a [PortalDrawItem<'a>],
     pub game_portal_draws: Option<&'a [PortalDrawItem<'a>]>,
@@ -723,6 +729,13 @@ pub struct GlassRenderer {
     pub editor_line_pipeline_legacy: GraphicsPipeline,
     pub editor_line_buffers: EditorLineBuffers,
     pub editor_grid_vp: [f32; 16],
+    /// Contorno de selección de la vista de Escena (casco invertido de
+    /// la malla, sin escritura de profundidad), sin y con piel, cada
+    /// uno con su gemelo legacy (render pass LDR).
+    pub selection_outline_pipeline: GraphicsPipeline,
+    pub selection_outline_pipeline_legacy: GraphicsPipeline,
+    pub selection_outline_skinned_pipeline: GraphicsPipeline,
+    pub selection_outline_skinned_pipeline_legacy: GraphicsPipeline,
     /// Draws de partículas grabados en el último render_views.
     pub particle_draws: std::cell::Cell<u32>,
     pub mesh_pipeline_legacy: GraphicsPipeline,
@@ -1093,6 +1106,13 @@ impl GlassRenderer {
         let particle_pipeline_legacy = GraphicsPipeline::new_particle_pipeline(device.clone(), final_offscreen.render_pass, PARTICLE_VERT_SPV, PARTICLE_FRAG_SPV)?;
         let editor_line_pipeline = GraphicsPipeline::new_editor_line_pipeline(device.clone(), offscreen.render_pass, EDITOR_LINE_VERT_SPV, EDITOR_LINE_FRAG_SPV)?;
         let editor_line_pipeline_legacy = GraphicsPipeline::new_editor_line_pipeline(device.clone(), final_offscreen.render_pass, EDITOR_LINE_VERT_SPV, EDITOR_LINE_FRAG_SPV)?;
+        // Contorno de selección de la vista de Escena: mismo par de
+        // shaders que el contorno toon (y su variante con piel), sin
+        // escritura de profundidad, para los dos render passes.
+        let selection_outline_pipeline = GraphicsPipeline::new_selection_outline_pipeline(device.clone(), offscreen.render_pass, OUTLINE_VERT_SPV, OUTLINE_FRAG_SPV)?;
+        let selection_outline_pipeline_legacy = GraphicsPipeline::new_selection_outline_pipeline(device.clone(), final_offscreen.render_pass, OUTLINE_VERT_SPV, OUTLINE_FRAG_SPV)?;
+        let selection_outline_skinned_pipeline = GraphicsPipeline::new_selection_outline_skinned_pipeline(device.clone(), offscreen.render_pass, OUTLINE_SKINNED_VERT_SPV, OUTLINE_FRAG_SPV)?;
+        let selection_outline_skinned_pipeline_legacy = GraphicsPipeline::new_selection_outline_skinned_pipeline(device.clone(), final_offscreen.render_pass, OUTLINE_SKINNED_VERT_SPV, OUTLINE_FRAG_SPV)?;
         // Layout del set 3 (luces puntuales): lo comparten los pipelines
         // PBR y de piel, en sus dos variantes de pase.
         let point_lights_layout = create_point_lights_set_layout(&device)?;
@@ -1823,6 +1843,10 @@ impl GlassRenderer {
             particle_game: ParticleBuffers::default(),
             editor_line_pipeline,
             editor_line_pipeline_legacy,
+            selection_outline_pipeline,
+            selection_outline_pipeline_legacy,
+            selection_outline_skinned_pipeline,
+            selection_outline_skinned_pipeline_legacy,
             editor_line_buffers: EditorLineBuffers::default(),
             editor_grid_vp: [0.0; 16],
             particle_draws: std::cell::Cell::new(0),
@@ -1991,6 +2015,48 @@ impl GlassRenderer {
             // Sets 4 y 5: el lightmap (mismo fragmento PBR).
             self.bind_lightmap_sets(cmd, pipe);
             self.bind_ibl_set(cmd, pipe);
+            let push_bytes = bytemuck::bytes_of(push_consts);
+            self.device.cmd_push_constants(
+                cmd,
+                pipe.layout,
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                0,
+                push_bytes,
+            );
+            self.device
+                .cmd_bind_vertex_buffers(cmd, 0, &[mesh.vertex_buffer], &[0]);
+            self.device
+                .cmd_bind_index_buffer(cmd, mesh.index_buffer, 0, vk::IndexType::UINT32);
+            self.device
+                .cmd_draw_indexed(cmd, range.1, 1, range.0, 0, 0);
+        }
+    }
+
+    /// Contorno de selección de las mallas con piel: como `draw_skinned`
+    /// pero con la pipeline de selección con piel y enlazando SOLO los
+    /// sets 0 (textura) y 1 (articulaciones). Sin sombras, luces,
+    /// lightmap ni IBL: outline_skinned.vert solo declara el set 1.
+    unsafe fn draw_skinned_outline(&self, cmd: vk::CommandBuffer, items: &[SkinnedDrawItem<'_>], legacy: bool) {
+        let pipe = if legacy {
+            &self.selection_outline_skinned_pipeline_legacy
+        } else {
+            &self.selection_outline_skinned_pipeline
+        };
+        self.device.cmd_bind_pipeline(
+            cmd,
+            vk::PipelineBindPoint::GRAPHICS,
+            pipe.pipeline,
+        );
+        for (mesh, push_consts, tex_set, joints_set, range, _light_slot) in items {
+            let sets = [*tex_set, *joints_set];
+            self.device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipe.layout,
+                0,
+                &sets,
+                &[],
+            );
             let push_bytes = bytemuck::bytes_of(push_consts);
             self.device.cmd_push_constants(
                 cmd,
@@ -2680,6 +2746,13 @@ impl GlassRenderer {
     fn pipeline_for(&self, shader_name: &Option<String>, legacy: bool) -> &GraphicsPipeline {
         match shader_name {
             Some(name) => {
+                if name == "__contorno_seleccion" {
+                    return if legacy {
+                        &self.selection_outline_pipeline_legacy
+                    } else {
+                        &self.selection_outline_pipeline
+                    };
+                }
                 if let Some(grafo) = name.strip_prefix("outline:") {
                     let mapa = if legacy {
                         &self.graph_outline_pipelines_legacy
@@ -3206,6 +3279,8 @@ impl GlassRenderer {
         _clear: [f32; 4],
         meshes: &[MeshDrawItem],
         skinned: &[SkinnedDrawItem],
+        // Contorno de selección con piel (solo lo usa la vista de Escena).
+        outline_skinned: &[SkinnedDrawItem],
         portal_draws: &[PortalDrawItem],
         _legacy: bool,
         _fallback_triangle: bool,
@@ -3375,6 +3450,11 @@ impl GlassRenderer {
                 }
                 if !skinned.is_empty() {
                     self.draw_skinned(cmd, skinned, legacy);
+                }
+                // Contorno de selección con piel: tras las pieles, solo
+                // en la vista de Escena.
+                if es_escena && !outline_skinned.is_empty() {
+                    self.draw_skinned_outline(cmd, outline_skinned, legacy);
                 }
             }
             // Sin mallas no se dibuja nada: el triángulo de respaldo
@@ -3578,6 +3658,7 @@ impl GlassRenderer {
             game_meshes,
             scene_skinned,
             game_skinned,
+            scene_outline_skinned,
             shadow_casters,
             scene_portal_draws,
             game_portal_draws,
@@ -3648,6 +3729,7 @@ impl GlassRenderer {
                     [0.06, 0.09, 0.14, 1.0],
                     scene_meshes,
                     scene_skinned,
+                    scene_outline_skinned,
                     scene_portal_draws,
                     legacy,
                     true,
@@ -3668,6 +3750,7 @@ impl GlassRenderer {
                     [0.02, 0.02, 0.03, 1.0],
                     game_meshes.unwrap_or(&[]),
                     game_skinned.unwrap_or(&[]),
+                    &[],
                     game_portal_draws.unwrap_or(&[]),
                     legacy,
                     false,
@@ -3729,9 +3812,9 @@ impl GlassRenderer {
             // Se clona la referencia al objetivo para no pelear
             // con el préstamo de &self de record_view_pass.
             let target_a = &self.portal_targets[0];
-            self.record_view_pass(cmd, target_a, clear, view_a.0, view_a.1, &[], false, false, None, false);
+            self.record_view_pass(cmd, target_a, clear, view_a.0, view_a.1, &[], &[], false, false, None, false);
             let target_b = &self.portal_targets[1];
-            self.record_view_pass(cmd, target_b, clear, view_b.0, view_b.1, &[], false, false, None, false);
+            self.record_view_pass(cmd, target_b, clear, view_b.0, view_b.1, &[], &[], false, false, None, false);
 
             self.device.end_command_buffer(cmd)?;
             let command_buffers = [cmd];
@@ -3764,6 +3847,7 @@ impl GlassRenderer {
             game_meshes: None,
             scene_skinned: &[],
             game_skinned: None,
+            scene_outline_skinned: &[],
             shadow_casters: None,
             scene_portal_draws: &[],
             game_portal_draws: None,

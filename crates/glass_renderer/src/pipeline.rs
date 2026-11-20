@@ -977,6 +977,318 @@ impl GraphicsPipeline {
     /// clon de la de partículas con topología LINE_LIST y vértice
     /// posición+color. Depth test LESS_OR_EQUAL sin escritura y mezcla
     /// alfa: los modelos tapan la rejilla, como en Unity.
+    /// Pipeline del contorno de selección de la vista de Escena (casco
+    /// invertido de la malla, como Unity): igual que `new_outline_pipeline`
+    /// (cull FRONT, depth test LESS_OR_EQUAL, sin descriptor sets) pero SIN
+    /// escritura de profundidad, para que el casco no tape nada dibujado
+    /// después ni contamine la profundidad de la vista.
+    pub fn new_selection_outline_pipeline(
+        device: Arc<ash::Device>,
+        render_pass: vk::RenderPass,
+        vert_spv: &[u8],
+        frag_spv: &[u8],
+    ) -> Result<Self, PipelineError> {
+        let vert_module = Self::create_shader_module(&device, vert_spv)?;
+        let frag_module = Self::create_shader_module(&device, frag_spv)?;
+        let entry_point = c"main";
+        let shader_stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(vert_module)
+                .name(entry_point),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(frag_module)
+                .name(entry_point),
+        ];
+
+        let binding_descriptions = [vk::VertexInputBindingDescription::default()
+            .binding(0)
+            .stride(std::mem::size_of::<crate::mesh::Vertex>() as u32)
+            .input_rate(vk::VertexInputRate::VERTEX)];
+        let attribute_descriptions = [
+            vk::VertexInputAttributeDescription::default().location(0).binding(0).format(vk::Format::R32G32B32_SFLOAT).offset(0),
+            vk::VertexInputAttributeDescription::default().location(1).binding(0).format(vk::Format::R32G32B32_SFLOAT).offset(12),
+            vk::VertexInputAttributeDescription::default().location(2).binding(0).format(vk::Format::R32G32_SFLOAT).offset(24),
+        ];
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&binding_descriptions)
+            .vertex_attribute_descriptions(&attribute_descriptions);
+
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+            .primitive_restart_enable(false);
+
+        let viewports = [vk::Viewport::default()];
+        let scissors = [vk::Rect2D::default()];
+        let viewport_state_info = vk::PipelineViewportStateCreateInfo::default()
+            .viewports(&viewports)
+            .scissors(&scissors);
+
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state_info =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+        let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
+            .depth_clamp_enable(false)
+            .rasterizer_discard_enable(false)
+            .polygon_mode(vk::PolygonMode::FILL)
+            .line_width(1.0)
+            .cull_mode(vk::CullModeFlags::FRONT)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .depth_bias_enable(false);
+
+        let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
+            .sample_shading_enable(false)
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+        // Única diferencia con el contorno toon: prueba SIN escritura.
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(false)
+            .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL)
+            .depth_bounds_test_enable(false)
+            .stencil_test_enable(false);
+
+        let color_blend_attachments = [vk::PipelineColorBlendAttachmentState::default()
+            .blend_enable(false)
+            .color_write_mask(vk::ColorComponentFlags::RGBA)];
+        let color_blending = vk::PipelineColorBlendStateCreateInfo::default()
+            .logic_op_enable(false)
+            .attachments(&color_blend_attachments);
+
+        let push_constant_ranges = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+            .offset(0)
+            .size(crate::renderer::MESH_PUSH_CONSTANTS_SIZE)];
+
+        let set_layouts: [vk::DescriptorSetLayout; 0] = [];
+        let layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&set_layouts)
+            .push_constant_ranges(&push_constant_ranges);
+        let layout = unsafe { device.create_pipeline_layout(&layout_info, None)? };
+
+        let pipeline_info = [vk::GraphicsPipelineCreateInfo::default()
+            .stages(&shader_stages)
+            .vertex_input_state(&vertex_input_info)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state_info)
+            .rasterization_state(&rasterizer)
+            .multisample_state(&multisampling)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blending)
+            .dynamic_state(&dynamic_state_info)
+            .layout(layout)
+            .render_pass(render_pass)
+            .subpass(0)];
+
+        let pipelines = unsafe {
+            device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &pipeline_info, None)
+                .map_err(|(_, err)| PipelineError::Driver(err))?
+        };
+
+        unsafe {
+            device.destroy_shader_module(vert_module, None);
+            device.destroy_shader_module(frag_module, None);
+        }
+
+        Ok(Self {
+            device,
+            layout,
+            pipeline: pipelines[0],
+            descriptor_set_layout: None,
+            joints_set_layout: None,
+            globals_set_layout: None,
+            shadow_set_layout: None,
+            point_lights_set_layout: None,
+            lm_set_layouts: None,
+            ibl_set_layout: None,
+        })
+    }
+
+    /// Pipeline del contorno de selección CON PIEL (outline_skinned.vert +
+    /// outline.frag): vértice `SkinnedVertex`, cull FRONT, depth test
+    /// LESS_OR_EQUAL sin escritura. Layout con set 0 (textura, mismas
+    /// bindings que `new_skinned_pipeline`, para aceptar el mismo set del
+    /// item) y set 1 (SSBO de articulaciones). Sin sombras, luces,
+    /// lightmap ni IBL: el shader solo lee push constants y el set 1.
+    pub fn new_selection_outline_skinned_pipeline(
+        device: Arc<ash::Device>,
+        render_pass: vk::RenderPass,
+        vert_spv: &[u8],
+        frag_spv: &[u8],
+    ) -> Result<Self, PipelineError> {
+        let vert_module = Self::create_shader_module(&device, vert_spv)?;
+        let frag_module = Self::create_shader_module(&device, frag_spv)?;
+
+        let entry_point = c"main";
+
+        let shader_stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(vert_module)
+                .name(entry_point),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(frag_module)
+                .name(entry_point),
+        ];
+
+        let binding_descriptions = [vk::VertexInputBindingDescription::default()
+            .binding(0)
+            .stride(std::mem::size_of::<crate::mesh::SkinnedVertex>() as u32)
+            .input_rate(vk::VertexInputRate::VERTEX)];
+
+        // Los offsets son el contrato de mesh::SkinnedVertex (#[repr(C)]):
+        // position 0, normal 12, uv 24, joints 32 (u16×4), weights 40.
+        let attribute_descriptions = [
+            vk::VertexInputAttributeDescription::default()
+                .location(0)
+                .binding(0)
+                .format(vk::Format::R32G32B32_SFLOAT)
+                .offset(0),
+            vk::VertexInputAttributeDescription::default()
+                .location(1)
+                .binding(0)
+                .format(vk::Format::R32G32B32_SFLOAT)
+                .offset(12),
+            vk::VertexInputAttributeDescription::default()
+                .location(2)
+                .binding(0)
+                .format(vk::Format::R32G32_SFLOAT)
+                .offset(24),
+            vk::VertexInputAttributeDescription::default()
+                .location(3)
+                .binding(0)
+                .format(vk::Format::R16G16B16A16_UINT)
+                .offset(32),
+            vk::VertexInputAttributeDescription::default()
+                .location(4)
+                .binding(0)
+                .format(vk::Format::R32G32B32A32_SFLOAT)
+                .offset(40),
+        ];
+
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default()
+            .vertex_binding_descriptions(&binding_descriptions)
+            .vertex_attribute_descriptions(&attribute_descriptions);
+
+        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+            .primitive_restart_enable(false);
+
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state_info =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+        let viewport_state_info = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+
+        // Casco invertido: se descartan las caras delanteras del casco
+        // expandido y solo queda el borde que asoma tras la silueta.
+        let rasterizer = vk::PipelineRasterizationStateCreateInfo::default()
+            .depth_clamp_enable(false)
+            .rasterizer_discard_enable(false)
+            .polygon_mode(vk::PolygonMode::FILL)
+            .line_width(1.0)
+            .cull_mode(vk::CullModeFlags::FRONT)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .depth_bias_enable(false);
+
+        let multisampling = vk::PipelineMultisampleStateCreateInfo::default()
+            .sample_shading_enable(false)
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(true)
+            .depth_write_enable(false)
+            .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL)
+            .depth_bounds_test_enable(false)
+            .stencil_test_enable(false);
+
+        let color_blend_attachment = [vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
+            .blend_enable(false)];
+
+        let color_blending = vk::PipelineColorBlendStateCreateInfo::default()
+            .logic_op_enable(false)
+            .attachments(&color_blend_attachment);
+
+        let push_constant_ranges = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)
+            .offset(0)
+            .size(crate::renderer::MESH_PUSH_CONSTANTS_SIZE)];
+
+        // Set 0: textura base, mismas bindings que new_skinned_pipeline
+        // (el shader no la lee, pero el item trae ese set y se enlaza).
+        let sampler_binding = [vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+        let set_layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&sampler_binding);
+        let descriptor_set_layout =
+            unsafe { device.create_descriptor_set_layout(&set_layout_info, None)? };
+
+        // Set 1: el SSBO de matrices de articulación (skin::JointBuffer).
+        let joints_binding = [vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX)];
+        let joints_layout_info =
+            vk::DescriptorSetLayoutCreateInfo::default().bindings(&joints_binding);
+        let joints_set_layout =
+            unsafe { device.create_descriptor_set_layout(&joints_layout_info, None)? };
+
+        let set_layouts = [descriptor_set_layout, joints_set_layout];
+
+        let layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&set_layouts)
+            .push_constant_ranges(&push_constant_ranges);
+        let layout = unsafe { device.create_pipeline_layout(&layout_info, None)? };
+
+        let pipeline_info = [vk::GraphicsPipelineCreateInfo::default()
+            .stages(&shader_stages)
+            .vertex_input_state(&vertex_input_info)
+            .input_assembly_state(&input_assembly)
+            .viewport_state(&viewport_state_info)
+            .rasterization_state(&rasterizer)
+            .multisample_state(&multisampling)
+            .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&color_blending)
+            .dynamic_state(&dynamic_state_info)
+            .layout(layout)
+            .render_pass(render_pass)
+            .subpass(0)];
+
+        let pipelines = unsafe {
+            device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &pipeline_info, None)
+                .map_err(|(_, err)| PipelineError::Driver(err))?
+        };
+
+        unsafe {
+            device.destroy_shader_module(vert_module, None);
+            device.destroy_shader_module(frag_module, None);
+        }
+
+        Ok(Self {
+            device,
+            layout,
+            pipeline: pipelines[0],
+            descriptor_set_layout: Some(descriptor_set_layout),
+            joints_set_layout: Some(joints_set_layout),
+            globals_set_layout: None,
+            shadow_set_layout: None,
+            point_lights_set_layout: None,
+            lm_set_layouts: None,
+            ibl_set_layout: None,
+        })
+    }
+
     pub fn new_editor_line_pipeline(
         device: Arc<ash::Device>,
         render_pass: vk::RenderPass,
