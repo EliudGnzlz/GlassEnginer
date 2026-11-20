@@ -29,7 +29,7 @@ fn contenido_cambio(path: &Path) -> Option<Option<String>> {
     };
     let mut guard = HASHES_EXPORTADOS.lock().unwrap();
     let map = guard.get_or_insert_with(HashMap::new);
-    if map.get(path) == Some(&hash) {
+    if map.get(&sin_prefijo_verbatim(path)) == Some(&hash) {
         None
     } else {
         Some(Some(hash))
@@ -41,7 +41,57 @@ fn registrar_exportado(path: &Path, hash: String) {
     let mut guard = HASHES_EXPORTADOS.lock().unwrap();
     guard
         .get_or_insert_with(HashMap::new)
-        .insert(path.to_path_buf(), hash);
+        .insert(sin_prefijo_verbatim(path), hash);
+}
+
+/// Quita el prefijo verbatim de Windows (`\\?\`, `\\?\UNC\`) de una ruta.
+///
+/// `std::fs::canonicalize` devuelve en Windows rutas verbatim
+/// (`\\?\C:\...`): el lado Rust las maneja sin problema y protegen
+/// las rutas largas, pero el puente de Blender no las tolera — el
+/// exportador glTF crea el directorio de salida con `os.makedirs`
+/// sobre el directorio verbatim con una '/' final y muere con
+/// WinError 123 (defecto P4, diagnosticado con el `glass.log` de un
+/// usuario real). La normalización se aplica SOLO donde una ruta va
+/// a salir del proceso hacia Blender/Python (los argumentos de
+/// `ejecutar_bridge_con_blender`) y a las claves de deduplicación
+/// (`EnVuelo`, `HASHES_EXPORTADOS`), para que la forma verbatim y
+/// la plana del mismo archivo sean la misma clave. Todo lo demás
+/// sigue en verbatim. Sin prefijo, devuelve la ruta tal cual.
+pub fn sin_prefijo_verbatim(path: &Path) -> PathBuf {
+    let texto = path.to_string_lossy();
+    let (resto, es_unc) = if let Some(r) = texto.strip_prefix(r"\\?\UNC\") {
+        (r, true)
+    } else if let Some(r) = texto.strip_prefix(r"\\?\") {
+        // Solo se quita si detrás viene una unidad (`C:`): es la
+        // forma que produce `canonicalize` para rutas de disco.
+        let mut chars = r.chars();
+        match (chars.next(), chars.next()) {
+            (Some(letra), Some(':')) if letra.is_ascii_alphabetic() => (r, false),
+            _ => return path.to_path_buf(),
+        }
+    } else {
+        return path.to_path_buf();
+    };
+    // Seguridad: en la forma verbatim, una '/' dentro de la ruta,
+    // los componentes '.'/'..' y los puntos o espacios finales de
+    // un componente son literales; en la forma plana, Win32 los
+    // reinterpretaría y la ruta pasaría a apuntar a otro archivo.
+    // Ante cualquiera de esos casos se deja la ruta como está:
+    // fallará en el exportador como hasta hoy, pero nunca se
+    // convertirá OTRO archivo por error.
+    let inseguro = resto.contains('/')
+        || resto
+            .split('\\')
+            .any(|c| c == "." || c == ".." || c.ends_with('.') || c.ends_with(' '));
+    if inseguro {
+        return path.to_path_buf();
+    }
+    if es_unc {
+        PathBuf::from(format!(r"\\{resto}"))
+    } else {
+        PathBuf::from(resto)
+    }
 }
 
 /// Fuentes (.blend/.fbx) con exportación en curso.
@@ -58,8 +108,11 @@ impl EnVuelo {
     fn intentar(path: &Path) -> Option<Self> {
         let mut guard = IN_FLIGHT.lock().unwrap();
         let set = guard.get_or_insert_with(HashSet::new);
-        if set.insert(path.to_path_buf()) {
-            Some(EnVuelo(path.to_path_buf()))
+        // Clave normalizada: la forma verbatim y la plana del mismo
+        // archivo dedupen juntas (P4).
+        let clave = sin_prefijo_verbatim(path);
+        if set.insert(clave.clone()) {
+            Some(EnVuelo(clave))
         } else {
             None
         }
@@ -78,6 +131,9 @@ impl Drop for EnVuelo {
 
 /// true si el .glb es la salida de una exportación en vuelo.
 fn fuente_en_vuelo(glb: &Path) -> bool {
+    // Las claves de IN_FLIGHT están normalizadas (sin verbatim): la
+    // consulta también, para comparar la misma forma (P4).
+    let glb = sin_prefijo_verbatim(glb);
     let guard = IN_FLIGHT.lock().unwrap();
     match guard.as_ref() {
         Some(set) => {
@@ -429,7 +485,31 @@ pub fn ejecutar_bridge_con_blender(
     input_path: &Path,
     glb_path: &Path,
 ) -> Result<SalidaBridge, String> {
-    let blender = resolver_blender().ok_or_else(|| MENSAJE_SIN_BLENDER.to_string())?;
+    // P4: a Blender/Python no puede llegar ninguna ruta verbatim
+    // (`\\?\...`): su exportador glTF muere con WinError 123 al
+    // crear el directorio de salida. Se normaliza AQUÍ, en el único
+    // punto por el que pasa toda ejecución de Blender (vigía y tool
+    // MCP `glass_asset_reload`, vía `convertir_fuente`); el resto
+    // del motor sigue trabajando con las rutas tal cual las tenga.
+    let bridge_script = sin_prefijo_verbatim(bridge_script);
+    let input_path = sin_prefijo_verbatim(input_path);
+    let glb_path = sin_prefijo_verbatim(glb_path);
+    // Un solo proceso de Blender a la vez en TODO el motor: el
+    // cerrojo vive aquí, en la única función que lanza Blender,
+    // para que también cubra a la tool MCP `glass_asset_reload`
+    // (que llama a `convertir_fuente` sin pasar por el vigía y
+    // podía lanzar un segundo Blender sobre el mismo destino y
+    // el mismo `.glass-tmp` que una exportación del vigía).
+    let _turno = CERROJO_CONVERSION
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    // La ruta del propio ejecutable también va normalizada: si el
+    // resolver la trae canonizada (p. ej. la copia portable derivada
+    // de un directorio verbatim), ni el proceso ni la variable
+    // GLASS_BLENDER que lee el bridge deben llevar el prefijo.
+    let blender = sin_prefijo_verbatim(
+        &resolver_blender().ok_or_else(|| MENSAJE_SIN_BLENDER.to_string())?,
+    );
     let mut comando = Command::new(&blender);
     // El bridge vuelve a resolver Blender desde Python (su lista no conoce
     // la copia portable del motor ni refleja la de Rust): se le pasa el ya
@@ -807,7 +887,9 @@ mod tests_resolver_blender {
 /// Cerrojo global de conversión: como mucho UN proceso de Blender a la
 /// vez en todo el motor. Sin él, una ráfaga de peticiones (muchos
 /// archivos guardados a la vez, varias solicitudes de la escena) lanzaba
-/// un Blender por archivo y agotaba la memoria del proceso.
+/// un Blender por archivo y agotaba la memoria del proceso. Se toma
+/// dentro de `ejecutar_bridge_con_blender` — la única función que
+/// lanza Blender — para cubrir también a la tool MCP.
 static CERROJO_CONVERSION: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn lanzar_conversion(path: &Path, tx: &Sender<AssetReloadEvent>) {
@@ -842,10 +924,9 @@ fn lanzar_conversion(path: &Path, tx: &Sender<AssetReloadEvent>) {
     // Ejecutar conversión desatendida en un hilo separado para no bloquear
     thread::spawn(move || {
         let _en_vuelo = en_vuelo;
-        // Esperar el turno: un solo Blender a la vez (ver CERROJO_CONVERSION).
-        let _turno = CERROJO_CONVERSION
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        // El turno de Blender (un solo proceso a la vez) se espera
+        // dentro de `ejecutar_bridge_con_blender`, no aquí: así el
+        // cerrojo cubre a todo el que lance Blender, MCP incluido.
         let mut hash_previo = hash_inicial;
         for ronda in 1..=MAX_RONDAS_EXPORTACION {
             // F2: convertir_fuente elige la vía (nativa para .fbx con
@@ -1263,5 +1344,101 @@ mod tests {
         assert_eq!(r, Some(local));
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod tests_prefijo_verbatim {
+    use super::*;
+
+    #[test]
+    fn quita_el_prefijo_de_disco() {
+        let entrada = PathBuf::from(r"\\?\C:\Users\vic\Assets\a.blend");
+        assert_eq!(
+            sin_prefijo_verbatim(&entrada),
+            PathBuf::from(r"C:\Users\vic\Assets\a.blend")
+        );
+    }
+
+    #[test]
+    fn convierte_unc_verbatim_a_unc_plana() {
+        let entrada = PathBuf::from(r"\\?\UNC\srv\share\a.blend");
+        assert_eq!(
+            sin_prefijo_verbatim(&entrada),
+            PathBuf::from(r"\\srv\share\a.blend")
+        );
+    }
+
+    #[test]
+    fn deja_intactas_las_rutas_sin_prefijo() {
+        for ruta in [
+            r"C:\Users\vic\Assets\a.blend",
+            "/home/u/Assets/a.blend",
+            "assets/a.blend",
+            r"\\srv\share\a.blend",
+        ] {
+            let p = PathBuf::from(ruta);
+            assert_eq!(sin_prefijo_verbatim(&p), p, "ruta: {ruta}");
+        }
+    }
+
+    #[test]
+    fn no_quita_un_prefijo_sin_unidad_detras() {
+        // `\\?\` seguido de algo que no es una unidad (`C:`) no es
+        // la forma verbatim de disco que produce `canonicalize`:
+        // no se toca.
+        let p = PathBuf::from(r"\\?\relativa\a.blend");
+        assert_eq!(sin_prefijo_verbatim(&p), p);
+    }
+
+    #[test]
+    fn no_quita_el_prefijo_si_la_forma_plana_apuntaria_a_otro_archivo() {
+        // En verbatim estos componentes son literales; en plano,
+        // Win32 los reinterpretaría. Se deja la ruta como está.
+        for ruta in [
+            r"\\?\C:\a/b.blend",       // '/' dentro de la ruta
+            r"\\?\C:\carpeta.\a.blend", // componente con punto final
+            r"\\?\C:\carpeta \a.blend", // componente con espacio final
+            r"\\?\C:\a\..\a.blend",     // componente '..'
+        ] {
+            let p = PathBuf::from(ruta);
+            assert_eq!(sin_prefijo_verbatim(&p), p, "ruta: {ruta}");
+        }
+    }
+
+    #[test]
+    fn en_vuelo_dedupe_entre_formas() {
+        let verbatim = PathBuf::from(r"\\?\C:\proj\Assets\dedup_p4.blend");
+        let plana = PathBuf::from(r"C:\proj\Assets\dedup_p4.blend");
+        let guarda = EnVuelo::intentar(&verbatim).expect("la primera inserción entra");
+        assert!(
+            EnVuelo::intentar(&plana).is_none(),
+            "la forma plana del mismo archivo debe dedupir contra la verbatim"
+        );
+        assert!(fuente_en_vuelo(&plana.with_extension("glb")));
+        drop(guarda);
+        let guarda2 = EnVuelo::intentar(&plana);
+        assert!(guarda2.is_some(), "al soltar la guarda se puede volver a entrar");
+        drop(guarda2);
+    }
+
+    #[test]
+    fn hash_registrado_se_consulta_sin_cambio_y_detecta_cambio() {
+        let dir = std::env::temp_dir().join(format!("glass_p4_hash_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let real = dir.join("fuente_hash_p4.blend");
+        std::fs::write(&real, b"contenido de prueba p4").unwrap();
+        let hash = sha256_de_archivo(&real).expect("hash del temporal");
+        registrar_exportado(&real, hash);
+        assert!(
+            contenido_cambio(&real).is_none(),
+            "mismo contenido: no hay que re-exportar"
+        );
+        std::fs::write(&real, b"contenido DISTINTO p4").unwrap();
+        assert!(
+            contenido_cambio(&real).is_some_and(|c| c.is_some()),
+            "contenido distinto: hay que re-exportar con el hash nuevo"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
