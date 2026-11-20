@@ -4344,6 +4344,71 @@ fn convex_hull_sostiene_como_caja() {
     }
 
     #[test]
+    fn compuesto_dos_cajas_un_cuerpo_caso_casa() {
+        // P3, el caso de la casa: UN cuerpo estático con DOS Box
+        // Collider desplazados (las «paredes»). Una bola sobre la
+        // segunda caja descansa sobre ELLA (no sobre el origen del
+        // cuerpo); una bola en el hueco entre ambas cae al suelo.
+        let mut world = PhysicsWorld::new();
+        let suelo = crear_cuerpo(&mut world, 1, false, [0.0, -0.5, 0.0]);
+        world
+            .attach_collider_with_config(
+                suelo,
+                ColliderShape::Cuboid { half_extents: [10.0, 0.5, 10.0] },
+                0.0,
+                0.8,
+                ColliderConfig::default(),
+            )
+            .expect("collider del suelo");
+
+        let casa = crear_cuerpo(&mut world, 2, false, [0.0, 0.0, 0.0]);
+        for x in [-2.0, 2.0] {
+            world
+                .attach_collider_with_config_at(
+                    casa,
+                    ColliderShape::Cuboid { half_extents: [0.5, 1.0, 0.5] },
+                    0.0,
+                    0.8,
+                    ColliderConfig::default(),
+                    [x, 1.0, 0.0],
+                )
+                .expect("caja de la casa");
+        }
+
+        // Bola sobre la caja derecha: su techo está a y = 2,0; la bola
+        // (radio 0,5) descansa con el centro a ≈ 2,5.
+        let bola_d = crear_cuerpo(&mut world, 3, true, [2.0, 4.0, 0.0]);
+        world
+            .attach_collider_with_config(
+                bola_d,
+                ColliderShape::Ball { radius: 0.5 },
+                0.0,
+                0.8,
+                ColliderConfig::default(),
+            )
+            .expect("bola derecha");
+        // Bola en el hueco central: cae al suelo (centro a ≈ 0,5).
+        let bola_c = crear_cuerpo(&mut world, 4, true, [0.0, 4.0, 0.0]);
+        world
+            .attach_collider_with_config(
+                bola_c,
+                ColliderShape::Ball { radius: 0.5 },
+                0.0,
+                0.8,
+                ColliderConfig::default(),
+            )
+            .expect("bola central");
+
+        for _ in 0..300 {
+            world.step(1.0 / 60.0);
+        }
+        let yd = world.get_transform(bola_d).unwrap().position[1];
+        assert!((yd - 2.5).abs() < 0.1, "la bola derecha debía descansar sobre la segunda caja (y≈2,5); está a {yd}");
+        let yc = world.get_transform(bola_c).unwrap().position[1];
+        assert!((yc - 0.5).abs() < 0.1, "la bola central debía caer al suelo (y≈0,5); está a {yc}");
+    }
+
+    #[test]
     fn trimesh_canal_recibe_esfera_en_el_fondo() {
         let mut world = PhysicsWorld::new();
 

@@ -45,6 +45,140 @@ fn scan_model_names_in(root: &std::path::Path) -> Vec<String> {
     names
 }
 
+/// Convierte `size` entre familias de forma (copia a nivel de módulo de
+/// la que usa la sección legacy del Collider, para la materialización
+/// del inferido al añadir un collider nuevo en P3):
+/// · Box (half-extents) → Sphere: radio = x; → Capsule/Cylinder: [half_height = y, radio = x].
+/// · Sphere (radio r) → Box: [r, r, r]; → Capsule/Cylinder: [r, r].
+/// · Capsule ↔ Cylinder comparten disposición [half_height, radio]: se conserva.
+fn tamano_convertido_modulo(desde: &str, hacia: &str, s: [f32; 3]) -> [f32; 3] {
+    let familia = |t: &str| match t {
+        "Box" => 0,
+        "Sphere" => 1,
+        _ => 2,
+    };
+    match (familia(desde), familia(hacia)) {
+        (0, 1) => [s[0], 0.0, 0.0],
+        (0, 2) => [s[1], s[0], 0.0],
+        (1, 0) => [s[0], s[0], s[0]],
+        (1, 2) => [s[0], s[0], 0.0],
+        (2, 0) => [s[1], s[0], s[1]],
+        (2, 1) => [s[1], 0.0, 0.0],
+        _ => s,
+    }
+}
+
+/// Forma que la física infiere del nombre de la malla integrada (la
+/// misma regla exacta de la sección Collider: "sphere"/"capsule"/
+/// "cylinder", cualquier otro nombre es Box).
+fn forma_inferida_collider(modelo: &str) -> &'static str {
+    match modelo {
+        "sphere" => "Sphere",
+        "capsule" => "Capsule",
+        "cylinder" => "Cylinder",
+        _ => "Box",
+    }
+}
+
+/// Qué collider pide una entrada del menú «Añadir Componente» (P3).
+#[derive(Clone, Copy)]
+enum NuevoCollider {
+    Primitiva(&'static str),
+    Mesh,
+}
+
+/// Añade un collider a la entidad desde el menú «Añadir Componente»
+/// (P3: cada collider es su propio componente, repetible). Crea la
+/// PhysicsData si no hay; si la entidad vivía del collider inferido
+/// legacy (lista vacía, sin mesh, con Collider), lo materializa primero
+/// como spec para no perderlo — también al añadir el Mesh, porque fijar
+/// el modo sacaría a la entidad del estado legacy.
+fn anadir_collider_componente(
+    entity: &mut glass_core::EntityData,
+    modelo: &str,
+    nuevo: NuevoCollider,
+) {
+    let era_collider = entity
+        .physics
+        .as_ref()
+        .is_some_and(|p| p.has_collider);
+    if entity.physics.is_none() {
+        entity.physics = Some(PhysicsData {
+            body_type: "Static".into(),
+            has_rigidbody: false,
+            has_collider: true,
+            ..PhysicsData::default()
+        });
+    }
+    let phys = entity.physics.as_mut().expect("physics recién asegurado");
+    if era_collider
+        && phys.colliders.is_empty()
+        && phys.mesh_collider == glass_core::MeshColliderMode::None
+    {
+        let forma = forma_inferida_collider(modelo);
+        let spec = glass_core::ColliderSpec {
+            shape: forma.to_string(),
+            size: tamano_convertido_modulo("Box", forma, phys.box_extents),
+            offset: phys.box_offset,
+            is_trigger: phys.is_trigger,
+        };
+        phys.colliders.push(spec);
+    }
+    phys.has_collider = true;
+    match nuevo {
+        NuevoCollider::Primitiva(forma) => {
+            phys.anadir_collider(glass_core::spec_por_defecto(forma));
+        }
+        NuevoCollider::Mesh => {
+            phys.mesh_collider = glass_core::MeshColliderMode::Convex;
+        }
+    }
+    if !entity.components.iter().any(|c| c == "Collider") {
+        entity.components.push("Collider".into());
+    }
+}
+
+/// Las cinco entradas de collider del menú «Añadir Componente» (P3).
+/// Devuelve true si se añadió algo (el llamador cierra el menú).
+fn botones_collider_menu(
+    ui: &mut Ui,
+    entity: &mut glass_core::EntityData,
+    modelo: &str,
+    q: &str,
+) -> bool {
+    let coincide = |nombre: &str| q.is_empty() || nombre.to_lowercase().contains(q);
+    let hay_mesh = entity
+        .physics
+        .as_ref()
+        .is_some_and(|p| p.mesh_collider != glass_core::MeshColliderMode::None);
+    for (nombre, etiqueta, forma) in [
+        ("Box Collider", "🧊 Box Collider", "Box"),
+        ("Sphere Collider", "🧊 Sphere Collider", "Sphere"),
+        ("Capsule Collider", "🧊 Capsule Collider", "Capsule"),
+        ("Cylinder Collider", "🧊 Cylinder Collider", "Cylinder"),
+    ] {
+        if coincide(nombre) && ui.button(etiqueta).clicked() {
+            anadir_collider_componente(entity, modelo, NuevoCollider::Primitiva(forma));
+            return true;
+        }
+    }
+    if !hay_mesh && coincide("Mesh Collider") && ui.button("🧊 Mesh Collider").clicked() {
+        anadir_collider_componente(entity, modelo, NuevoCollider::Mesh);
+        return true;
+    }
+    false
+}
+
+/// Acción estructural pedida desde una sección de collider (P3): se
+/// recoge mientras se pinta y se aplica después, para no mutar la lista
+/// durante la iteración.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AccionCollider {
+    Duplicar(usize),
+    Quitar(usize),
+    QuitarMesh,
+}
+
 #[derive(Default)]
 pub struct InspectorPanel {
     show_add_component_menu: bool,
@@ -517,7 +651,10 @@ impl InspectorPanel {
                         });
                     }
 
-                    if phys.has_collider {
+                    if phys.has_collider
+                        && phys.colliders.is_empty()
+                        && phys.mesh_collider == glass_core::MeshColliderMode::None
+                    {
                         ui.collapsing("🧊 Collider", |ui| {
                             use glass_core::scene::{ColliderSpec, MeshColliderMode};
 
@@ -755,6 +892,218 @@ impl InspectorPanel {
                                 remove_collider = true;
                             }
                         });
+                    } else if phys.has_collider {
+                        // P3: cada collider es su propio componente, como
+                        // en Unity. Fricción y elasticidad son del cuerpo
+                        // (compartidos) y van una sola vez, arriba.
+                        ui.collapsing("🧊 Colliders", |ui| {
+                            ui.add(Slider::new(&mut phys.friction, 0.0..=1.0).text("Fricción"));
+                            ui.add(Slider::new(&mut phys.restitution, 0.0..=1.0).text("Elasticidad (Bounciness)"));
+                            ui.label(
+                                RichText::new("Fricción y elasticidad son del cuerpo: las comparten sus colliders.")
+                                    .weak(),
+                            );
+                        });
+
+                        let mut acciones: Vec<AccionCollider> = Vec::new();
+                        for i in 0..phys.colliders.len() {
+                            let titulo = format!("{} Collider", phys.colliders[i].shape);
+                            egui::CollapsingHeader::new(titulo)
+                                .id_salt(("collider_spec", selected_id.unwrap_or(0), i))
+                                .default_open(true)
+                                .show(ui, |ui| {
+                                    let spec = &mut phys.colliders[i];
+                                    ui.checkbox(&mut spec.is_trigger, "Is Trigger");
+
+                                    let mut center = spec.offset;
+                                    let mut size = spec.size;
+                                    let mut cambiado = false;
+
+                                    ui.horizontal(|ui| {
+                                        ui.label("Center");
+                                        for (eje, v) in ["X", "Y", "Z"].iter().zip(center.iter_mut()) {
+                                            ui.label(*eje);
+                                            cambiado |= ui.add(DragValue::new(v).speed(0.05)).changed();
+                                        }
+                                    });
+
+                                    match spec.shape.as_str() {
+                                        "Sphere" => {
+                                            ui.horizontal(|ui| {
+                                                ui.label("Radius");
+                                                cambiado |= ui
+                                                    .add(DragValue::new(&mut size[0]).speed(0.05).range(0.01..=f32::INFINITY))
+                                                    .changed();
+                                            });
+                                        }
+                                        "Capsule" => {
+                                            ui.horizontal(|ui| {
+                                                ui.label("Radius");
+                                                cambiado |= ui
+                                                    .add(DragValue::new(&mut size[1]).speed(0.05).range(0.01..=f32::INFINITY))
+                                                    .changed();
+                                            });
+                                            let mut altura = 2.0 * (size[0] + size[1]);
+                                            ui.horizontal(|ui| {
+                                                ui.label("Height");
+                                                if ui
+                                                    .add(DragValue::new(&mut altura).speed(0.05).range(0.0..=f32::INFINITY))
+                                                    .changed()
+                                                {
+                                                    size[0] = (altura * 0.5 - size[1]).max(0.0);
+                                                    cambiado = true;
+                                                }
+                                            });
+                                            ui.label(RichText::new("Dirección: Y").weak());
+                                        }
+                                        "Cylinder" => {
+                                            ui.horizontal(|ui| {
+                                                ui.label("Radius");
+                                                cambiado |= ui
+                                                    .add(DragValue::new(&mut size[1]).speed(0.05).range(0.01..=f32::INFINITY))
+                                                    .changed();
+                                            });
+                                            let mut altura = 2.0 * size[0];
+                                            ui.horizontal(|ui| {
+                                                ui.label("Height");
+                                                if ui
+                                                    .add(DragValue::new(&mut altura).speed(0.05).range(0.0..=f32::INFINITY))
+                                                    .changed()
+                                                {
+                                                    size[0] = altura.max(0.0) * 0.5;
+                                                    cambiado = true;
+                                                }
+                                            });
+                                        }
+                                        _ => {
+                                            // Box (y cualquier forma desconocida).
+                                            ui.horizontal(|ui| {
+                                                ui.label("Size");
+                                                for (eje, h) in ["X", "Y", "Z"].iter().zip(size.iter_mut()) {
+                                                    ui.label(*eje);
+                                                    let mut completo = *h * 2.0;
+                                                    if ui
+                                                        .add(DragValue::new(&mut completo).speed(0.05).range(0.01..=f32::INFINITY))
+                                                        .changed()
+                                                    {
+                                                        *h = completo.max(0.01) * 0.5;
+                                                        cambiado = true;
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+
+                                    if spec.shape == "Box" || spec.shape == "Sphere" {
+                                        let pulsado = ui
+                                            .add_enabled_ui(!modelo_entidad.is_empty(), |ui| {
+                                                ui.button("🎯 Ajustar a la malla").clicked()
+                                            })
+                                            .inner;
+                                        if pulsado {
+                                            let (lo, hi) = cotas_entidad;
+                                            for k in 0..3 {
+                                                center[k] = (lo[k] + hi[k]) * 0.5;
+                                            }
+                                            if spec.shape == "Box" {
+                                                for k in 0..3 {
+                                                    size[k] = ((hi[k] - lo[k]) * 0.5).max(0.005);
+                                                }
+                                            } else {
+                                                let mayor = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(hi[2] - lo[2]);
+                                                size[0] = (mayor * 0.5).max(0.01);
+                                            }
+                                            cambiado = true;
+                                        }
+                                    }
+
+                                    if cambiado {
+                                        spec.offset = center;
+                                        spec.size = size;
+                                    }
+
+                                    ui.horizontal(|ui| {
+                                        if ui.small_button("⧉ Duplicar").clicked() {
+                                            acciones.push(AccionCollider::Duplicar(i));
+                                        }
+                                        if ui.small_button("🗑 Quitar").clicked() {
+                                            acciones.push(AccionCollider::Quitar(i));
+                                        }
+                                    });
+                                });
+                        }
+
+                        if phys.mesh_collider != glass_core::MeshColliderMode::None {
+                            egui::CollapsingHeader::new("Mesh Collider")
+                                .id_salt(("mesh_collider", selected_id.unwrap_or(0)))
+                                .default_open(true)
+                                .show(ui, |ui| {
+                                    if modelo_entidad.is_empty() {
+                                        ui.label(RichText::new("(sin malla: caerá a los primitivos)").weak());
+                                    } else {
+                                        ui.label(format!("Malla: {modelo_entidad}"));
+                                    }
+                                    ui.label(
+                                        RichText::new("Se adapta a la malla real del objeto.")
+                                            .weak(),
+                                    );
+                                    let mut convex =
+                                        phys.mesh_collider == glass_core::MeshColliderMode::Convex;
+                                    if ui.checkbox(&mut convex, "Convex").changed() {
+                                        phys.mesh_collider = if convex {
+                                            glass_core::MeshColliderMode::Convex
+                                        } else {
+                                            glass_core::MeshColliderMode::TriMesh
+                                        };
+                                    }
+                                    if phys.mesh_collider == glass_core::MeshColliderMode::TriMesh
+                                        && phys.has_rigidbody
+                                        && phys.body_type != "Static"
+                                    {
+                                        ui.label(
+                                            RichText::new("En cuerpos dinámicos TriMesh se degrada a Convex al simular.")
+                                                .color(Color32::from_rgb(255, 190, 80)),
+                                        );
+                                    }
+                                    if ui.small_button("🗑 Quitar").clicked() {
+                                        acciones.push(AccionCollider::QuitarMesh);
+                                    }
+                                });
+                        }
+
+                        if !acciones.is_empty() {
+                            // Aplicar tras pintar, reconstruyendo la lista
+                            // para que varias acciones en el mismo frame
+                            // no desplacen índices.
+                            let originales = std::mem::take(&mut phys.colliders);
+                            let mut nuevos = Vec::with_capacity(originales.len() + 1);
+                            for (i, spec) in originales.into_iter().enumerate() {
+                                let quitar = acciones.contains(&AccionCollider::Quitar(i));
+                                let duplicar = acciones.contains(&AccionCollider::Duplicar(i));
+                                match (quitar, duplicar) {
+                                    (true, false) => {}
+                                    (false, true) => {
+                                        let copia = spec.clone();
+                                        nuevos.push(spec);
+                                        nuevos.push(copia);
+                                    }
+                                    _ => nuevos.push(spec),
+                                }
+                            }
+                            phys.colliders = nuevos;
+                            if acciones.contains(&AccionCollider::QuitarMesh) {
+                                phys.mesh_collider = glass_core::MeshColliderMode::None;
+                            }
+                            // Sin specs y sin mesh no queda ningún
+                            // collider: apagar el componente para no
+                            // resucitar el inferido legacy.
+                            if phys.colliders.is_empty()
+                                && phys.mesh_collider == glass_core::MeshColliderMode::None
+                            {
+                                phys.has_collider = false;
+                                remove_collider = true;
+                            }
+                        }
                     }
                     ui.separator();
                 }
@@ -1175,7 +1524,11 @@ impl InspectorPanel {
                         let mut hay_resultados = false;
                         hay_resultados |= coincide("MeshRenderer");
                         hay_resultados |= coincide("Rigidbody");
-                        hay_resultados |= coincide("Collider");
+                        hay_resultados |= coincide("Box Collider");
+                        hay_resultados |= coincide("Sphere Collider");
+                        hay_resultados |= coincide("Capsule Collider");
+                        hay_resultados |= coincide("Cylinder Collider");
+                        hay_resultados |= coincide("Mesh Collider");
                         hay_resultados |= coincide("Script");
                         hay_resultados |= coincide("AudioSource");
                         hay_resultados |= coincide("CharacterController");
@@ -1200,7 +1553,6 @@ impl InspectorPanel {
                         }
 
                         if entity.physics.is_none() {
-                            // Filtro en la cadena if/else: con "coll" se dibuja Collider; sin filtro, ambos como antes.
                             if coincide("Rigidbody") && ui.button("⚙ Rigidbody").clicked() {
                                 entity.physics = Some(PhysicsData {
                                     has_rigidbody: true,
@@ -1209,14 +1561,10 @@ impl InspectorPanel {
                                 });
                                 entity.components.push("RigidBody".into());
                                 self.show_add_component_menu = false;
-                            } else if coincide("Collider") && ui.button("🧊 Collider").clicked() {
-                                entity.physics = Some(PhysicsData {
-                                    body_type: "Static".into(),
-                                    has_rigidbody: false,
-                                    has_collider: true,
-                                    ..PhysicsData::default()
-                                });
-                                entity.components.push("Collider".into());
+                            }
+                            // P3: cada collider es su componente; estas
+                            // entradas crean la PhysicsData al vuelo.
+                            if botones_collider_menu(ui, entity, &modelo_entidad, &q) {
                                 self.show_add_component_menu = false;
                             }
                         } else if let Some(ref mut phys) = entity.physics {
@@ -1234,11 +1582,15 @@ impl InspectorPanel {
                                 entity.components.push("RigidBody".into());
                                 self.show_add_component_menu = false;
                             }
-                            if coincide("Collider") && !phys.has_collider && ui.button("🧊 Añadir Collider").clicked() {
-                                phys.has_collider = true;
-                                entity.components.push("Collider".into());
-                                self.show_add_component_menu = false;
-                            }
+                        }
+
+                        // P3: con física ya presente, los colliders se
+                        // añaden uno a uno y son repetibles (fuera del
+                        // préstamo de `phys`, el helper toma la entidad).
+                        if entity.physics.is_some()
+                            && botones_collider_menu(ui, entity, &modelo_entidad, &q)
+                        {
+                            self.show_add_component_menu = false;
                         }
 
                         if coincide("Script") && entity.script.is_none() && ui.button("📜 Script C# (.NET CoreCLR)").clicked() {

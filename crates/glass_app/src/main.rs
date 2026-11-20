@@ -108,6 +108,10 @@ struct SpawnedBodySpec {
     /// Colliders primitivos resueltos de la Fase 1.5 (forma, config y
     /// offset local por collider).
     colliders: Vec<(ColliderShape, ColliderConfig, [f32; 3])>,
+    /// True si `colliders` viene de specs explícitos del autor (componen
+    /// con el collider de malla); false si es solo el inferido histórico
+    /// (que actúa de respaldo cuando la malla no cuela). P3.
+    colliders_son_specs: bool,
     /// Modo de collider de malla pedido por la escena (Fase 1.5). El
     /// spawn en vivo lo resuelve con la geometría retenida de la
     /// caché compartida, como la carga de escena (auditoría C4).
@@ -169,6 +173,7 @@ impl EngineSceneBridge {
             friction: body.friction,
             restitution: body.restitution,
             colliders,
+            colliders_son_specs: !body.colliders.is_empty(),
             mesh_collider: body.mesh_collider,
             model: model.to_string(),
             world_scale: glass_core::mat4_scale(world),
@@ -250,11 +255,12 @@ impl EngineSceneBridge {
         }
         // La masa se aplica AL FINAL de esta función, con los
         // colliders ya adjuntos (set_mass rescales densidades).
-        // El collider de malla, si cuela, SUSTITUYE a los primitivos
-        // (la misma semántica que rebuild_physics_from_scene). OJO,
-        // orden deliberado: se pasa (friction, restitution) a la firma
-        // (restitution, friction), el mismo cruce histórico de todas
-        // las rutas.
+        // El collider de malla, si cuela, COMPONE con los primitivos de
+        // specs (la misma semántica que rebuild_physics_from_scene,
+        // P3); el inferido histórico solo actúa de respaldo si la malla
+        // no cuela. OJO, orden deliberado: se pasa (friction,
+        // restitution) a la firma (restitution, friction), el mismo
+        // cruce histórico de todas las rutas.
         let mut via_mesh = false;
         if spec.mesh_collider != glass_core::MeshColliderMode::None {
             match &geometria {
@@ -326,36 +332,27 @@ impl EngineSceneBridge {
                 }
             }
         }
-        if via_mesh {
-            // Masa con el collider de malla ya adjunto.
-            if spec.body_type == BodyType::Dynamic {
-                physics.set_mass(handle, spec.mass);
-            }
-            if !spec.automatic_center_of_mass {
-                physics.set_automatic_center_of_mass(handle, false);
-            }
-            if !spec.automatic_inertia_tensor {
-                physics.set_automatic_inertia_tensor(handle, false);
-            }
-            return;
-        }
+        // Los specs componen con la malla; el inferido (lista vacía)
+        // solo se adjunta si la malla no cuela, para no duplicarlo.
         // OJO, orden deliberado: se pasa (friction, restitution) a la
         // firma (restitution, friction) de `attach_collider_with_config_at`,
         // EL MISMO cruce histórico de `rebuild_physics_from_scene`. Un
         // spawn y su gemelo autorado deben comportarse igual; el cruce se
         // paga el día que se corrija en TODAS las rutas a la vez (deuda
         // registrada en REGISTRO_PRIMITIVAS_COLLIDERS.md).
-        for (shape, cfg, offset) in spec.colliders {
-            physics.attach_collider_with_config_at(
-                handle,
-                shape,
-                spec.friction,
-                spec.restitution,
-                cfg,
-                offset,
-            );
+        if spec.colliders_son_specs || !via_mesh {
+            for (shape, cfg, offset) in spec.colliders {
+                physics.attach_collider_with_config_at(
+                    handle,
+                    shape,
+                    spec.friction,
+                    spec.restitution,
+                    cfg,
+                    offset,
+                );
+            }
         }
-        // Masa al final: los colliders primitivos ya están adjuntos.
+        // Masa al final: todos los colliders ya están adjuntos.
         if spec.body_type == BodyType::Dynamic {
             physics.set_mass(handle, spec.mass);
         }
@@ -2116,6 +2113,9 @@ type DescriptorCuerpo = (
     f32,
     [f32; 3],
     Option<(glass_core::MeshColliderMode, String, [f32; 3], bool)>,
+    // P3: true si los resueltos vienen de specs explícitos (componen con
+    // la malla); false si traen solo el inferido (respaldo de la malla).
+    bool,
     // Superficie de Rigidbody (huecos beta + RB-1): masa, damping lineal,
     // usa gravedad, CCD, interpola, damping angular, iteraciones del solver.
     (f32, f32, bool, bool, bool, f32, u32, f32, u32, u32, u32, bool, bool),
@@ -4337,6 +4337,7 @@ let resueltos = if body.has_collider {
                     body.restitution,
                     body.linear_velocity,
                     mesh,
+                    !body.colliders.is_empty(),
                     (
     body.mass,
     body.linear_damping,
@@ -4377,7 +4378,7 @@ let resueltos = if body.has_collider {
             return;
         };
         *physics = PhysicsWorld::new();
-        for (id, body_type, pos, rot, resueltos, friction, restitution, linvel, mesh, superficie) in descriptors
+        for (id, body_type, pos, rot, resueltos, friction, restitution, linvel, mesh, hay_specs, superficie) in descriptors
         {
             let handle = physics.create_rigid_body(id, body_type, pos, rot);
             let (
@@ -4433,7 +4434,7 @@ let resueltos = if body.has_collider {
             let mut via_mesh = false;
             if let Some((modo, model_name, escala, es_estatico)) = &mesh {
                 if let Some((vertices, indices)) = geometrias.get(model_name) {
-                    let cfg = resueltos[0].1;
+                    let cfg = resueltos.first().map(|c| c.1).unwrap_or_default();
                     let puntos: Vec<[f32; 3]> = vertices
                         .iter()
                         .map(|v| [v[0] * escala[0], v[1] * escala[1], v[2] * escala[2]])
@@ -4489,7 +4490,10 @@ let resueltos = if body.has_collider {
                 }
             }
 
-            if !via_mesh {
+            if hay_specs || !via_mesh {
+                // Los specs componen con la malla (P3); sin specs,
+                // `resueltos` trae solo el inferido y actúa de respaldo
+                // cuando la malla no cuela.
                 // OJO, orden deliberado: el cruce (friction, restitution) se conserva
                 // para mantener coherencia con el resto del sitio.
                 for (shape, cfg, offset) in resueltos {

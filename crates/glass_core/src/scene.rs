@@ -149,6 +149,24 @@ pub struct ColliderSpec {
     pub is_trigger: bool,
 }
 
+/// Spec de collider con los valores por defecto de su forma, como el que
+/// crea Unity al añadir el componente: medio metro en todo. Las formas
+/// desconocidas se normalizan a `Box`.
+pub fn spec_por_defecto(shape: &str) -> ColliderSpec {
+    let (shape, size) = match shape {
+        "Sphere" => ("Sphere", [0.5, 0.0, 0.0]),
+        "Capsule" => ("Capsule", [0.5, 0.5, 0.0]),
+        "Cylinder" => ("Cylinder", [0.5, 0.5, 0.0]),
+        _ => ("Box", [0.5, 0.5, 0.5]),
+    };
+    ColliderSpec {
+        shape: shape.to_string(),
+        size,
+        offset: [0.0, 0.0, 0.0],
+        is_trigger: false,
+    }
+}
+
 /// Modo de collider de malla (Fase 1.5): None = camino histórico (primitiva
 /// inferida o lista `colliders`); Convex = casco convexo de la geometría
 /// del modelo; TriMesh = malla triangular exacta (SOLO estáticos: en un
@@ -389,6 +407,72 @@ impl Default for PhysicsData {
             use_gravity: true,
             ccd: false,
         }
+    }
+}
+
+impl PhysicsData {
+    /// Añade un collider primitivo a la lista y marca el componente
+    /// Collider como presente (P3: cada spec es un componente).
+    pub fn anadir_collider(&mut self, spec: ColliderSpec) {
+        self.colliders.push(spec);
+        self.has_collider = true;
+    }
+
+    /// Duplica el collider `idx` justo después del original. `false` si
+    /// `idx` está fuera de rango (no toca nada).
+    pub fn duplicar_collider(&mut self, idx: usize) -> bool {
+        if idx >= self.colliders.len() {
+            return false;
+        }
+        let copia = self.colliders[idx].clone();
+        self.colliders.insert(idx + 1, copia);
+        self.has_collider = true;
+        true
+    }
+
+    /// Extrae el collider `idx`. Si la lista queda vacía y no hay Mesh
+    /// Collider, apaga `has_collider`: la lista vacía sin mesh es el
+    /// estado «inferido legacy» y resucitaría un collider que el usuario
+    /// acaba de quitar.
+    pub fn quitar_collider(&mut self, idx: usize) -> Option<ColliderSpec> {
+        if idx >= self.colliders.len() {
+            return None;
+        }
+        let quitado = self.colliders.remove(idx);
+        if self.colliders.is_empty()
+            && matches!(self.mesh_collider, MeshColliderMode::None)
+        {
+            self.has_collider = false;
+        }
+        Some(quitado)
+    }
+
+    /// Quita el Mesh Collider (modo a `None`). Si no quedan specs, apaga
+    /// `has_collider` por la misma regla que `quitar_collider`.
+    pub fn quitar_mesh_collider(&mut self) {
+        self.mesh_collider = MeshColliderMode::None;
+        if self.colliders.is_empty() {
+            self.has_collider = false;
+        }
+    }
+
+    /// Número de colliders efectivos de la entidad: los specs, más el de
+    /// malla si lo hay, más el inferido legacy si la lista está vacía sin
+    /// mesh. 0 si el componente Collider no está presente.
+    pub fn total_colliders(&self) -> usize {
+        if !self.has_collider {
+            return 0;
+        }
+        let mut total = self.colliders.len();
+        if !matches!(self.mesh_collider, MeshColliderMode::None) {
+            total += 1;
+        }
+        if self.colliders.is_empty()
+            && matches!(self.mesh_collider, MeshColliderMode::None)
+        {
+            total += 1;
+        }
+        total
     }
 }
 
@@ -3339,6 +3423,151 @@ mod scene_index_tests {
         let profile: LightProfileData = serde_json::from_str(r#"{"preset":"Custom"}"#).unwrap();
         assert_eq!(profile.tope_por_objeto, 4);
         assert_eq!(profile.prioridad, 1.0);
+    }
+
+    fn physics_data_base() -> PhysicsData {
+        PhysicsData {
+            has_rigidbody: false,
+            has_collider: false,
+            ..PhysicsData::default()
+        }
+    }
+
+    fn spec_con_offset(shape: &str, x: f32) -> ColliderSpec {
+        let mut spec = spec_por_defecto(shape);
+        spec.offset = [x, 0.0, 0.0];
+        spec
+    }
+
+    #[test]
+    fn spec_por_defecto_devuelve_defaults_por_forma() {
+        let b = spec_por_defecto("Box");
+        assert_eq!(b.shape, "Box");
+        assert_eq!(b.size, [0.5, 0.5, 0.5]);
+        assert_eq!(b.offset, [0.0, 0.0, 0.0]);
+        assert!(!b.is_trigger);
+        let e = spec_por_defecto("Sphere");
+        assert_eq!(e.shape, "Sphere");
+        assert_eq!(e.size, [0.5, 0.0, 0.0]);
+        let c = spec_por_defecto("Capsule");
+        assert_eq!(c.shape, "Capsule");
+        assert_eq!(c.size, [0.5, 0.5, 0.0]);
+        let ci = spec_por_defecto("Cylinder");
+        assert_eq!(ci.shape, "Cylinder");
+        assert_eq!(ci.size, [0.5, 0.5, 0.0]);
+    }
+
+    #[test]
+    fn spec_por_defecto_forma_desconocida_cae_a_box() {
+        let spec = spec_por_defecto("Pyramid");
+        assert_eq!(spec.shape, "Box");
+        assert_eq!(spec.size, [0.5, 0.5, 0.5]);
+    }
+
+    #[test]
+    fn anadir_collider_pone_has_collider() {
+        let mut physics = physics_data_base();
+        assert!(!physics.has_collider);
+        physics.anadir_collider(spec_por_defecto("Sphere"));
+        assert!(physics.has_collider);
+        assert_eq!(physics.colliders.len(), 1);
+        assert_eq!(physics.total_colliders(), 1);
+    }
+
+    #[test]
+    fn duplicar_collider_inserta_tras_el_original_y_conserva_orden() {
+        let mut physics = physics_data_base();
+        physics.anadir_collider(spec_con_offset("Box", 0.0));
+        physics.anadir_collider(spec_con_offset("Sphere", 1.0));
+        physics.anadir_collider(spec_con_offset("Capsule", 2.0));
+        assert!(physics.duplicar_collider(1));
+        let formas: Vec<_> = physics
+            .colliders
+            .iter()
+            .map(|c| c.shape.as_str())
+            .collect();
+        assert_eq!(formas, vec!["Box", "Sphere", "Sphere", "Capsule"]);
+        let offsets: Vec<_> = physics.colliders.iter().map(|c| c.offset).collect();
+        assert_eq!(
+            offsets,
+            vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [2.0, 0.0, 0.0],
+            ]
+        );
+    }
+
+    #[test]
+    fn duplicar_collider_fuera_de_rango_no_toca_nada() {
+        let mut physics = physics_data_base();
+        physics.anadir_collider(spec_con_offset("Box", 0.0));
+        assert!(!physics.duplicar_collider(5));
+        assert_eq!(physics.colliders.len(), 1);
+    }
+
+    #[test]
+    fn quitar_ultimo_spec_sin_mesh_apaga_has_collider() {
+        let mut physics = physics_data_base();
+        physics.anadir_collider(spec_por_defecto("Box"));
+        let quitado = physics.quitar_collider(0);
+        assert!(quitado.is_some());
+        assert!(physics.colliders.is_empty());
+        assert!(!physics.has_collider);
+        assert_eq!(physics.total_colliders(), 0);
+    }
+
+    #[test]
+    fn quitar_spec_con_mesh_presente_conserva_has_collider() {
+        let mut physics = physics_data_base();
+        physics.anadir_collider(spec_por_defecto("Box"));
+        physics.mesh_collider = MeshColliderMode::Convex;
+        let quitado = physics.quitar_collider(0);
+        assert!(quitado.is_some());
+        assert!(physics.colliders.is_empty());
+        assert!(physics.has_collider);
+        assert_eq!(physics.total_colliders(), 1);
+    }
+
+    #[test]
+    fn quitar_mesh_con_specs_conserva_has_collider_y_sin_specs_lo_apaga() {
+        let mut con_specs = physics_data_base();
+        con_specs.anadir_collider(spec_por_defecto("Box"));
+        con_specs.mesh_collider = MeshColliderMode::Convex;
+        con_specs.quitar_mesh_collider();
+        assert!(matches!(con_specs.mesh_collider, MeshColliderMode::None));
+        assert!(con_specs.has_collider);
+        assert_eq!(con_specs.total_colliders(), 1);
+
+        let mut sin_specs = physics_data_base();
+        sin_specs.has_collider = true;
+        sin_specs.mesh_collider = MeshColliderMode::Convex;
+        sin_specs.quitar_mesh_collider();
+        assert!(matches!(sin_specs.mesh_collider, MeshColliderMode::None));
+        assert!(!sin_specs.has_collider);
+        assert_eq!(sin_specs.total_colliders(), 0);
+    }
+
+    #[test]
+    fn total_colliders_cubre_los_cuatro_estados() {
+        let sin_collider = physics_data_base();
+        assert_eq!(sin_collider.total_colliders(), 0);
+
+        let mut legacy = physics_data_base();
+        legacy.has_collider = true;
+        assert_eq!(legacy.total_colliders(), 1);
+
+        let mut specs = physics_data_base();
+        specs.anadir_collider(spec_por_defecto("Box"));
+        specs.anadir_collider(spec_por_defecto("Sphere"));
+        assert_eq!(specs.total_colliders(), 2);
+
+        let mut specs_mesh = physics_data_base();
+        specs_mesh.anadir_collider(spec_por_defecto("Box"));
+        specs_mesh.anadir_collider(spec_por_defecto("Sphere"));
+        specs_mesh.mesh_collider = MeshColliderMode::Convex;
+        assert_eq!(specs_mesh.total_colliders(), 3);
     }
 
 }

@@ -483,6 +483,36 @@ impl ViewportPanel {
                                     if is_sel { 1.8 } else { 1.2 },
                                 );
                             }
+                            gizmo_3d::ColliderDibujo::MallaYFormas(formas) => {
+                                // La caja de la malla (cotas locales, matriz
+                                // completa) Y las formas de los specs (tamaño
+                                // de mundo, pose sin escala), como la física.
+                                let (lo, hi) =
+                                    gizmo_3d::entity_local_bounds(ent, &self.mesh_bounds);
+                                gizmo_3d::dibujar_caja(
+                                    painter,
+                                    lo,
+                                    hi,
+                                    &world,
+                                    &view_proj,
+                                    rect,
+                                    egui::Color32::from_rgba_unmultiplied(
+                                        90,
+                                        255,
+                                        130,
+                                        if is_sel { 255 } else { 130 },
+                                    ),
+                                    if is_sel { 1.8 } else { 1.2 },
+                                );
+                                gizmo_3d::draw_collider_gizmo(
+                                    painter,
+                                    &formas,
+                                    &glass_core::mat4_sin_escala(world),
+                                    &view_proj,
+                                    rect,
+                                    is_sel,
+                                );
+                            }
                             gizmo_3d::ColliderDibujo::Ninguno => {}
                         }
                     }

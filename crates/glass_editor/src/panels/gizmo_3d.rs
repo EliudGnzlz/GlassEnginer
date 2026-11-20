@@ -1126,9 +1126,11 @@ pub fn draw_selection_bounding_box(
 pub enum ColliderDibujo {
     /// Primitivos de Rapier, cada uno con su offset local respecto al cuerpo.
     Formas(Vec<(glass_physics::ColliderShape, [f32; 3])>),
-    /// Collider de malla: la física sustituye los primitivos por la
-    /// geometría del modelo; el gizmo de primitivos no aplica.
+    /// Solo collider de malla: se dibuja la caja de las cotas del modelo.
     Malla,
+    /// Collider de malla Y primitivos de specs a la vez (P3: componen):
+    /// la caja de las cotas más una forma por spec.
+    MallaYFormas(Vec<(glass_physics::ColliderShape, [f32; 3])>),
     /// Sin componente de física o sin Collider.
     Ninguno,
 }
@@ -1147,9 +1149,10 @@ fn forma_de_spec(spec: &glass_core::ColliderSpec) -> glass_physics::ColliderShap
 }
 /// Resuelve el collider de `ent` con las mismas reglas que la física
 /// (`colliders_resueltos` en glass_app): sin Collider no hay nada; el
-/// collider de malla tiene prioridad sobre los primitivos; con specs, una
-/// forma por spec con su offset; con la lista vacía, la forma histórica
-/// inferida del nombre de la malla visual con `box_offset`.
+/// el collider de malla compone con los primitivos de specs (P3): con
+/// specs, una forma por spec con su offset, además de la caja de la
+/// malla; con la lista vacía, la forma histórica inferida del nombre de
+/// la malla visual con `box_offset`.
 ///
 /// `world_scale` es la escala MUNDIAL de la entidad (la misma que recibe
 /// `collider_shape_for_builtin` al construir el cuerpo).
@@ -1160,9 +1163,17 @@ pub fn collider_dibujo(ent: &EntityData, world_scale: [f32; 3]) -> ColliderDibuj
     if !physics.has_collider {
         return ColliderDibujo::Ninguno;
     }
-    // `matches!` en lugar de `!=` para no exigir PartialEq a MeshColliderMode.
-    if !matches!(physics.mesh_collider, glass_core::MeshColliderMode::None) {
-        return ColliderDibujo::Malla;
+    if physics.mesh_collider != glass_core::MeshColliderMode::None {
+        if physics.colliders.is_empty() {
+            return ColliderDibujo::Malla;
+        }
+        return ColliderDibujo::MallaYFormas(
+            physics
+                .colliders
+                .iter()
+                .map(|spec| (forma_de_spec(spec), spec.offset))
+                .collect(),
+        );
     }
     if physics.colliders.is_empty() {
         // Sin modelo el render cae al cubo, y `""` en
@@ -2757,5 +2768,42 @@ mod tests_gizmos {
         fisica["mesh_collider"] = serde_json::json!("Convex");
         let ent = entidad_con_fisica(fisica);
         assert_eq!(collider_dibujo(&ent, [1.0; 3]), ColliderDibujo::Malla);
+    }
+
+    #[test]
+    fn collider_dibujo_mesh_con_specs_es_malla_y_formas() {
+        // P3: el Mesh Collider compone con los specs; el dibujo trae la
+        // caja de la malla Y una forma por spec, sin la inferida.
+        let mut fisica = fisica_base();
+        fisica["mesh_collider"] = serde_json::json!("Convex");
+        fisica["colliders"] = serde_json::json!([
+            { "shape": "Box", "size": [1.0, 2.0, 3.0], "offset": [4.0, 0.0, 0.0], "is_trigger": false },
+            { "shape": "Sphere", "size": [0.7, 0.0, 0.0], "offset": [0.0, 1.0, 0.0], "is_trigger": false },
+        ]);
+        let ent = entidad_con_fisica(fisica);
+        assert_eq!(
+            collider_dibujo(&ent, [1.0; 3]),
+            ColliderDibujo::MallaYFormas(vec![
+                (
+                    glass_physics::ColliderShape::Cuboid { half_extents: [1.0, 2.0, 3.0] },
+                    [4.0, 0.0, 0.0],
+                ),
+                (ColliderShape::Ball { radius: 0.7 }, [0.0, 1.0, 0.0]),
+            ])
+        );
+    }
+
+    #[test]
+    fn collider_dibujo_mesh_trimesh_con_specs_tambien_compone() {
+        let mut fisica = fisica_base();
+        fisica["mesh_collider"] = serde_json::json!("TriMesh");
+        fisica["colliders"] = serde_json::json!([
+            { "shape": "Box", "size": [0.5, 0.5, 0.5], "offset": [0.0, 0.0, 0.0], "is_trigger": false },
+        ]);
+        let ent = entidad_con_fisica(fisica);
+        match collider_dibujo(&ent, [1.0; 3]) {
+            ColliderDibujo::MallaYFormas(formas) => assert_eq!(formas.len(), 1),
+            otro => panic!("se esperaba MallaYFormas, llegó {:?}", otro),
+        }
     }
 }
