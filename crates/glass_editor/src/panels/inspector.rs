@@ -1,6 +1,7 @@
 use egui::{Color32, DragValue, RichText, Slider, Ui};
 use glass_core::{
-    AudioSourceData, CameraData, CanvasData, CharacterData, LightData, MeshData, PhysicsData,
+    AudioSourceData, CameraData, CanvasData, CharacterData, EntityData, LightData, MeshData,
+    PhysicsData,
     RectTransformData, SceneState, ScriptComponentData, UIButtonData, UITextData,
     UIImageData,
     UIDragData,
@@ -179,6 +180,462 @@ enum AccionCollider {
     QuitarMesh,
 }
 
+
+// ======================================================================
+// P6: portapapeles de componentes, cabeceras con menú contextual y ✕,
+// y el candado de escala proporcional del Transform.
+// ======================================================================
+
+/// Componentes del Inspector que participan en copiar/pegar y en el
+/// botón ✕ de la cabecera. Rigidbody y Collider comparten PhysicsData:
+/// cada uno copia solo su parte de campos.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TipoComponente {
+    Transform,
+    MeshRenderer,
+    Rigidbody,
+    Collider,
+    CharacterController,
+    Camera,
+    Light,
+    Script,
+    AudioSource,
+    Canvas,
+    RectTransform,
+    Texto,
+    Boton,
+    Imagen,
+    DragDrop,
+}
+
+impl TipoComponente {
+    /// Nombre tal como aparece en `EntityData::components`.
+    pub fn nombre(self) -> &'static str {
+        match self {
+            TipoComponente::Transform => "Transform",
+            TipoComponente::MeshRenderer => "MeshRenderer",
+            TipoComponente::Rigidbody => "Rigidbody",
+            TipoComponente::Collider => "Collider",
+            TipoComponente::CharacterController => "CharacterController",
+            TipoComponente::Camera => "Camera",
+            TipoComponente::Light => "Light",
+            TipoComponente::Script => "Script",
+            TipoComponente::AudioSource => "AudioSource",
+            TipoComponente::Canvas => "Canvas",
+            TipoComponente::RectTransform => "RectTransform",
+            TipoComponente::Texto => "Text",
+            TipoComponente::Boton => "Button",
+            TipoComponente::Imagen => "Image",
+            TipoComponente::DragDrop => "DragDrop",
+        }
+    }
+}
+
+/// Lo copiado con «Copiar datos» (es_componente = false: solo se puede
+/// pegar sobre el mismo tipo) o con «Copiar componente» (true: se puede
+/// pegar como componente nuevo en cualquier entidad).
+#[derive(Clone, Debug)]
+pub struct PortapapelesComponente {
+    pub tipo: TipoComponente,
+    pub json: String,
+    pub es_componente: bool,
+}
+
+/// Lo que el usuario pidió desde la cabecera de un componente: se
+/// recoge mientras se pinta y se aplica después de la sección, como el
+/// resto de acciones diferidas del Inspector.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AccionCabecera {
+    Nada,
+    Quitar,
+    CopiarDatos,
+    CopiarComponente,
+    PegarDatos,
+    PegarComoNuevo,
+}
+
+fn a_json<T: serde::Serialize>(v: &T) -> Option<String> {
+    serde_json::to_string(v).ok()
+}
+
+fn registrar_nombre(components: &mut Vec<String>, nombre: &str) {
+    if !components.iter().any(|c| c == nombre) {
+        components.push(nombre.to_string());
+    }
+}
+
+fn sustituir<T: serde::de::DeserializeOwned>(slot: &mut Option<T>, json: &str) -> bool {
+    if slot.is_none() {
+        return false;
+    }
+    match serde_json::from_str(json) {
+        Ok(v) => {
+            *slot = Some(v);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn crear<T: serde::de::DeserializeOwned>(
+    slot: &mut Option<T>,
+    json: &str,
+    components: &mut Vec<String>,
+    nombre: &str,
+) -> bool {
+    if slot.is_some() {
+        return false;
+    }
+    let Ok(v) = serde_json::from_str(json) else {
+        return false;
+    };
+    *slot = Some(v);
+    registrar_nombre(components, nombre);
+    true
+}
+
+/// Deja un PhysicsData sin parte Collider (para extraer solo el RB).
+fn neutralizar_collider(p: &mut PhysicsData) {
+    p.has_collider = false;
+    p.colliders.clear();
+    p.mesh_collider = glass_core::MeshColliderMode::None;
+}
+
+/// Copia solo la parte Rigidbody de `src` en `dst` y activa el flag.
+/// Los campos de capa/colisión son del cuerpo entero y no se tocan.
+fn copiar_parte_rb(dst: &mut PhysicsData, src: &PhysicsData) {
+    dst.body_type = src.body_type.clone();
+    dst.mass = src.mass;
+    dst.linear_damping = src.linear_damping;
+    dst.angular_damping = src.angular_damping;
+    dst.use_gravity = src.use_gravity;
+    dst.constraints = src.constraints;
+    dst.ccd = src.ccd;
+    dst.interpolate = src.interpolate;
+    dst.solver_iterations = src.solver_iterations;
+    dst.solver_velocity_iterations = src.solver_velocity_iterations;
+    dst.max_depenetration_velocity = src.max_depenetration_velocity;
+    dst.automatic_center_of_mass = src.automatic_center_of_mass;
+    dst.automatic_inertia_tensor = src.automatic_inertia_tensor;
+    dst.has_rigidbody = true;
+}
+
+/// Copia solo la parte Collider de `src` en `dst` y activa el flag.
+fn copiar_parte_collider(dst: &mut PhysicsData, src: &PhysicsData) {
+    dst.colliders = src.colliders.clone();
+    dst.mesh_collider = src.mesh_collider;
+    dst.box_extents = src.box_extents;
+    dst.box_offset = src.box_offset;
+    dst.is_trigger = src.is_trigger;
+    dst.friction = src.friction;
+    dst.restitution = src.restitution;
+    dst.has_collider = true;
+}
+
+/// Foto serializable del componente Script (nombre + datos): la entidad
+/// lo guarda en dos campos y el portapapeles lo trata como uno solo.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ScriptFoto {
+    script: Option<String>,
+    data: Option<ScriptComponentData>,
+}
+
+/// JSON del componente `tipo` de la entidad, o None si no lo tiene.
+pub fn extraer_componente(ent: &EntityData, tipo: TipoComponente) -> Option<String> {
+    match tipo {
+        TipoComponente::Transform => a_json(&ent.transform),
+        TipoComponente::MeshRenderer => ent.mesh.as_ref().and_then(a_json),
+        TipoComponente::CharacterController => ent.character.as_ref().and_then(a_json),
+        TipoComponente::Camera => ent.camera.as_ref().and_then(a_json),
+        TipoComponente::Light => ent.light.as_ref().and_then(a_json),
+        TipoComponente::AudioSource => ent.audio.as_ref().and_then(a_json),
+        TipoComponente::Canvas => ent.canvas.as_ref().and_then(a_json),
+        TipoComponente::RectTransform => ent.rect_transform.as_ref().and_then(a_json),
+        TipoComponente::Texto => ent.ui_text.as_ref().and_then(a_json),
+        TipoComponente::Boton => ent.ui_button.as_ref().and_then(a_json),
+        TipoComponente::Imagen => ent.ui_image.as_ref().and_then(a_json),
+        TipoComponente::DragDrop => ent.ui_drag.as_ref().and_then(a_json),
+        TipoComponente::Script => {
+            if ent.script.is_none() && ent.script_data.is_none() {
+                None
+            } else {
+                a_json(&ScriptFoto {
+                    script: ent.script.clone(),
+                    data: ent.script_data.clone(),
+                })
+            }
+        }
+        TipoComponente::Rigidbody => ent
+            .physics
+            .as_ref()
+            .filter(|p| p.has_rigidbody)
+            .and_then(|p| {
+                let mut c = p.clone();
+                neutralizar_collider(&mut c);
+                a_json(&c)
+            }),
+        TipoComponente::Collider => ent
+            .physics
+            .as_ref()
+            .filter(|p| p.has_collider)
+            .and_then(|p| {
+                let mut c = p.clone();
+                c.has_rigidbody = false;
+                a_json(&c)
+            }),
+    }
+}
+
+/// Pega VALORES sobre el componente existente del mismo tipo. False si
+/// la entidad no tiene ese componente o el JSON no casa.
+pub fn aplicar_datos(ent: &mut EntityData, tipo: TipoComponente, json: &str) -> bool {
+    match tipo {
+        TipoComponente::Transform => match serde_json::from_str(json) {
+            Ok(t) => {
+                ent.transform = t;
+                true
+            }
+            Err(_) => false,
+        },
+        TipoComponente::MeshRenderer => sustituir(&mut ent.mesh, json),
+        TipoComponente::CharacterController => sustituir(&mut ent.character, json),
+        TipoComponente::Camera => sustituir(&mut ent.camera, json),
+        TipoComponente::Light => sustituir(&mut ent.light, json),
+        TipoComponente::AudioSource => sustituir(&mut ent.audio, json),
+        TipoComponente::Canvas => sustituir(&mut ent.canvas, json),
+        TipoComponente::RectTransform => sustituir(&mut ent.rect_transform, json),
+        TipoComponente::Texto => sustituir(&mut ent.ui_text, json),
+        TipoComponente::Boton => sustituir(&mut ent.ui_button, json),
+        TipoComponente::Imagen => sustituir(&mut ent.ui_image, json),
+        TipoComponente::DragDrop => sustituir(&mut ent.ui_drag, json),
+        TipoComponente::Script => {
+            if ent.script.is_none() && ent.script_data.is_none() {
+                return false;
+            }
+            match serde_json::from_str::<ScriptFoto>(json) {
+                Ok(f) => {
+                    ent.script = f.script;
+                    ent.script_data = f.data;
+                    true
+                }
+                Err(_) => false,
+            }
+        }
+        TipoComponente::Rigidbody => {
+            let Some(p) = ent.physics.as_mut().filter(|p| p.has_rigidbody) else {
+                return false;
+            };
+            let Ok(srcp) = serde_json::from_str::<PhysicsData>(json) else {
+                return false;
+            };
+            copiar_parte_rb(p, &srcp);
+            true
+        }
+        TipoComponente::Collider => {
+            let Some(p) = ent.physics.as_mut().filter(|p| p.has_collider) else {
+                return false;
+            };
+            let Ok(srcp) = serde_json::from_str::<PhysicsData>(json) else {
+                return false;
+            };
+            copiar_parte_collider(p, &srcp);
+            true
+        }
+    }
+}
+
+/// Pega el componente como NUEVO en la entidad. False si ya lo tiene
+/// (para los Option) o si es el Transform, que no se puede añadir.
+pub fn instalar_componente(ent: &mut EntityData, tipo: TipoComponente, json: &str) -> bool {
+    let nombre = tipo.nombre();
+    match tipo {
+        TipoComponente::Transform => false,
+        TipoComponente::MeshRenderer => crear(&mut ent.mesh, json, &mut ent.components, nombre),
+        TipoComponente::CharacterController => {
+            crear(&mut ent.character, json, &mut ent.components, nombre)
+        }
+        TipoComponente::Camera => crear(&mut ent.camera, json, &mut ent.components, nombre),
+        TipoComponente::Light => crear(&mut ent.light, json, &mut ent.components, nombre),
+        TipoComponente::AudioSource => crear(&mut ent.audio, json, &mut ent.components, nombre),
+        TipoComponente::Canvas => crear(&mut ent.canvas, json, &mut ent.components, nombre),
+        TipoComponente::RectTransform => {
+            crear(&mut ent.rect_transform, json, &mut ent.components, nombre)
+        }
+        TipoComponente::Texto => crear(&mut ent.ui_text, json, &mut ent.components, nombre),
+        TipoComponente::Boton => crear(&mut ent.ui_button, json, &mut ent.components, nombre),
+        TipoComponente::Imagen => crear(&mut ent.ui_image, json, &mut ent.components, nombre),
+        TipoComponente::DragDrop => crear(&mut ent.ui_drag, json, &mut ent.components, nombre),
+        TipoComponente::Script => {
+            if ent.script.is_some() || ent.script_data.is_some() {
+                return false;
+            }
+            match serde_json::from_str::<ScriptFoto>(json) {
+                Ok(f) => {
+                    ent.script = f.script;
+                    ent.script_data = f.data;
+                    registrar_nombre(&mut ent.components, nombre);
+                    true
+                }
+                Err(_) => false,
+            }
+        }
+        TipoComponente::Rigidbody => {
+            let Ok(mut srcp) = serde_json::from_str::<PhysicsData>(json) else {
+                return false;
+            };
+            match ent.physics.as_mut() {
+                None => {
+                    neutralizar_collider(&mut srcp);
+                    srcp.has_rigidbody = true;
+                    ent.physics = Some(srcp);
+                }
+                Some(p) => copiar_parte_rb(p, &srcp),
+            }
+            registrar_nombre(&mut ent.components, nombre);
+            true
+        }
+        TipoComponente::Collider => {
+            let Ok(mut srcp) = serde_json::from_str::<PhysicsData>(json) else {
+                return false;
+            };
+            match ent.physics.as_mut() {
+                None => {
+                    srcp.has_rigidbody = false;
+                    srcp.has_collider = true;
+                    ent.physics = Some(srcp);
+                }
+                Some(p) => copiar_parte_collider(p, &srcp),
+            }
+            registrar_nombre(&mut ent.components, nombre);
+            true
+        }
+    }
+}
+
+/// El menú contextual de la cabecera de un componente: copiar datos,
+/// copiar componente, pegar datos (solo datos del mismo tipo) y pegar
+/// componente como nuevo (solo si el portapapeles trae un componente).
+pub fn menu_componente(
+    ui: &mut Ui,
+    tipo: TipoComponente,
+    portapapeles: Option<&PortapapelesComponente>,
+) -> AccionCabecera {
+    let mut accion = AccionCabecera::Nada;
+    if ui.button("📋 Copiar datos").clicked() {
+        accion = AccionCabecera::CopiarDatos;
+        ui.close();
+    }
+    if ui.button("📋 Copiar componente").clicked() {
+        accion = AccionCabecera::CopiarComponente;
+        ui.close();
+    }
+    ui.separator();
+    let puede_datos = portapapeles.is_some_and(|p| !p.es_componente && p.tipo == tipo);
+    if ui
+        .add_enabled(puede_datos, egui::Button::new("📥 Pegar datos"))
+        .clicked()
+    {
+        accion = AccionCabecera::PegarDatos;
+        ui.close();
+    }
+    let puede_nuevo = tipo != TipoComponente::Transform
+        && portapapeles.is_some_and(|p| p.es_componente);
+    if ui
+        .add_enabled(puede_nuevo, egui::Button::new("📥 Pegar componente como nuevo"))
+        .clicked()
+    {
+        accion = AccionCabecera::PegarComoNuevo;
+        ui.close();
+    }
+    accion
+}
+
+/// Sección de componente con la cabecera común de P6: flecha y título
+/// (el título también alterna), menú contextual con clic derecho sobre
+/// el título y, si es quitable, el botón ✕ a la derecha de la cabecera.
+/// Sustituye a `ui.collapsing` conservando su estado por defecto
+/// (cerrada) y su id por sección dentro del `push_id` de la entidad.
+/// Devuelve la acción pedida y el resultado del cuerpo, si se pintó.
+#[allow(clippy::too_many_arguments)]
+pub fn seccion_componente<R>(
+    ui: &mut Ui,
+    id_salt: &str,
+    titulo: &str,
+    tipo: TipoComponente,
+    quitable: bool,
+    portapapeles: Option<&PortapapelesComponente>,
+    accion_out: &mut AccionCabecera,
+    cuerpo: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
+    let id = ui.make_persistent_id(("seccion_componente", id_salt));
+    let estado = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    let mut alternar = false;
+    let mut cabecera = estado.show_header(ui, |ui| {
+        let resp_titulo = ui.add(
+            egui::Button::new(RichText::new(titulo).strong())
+                .frame(false)
+                .wrap_mode(egui::TextWrapMode::Extend),
+        );
+        if resp_titulo.clicked() {
+            alternar = true;
+        }
+        resp_titulo.context_menu(|ui| {
+            let a = menu_componente(ui, tipo, portapapeles);
+            if a != AccionCabecera::Nada {
+                *accion_out = a;
+            }
+        });
+        if quitable {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("✕")
+                    .on_hover_text("Quitar componente")
+                    .clicked()
+                {
+                    *accion_out = AccionCabecera::Quitar;
+                }
+            });
+        }
+    });
+    if alternar {
+        cabecera.toggle();
+    }
+    let (_, _, cuerpo_resp) = cabecera.body(cuerpo);
+    cuerpo_resp.map(|r| r.inner)
+}
+
+/// Escala proporcional del candado del Transform: cambiar un eje mueve
+/// los otros dos guardando la proporción. Si el eje editado valía ~0 no
+/// hay proporción que guardar y los demás reciben el mismo delta. El
+/// valor nuevo se acota a ≥ 0 (con actual > 0, un nuevo negativo da
+/// factor 0 y todo queda en 0) y ningún resultado es negativo ni NaN.
+pub fn escala_proporcional(actual: [f32; 3], eje: usize, nuevo: f32) -> [f32; 3] {
+    if eje >= 3 {
+        return actual;
+    }
+    let nuevo = if nuevo.is_finite() { nuevo.max(0.0) } else { 0.0 };
+    let actual = actual.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 });
+    let anterior = actual[eje];
+    let mut resultado = actual;
+    if anterior.abs() > 1.0e-6 {
+        let factor = nuevo / anterior;
+        for valor in &mut resultado {
+            *valor = (*valor * factor).max(0.0);
+        }
+        resultado[eje] = nuevo;
+    } else {
+        let delta = nuevo - anterior;
+        for (i, valor) in resultado.iter_mut().enumerate() {
+            *valor = if i == eje {
+                nuevo
+            } else {
+                (actual[i] + delta).max(0.0)
+            };
+        }
+    }
+    resultado
+}
+
 #[derive(Default)]
 pub struct InspectorPanel {
     show_add_component_menu: bool,
@@ -194,6 +651,12 @@ pub struct InspectorPanel {
     /// no aparecer en ella; evita reescanear en cada frame cuando el modelo
     /// falta de verdad.
     rescan_for_model: Option<String>,
+    /// Portapapeles de componentes de P6 (copiar datos / componente).
+    portapapeles: Option<PortapapelesComponente>,
+    /// Candado de escala proporcional del Transform y a qué entidad
+    /// pertenece (se suelta al cambiar la selección).
+    escala_bloqueada: bool,
+    escala_bloqueada_para: Option<u64>,
 }
 
 impl InspectorPanel {
@@ -205,6 +668,46 @@ impl InspectorPanel {
             model_names_for: None,
             model_names_dirty: true,
             rescan_for_model: None,
+            portapapeles: None,
+            escala_bloqueada: false,
+            escala_bloqueada_para: None,
+        }
+    }
+
+    /// Aplica una acción de cabecera de P6 sobre la entidad. «Quitar»
+    /// no pasa por aquí: cada sección lo traduce a su flag diferido de
+    /// siempre, con su semántica exacta de retirada.
+    fn ejecutar_accion_cabecera(
+        &mut self,
+        entity: &mut EntityData,
+        tipo: TipoComponente,
+        accion: AccionCabecera,
+    ) {
+        match accion {
+            AccionCabecera::Nada | AccionCabecera::Quitar => {}
+            AccionCabecera::CopiarDatos | AccionCabecera::CopiarComponente => {
+                if let Some(json) = extraer_componente(entity, tipo) {
+                    self.portapapeles = Some(PortapapelesComponente {
+                        tipo,
+                        json,
+                        es_componente: accion == AccionCabecera::CopiarComponente,
+                    });
+                }
+            }
+            AccionCabecera::PegarDatos => {
+                if let Some(pp) = self.portapapeles.as_ref() {
+                    if pp.tipo == tipo {
+                        let json = pp.json.clone();
+                        aplicar_datos(entity, tipo, &json);
+                    }
+                }
+            }
+            AccionCabecera::PegarComoNuevo => {
+                if let Some(pp) = self.portapapeles.as_ref() {
+                    let (tipo_pp, json) = (pp.tipo, pp.json.clone());
+                    instalar_componente(entity, tipo_pp, &json);
+                }
+            }
         }
     }
 
@@ -247,6 +750,13 @@ impl InspectorPanel {
         // selección, y dar el aviso "no está en assets/" con la lista vieja
         // sería falso. Si tras reescanear sigue sin aparecer, el aviso es
         // real y no se vuelve a reescanear para ese mismo valor.
+        // El candado de escala es por entidad: al cambiar la selección
+        // se suelta, como el resto de estado por selección del panel.
+        if self.escala_bloqueada_para != Some(entity.id) {
+            self.escala_bloqueada = false;
+            self.escala_bloqueada_para = Some(entity.id);
+        }
+
         let modelo_actual = entity
             .mesh
             .as_ref()
@@ -316,14 +826,33 @@ impl InspectorPanel {
                 // 2. COMPONENTE TRANSFORM (ESTILO UNITY)
                 // ==========================================
                 let mut reset_transform = false;
+                let mut accion_transform = AccionCabecera::Nada;
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("📐 Transform").strong());
+                    let resp_titulo = ui.add(
+                        egui::Label::new(RichText::new("📐 Transform").strong())
+                            .sense(egui::Sense::click()),
+                    );
+                    resp_titulo.context_menu(|ui| {
+                        let a = menu_componente(
+                            ui,
+                            TipoComponente::Transform,
+                            self.portapapeles.as_ref(),
+                        );
+                        if a != AccionCabecera::Nada {
+                            accion_transform = a;
+                        }
+                    });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.small_button("⟲ Reset").clicked() {
                             reset_transform = true;
                         }
                     });
                 });
+                self.ejecutar_accion_cabecera(
+                    entity,
+                    TipoComponente::Transform,
+                    accion_transform,
+                );
 
                 if reset_transform {
                     entity.transform.position = [0.0, 0.0, 0.0];
@@ -369,15 +898,46 @@ impl InspectorPanel {
                         }
                         ui.end_row();
 
-                        // Escala
-                        ui.label("Escala");
+                        // Escala, con el candado de proporción de P6:
+                        // activado, cambiar un eje mueve los otros dos
+                        // guardando la proporción (escala_proporcional).
+                        let texto_candado = if self.escala_bloqueada {
+                            "🔒 Escala"
+                        } else {
+                            "🔓 Escala"
+                        };
+                        if ui.small_button(texto_candado).clicked() {
+                            self.escala_bloqueada = !self.escala_bloqueada;
+                        }
+                        let escala_antes = entity.transform.scale;
                         ui.horizontal(|ui| {
                             ui.colored_label(red, "X");
-                            ui.add(DragValue::new(&mut entity.transform.scale[0]).speed(0.02));
+                            if ui
+                                .add(DragValue::new(&mut entity.transform.scale[0]).speed(0.02))
+                                .changed()
+                                && self.escala_bloqueada
+                            {
+                                let n = entity.transform.scale[0];
+                                entity.transform.scale = escala_proporcional(escala_antes, 0, n);
+                            }
                             ui.colored_label(green, "Y");
-                            ui.add(DragValue::new(&mut entity.transform.scale[1]).speed(0.02));
+                            if ui
+                                .add(DragValue::new(&mut entity.transform.scale[1]).speed(0.02))
+                                .changed()
+                                && self.escala_bloqueada
+                            {
+                                let n = entity.transform.scale[1];
+                                entity.transform.scale = escala_proporcional(escala_antes, 1, n);
+                            }
                             ui.colored_label(blue, "Z");
-                            ui.add(DragValue::new(&mut entity.transform.scale[2]).speed(0.02));
+                            if ui
+                                .add(DragValue::new(&mut entity.transform.scale[2]).speed(0.02))
+                                .changed()
+                                && self.escala_bloqueada
+                            {
+                                let n = entity.transform.scale[2];
+                                entity.transform.scale = escala_proporcional(escala_antes, 2, n);
+                            }
                         });
                         ui.end_row();
                     });
@@ -387,9 +947,10 @@ impl InspectorPanel {
                 // ==========================================
                 // 3. COMPONENTE MESH RENDERER & MATERIAL
                 // ==========================================
+                let mut accion_mesh = AccionCabecera::Nada;
                 let mut remove_mesh = false;
                 if let Some(ref mut mesh) = entity.mesh {
-                    ui.collapsing("◈ Mesh Renderer & Material", |ui| {
+                    seccion_componente(ui, "mesh", "◈ Mesh Renderer & Material", TipoComponente::MeshRenderer, true, self.portapapeles.as_ref(), &mut accion_mesh, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Color Albedo:");
                             ui.color_edit_button_rgb(&mut mesh.color);
@@ -457,11 +1018,13 @@ impl InspectorPanel {
                         }
                         ui.label(format!("Shader: {}", mesh.shader));
 
-                        if ui.small_button("🗑 Quitar MeshRenderer").clicked() {
-                            remove_mesh = true;
-                        }
                     });
                     ui.separator();
+                }
+                if accion_mesh == AccionCabecera::Quitar {
+                    remove_mesh = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::MeshRenderer, accion_mesh);
                 }
                 if remove_mesh {
                     entity.mesh = None;
@@ -471,9 +1034,10 @@ impl InspectorPanel {
                 // ==========================================
                 // 3.5. COMPONENTE CÁMARA (CAMERA ESTILO UNITY)
                 // ==========================================
+                let mut accion_camera = AccionCabecera::Nada;
                 let mut remove_camera = false;
                 if let Some(ref mut cam) = entity.camera {
-                    ui.collapsing("🎥 Cámara (Camera)", |ui| {
+                    seccion_componente(ui, "camera", "🎥 Cámara (Camera)", TipoComponente::Camera, true, self.portapapeles.as_ref(), &mut accion_camera, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Field of View:");
                             ui.add(Slider::new(&mut cam.fov, 10.0..=120.0).suffix("°"));
@@ -488,11 +1052,13 @@ impl InspectorPanel {
                             ui.add(DragValue::new(&mut cam.far_clip).speed(1.0).range(1.0..=10000.0));
                         });
                         ui.checkbox(&mut cam.is_main, "Cámara Principal (Main Camera)");
-                        if ui.small_button("🗑 Quitar Cámara").clicked() {
-                            remove_camera = true;
-                        }
                     });
                     ui.separator();
+                }
+                if accion_camera == AccionCabecera::Quitar {
+                    remove_camera = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::Camera, accion_camera);
                 }
                 if remove_camera {
                     entity.camera = None;
@@ -502,9 +1068,10 @@ impl InspectorPanel {
                 // ==========================================
                 // 3.6. COMPONENTE LUZ (LIGHT ESTILO UNITY)
                 // ==========================================
+                let mut accion_light = AccionCabecera::Nada;
                 let mut remove_light = false;
                 if let Some(ref mut light) = entity.light {
-                    ui.collapsing("☼ Luz (Light)", |ui| {
+                    seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, self.portapapeles.as_ref(), &mut accion_light, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Tipo de Luz:");
                             egui::ComboBox::from_id_salt(format!("light_type_{}", entity.id))
@@ -529,11 +1096,13 @@ impl InspectorPanel {
                                 ui.add(DragValue::new(&mut light.range).speed(0.2).range(0.1..=100.0).suffix(" m"));
                             });
                         }
-                        if ui.small_button("🗑 Quitar Luz").clicked() {
-                            remove_light = true;
-                        }
                     });
                     ui.separator();
+                }
+                if accion_light == AccionCabecera::Quitar {
+                    remove_light = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::Light, accion_light);
                 }
                 if remove_light {
                     entity.light = None;
@@ -544,6 +1113,9 @@ impl InspectorPanel {
                 // 4. COMPONENTES RIGIDBODY Y COLLIDER (RAPIER3D)
                 // Separados como en Unity: un Collider sin Rigidbody es estático.
                 // ==========================================
+                let mut accion_rb = AccionCabecera::Nada;
+                let mut accion_col = AccionCabecera::Nada;
+                let mut accion_cols = AccionCabecera::Nada;
                 let mut remove_rigidbody = false;
                 let mut remove_collider = false;
                 // Datos de la entidad que la sección Collider necesita sin
@@ -555,7 +1127,7 @@ impl InspectorPanel {
                 let cotas_entidad = super::gizmo_3d::entity_local_bounds(entity, model_bounds);
                 if let Some(ref mut phys) = entity.physics {
                     if phys.has_rigidbody {
-                        ui.collapsing("⚙ Rigidbody", |ui| {
+                        seccion_componente(ui, "rigidbody", "⚙ Rigidbody", TipoComponente::Rigidbody, true, self.portapapeles.as_ref(), &mut accion_rb, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label("Tipo de Cuerpo:");
                                 egui::ComboBox::from_id_salt(format!("phys_type_{}", entity.id))
@@ -645,9 +1217,6 @@ impl InspectorPanel {
                                 phys.linear_velocity[0], phys.linear_velocity[1], phys.linear_velocity[2]
                             )).color(Color32::from_rgb(160, 210, 255)));
 
-                            if ui.small_button("🗑 Quitar Rigidbody").clicked() {
-                                remove_rigidbody = true;
-                            }
                         });
                     }
 
@@ -655,7 +1224,7 @@ impl InspectorPanel {
                         && phys.colliders.is_empty()
                         && phys.mesh_collider == glass_core::MeshColliderMode::None
                     {
-                        ui.collapsing("🧊 Collider", |ui| {
+                        seccion_componente(ui, "collider", "🧊 Collider", TipoComponente::Collider, true, self.portapapeles.as_ref(), &mut accion_col, |ui| {
                             use glass_core::scene::{ColliderSpec, MeshColliderMode};
 
                             // Convierte `size` entre familias de forma con un criterio simple:
@@ -888,15 +1457,12 @@ impl InspectorPanel {
                                 }
                             }
 
-                            if ui.small_button("🗑 Quitar Collider").clicked() {
-                                remove_collider = true;
-                            }
                         });
                     } else if phys.has_collider {
                         // P3: cada collider es su propio componente, como
                         // en Unity. Fricción y elasticidad son del cuerpo
                         // (compartidos) y van una sola vez, arriba.
-                        ui.collapsing("🧊 Colliders", |ui| {
+                        seccion_componente(ui, "colliders", "🧊 Colliders", TipoComponente::Collider, true, self.portapapeles.as_ref(), &mut accion_cols, |ui| {
                             ui.add(Slider::new(&mut phys.friction, 0.0..=1.0).text("Fricción"));
                             ui.add(Slider::new(&mut phys.restitution, 0.0..=1.0).text("Elasticidad (Bounciness)"));
                             ui.label(
@@ -1107,6 +1673,21 @@ impl InspectorPanel {
                     }
                     ui.separator();
                 }
+                if accion_rb == AccionCabecera::Quitar {
+                    remove_rigidbody = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::Rigidbody, accion_rb);
+                }
+                if accion_col == AccionCabecera::Quitar {
+                    remove_collider = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::Collider, accion_col);
+                }
+                if accion_cols == AccionCabecera::Quitar {
+                    remove_collider = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::Collider, accion_cols);
+                }
                 if remove_rigidbody || remove_collider {
                     if let Some(ref mut phys) = entity.physics {
                         if remove_rigidbody {
@@ -1135,9 +1716,10 @@ impl InspectorPanel {
                 // ==========================================
                 // 4b. COMPONENTE CHARACTER CONTROLLER
                 // ==========================================
+                let mut accion_character = AccionCabecera::Nada;
                 let mut remove_character = false;
                 if let Some(ref mut cc) = entity.character {
-                    ui.collapsing("🚶 Character Controller", |ui| {
+                    seccion_componente(ui, "character", "🚶 Character Controller", TipoComponente::CharacterController, true, self.portapapeles.as_ref(), &mut accion_character, |ui| {
                         ui.checkbox(&mut cc.enabled, "Enabled");
                         ui.horizontal(|ui| {
                             ui.label("Slope Limit");
@@ -1204,10 +1786,12 @@ impl InspectorPanel {
                             );
                         });
                         ui.checkbox(&mut cc.detect_collisions, "Detect Collisions");
-                        if ui.button("🗑 Quitar Character Controller").clicked() {
-                            remove_character = true;
-                        }
                     });
+                }
+                if accion_character == AccionCabecera::Quitar {
+                    remove_character = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::CharacterController, accion_character);
                 }
                 if remove_character {
                     entity.character = None;
@@ -1217,9 +1801,10 @@ impl InspectorPanel {
                 // ==========================================
                 // 5. COMPONENTE SCRIPT C# (.NET CORECLR)
                 // ==========================================
+                let mut accion_script = AccionCabecera::Nada;
                 let mut remove_script = false;
                 if let Some(ref mut script_name) = entity.script {
-                    ui.collapsing("§ Script C# (.NET CoreCLR)", |ui| {
+                    seccion_componente(ui, "script", "§ Script C# (.NET CoreCLR)", TipoComponente::Script, true, self.portapapeles.as_ref(), &mut accion_script, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Script:");
                             ui.text_edit_singleline(script_name);
@@ -1261,11 +1846,13 @@ impl InspectorPanel {
 
                         ui.label(RichText::new("● Runtime .NET 8.0 CoreCLR Activo").color(Color32::from_rgb(60, 220, 110)));
 
-                        if ui.small_button("🗑 Quitar Script").clicked() {
-                            remove_script = true;
-                        }
                     });
                     ui.separator();
+                }
+                if accion_script == AccionCabecera::Quitar {
+                    remove_script = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::Script, accion_script);
                 }
                 if remove_script {
                     entity.script = None;
@@ -1276,9 +1863,10 @@ impl InspectorPanel {
                 // ==========================================
                 // 6. COMPONENTE AUDIOSOURCE (KIRA 2D/3D)
                 // ==========================================
+                let mut accion_audio = AccionCabecera::Nada;
                 let mut remove_audio = false;
                 if let Some(ref mut audio) = entity.audio {
-                    ui.collapsing("♫ AudioSource (Kira CPAL)", |ui| {
+                    seccion_componente(ui, "audio", "♫ AudioSource (Kira CPAL)", TipoComponente::AudioSource, true, self.portapapeles.as_ref(), &mut accion_audio, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Audio Clip:");
                             egui::ComboBox::from_id_salt(format!("audio_clip_{}", entity.id))
@@ -1298,12 +1886,14 @@ impl InspectorPanel {
                                     audio_sys.play_2d(&audio.clip_name, audio.volume, audio.pitch, false);
                                 }
                             }
-                            if ui.small_button("🗑 Quitar AudioSource").clicked() {
-                                remove_audio = true;
-                            }
                         });
                     });
                     ui.separator();
+                }
+                if accion_audio == AccionCabecera::Quitar {
+                    remove_audio = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::AudioSource, accion_audio);
                 }
                 if remove_audio {
                     entity.audio = None;
@@ -1313,9 +1903,10 @@ impl InspectorPanel {
                 // ==========================================
                 // 6.5. COMPONENTES DE UI (CANVAS, RECTTRANSFORM, TEXT, BUTTON)
                 // ==========================================
+                let mut accion_canvas = AccionCabecera::Nada;
                 let mut remove_canvas = false;
                 if let Some(ref mut canvas) = entity.canvas {
-                    ui.collapsing("🖼 Canvas (Sistema UI)", |ui| {
+                    seccion_componente(ui, "canvas", "🖼 Canvas (Sistema UI)", TipoComponente::Canvas, true, self.portapapeles.as_ref(), &mut accion_canvas, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Modo de Render:");
                             egui::ComboBox::from_id_salt(format!("canvas_render_mode_{}", entity.id))
@@ -1331,20 +1922,24 @@ impl InspectorPanel {
                             ui.add(DragValue::new(&mut canvas.reference_resolution[0]).prefix("W: "));
                             ui.add(DragValue::new(&mut canvas.reference_resolution[1]).prefix("H: "));
                         });
-                        if ui.small_button("🗑 Quitar Canvas").clicked() {
-                            remove_canvas = true;
-                        }
                     });
                     ui.separator();
+                }
+                if accion_canvas == AccionCabecera::Quitar {
+                    remove_canvas = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::Canvas, accion_canvas);
                 }
                 if remove_canvas {
                     entity.canvas = None;
                     entity.components.retain(|c| c != "Canvas");
                 }
 
+                let mut accion_rect = AccionCabecera::Nada;
+
                 let mut remove_rect = false;
                 if let Some(ref mut rt) = entity.rect_transform {
-                    ui.collapsing("⊡ RectTransform (Geometría UI 2D)", |ui| {
+                    seccion_componente(ui, "rect", "⊡ RectTransform (Geometría UI 2D)", TipoComponente::RectTransform, true, self.portapapeles.as_ref(), &mut accion_rect, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Posición Anclada:");
                             ui.add(DragValue::new(&mut rt.anchored_position[0]).speed(1.0).prefix("X: "));
@@ -1360,20 +1955,24 @@ impl InspectorPanel {
                             ui.add(DragValue::new(&mut rt.pivot[0]).speed(0.05).range(0.0..=1.0).prefix("X: "));
                             ui.add(DragValue::new(&mut rt.pivot[1]).speed(0.05).range(0.0..=1.0).prefix("Y: "));
                         });
-                        if ui.small_button("🗑 Quitar RectTransform").clicked() {
-                            remove_rect = true;
-                        }
                     });
                     ui.separator();
+                }
+                if accion_rect == AccionCabecera::Quitar {
+                    remove_rect = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::RectTransform, accion_rect);
                 }
                 if remove_rect {
                     entity.rect_transform = None;
                     entity.components.retain(|c| c != "RectTransform");
                 }
 
+                let mut accion_text = AccionCabecera::Nada;
+
                 let mut remove_text = false;
                 if let Some(ref mut txt) = entity.ui_text {
-                    ui.collapsing("🔤 Text (TMP / UI Text)", |ui| {
+                    seccion_componente(ui, "text", "🔤 Text (TMP / UI Text)", TipoComponente::Texto, true, self.portapapeles.as_ref(), &mut accion_text, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Texto:");
                             ui.text_edit_singleline(&mut txt.text);
@@ -1404,20 +2003,24 @@ impl InspectorPanel {
                                 }
                             }
                         });
-                        if ui.small_button("🗑 Quitar Text").clicked() {
-                            remove_text = true;
-                        }
                     });
                     ui.separator();
+                }
+                if accion_text == AccionCabecera::Quitar {
+                    remove_text = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::Texto, accion_text);
                 }
                 if remove_text {
                     entity.ui_text = None;
                     entity.components.retain(|c| c != "Text");
                 }
 
+                let mut accion_btn = AccionCabecera::Nada;
+
                 let mut remove_btn = false;
                 if let Some(ref mut btn) = entity.ui_button {
-                    ui.collapsing("🔘 Button (Interactable)", |ui| {
+                    seccion_componente(ui, "button", "🔘 Button (Interactable)", TipoComponente::Boton, true, self.portapapeles.as_ref(), &mut accion_btn, |ui| {
                         ui.checkbox(&mut btn.interactable, "Interactable (Habilitado)");
                         ui.horizontal(|ui| {
                             ui.label("Color Botón:");
@@ -1427,20 +2030,24 @@ impl InspectorPanel {
                             ui.label("On Click Event:");
                             ui.text_edit_singleline(&mut btn.on_click_action);
                         });
-                        if ui.small_button("🗑 Quitar Button").clicked() {
-                            remove_btn = true;
-                        }
                     });
                     ui.separator();
+                }
+                if accion_btn == AccionCabecera::Quitar {
+                    remove_btn = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::Boton, accion_btn);
                 }
                 if remove_btn {
                     entity.ui_button = None;
                     entity.components.retain(|c| c != "Button");
                 }
 
+                let mut accion_img = AccionCabecera::Nada;
+
                 let mut remove_img = false;
                 if let Some(ref mut img) = entity.ui_image {
-                    ui.collapsing("🖼 Image", |ui| {
+                    seccion_componente(ui, "image", "🖼 Image", TipoComponente::Imagen, true, self.portapapeles.as_ref(), &mut accion_img, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Sprite:");
                             ui.text_edit_singleline(&mut img.sprite);
@@ -1451,20 +2058,24 @@ impl InspectorPanel {
                             ui.color_edit_button_rgba_unmultiplied(&mut img.color);
                         });
                         ui.checkbox(&mut img.preserve_aspect, "Preserve Aspect (encajar sin deformar)");
-                        if ui.small_button("🗑 Quitar Image").clicked() {
-                            remove_img = true;
-                        }
                     });
                     ui.separator();
+                }
+                if accion_img == AccionCabecera::Quitar {
+                    remove_img = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::Imagen, accion_img);
                 }
                 if remove_img {
                     entity.ui_image = None;
                     entity.components.retain(|c| c != "Image");
                 }
 
+                let mut accion_drag = AccionCabecera::Nada;
+
                 let mut remove_drag = false;
                 if let Some(ref mut drag) = entity.ui_drag {
-                    ui.collapsing("✋ Drag & Drop (UI)", |ui| {
+                    seccion_componente(ui, "drag", "✋ Drag & Drop (UI)", TipoComponente::DragDrop, true, self.portapapeles.as_ref(), &mut accion_drag, |ui| {
                         ui.checkbox(&mut drag.draggable, "Draggable (se puede arrastrar)");
                         ui.checkbox(&mut drag.accepts_drop, "Accepts Drop (recibe sueltas)");
                         ui.horizontal(|ui| {
@@ -1480,11 +2091,13 @@ impl InspectorPanel {
                             ui.text_edit_singleline(&mut drag.on_drop);
                         });
                         ui.label("Métodos del script de esta entidad; DragDrop.DraggedEntityId / DropTargetEntityId dan la pareja del gesto.");
-                        if ui.small_button("🗑 Quitar Drag & Drop").clicked() {
-                            remove_drag = true;
-                        }
                     });
                     ui.separator();
+                }
+                if accion_drag == AccionCabecera::Quitar {
+                    remove_drag = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::DragDrop, accion_drag);
                 }
                 if remove_drag {
                     entity.ui_drag = None;
@@ -1668,7 +2281,11 @@ impl InspectorPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::scan_model_names_in;
+    use super::{
+        aplicar_datos, escala_proporcional, extraer_componente, instalar_componente,
+        scan_model_names_in, TipoComponente,
+    };
+    use glass_core::{CameraData, ColliderSpec, EntityData, PhysicsData};
     use std::path::{Path, PathBuf};
 
     /// Crea un directorio temporal único para un test. Si ya existe (resto de
@@ -1723,5 +2340,130 @@ mod tests {
         let missing = root.join("no_existe");
         assert!(scan_model_names_in(&missing).is_empty());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- P6: portapapeles de componentes ----
+
+    fn ent_p6() -> EntityData {
+        EntityData::new(1, "E".to_string(), vec!["Transform".to_string()])
+    }
+
+    #[test]
+    fn p6_transform_extraer_y_aplicar() {
+        let mut a = ent_p6();
+        a.transform.position = [1.0, 2.0, 3.0];
+        let mut b = ent_p6();
+        let json = extraer_componente(&a, TipoComponente::Transform).unwrap();
+        assert!(aplicar_datos(&mut b, TipoComponente::Transform, &json));
+        assert_eq!(b.transform.position, [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn p6_extraer_rigidbody_no_arrastra_colliders() {
+        let mut a = ent_p6();
+        let mut p = PhysicsData {
+            has_rigidbody: true,
+            has_collider: true,
+            ..Default::default()
+        };
+        p.colliders.push(ColliderSpec {
+            shape: "Box".to_string(),
+            size: [0.5, 0.5, 0.5],
+            offset: [0.0, 0.0, 0.0],
+            is_trigger: false,
+        });
+        a.physics = Some(p);
+        let json = extraer_componente(&a, TipoComponente::Rigidbody).unwrap();
+        let copia: PhysicsData = serde_json::from_str(&json).unwrap();
+        assert!(copia.has_rigidbody);
+        assert!(!copia.has_collider);
+        assert!(copia.colliders.is_empty());
+        assert_eq!(copia.mesh_collider, glass_core::MeshColliderMode::None);
+    }
+
+    #[test]
+    fn p6_aplicar_datos_collider_no_toca_la_masa() {
+        let mut origen = ent_p6();
+        let po = PhysicsData {
+            has_collider: true,
+            is_trigger: true,
+            mass: 1.0,
+            ..Default::default()
+        };
+        origen.physics = Some(po);
+        let mut destino = ent_p6();
+        let pd = PhysicsData {
+            has_rigidbody: true,
+            has_collider: true,
+            is_trigger: false,
+            mass: 5.0,
+            ..Default::default()
+        };
+        destino.physics = Some(pd);
+        let json = extraer_componente(&origen, TipoComponente::Collider).unwrap();
+        assert!(aplicar_datos(&mut destino, TipoComponente::Collider, &json));
+        let p = destino.physics.as_ref().unwrap();
+        assert_eq!(p.mass, 5.0);
+        assert!(p.has_rigidbody);
+        assert!(p.is_trigger);
+    }
+
+    #[test]
+    fn p6_instalar_camera_crea_y_registra_y_segunda_vez_falla() {
+        let mut e = ent_p6();
+        assert!(e.camera.is_none());
+        let json = serde_json::to_string(&CameraData::default()).unwrap();
+        assert!(instalar_componente(&mut e, TipoComponente::Camera, &json));
+        assert!(e.camera.is_some());
+        assert_eq!(e.components.iter().filter(|c| *c == "Camera").count(), 1);
+        assert!(!instalar_componente(&mut e, TipoComponente::Camera, &json));
+        assert_eq!(e.components.iter().filter(|c| *c == "Camera").count(), 1);
+    }
+
+    // ---- P6: candado de escala proporcional ----
+
+    fn assert_escala(actual: [f32; 3], esperada: [f32; 3]) {
+        for i in 0..3 {
+            assert!(
+                (actual[i] - esperada[i]).abs() < 1.0e-6,
+                "eje {i}: esperado {}, obtenido {}",
+                esperada[i],
+                actual[i]
+            );
+        }
+    }
+
+    #[test]
+    fn p6_escala_uniforme() {
+        assert_escala(escala_proporcional([2.0, 2.0, 2.0], 0, 3.0), [3.0, 3.0, 3.0]);
+    }
+
+    #[test]
+    fn p6_escala_no_uniforme() {
+        assert_escala(escala_proporcional([1.0, 2.0, 4.0], 1, 1.0), [0.5, 1.0, 2.0]);
+    }
+
+    #[test]
+    fn p6_escala_editar_a_cero_sin_nan() {
+        let r = escala_proporcional([1.0, 2.0, 4.0], 1, 0.0);
+        assert_escala(r, [0.0, 0.0, 0.0]);
+        assert!(r.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn p6_escala_eje_en_cero_aplica_delta() {
+        assert_escala(escala_proporcional([0.0, 2.0, 2.0], 0, 1.0), [1.0, 3.0, 3.0]);
+        // Delta 0 (editar 0 a 0): los demás ejes no se tocan.
+        assert_escala(escala_proporcional([0.0, 0.5, 2.0], 0, 0.0), [0.0, 0.5, 2.0]);
+    }
+
+    #[test]
+    fn p6_escala_nuevo_negativo_anula_la_proporcion() {
+        assert_escala(escala_proporcional([1.0, 2.0, 4.0], 1, -1.0), [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn p6_escala_eje_fuera_de_rango_no_toca() {
+        assert_eq!(escala_proporcional([1.0, 2.0, 4.0], 3, 8.0), [1.0, 2.0, 4.0]);
     }
 }
