@@ -192,6 +192,18 @@ def validar_glb(glb_path):
     return True, f"GLB válido: {length} bytes", conteos
 
 
+def _ejecutar_blender(blender, script_path, blend_path, tmp_glb, factory_startup):
+    """Una corrida de exportación de Blender, con o sin --factory-startup."""
+    cmd = [blender, "-b"]
+    if factory_startup:
+        cmd.append("--factory-startup")
+    cmd.extend([
+        "--python-exit-code", "1", "--python", script_path,
+        "--", blend_path, tmp_glb,
+    ])
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
 def export_blend_to_glb(blend_path, glb_path):
     # Las rutas relativas se resuelven contra la raíz del proyecto
     # (la carpeta que contiene tools/), nunca contra el directorio
@@ -234,6 +246,25 @@ def export_blend_to_glb(blend_path, glb_path):
 
     limpiar_tmp()
 
+    # --factory-startup: la exportación no carga los addons del usuario
+    # y arranca mucho más rápido en instalaciones cargadas (el exportador
+    # glTF es del núcleo y sigue activo). Dos redes de seguridad: si la
+    # corrida con factory falla, se reintenta una vez con la configuración
+    # del usuario; y el interruptor GLASS_BLEND_FACTORY=0 lo desactiva
+    # del todo, porque un .blend que dependa de un addon para exportarse
+    # podría salir distinto con factory sin que la exportación falle.
+    factory_activado = os.environ.get("GLASS_BLEND_FACTORY", "").strip().lower() not in {
+        "0", "false", "no",
+    }
+    factory_fallback = False
+    factory_startup = factory_activado
+    if not factory_activado:
+        print(
+            "GLASS_BRIDGE_AVISO --factory-startup desactivado por "
+            "GLASS_BLEND_FACTORY=0: la exportación usa la configuración completa "
+            "del usuario (más lenta, con sus addons)."
+        )
+
     with tempfile.NamedTemporaryFile(
         "w", suffix=".py", prefix="glass_blender_export_", delete=False, encoding="utf-8"
     ) as f:
@@ -241,14 +272,35 @@ def export_blend_to_glb(blend_path, glb_path):
         script_path = f.name
 
     try:
-        cmd = [
-            blender, "-b", "--python-exit-code", "1", "--python", script_path,
-            "--", blend_path, tmp_glb,
-        ]
-        res = subprocess.run(cmd, capture_output=True, text=True)
-    except OSError as e:
-        limpiar_tmp()
-        return False, f"Fallo al lanzar Blender: {e}", {}
+        try:
+            res = _ejecutar_blender(
+                blender, script_path, blend_path, tmp_glb, factory_activado
+            )
+            if factory_activado and res.returncode != 0:
+                res_factory = res
+                limpiar_tmp()
+                res = _ejecutar_blender(
+                    blender, script_path, blend_path, tmp_glb, False
+                )
+                if res.returncode == 0:
+                    factory_fallback = True
+                    factory_startup = False
+                    print(
+                        "GLASS_BRIDGE_AVISO La exportación con --factory-startup "
+                        "falló; se reintentó con la configuración del usuario y salió bien."
+                    )
+                else:
+                    limpiar_tmp()
+                    return False, (
+                        "Fallo al ejecutar Blender con --factory-startup: "
+                        f"{res_factory.stderr}\n{res_factory.stdout}\n"
+                        "Fallo al ejecutar Blender sin --factory-startup "
+                        "(reintento con la configuración del usuario): "
+                        f"{res.stderr}\n{res.stdout}"
+                    ), {}
+        except OSError as e:
+            limpiar_tmp()
+            return False, f"Fallo al lanzar Blender: {e}", {}
     finally:
         try:
             os.unlink(script_path)
@@ -327,6 +379,8 @@ def export_blend_to_glb(blend_path, glb_path):
         "instances": sum(1 for o in sidecar["objects"] if o.get("instance_of")),
         "lods": sorted({o["lod"] for o in sidecar["objects"] if o.get("lod") is not None}),
         "prefabs": [c["prefab"] for c in sidecar["collections"] if c.get("prefab")],
+        "factory_startup": factory_startup,
+        "factory_fallback": factory_fallback,
     }
     if fuente_cambio:
         resultado["source_changed_during_export"] = True

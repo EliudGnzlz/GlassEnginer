@@ -476,17 +476,101 @@ fn candidatos_instalacion() -> Vec<std::path::PathBuf> {
     }
 }
 
-/// Ejecuta el bridge UNA vez con el Python del propio Blender
+/// Localiza el intérprete Python que trae la propia instalación de
+/// Blender del ejecutable dado: junto a `blender[.exe]` hay una
+/// carpeta por versión (`4.2`, `5.3`, …) y dentro
+/// `<versión>/python/bin/python[.exe]`. Se descubre, no se fija la
+/// versión: Steam y las instalaciones nuevas la cambian.
+pub fn python_de_blender(blender: &Path) -> Option<PathBuf> {
+    // Un `blender` del PATH puede ser un enlace a la instalación real:
+    // las carpetas de versión están junto al ejecutable verdadero.
+    let real = std::fs::canonicalize(blender).unwrap_or_else(|_| blender.to_path_buf());
+    let real = sin_prefijo_verbatim(&real);
+    python_en_directorio_blender(real.parent()?)
+}
+
+/// Carpeta de versión junto al ejecutable de Blender: su
+/// `(major, minor)` parseado si el nombre lo permite, el nombre y
+/// la ruta.
+type CarpetaVersion = (Option<(u32, u32)>, String, PathBuf);
+
+/// Núcleo puro de `python_de_blender`: recibe el directorio del
+/// ejecutable ya resuelto y recorre sus carpetas de versión de mayor
+/// a menor hasta dar con un intérprete.
+fn python_en_directorio_blender(dir: &Path) -> Option<PathBuf> {
+    let mut versiones: Vec<CarpetaVersion> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|e| {
+            let nombre = e.file_name().into_string().ok()?;
+            let ruta = e.path();
+            if !nombre.starts_with(|c: char| c.is_ascii_digit()) || !ruta.is_dir() {
+                return None;
+            }
+            Some((version_de_carpeta(&nombre), nombre, ruta))
+        })
+        .collect();
+    // Parseadas primero, de mayor a menor; las no parseables después,
+    // por nombre descendente.
+    versiones.sort_by(|a, b| match (a.0, b.0) {
+        (Some(x), Some(y)) => y.cmp(&x).then_with(|| b.1.cmp(&a.1)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => b.1.cmp(&a.1),
+    });
+    versiones
+        .iter()
+        .find_map(|(_, _, ruta)| python_en_version(ruta))
+}
+
+/// `(major, minor)` del nombre de una carpeta de versión: `4.2` y
+/// `4.2.3` dan `(4, 2)`; cualquier otra forma, `None`.
+fn version_de_carpeta(nombre: &str) -> Option<(u32, u32)> {
+    let mut partes = nombre.split('.');
+    let major = partes.next()?.parse().ok()?;
+    let minor = partes.next()?.parse().ok()?;
+    Some((major, minor))
+}
+
+/// Intérprete dentro de `<versión>/python/bin/`: primero los nombres
+/// conocidos en orden de preferencia; si no, el primer archivo
+/// `python*` en orden alfabético (p. ej. `python3.11`).
+fn python_en_version(version: &Path) -> Option<PathBuf> {
+    let bin = version.join("python").join("bin");
+    for nombre in ["python.exe", "python3.exe", "python3", "python"] {
+        let candidato = bin.join(nombre);
+        if candidato.is_file() {
+            return Some(candidato);
+        }
+    }
+    std::fs::read_dir(&bin)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with("python"))
+        })
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .min()
+}
+
+/// Ejecuta el bridge UNA vez. Si se localiza el Python que trae la
+/// instalación de Blender (`python_de_blender`), el bridge corre con
+/// él (`<python> <bridge> -- <in> <out>`) y solo arranca el Blender
+/// que exporta. Respaldo para instalaciones donde no se localiza: el
+/// bridge corre dentro de Blender
 /// (`blender -b --python-exit-code 1 --python <bridge> -- <in> <out>`).
-/// Err solo si Blender no se encuentra o no se puede lanzar; si el
-/// proceso corrió, Ok con su salida y si salió bien.
+/// Err solo si Blender no se encuentra o el proceso no se puede
+/// lanzar; si el proceso corrió, Ok con su salida y si salió bien.
 pub fn ejecutar_bridge_con_blender(
     bridge_script: &Path,
     input_path: &Path,
     glb_path: &Path,
 ) -> Result<SalidaBridge, String> {
     // P4: a Blender/Python no puede llegar ninguna ruta verbatim
-    // (`\\?\...`): su exportador glTF muere con WinError 123 al
+    // (`\\\\?\\...`): su exportador glTF muere con WinError 123 al
     // crear el directorio de salida. Se normaliza AQUÍ, en el único
     // punto por el que pasa toda ejecución de Blender (vigía y tool
     // MCP `glass_asset_reload`, vía `convertir_fuente`); el resto
@@ -510,24 +594,44 @@ pub fn ejecutar_bridge_con_blender(
     let blender = sin_prefijo_verbatim(
         &resolver_blender().ok_or_else(|| MENSAJE_SIN_BLENDER.to_string())?,
     );
-    let mut comando = Command::new(&blender);
+    // El bridge es Python puro de librería estándar: con el Python de
+    // la instalación se ahorra arrancar un Blender completo solo para
+    // ejecutarlo. Sin él, respaldo al comando de siempre dentro de Blender.
+    let python = python_de_blender(&blender);
+    let mut comando = match &python {
+        Some(py) => Command::new(py),
+        None => Command::new(&blender),
+    };
     // El bridge vuelve a resolver Blender desde Python (su lista no conoce
     // la copia portable del motor ni refleja la de Rust): se le pasa el ya
     // resuelto por GLASS_BLENDER, que es su primera fuente tras bpy, para
     // que ambas resoluciones coincidan siempre (defecto cazado en el test
     // físico del bloque Blender portable: el .blend fallaba dentro del
-    // bridge aunque Rust sí había encontrado el portable).
+    // bridge aunque Rust sí había encontrado el portable). Bajo un Python
+    // normal no hay bpy, así que es la fuente que manda.
     comando.env("GLASS_BLENDER", &blender);
+    if python.is_some() {
+        // El Python de Blender es una instalación cerrada: un
+        // PYTHONHOME/PYTHONPATH del entorno del usuario lo rompería.
+        comando.env_remove("PYTHONHOME").env_remove("PYTHONPATH");
+    }
+    if python.is_none() {
+        comando.args(["-b", "--python-exit-code", "1", "--python"]);
+    }
     comando
-        .args(["-b", "--python-exit-code", "1", "--python"])
         .arg(bridge_script)
         .arg("--")
         .arg(input_path)
         .arg(glb_path);
     glass_core::proceso::sin_consola(&mut comando);
-    let res = comando
-        .output()
-        .map_err(|e| format!("No se pudo lanzar Blender ({}): {}", blender.display(), e))?;
+    let res = comando.output().map_err(|e| match &python {
+        Some(py) => format!(
+            "No se pudo lanzar el Python de Blender ({}): {}",
+            py.display(),
+            e
+        ),
+        None => format!("No se pudo lanzar Blender ({}): {}", blender.display(), e),
+    })?;
     Ok(SalidaBridge {
         exito: res.status.success(),
         stdout: String::from_utf8_lossy(&res.stdout).into_owned(),
@@ -639,7 +743,7 @@ fn convertir_con_bridge(fuente: &Path, destino_glb: &Path) -> Result<InformeFuen
 
     Ok(InformeFuente {
         conteos,
-        avisos: Vec::new(),
+        avisos: avisos_desde_salida_bridge(&salida.stdout),
         via: ViaConversion::Blender,
     })
 }
@@ -677,6 +781,71 @@ pub fn conteos_desde_resultado_bridge(stdout: &str) -> Option<glass_fbx::Conteos
         skins: campo("skins")?,
         bytes: campo("bytes")?,
     })
+}
+
+/// Extrae los avisos `GLASS_BRIDGE_AVISO ...` del stdout del bridge.
+///
+/// El bridge los imprime cuando la conversión sale bien por una vía
+/// que el usuario debe conocer (p. ej. la exportación con
+/// --factory-startup falló y se reintentó con su configuración).
+pub fn avisos_desde_salida_bridge(stdout: &str) -> Vec<String> {
+    const PREFIJO: &str = "GLASS_BRIDGE_AVISO ";
+
+    let mut avisos = Vec::new();
+    for linea in stdout.lines() {
+        // Solo cuenta si el prefijo abre la línea (con su espacio).
+        if let Some(texto) = linea.strip_prefix(PREFIJO) {
+            let texto = texto.trim();
+            if !texto.is_empty() {
+                avisos.push(texto.to_string());
+            }
+        }
+    }
+    avisos
+}
+
+#[cfg(test)]
+mod tests_avisos_bridge {
+    use super::*;
+
+    #[test]
+    fn sin_avisos_devuelve_vector_vacio() {
+        let stdout = "Blender 4.2\nRead prefs\nGLASS_BRIDGE_RESULT {\"objetos\":1}";
+        assert!(avisos_desde_salida_bridge(stdout).is_empty());
+    }
+
+    #[test]
+    fn extrae_un_aviso_entre_ruido() {
+        let stdout = "Blender 4.2\nRead prefs\nGLASS_BRIDGE_AVISO Falló --factory-startup; se reintenta con la configuración del usuario  \nGLASS_BRIDGE_RESULT {}";
+        assert_eq!(
+            avisos_desde_salida_bridge(stdout),
+            vec!["Falló --factory-startup; se reintenta con la configuración del usuario".to_string()]
+        );
+    }
+
+    #[test]
+    fn extrae_dos_avisos_en_orden() {
+        let stdout = "GLASS_BRIDGE_AVISO primero\nruido de Blender\nGLASS_BRIDGE_AVISO segundo\n";
+        assert_eq!(
+            avisos_desde_salida_bridge(stdout),
+            vec!["primero".to_string(), "segundo".to_string()]
+        );
+    }
+
+    #[test]
+    fn ignora_prefijo_sin_texto() {
+        let stdout = "GLASS_BRIDGE_AVISO\nGLASS_BRIDGE_AVISO    \nGLASS_BRIDGE_AVISO válido\n";
+        assert_eq!(
+            avisos_desde_salida_bridge(stdout),
+            vec!["válido".to_string()]
+        );
+    }
+
+    #[test]
+    fn ignora_prefijo_a_mitad_de_linea() {
+        let stdout = "texto GLASS_BRIDGE_AVISO no cuenta\nGLASS_BRIDGE_RESULT {}";
+        assert!(avisos_desde_salida_bridge(stdout).is_empty());
+    }
 }
 
 #[cfg(test)]
@@ -880,6 +1049,72 @@ mod tests_resolver_blender {
 
         let _ = std::fs::remove_dir_all(&base);
     }
+    fn bin_python(dir: &Path, version: &str) -> PathBuf {
+            dir.join(version).join("python").join("bin")
+        }
+
+        #[test]
+        fn python_diseno_linux() {
+            let d = dir_temporal("py_linux");
+            tocar(&d.join("blender"));
+            let py = bin_python(&d, "4.2").join("python3.11");
+            tocar(&py);
+            assert_eq!(python_en_directorio_blender(&d), Some(py));
+            let _ = std::fs::remove_dir_all(&d);
+        }
+
+        #[test]
+        fn python_diseno_windows() {
+            let d = dir_temporal("py_windows");
+            tocar(&d.join("blender.exe"));
+            let py = bin_python(&d, "5.3").join("python.exe");
+            tocar(&py);
+            assert_eq!(python_en_directorio_blender(&d), Some(py));
+            let _ = std::fs::remove_dir_all(&d);
+        }
+
+        #[test]
+        fn python_elige_version_mayor() {
+            let d = dir_temporal("py_dos_versiones");
+            tocar(&d.join("blender"));
+            tocar(&bin_python(&d, "4.2").join("python3"));
+            let py = bin_python(&d, "5.3").join("python3");
+            tocar(&py);
+            assert_eq!(python_en_directorio_blender(&d), Some(py));
+            let _ = std::fs::remove_dir_all(&d);
+        }
+
+        #[test]
+        fn python_cae_a_version_menor() {
+            let d = dir_temporal("py_cae_menor");
+            tocar(&d.join("blender"));
+            tocar(&d.join("5.3").join("datafiles").join("x"));
+            let py = bin_python(&d, "4.2").join("python3");
+            tocar(&py);
+            assert_eq!(python_en_directorio_blender(&d), Some(py));
+            let _ = std::fs::remove_dir_all(&d);
+        }
+
+        #[test]
+        fn python_sin_carpetas_de_version() {
+            let d = dir_temporal("py_sin_versiones");
+            tocar(&d.join("blender"));
+            // Una carpeta que no empieza por dígito no cuenta como versión.
+            tocar(&bin_python(&d, "config").join("python3"));
+            assert_eq!(python_en_directorio_blender(&d), None);
+            let _ = std::fs::remove_dir_all(&d);
+        }
+
+        #[test]
+        fn python_prefiere_nombre_conocido() {
+            let d = dir_temporal("py_preferencia");
+            tocar(&d.join("blender"));
+            let bin = bin_python(&d, "4.2");
+            tocar(&bin.join("python3.11"));
+            tocar(&bin.join("python3"));
+            assert_eq!(python_en_directorio_blender(&d), Some(bin.join("python3")));
+            let _ = std::fs::remove_dir_all(&d);
+        }
 }
 
 /// Lanza la conversión .blend/.fbx -> .glb hermano en un hilo propio y
