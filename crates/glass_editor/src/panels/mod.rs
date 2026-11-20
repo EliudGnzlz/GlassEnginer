@@ -1,3 +1,4 @@
+pub mod canvas_ui;
 pub mod console;
 pub mod gizmo_3d;
 pub mod hierarchy;
@@ -13,6 +14,7 @@ pub mod viewport;
 
 pub use mesh_tool::MeshToolPanel;
 
+pub use canvas_ui::CanvasPanel;
 pub use console::ConsolePanel;
 pub use shader_graph::ShaderGraphEditorPanel;
 pub use gizmo_3d::GizmoAxis;

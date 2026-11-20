@@ -1,7 +1,7 @@
 use crate::panels::{
     ConsolePanel, CoordSpace, GizmoMode, HierarchyPanel, InspectorPanel, MeshToolPanel, PivotMode,
     PlayState, ProjectPanel, ShaderGraphEditorPanel, ViewportPanel,
-};
+    CanvasPanel,};
 use egui_dock::{DockArea, DockState, NodeIndex, TabViewer};
 use glass_core::SceneManager;
 use glass_mcp::SceneState;
@@ -17,6 +17,7 @@ pub enum EditorTab {
     Project,
     ShaderGraph,
     MeshForge,
+    CanvasUi,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +48,8 @@ pub struct EditorDockingLayout {
     pub project: ProjectPanel,
     pub shader_graph: ShaderGraphEditorPanel,
     pub mesh_tool: MeshToolPanel,
+    /// Panel de edición de Canvas y UI.
+    pub canvas_ui: CanvasPanel,
     pub dock_state: DockState<EditorTab>,
     pub current_preset: LayoutPreset,
     /// Espacio de trabajo activo: el editor de siempre o el de herramientas.
@@ -148,6 +151,7 @@ impl EditorDockingLayout {
             project: ProjectPanel::new(),
             shader_graph: ShaderGraphEditorPanel::new(),
             mesh_tool: MeshToolPanel::new(),
+            canvas_ui: CanvasPanel::new(),
             dock_state: DockState::new(vec![EditorTab::SceneView, EditorTab::GameView]),
             current_preset: LayoutPreset::Default,
             espacio: EspacioTrabajo::Editor,
@@ -985,6 +989,7 @@ impl EditorDockingLayout {
                     (EditorTab::Console, "📟 Consola"),
                     (EditorTab::Project, "📁 Proyecto / Assets"),
                     (EditorTab::ShaderGraph, "🎨 Grafo de Shaders"),
+                    (EditorTab::CanvasUi, "🖼 Canvas / UI"),
                 ] {
                     let mut ver = self.tab_visible(&tab);
                     if ui.checkbox(&mut ver, etiqueta).changed() {
@@ -1190,6 +1195,12 @@ impl EditorDockingLayout {
         ui.separator();
 
         // --- ÁREA CENTRAL DE DOCKING DINÁMICO ---
+        // Abre Canvas / UI al crear un Canvas desde la jerarquía.
+        if self.hierarchy.abrir_panel_canvas {
+            self.hierarchy.abrir_panel_canvas = false;
+            self.set_tab_visible(EditorTab::CanvasUi, true);
+        }
+
         let mut tab_viewer = EditorTabViewer {
             hierarchy: &mut self.hierarchy,
             viewport: &mut self.viewport,
@@ -1198,6 +1209,7 @@ impl EditorDockingLayout {
             project: &mut self.project,
             shader_graph: &mut self.shader_graph,
             mesh_tool: &mut self.mesh_tool,
+            canvas_ui: &mut self.canvas_ui,
 
             scene_texture_id,
             game_texture_id,
@@ -1714,6 +1726,7 @@ struct EditorTabViewer<'a> {
     project: &'a mut ProjectPanel,
     shader_graph: &'a mut ShaderGraphEditorPanel,
     mesh_tool: &'a mut MeshToolPanel,
+    canvas_ui: &'a mut CanvasPanel,
 
     scene_texture_id: Option<egui::TextureId>,
     game_texture_id: Option<egui::TextureId>,
@@ -1738,6 +1751,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             EditorTab::Project => "📁 Proyecto / Assets".into(),
             EditorTab::ShaderGraph => "🎨 Grafo de Shaders".into(),
             EditorTab::MeshForge => "🧊 MeshForge".into(),
+            EditorTab::CanvasUi => "🖼 Canvas / UI".into(),
 
         }
     }
@@ -1798,6 +1812,10 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 self.mesh_tool
                     .render_panel(ui, self.scene_state, seleccion.as_ref());
             }
+            EditorTab::CanvasUi => {
+                self.canvas_ui
+                    .render(ui, self.scene_state, self.selected_entity_id);
+            }
         }
     }
 
@@ -1847,6 +1865,20 @@ mod tests_puerta_herramienta_3d {
 
         layout.set_tab_visible(super::EditorTab::MeshForge, false);
         assert!(layout.dock_state.find_tab(&super::EditorTab::MeshForge).is_none());
+    }
+
+    #[test]
+    fn canvas_ui_se_muestra_y_se_oculta_desde_window() {
+        let mut layout = super::EditorDockingLayout::new();
+        let tab = super::EditorTab::CanvasUi;
+
+        assert!(!layout.tab_visible(&tab));
+
+        layout.set_tab_visible(tab, true);
+        assert!(layout.tab_visible(&super::EditorTab::CanvasUi));
+
+        layout.set_tab_visible(super::EditorTab::CanvasUi, false);
+        assert!(!layout.tab_visible(&super::EditorTab::CanvasUi));
     }
 
     #[test]

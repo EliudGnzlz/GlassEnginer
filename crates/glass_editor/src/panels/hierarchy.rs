@@ -63,6 +63,10 @@ pub struct HierarchyPanel {
     /// .glb o el gemelo ya al día de una fuente): la app lo carga en la
     /// caché y la vacía, como en el viewport.
     pub pending_carga: Option<std::path::PathBuf>,
+    /// Señal para el docking: se acaba de crear un Canvas y toca
+    /// abrir la pestaña «Canvas / UI». El layout la consume y la
+    /// devuelve a false.
+    pub abrir_panel_canvas: bool,
 }
 
 impl Default for HierarchyPanel {
@@ -77,6 +81,7 @@ impl Default for HierarchyPanel {
             hovered_drop: None,
             pending_conversion: None,
             pending_carga: None,
+            abrir_panel_canvas: false,
         }
     }
 }
@@ -624,7 +629,7 @@ impl HierarchyPanel {
                 HierarchyAction::CreateChild(parent_id, preset) => {
                     let new_id = Self::instantiate_preset(&mut scene, preset);
                     scene.reparent(new_id, Some(parent_id));
-                    self.selected_entity = Some(new_id);
+                    self.nota_creacion(preset, new_id);
                 }
                 HierarchyAction::Delete(id) => {
                     scene.delete_entity(id);
@@ -660,7 +665,7 @@ impl HierarchyPanel {
                 }
                 HierarchyAction::Create(preset) => {
                     let new_id = Self::instantiate_preset(&mut scene, preset);
-                    self.selected_entity = Some(new_id);
+                    self.nota_creacion(preset, new_id);
                 }
             }
         }
@@ -717,6 +722,15 @@ impl HierarchyPanel {
                     }
                 }
             }
+        }
+    }
+
+    /// Tras crear una entidad desde el menú: queda seleccionada y,
+    /// si es un Canvas, se señala al docking que abra su pestaña.
+    fn nota_creacion(&mut self, preset: EntityPreset, new_id: u64) {
+        self.selected_entity = Some(new_id);
+        if matches!(preset, EntityPreset::Canvas) {
+            self.abrir_panel_canvas = true;
         }
     }
 
@@ -987,5 +1001,21 @@ mod preset_physics_tests {
         assert!(!phys.has_rigidbody);
         assert!(phys.has_collider);
         assert_eq!(phys.body_type, "Static");
+    }
+
+    #[test]
+    fn crear_canvas_levanta_la_senal_del_panel() {
+        let mut panel = HierarchyPanel::default();
+        panel.nota_creacion(EntityPreset::Canvas, 42);
+        assert_eq!(panel.selected_entity, Some(42));
+        assert!(panel.abrir_panel_canvas);
+    }
+
+    #[test]
+    fn crear_otra_cosa_no_levanta_la_senal() {
+        let mut panel = HierarchyPanel::default();
+        panel.nota_creacion(EntityPreset::Cube, 7);
+        assert_eq!(panel.selected_entity, Some(7));
+        assert!(!panel.abrir_panel_canvas);
     }
 }
