@@ -54,6 +54,8 @@ mod luces_objeto;
 mod ibl;
 mod mouse_input;
 mod logfile;
+#[cfg(feature = "editor")]
+mod proyecto_lock;
 
 use std::ffi::CStr;
 use std::path::Path;
@@ -1807,6 +1809,10 @@ struct GlassEngineApp {
     /// árbol del motor.
     #[cfg(feature = "editor")]
     raiz_proyecto_actual: Option<std::path::PathBuf>,
+    /// Lock exclusivo del proyecto abierto (P1): ninguna otra instancia
+    /// del editor puede abrirlo mientras viva. None = sin proyecto.
+    #[cfg(feature = "editor")]
+    lock_proyecto: Option<proyecto_lock::ProyectoLock>,
     /// Stems ya intentados por la recarga bajo demanda en esta escena:
     /// evita reintentar cada frame un modelo sin .glb o corrupto. Se
     /// limpia al aplicarse una carga de escena.
@@ -2312,6 +2318,8 @@ impl GlassEngineApp {
             ruta_escena_actual: None,
             #[cfg(feature = "editor")]
             raiz_proyecto_actual: None,
+            #[cfg(feature = "editor")]
+            lock_proyecto: None,
             recarga_bajo_demanda: std::collections::HashSet::new(),
             modelos_expulsados: std::collections::HashSet::new(),
             #[cfg(feature = "editor")]
@@ -3271,6 +3279,28 @@ fn lanzar_hub_al_salir() {
     /// del proyecto, lo registra, guarda el registro y entra al editor.
     #[cfg(feature = "editor")]
     fn abrir_proyecto(&mut self, path: &std::path::Path) {
+        // 0) Lock de proyecto (P1): antes de cargar nada. Si otra
+        // instancia ya lo tiene abierto, la apertura se aborta SIN tocar
+        // el estado actual (ni escena, ni registro, ni raíz vigente).
+        // Reabrir el MISMO proyecto en esta instancia no re-toma el lock
+        // (un segundo handle fallaría incluso en el mismo proceso). El
+        // lock nuevo vive en esta variable durante la carga: si la
+        // apertura aborta más abajo, se suelta solo y el vigente queda.
+        let mismo_proyecto = match (&self.lock_proyecto, proyecto_lock::raiz_canonica(path)) {
+            (Some(actual), Ok(nueva)) => actual.raiz() == nueva.as_path(),
+            _ => false,
+        };
+        let lock_nuevo = if mismo_proyecto {
+            None
+        } else {
+            match proyecto_lock::tomar_lock_proyecto(path) {
+                Ok(lock) => Some(lock),
+                Err(msg) => {
+                    log::error!("{msg}");
+                    return;
+                }
+            }
+        };
         // 1) Campo "scene" de project.glass, relativo al proyecto.
         let desde_meta = std::fs::read_to_string(path.join("project.glass"))
             .ok()
@@ -3319,6 +3349,12 @@ fn lanzar_hub_al_salir() {
         } else {
             path.join("Assets")
         };
+        // Commit del lock (P1): el nuevo ya está tomado; al reemplazar
+        // el campo se suelta el anterior. A partir de aquí la apertura
+        // ya no aborta: el proyecto queda abierto y bloqueado.
+        if let Some(lock) = lock_nuevo {
+            self.lock_proyecto = Some(lock);
+        }
         self.raiz_proyecto_actual = Some(path.to_path_buf());
         // Reancla las escenas al proyecto: si no, las cargas por nombre usan el directorio de arranque.
         match self.scene_manager.lock() {
@@ -4677,6 +4713,9 @@ let resueltos = if body.has_collider {
                 AccionApertura::LoadSampleScene(preset) => {
                     self.ruta_escena_actual = None;
                     self.raiz_proyecto_actual = None;
+                    // Salir a una escena de ejemplo suelta el proyecto:
+                    // su lock queda libre para otra instancia (P1).
+                    self.lock_proyecto = None;
                     match preset {
                         SampleScenePreset::PlatformerDemo => {
                             self.setup_interactive_platformer_scene();

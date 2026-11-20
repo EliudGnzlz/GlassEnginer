@@ -32,3 +32,6 @@ soak-report/
 
 # Salida del workflow de Release (payload, instaladores, AppImage)
 dist/
+
+# Lock de proyecto abierto en el editor (P1)
+.glass_editor.lock
