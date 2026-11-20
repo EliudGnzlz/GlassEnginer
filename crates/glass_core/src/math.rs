@@ -411,6 +411,37 @@ pub fn mat4_to_quat(m: [f32; 16]) -> [f32; 4] {
 /// Returns `None` when the upper 3x3 block is singular (a zero scale on any
 /// axis), because such a matrix has no inverse and silently producing garbage
 /// would corrupt the entity's transform.
+/// Returns `m` with its scale removed: same translation and rotation, unit scale.
+///
+/// Built from `mat4_translation`, `mat4_to_quat` and `mat4_from_trs_quat`, so it
+/// is exact for non-uniform scale and composed rotations. Intended for poses of
+/// shapes that are already expressed in world size (e.g. collider gizmos): the
+/// physics places those shapes with an unscaled pose, so their drawing must too.
+///
+/// Limitation: a mirror (negative determinant) cannot be expressed as a rotation.
+/// In that case the X axis is flipped before extracting the rotation, so the
+/// result is always a proper rotation and the mirror is dropped. This is
+/// acceptable for gizmo poses: the gizmo shapes are symmetric.
+///
+/// Zero scale on any axis is not supported (the rotation is undefined).
+pub fn mat4_sin_escala(m: [f32; 16]) -> [f32; 16] {
+    let c0 = [m[0], m[1], m[2]];
+    let c1 = [m[4], m[5], m[6]];
+    let c2 = [m[8], m[9], m[10]];
+    let det = c0[0] * (c1[1] * c2[2] - c1[2] * c2[1])
+        - c0[1] * (c1[0] * c2[2] - c1[2] * c2[0])
+        + c0[2] * (c1[0] * c2[1] - c1[1] * c2[0]);
+
+    let mut r = m;
+    if det < 0.0 {
+        r[0] = -r[0];
+        r[1] = -r[1];
+        r[2] = -r[2];
+    }
+
+    mat4_from_trs_quat(mat4_translation(m), mat4_to_quat(r), [1.0, 1.0, 1.0])
+}
+
 pub fn mat4_inverse_affine(m: [f32; 16]) -> Option<[f32; 16]> {
     // Upper-left 3x3 and its adjugate.
     let a00 = m[0];
@@ -1199,4 +1230,87 @@ mod tests {
         let alto = mat4_transform_point(vp, [2.0 + l[0] * 5.0, l[1] * 5.0, 2.0 + l[2] * 5.0]);
         assert!(alto[2] < suelo[2], "alto {} !< suelo {}", alto[2], suelo[2]);
     }
+    fn assert_mat4_casi(a: [f32; 16], b: [f32; 16]) {
+        for i in 0..16 {
+            assert!(
+                (a[i] - b[i]).abs() < EPS,
+                "índice {i}: {} vs {}",
+                a[i],
+                b[i]
+            );
+        }
+    }
+
+    fn quat_y_90() -> [f32; 4] {
+        let h = std::f32::consts::FRAC_PI_4;
+        [0.0, h.sin(), 0.0, h.cos()]
+    }
+
+    #[test]
+    fn sin_escala_identidad_sin_cambios() {
+        let id = mat4_from_trs_quat([0.0; 3], [0.0, 0.0, 0.0, 1.0], [1.0; 3]);
+        assert_mat4_casi(mat4_sin_escala(id), id);
+    }
+
+    #[test]
+    fn sin_escala_pura_da_rotacion_identidad_y_la_misma_traslacion() {
+        // El caso del defecto P2: el Plano a escala (10, 1, 10).
+        let t = [3.0, -2.0, 7.5];
+        let m = mat4_from_trs_quat(t, [0.0, 0.0, 0.0, 1.0], [10.0, 1.0, 10.0]);
+        let r = mat4_sin_escala(m);
+        assert_mat4_casi(r, mat4_from_trs_quat(t, [0.0, 0.0, 0.0, 1.0], [1.0; 3]));
+        assert_eq!(mat4_translation(r), t);
+    }
+
+    #[test]
+    fn sin_escala_rotacion_y90_escala_no_uniforme() {
+        let t = [1.0, 2.0, 3.0];
+        let q = quat_y_90();
+        let m = mat4_from_trs_quat(t, q, [2.0, 3.0, 4.0]);
+        let rigida = mat4_from_trs_quat(t, q, [1.0; 3]);
+        let r = mat4_sin_escala(m);
+        assert_mat4_casi(r, rigida);
+        for p in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.5, -2.0, 4.0]] {
+            let a = mat4_transform_point(r, p);
+            let b = mat4_transform_point(rigida, p);
+            for i in 0..3 {
+                assert!((a[i] - b[i]).abs() < EPS, "{p:?}: {a:?} vs {b:?}");
+            }
+        }
+        for s in mat4_scale(r) {
+            assert!(approx_eq(s, 1.0));
+        }
+    }
+
+    #[test]
+    fn sin_escala_rotacion_compuesta_escala_no_uniforme() {
+        let (x, y, z, w) = (0.3_f32, -0.5_f32, 0.7_f32, 0.4_f32);
+        let n = (x * x + y * y + z * z + w * w).sqrt();
+        let q = [x / n, y / n, z / n, w / n];
+        let t = [-4.0, 0.25, 9.0];
+        let m = mat4_from_trs_quat(t, q, [0.5, 6.0, 2.0]);
+        assert_mat4_casi(mat4_sin_escala(m), mat4_from_trs_quat(t, q, [1.0; 3]));
+    }
+
+    #[test]
+    fn sin_escala_espejo_se_descarta_y_queda_rotacion_propia() {
+        // Limitación documentada: el espejo no es una rotación; se pierde y
+        // el resultado es la rotación propia con la misma traslación.
+        let t = [1.0, 2.0, 3.0];
+        let q = quat_y_90();
+        let m = mat4_from_trs_quat(t, q, [-2.0, 3.0, 4.0]);
+        let r = mat4_sin_escala(m);
+        assert_mat4_casi(r, mat4_from_trs_quat(t, q, [1.0; 3]));
+        let det = r[0] * (r[5] * r[10] - r[6] * r[9])
+            - r[1] * (r[4] * r[10] - r[6] * r[8])
+            + r[2] * (r[4] * r[9] - r[5] * r[8]);
+        assert!(approx_eq(det, 1.0));
+    }
+
+    #[test]
+    fn sin_escala_es_idempotente() {
+        let m = mat4_from_trs_quat([5.0, 0.0, -1.0], quat_y_90(), [3.0, 3.0, 3.0]);
+        assert_mat4_casi(mat4_sin_escala(mat4_sin_escala(m)), mat4_sin_escala(m));
+    }
+
 }

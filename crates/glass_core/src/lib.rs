@@ -26,7 +26,8 @@ pub mod window;
 pub use events::EngineEvent;
 pub use math::{
     directional_shadow_vp, euler_deg_to_quat, mat4_from_trs_euler, mat4_from_trs_quat, mat4_identity, mat4_inverse_affine, mat4_mul,
-    mat4_scale, mat4_to_quat, mat4_transform_point, mat4_translation, quat_mul, quat_normalize,
+    mat4_scale, mat4_sin_escala, mat4_to_quat, mat4_transform_point, mat4_translation, quat_mul,
+    quat_normalize,
     quat_rotate_vec3, quat_to_euler_deg, quat_to_mat3,
 };
 pub use prefab::Prefab;

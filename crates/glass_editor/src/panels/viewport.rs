@@ -452,10 +452,13 @@ impl ViewportPanel {
                             glass_core::mat4_scale(world),
                         ) {
                             gizmo_3d::ColliderDibujo::Formas(formas) => {
+                                // Las formas ya vienen en tamaño de mundo
+                                // (como las coloca la física): la pose de
+                                // dibujo va SIN escala o se aplica dos veces.
                                 gizmo_3d::draw_collider_gizmo(
                                     painter,
                                     &formas,
-                                    &world,
+                                    &glass_core::mat4_sin_escala(world),
                                     &view_proj,
                                     rect,
                                     is_sel,
@@ -491,7 +494,7 @@ impl ViewportPanel {
                             gizmo_3d::draw_character_gizmo(
                                 painter,
                                 ch,
-                                &world,
+                                &glass_core::mat4_sin_escala(world),
                                 &view_proj,
                                 rect,
                                 is_sel,
