@@ -257,6 +257,9 @@ pub struct ViewportPanel {
     pub fly_active: bool,
     // El puntero está sobre la vista de escena.
     pub scene_hovered: bool,
+    /// Rect de la vista de escena en el último frame (contexto de
+    /// Supr por clic en el docking).
+    pub rect_escena: egui::Rect,
     // Cotas locales de las mallas (clave → (min, max)) que la app
     // refresca desde el AssetCache antes de cada render: las usan el
     // picking y la caja de selección para trabajar con la geometría
@@ -299,6 +302,7 @@ impl Default for ViewportPanel {
             fly_speed: 10.0,
             fly_active: false,
             scene_hovered: false,
+            rect_escena: egui::Rect::NOTHING,
             mesh_bounds: std::collections::HashMap::new(),
             pending_conversion: None,
             pending_carga: None,
@@ -395,6 +399,7 @@ impl ViewportPanel {
 
         Frame::canvas(ui.style()).show(ui, |ui| {
             let (rect, response) = ui.allocate_exact_size(vec2(self.scene_width, self.scene_height), egui::Sense::click_and_drag());
+            self.rect_escena = rect;
             self.scene_hovered = response.hovered();
             let mouse_pos = ui.input(|i| i.pointer.hover_pos());
 

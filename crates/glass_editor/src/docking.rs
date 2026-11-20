@@ -37,6 +37,37 @@ pub enum EspacioTrabajo {
     Herramientas,
 }
 
+/// Qué selección se tocó por última vez (incluye la deselección):
+/// es el «foco» que enruta la tecla Supr, como la ventana activa
+/// de Unity decide si Supr borra un asset o un objeto.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ToqueSupr {
+    Ninguno,
+    Entidad,
+    Asset,
+}
+
+/// Destino de la tecla Supr según el último toque y qué selecciones
+/// siguen vivas.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SuprDestino {
+    Nada,
+    Asset,
+    Entidad,
+}
+
+/// Regla de enrutado de Supr: actúa sobre la selección tocada más
+/// recientemente, y solo si esa selección sigue viva. Si lo último
+/// tocado fue una deselección (clic en vacío), Supr no hace nada,
+/// igual que en Unity no actúa sobre una ventana sin selección.
+pub fn destino_supr(toque: ToqueSupr, hay_asset: bool, hay_entidad: bool) -> SuprDestino {
+    match toque {
+        ToqueSupr::Asset if hay_asset => SuprDestino::Asset,
+        ToqueSupr::Entidad if hay_entidad => SuprDestino::Entidad,
+        _ => SuprDestino::Nada,
+    }
+}
+
 pub struct EditorDockingLayout {
     pub hierarchy: HierarchyPanel,
     pub viewport: ViewportPanel,
@@ -79,6 +110,11 @@ pub struct EditorDockingLayout {
 pub input_axes_edit: Option<Vec<glass_scripting::input_axes::InputAxisDef>>,
     pub project_settings: glass_core::ProjectSettings,
     pub status_message: Option<(String, std::time::Instant)>,
+    /// Enrutado de Supr: valor anterior de cada selección y cuál se
+    /// tocó por última vez (ver `destino_supr`).
+    pub supr_sel_entidad_prev: Option<u64>,
+    pub supr_sel_asset_prev: Option<std::path::PathBuf>,
+    pub supr_ultimo_toque: ToqueSupr,
     /// Diálogo "Save Scene As" (equivalente al de Unity).
     pub show_save_as_dialog: bool,
     pub save_as_name: String,
@@ -179,6 +215,9 @@ impl EditorDockingLayout {
             undo_suspendido: false,
             project_settings: glass_core::ProjectSettings::load_or_default("project.json"),
             status_message: None,
+            supr_sel_entidad_prev: None,
+            supr_sel_asset_prev: None,
+            supr_ultimo_toque: ToqueSupr::Ninguno,
         };
         slf.apply_preset(LayoutPreset::Default);
         slf
@@ -562,25 +601,70 @@ impl EditorDockingLayout {
             if rehacer && self.apply_history(scene_state, true) {
                 selected_id = self.hierarchy.selected_entity;
             }
-            // Supr: borra la selección única desde cualquier
-            // parte del editor (antes solo lo comprobaba el
-            // panel Hierarchy, y solo con su selección local).
+            // Enrutado de Supr entre las dos selecciones (entidad y
+            // asset): los toques se detectan por cambio de valor,
+            // aquí, tras deshacer/rehacer (que pueden reasignar
+            // `selected_id`). Dentro de este portón, un cambio hecho
+            // con texto enfocado o con la malla al mando se detecta
+            // al reabrirse el portón, no al ocurrir.
+            if selected_id != self.supr_sel_entidad_prev {
+                self.supr_sel_entidad_prev = selected_id;
+                self.supr_ultimo_toque = ToqueSupr::Entidad;
+            }
+            if self.project.seleccion != self.supr_sel_asset_prev {
+                self.supr_sel_asset_prev = self.project.seleccion.clone();
+                self.supr_ultimo_toque = ToqueSupr::Asset;
+            }
+            // Toque por clic: un clic primario dentro de un panel lo
+            // convierte en el contexto de Supr AUNQUE la selección no
+            // cambie de valor (reclicar lo ya seleccionado tras haber
+            // tocado el otro panel). Los rects son los del frame
+            // anterior, como el resto de lecturas de hover del marco.
+            // Se aplica tras los cambios de valor para que el gesto
+            // físico mande en el mismo frame.
+            if ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary)) {
+                if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                    if self.project.rect_ultimo.contains(pos) {
+                        self.supr_ultimo_toque = ToqueSupr::Asset;
+                    } else if self.hierarchy.rect_ultimo.contains(pos)
+                        || self.viewport.rect_escena.contains(pos)
+                    {
+                        self.supr_ultimo_toque = ToqueSupr::Entidad;
+                    }
+                }
+            }
+            // Supr: en Unity actúa sobre la ventana con foco
+            // (Proyecto → el asset; Jerarquía/Escena → el objeto).
+            // Aquí manda la selección tocada más recientemente.
             if self.viewport.play_state == PlayState::Edit
                 && ui.input(|i| i.key_pressed(egui::Key::Delete))
             {
-                if let Some(id) = selected_id {
-                    let borrado = scene_state
-                        .lock()
-                        .map(|mut sc| sc.delete_entity(id))
-                        .unwrap_or(false);
-                    if borrado {
-                        self.hierarchy.selected_entity = None;
-                        selected_id = None;
-                        self.status_message = Some((
-                            "🗑 Objeto eliminado".into(),
-                            std::time::Instant::now(),
-                        ));
+                match destino_supr(
+                    self.supr_ultimo_toque,
+                    self.project.seleccion.is_some(),
+                    selected_id.is_some(),
+                ) {
+                    SuprDestino::Asset => {
+                        // El asset va a la papelera; la entidad queda intacta.
+                        self.project.eliminar_seleccion();
                     }
+                    SuprDestino::Entidad => {
+                        if let Some(id) = selected_id {
+                            let borrado = scene_state
+                                .lock()
+                                .map(|mut sc| sc.delete_entity(id))
+                                .unwrap_or(false);
+                            if borrado {
+                                self.hierarchy.selected_entity = None;
+                                selected_id = None;
+                                self.status_message = Some((
+                                    "🗑 Objeto eliminado".into(),
+                                    std::time::Instant::now(),
+                                ));
+                            }
+                        }
+                    }
+                    SuprDestino::Nada => {}
                 }
             }
         }
@@ -1952,5 +2036,38 @@ mod tests_guardado {
         escena.next_entity_id += 1;
         layout.marcar_guardada(&escena);
         assert!(!layout.escena_sucia(&escena));
+    }
+}
+
+#[cfg(test)]
+mod tests_supr {
+    use super::{destino_supr, SuprDestino, ToqueSupr};
+
+    #[test]
+    fn asset_tocado_y_vivo_va_al_asset() {
+        assert_eq!(destino_supr(ToqueSupr::Asset, true, false), SuprDestino::Asset);
+        // Aunque también haya entidad: manda lo último tocado.
+        assert_eq!(destino_supr(ToqueSupr::Asset, true, true), SuprDestino::Asset);
+    }
+
+    #[test]
+    fn entidad_tocada_y_viva_va_a_la_entidad() {
+        assert_eq!(destino_supr(ToqueSupr::Entidad, false, true), SuprDestino::Entidad);
+        assert_eq!(destino_supr(ToqueSupr::Entidad, true, true), SuprDestino::Entidad);
+    }
+
+    #[test]
+    fn deseleccion_es_lo_ultimo_tocado_y_no_hay_nada() {
+        // Clic en vacío del viewport tras tocar el asset: la entidad
+        // quedó deseleccionada y Supr no cae sobre el asset.
+        assert_eq!(destino_supr(ToqueSupr::Entidad, true, false), SuprDestino::Nada);
+        // Clic en vacío del Proyecto tras tocar la entidad.
+        assert_eq!(destino_supr(ToqueSupr::Asset, false, true), SuprDestino::Nada);
+    }
+
+    #[test]
+    fn sin_toque_previo_no_hay_destino() {
+        assert_eq!(destino_supr(ToqueSupr::Ninguno, true, true), SuprDestino::Nada);
+        assert_eq!(destino_supr(ToqueSupr::Ninguno, false, false), SuprDestino::Nada);
     }
 }

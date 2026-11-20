@@ -67,6 +67,9 @@ pub struct HierarchyPanel {
     /// abrir la pestaña «Canvas / UI». El layout la consume y la
     /// devuelve a false.
     pub abrir_panel_canvas: bool,
+    /// Rect del panel en el último frame renderizado (contexto de
+    /// Supr por clic en el docking).
+    pub rect_ultimo: egui::Rect,
 }
 
 impl Default for HierarchyPanel {
@@ -82,6 +85,7 @@ impl Default for HierarchyPanel {
             pending_conversion: None,
             pending_carga: None,
             abrir_panel_canvas: false,
+            rect_ultimo: egui::Rect::NOTHING,
         }
     }
 }
@@ -228,6 +232,7 @@ impl HierarchyPanel {
         let mouse_pos = ui.input(|i| i.pointer.hover_pos());
         // Rect del panel para detectar el soltado de assets del panel Proyecto.
         let panel_rect = ui.max_rect();
+        self.rect_ultimo = panel_rect;
         let is_pointer_released = ui.input(|i| i.pointer.any_released());
 
         // La tecla Supr ya no se comprueba aquí: es un comando

@@ -489,18 +489,26 @@ pub fn importar_archivo(origen: &Path, dir_destino: &Path) -> Result<PathBuf, St
     Ok(destino)
 }
 
-/// Mueve un elemento a `.project_trash/` (hermana de `assets/`). Nada se borra.
-pub fn mover_a_papelera(raiz_proyecto: &Path, ruta: &Path) -> Result<PathBuf, String> {
+/// Mueve un elemento a `.project_trash/` (hermana de la raíz de
+/// assets). Nada se borra. Recibe la raíz de assets REAL del proyecto
+/// (con la capitalización que tenga en disco: `Assets` o `assets`):
+/// reconstruirla como `raíz.join("assets")` rompía el borrado en
+/// sistemas de archivos sensibles a mayúsculas cuando la carpeta se
+/// llama `Assets` (el caso de las plantillas), porque la resolución
+/// canónica fallaba y ningún asset se podía mandar a la papelera.
+pub fn mover_a_papelera(assets_root: &Path, ruta: &Path) -> Result<PathBuf, String> {
     if !ruta.exists() {
         return Err(format!("No existe {}", ruta.display()));
     }
+    // La raíz del proyecto es la carpeta madre de la de assets.
+    let raiz_proyecto = assets_root.parent().unwrap_or(assets_root);
     if rutas_iguales(ruta, raiz_proyecto) {
         return Err("No se puede eliminar la raíz del proyecto".to_string());
     }
     // Solo se manda a la papelera lo que vive dentro de assets/ (la
     // función es pública; la UI ya filtra, pero la garantía va aquí).
-    let assets_canon = std::fs::canonicalize(raiz_proyecto.join("assets"))
-        .map_err(|e| format!("No se pudo resolver assets/: {e}"))?;
+    let assets_canon = std::fs::canonicalize(assets_root)
+        .map_err(|e| format!("No se pudo resolver {}: {e}", assets_root.display()))?;
     let ruta_canon = std::fs::canonicalize(ruta)
         .map_err(|e| format!("No se pudo resolver {}: {e}", ruta.display()))?;
     if ruta_canon == assets_canon || !ruta_canon.starts_with(&assets_canon) {
@@ -521,6 +529,41 @@ pub fn mover_a_papelera(raiz_proyecto: &Path, ruta: &Path) -> Result<PathBuf, St
     std::fs::rename(ruta, &destino)
         .map_err(|e| format!("No se pudo mover a la papelera {}: {e}", ruta.display()))?;
     Ok(destino)
+}
+
+/// Productos de conversión que acompañan a una fuente convertible
+/// (`.blend`/`.fbx`): su `.glb` gemelo y el sidecar de ese `.glb`,
+/// SOLO si existen en disco. Para cualquier otra extensión, vacío.
+pub fn gemelos_convertidos(ruta: &Path) -> Vec<PathBuf> {
+    let convertible = ruta
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|extension| extension == "blend" || extension == "fbx");
+
+    if !convertible {
+        return vec![];
+    }
+
+    let glb = ruta.with_extension("glb");
+    if !glb.exists() {
+        return vec![];
+    }
+
+    let mut gemelos = vec![glb.clone()];
+    let Some(nombre) = glb.file_name() else {
+        return gemelos;
+    };
+
+    let mut nombre_sidecar = nombre.to_os_string();
+    nombre_sidecar.push(".meta.json");
+    let sidecar = glb.with_file_name(nombre_sidecar);
+
+    if sidecar.exists() {
+        gemelos.push(sidecar);
+    }
+
+    gemelos
 }
 
 /// Migas de pan desde la raíz de assets hasta `current_dir`: pares
@@ -844,6 +887,10 @@ pub struct ProjectPanel {
     pub entradas: Vec<Entrada>,
     /// Elemento seleccionado.
     pub seleccion: Option<PathBuf>,
+    /// Rect del panel en el último frame renderizado: el docking lo
+    /// usa para saber que un clic cayó dentro del panel (contexto
+    /// de Supr aunque la selección no cambie de valor).
+    pub rect_ultimo: egui::Rect,
     /// Elemento en edición inline y su buffer.
     pub rename_target: Option<PathBuf>,
     pub rename_buffer: String,
@@ -898,6 +945,7 @@ impl ProjectPanel {
             assets_root,
             entradas: Vec::new(),
             seleccion: None,
+            rect_ultimo: egui::Rect::NOTHING,
             rename_target: None,
             rename_buffer: String::new(),
             rename_focus: false,
@@ -1086,14 +1134,41 @@ impl ProjectPanel {
             self.set_error("No se puede eliminar la raíz de assets/");
             return;
         }
-        let raiz = self.raiz_proyecto();
-        match mover_a_papelera(&raiz, &ruta) {
+
+        let gemelos = gemelos_convertidos(&ruta);
+
+        match mover_a_papelera(&self.assets_root, &ruta) {
             Ok(destino) => {
+                let mut fallos = Vec::new();
+
+                for gemelo in gemelos {
+                    if let Err(error) = mover_a_papelera(&self.assets_root, &gemelo) {
+                        fallos.push(format!("{}: {error}", gemelo.display()));
+                    }
+                }
+
                 self.seleccion = None;
                 self.refrescar();
-                self.set_info(format!("Movido a la papelera: {}", destino.display()));
+
+                if fallos.is_empty() {
+                    self.set_info(format!("Movido a la papelera: {}", destino.display()));
+                } else {
+                    self.set_error(format!(
+                        "Movido a la papelera: {}. El elemento principal se movió, pero algún archivo generado quedó sin mover: {}",
+                        destino.display(),
+                        fallos.join("; ")
+                    ));
+                }
             }
             Err(e) => self.set_error(e),
+        }
+    }
+
+    /// Borra (a la papelera) el asset seleccionado, si hay selección.
+    /// Es la vía de la tecla Supr enrutada desde el docking.
+    pub fn eliminar_seleccion(&mut self) {
+        if let Some(ruta) = self.seleccion.clone() {
+            self.eliminar(ruta);
         }
     }
 
@@ -1161,6 +1236,7 @@ impl ProjectPanel {
     // --- dibujo --------------------------------------------------------------
 
     pub fn render(&mut self, ui: &mut Ui) {
+        self.rect_ultimo = ui.max_rect();
         // --- Barra superior ---------------------------------------------------
         let en_raiz = self.en_raiz();
         let mut pedir_refresco = false;
@@ -2756,13 +2832,13 @@ mod tests {
         std::fs::create_dir_all(&assets).unwrap();
         std::fs::write(assets.join("dup.txt"), "hola").unwrap();
 
-        let d1 = mover_a_papelera(&raiz, &assets.join("dup.txt")).unwrap();
+        let d1 = mover_a_papelera(&assets, &assets.join("dup.txt")).unwrap();
         assert!(!assets.join("dup.txt").exists());
         assert!(d1.exists());
         assert_eq!(std::fs::read_to_string(&d1).unwrap(), "hola");
 
         std::fs::write(assets.join("dup.txt"), "otra vez").unwrap();
-        let d2 = mover_a_papelera(&raiz, &assets.join("dup.txt")).unwrap();
+        let d2 = mover_a_papelera(&assets, &assets.join("dup.txt")).unwrap();
         assert_ne!(d1, d2);
         assert!(d2.exists());
         assert!(d2
@@ -2770,6 +2846,24 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .contains("(2)"));
+
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn papelera_con_assets_en_mayusculas() {
+        // Regresión: las plantillas crean la carpeta como «Assets» y
+        // reconstruir la ruta como raíz + "assets" hacía fallar la
+        // resolución canónica en Linux: ningún asset se podía borrar.
+        let raiz = temp_dir_unico("papelera_mayusculas");
+        let assets = raiz.join("Assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        std::fs::write(assets.join("casa.txt"), "casa").unwrap();
+
+        let destino = mover_a_papelera(&assets, &assets.join("casa.txt")).unwrap();
+        assert!(!assets.join("casa.txt").exists());
+        assert!(destino.exists());
+        assert!(destino.starts_with(raiz.join(".project_trash")));
 
         let _ = std::fs::remove_dir_all(&raiz);
     }
@@ -3128,4 +3222,72 @@ mod tests {
         assert!(TipoRapido::Scripts.coincide("Jugador.cs"));
         assert!(!TipoRapido::Scripts.coincide("Jugador.rs"));
     }
+
+fn proyecto_gemelos_test(nombre: &str) -> PathBuf {
+    let raiz = std::env::temp_dir().join(format!(
+        "glassenginer_gemelos_{nombre}_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&raiz);
+    std::fs::create_dir_all(raiz.join("assets")).unwrap();
+    raiz
+}
+
+#[test]
+fn gemelos_convertidos_devuelve_glb_y_sidecar() {
+    let proyecto = proyecto_gemelos_test("completos");
+    let assets = proyecto.join("assets");
+    let fuente = assets.join("casa.blend");
+    let glb = assets.join("casa.glb");
+    let sidecar = assets.join("casa.glb.meta.json");
+
+    std::fs::write(&fuente, b"").unwrap();
+    std::fs::write(&glb, b"").unwrap();
+    std::fs::write(&sidecar, b"").unwrap();
+
+    assert_eq!(
+        gemelos_convertidos(&fuente),
+        vec![glb, sidecar]
+    );
+
+    std::fs::remove_dir_all(proyecto).unwrap();
+}
+
+#[test]
+fn gemelos_convertidos_ignora_fuentes_no_convertibles() {
+    let proyecto = proyecto_gemelos_test("no_convertible");
+    let glb = proyecto.join("assets").join("casa.glb");
+    std::fs::write(&glb, b"").unwrap();
+
+    assert!(gemelos_convertidos(&glb).is_empty());
+
+    std::fs::remove_dir_all(proyecto).unwrap();
+}
+
+#[test]
+fn gemelos_convertidos_devuelve_vacio_si_no_hay_productos() {
+    let proyecto = proyecto_gemelos_test("sin_productos");
+    let fuente = proyecto.join("assets").join("sola.fbx");
+    std::fs::write(&fuente, b"").unwrap();
+
+    assert!(gemelos_convertidos(&fuente).is_empty());
+
+    std::fs::remove_dir_all(proyecto).unwrap();
+}
+
+#[test]
+fn gemelos_convertidos_no_incluye_sidecar_sin_glb() {
+    let proyecto = proyecto_gemelos_test("sidecar_huerfano");
+    let assets = proyecto.join("assets");
+    let fuente = assets.join("huerfano.blend");
+    let sidecar = assets.join("huerfano.glb.meta.json");
+
+    std::fs::write(&fuente, b"").unwrap();
+    std::fs::write(&sidecar, b"").unwrap();
+
+    // El sidecar pertenece al `.glb`: sin ese archivo no se incluye.
+    assert!(gemelos_convertidos(&fuente).is_empty());
+
+    std::fs::remove_dir_all(proyecto).unwrap();
+}
 }
