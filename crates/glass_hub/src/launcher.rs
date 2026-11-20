@@ -112,6 +112,10 @@ pub struct LauncherPanel {
     pub hub_update_state: UpdateUiState,
     /// Canal con el hilo que comprueba o aplica la actualización del Hub.
     hub_update_rx: Option<std::sync::mpsc::Receiver<HubUpdateMsg>>,
+    /// Estado de la descarga del Blender portable (pestaña Instalaciones).
+    blender_state: PluginUiState,
+    /// Canal con el hilo que descarga el Blender portable.
+    blender_rx: Option<std::sync::mpsc::Receiver<BlenderMsg>>,
     /// Acción tras actualizar el Hub; la consume main.rs al pintar el frame.
     pub accion_hub_pendiente: Option<glass_launcher::updates::AccionHub>,
     /// Si está presente, sustituye a «Cargando el motor…» en la pantalla de carga.
@@ -258,6 +262,12 @@ pub enum PluginMsg {
     Installed(Result<glass_launcher::plugins::PluginInstall, String>),
 }
 
+/// Mensajes del hilo de descarga de Blender portable.
+#[derive(Debug)]
+pub enum BlenderMsg {
+    Descargado(Result<std::path::PathBuf, String>),
+}
+
 fn descubrir_proyectos(
     registrados: &[glass_launcher::updates::ProjectEntry],
     ocultos: &[String],
@@ -353,6 +363,8 @@ impl Default for LauncherPanel {
             texto_carga: None,
             splash_hub_hasta: None,
             update_rx: None,
+            blender_state: PluginUiState::Idle,
+            blender_rx: None,
             plugin_store: glass_launcher::plugins::PluginStore::load(),
             plugin_catalog: None,
             plugin_state: PluginUiState::Idle,
@@ -1290,6 +1302,24 @@ impl LauncherPanel {
 
     fn render_installs_tab(&mut self, ui: &mut Ui) {
         Self::tab_title(ui, "Instalaciones", "Versiones del motor en este equipo y actualizaciones desde GitHub Releases. Es la única parte del Launcher que usa internet, y solo cuando tú lo pides.");
+        // Recoger el resultado de la descarga de Blender portable, si ya llegó.
+        if let Some(rx) = &self.blender_rx {
+            match rx.try_recv() {
+                Ok(BlenderMsg::Descargado(Ok(_ruta))) => {
+                    self.blender_state = PluginUiState::Idle;
+                    self.blender_rx = None;
+                    self.status_message = Some(
+                        "✅ Blender portable instalado: los archivos .blend ya se convierten sin tener Blender en el sistema."
+                            .to_string(),
+                    );
+                }
+                Ok(BlenderMsg::Descargado(Err(e))) => {
+                    self.blender_state = PluginUiState::Error(e);
+                    self.blender_rx = None;
+                }
+                Err(_) => {}
+            }
+        }
         let store_motor = glass_launcher::updates::EngineStore::load();
         let texto_actual: String = if self.es_hub {
             store_motor.en_uso.as_ref().map(|v| format!("v{v}")).unwrap_or_else(|| "sin motor".into())
@@ -1335,6 +1365,82 @@ impl LauncherPanel {
                         });
                     }
                 });
+            }
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new("Blender portable (para archivos .blend)")
+                    .size(14.0)
+                    .strong()
+                    .color(TEXT_MAIN),
+            );
+            if let Some(version) = &store_motor.en_uso {
+                let dir_motor = glass_launcher::updates::engines_dir_in(
+                    &glass_launcher::updates::data_root(),
+                )
+                .join(version);
+                if glass_launcher::updates::blender_portable_instalado(&dir_motor) {
+                    ui.label(
+                        RichText::new(format!(
+                            "✓ Blender portable {} instalado en el motor en uso.",
+                            glass_launcher::updates::BLENDER_PORTABLE_VERSION
+                        ))
+                        .size(12.5)
+                        .color(OK_GREEN),
+                    );
+                } else {
+                    match &self.blender_state {
+                        PluginUiState::Working(texto) => {
+                            ui.label(RichText::new(texto).size(12.5).color(TEXT_MAIN));
+                        }
+                        PluginUiState::Error(e) => {
+                            ui.label(
+                                RichText::new(format!("⚠ {e}"))
+                                    .size(12.5)
+                                    .color(egui::Color32::from_rgb(176, 42, 42)),
+                            );
+                        }
+                        _ => {}
+                    }
+                    if matches!(&self.blender_state, PluginUiState::Idle) {
+                        ui.label(
+                            RichText::new(format!(
+                                "Sin Blender en el sistema, los archivos .blend no se pueden convertir. Puedes descargar el portable oficial (Blender {} LTS, ~350 MB) a la carpeta del motor: queda guardado en tools/blender del motor, no se instala nada en tu sistema y solo se descarga con tu clic.",
+                                glass_launcher::updates::BLENDER_PORTABLE_VERSION
+                            ))
+                            .size(12.0)
+                            .color(TEXT_DIM),
+                        );
+                    }
+                    let ocupado = matches!(&self.blender_state, PluginUiState::Working(_));
+                    let descargar = ui
+                        .add_enabled_ui(!ocupado, |ui| {
+                            ui.button(
+                                RichText::new("Descargar Blender portable para el motor")
+                                    .size(13.0),
+                            )
+                            .clicked()
+                        })
+                        .inner;
+                    if descargar {
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        self.blender_rx = Some(rx);
+                        self.blender_state = PluginUiState::Working(
+                            "Descargando Blender portable…".into(),
+                        );
+                        std::thread::spawn(move || {
+                            let r = glass_launcher::updates::descargar_blender_portable(&dir_motor);
+                            let _ = tx.send(BlenderMsg::Descargado(r));
+                        });
+                    }
+                }
+            } else {
+                ui.label(
+                    RichText::new(
+                        "Instala primero un motor para poder descargar su Blender portable.",
+                    )
+                    .size(12.5)
+                    .color(TEXT_DIM),
+                );
             }
             ui.add_space(8.0);
         } else {

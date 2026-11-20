@@ -109,17 +109,23 @@ pub struct SalidaBridge {
 }
 
 const MENSAJE_SIN_BLENDER: &str =
-    "No se encontró el ejecutable de Blender: define GLASS_BLENDER con su ruta o instala Blender.";
+    "No se encontró el ejecutable de Blender: instala Blender, define GLASS_BLENDER con su ruta, o descarga el Blender portable desde el Hub (Instalaciones → «Descargar Blender portable para el motor»).";
 
 /// Resuelve el ejecutable de Blender: `GLASS_BLENDER` (si es un
 /// archivo) → búsqueda en el PATH → rutas de instalación habituales
-/// de la plataforma. `None` si no hay Blender localizable.
+/// de la plataforma → copia portable descargada por el Hub en la
+/// carpeta del motor (último recurso).
+/// `None` si no hay Blender localizable.
 pub fn resolver_blender() -> Option<std::path::PathBuf> {
     let env_val = std::env::var("GLASS_BLENDER").ok();
     let dirs_path: Vec<std::path::PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
-    resolver_blender_desde(env_val.as_deref(), &dirs_path, &candidatos_instalacion())
+    let mut candidatos = candidatos_instalacion();
+    if let Some(local) = candidato_blender_local() {
+        candidatos.push(local);
+    }
+    resolver_blender_desde(env_val.as_deref(), &dirs_path, &candidatos)
 }
 
 /// Núcleo puro de `resolver_blender`: env → PATH → candidatos.
@@ -139,6 +145,22 @@ fn resolver_blender_desde(
         return Some(p);
     }
     candidatos.iter().find(|c| c.is_file()).cloned()
+}
+
+/// Devuelve la ruta esperada del Blender portable dentro de la raíz
+/// del motor: `<raiz>/tools/blender/blender.exe` en Windows y
+/// `<raiz>/tools/blender/blender` en el resto de plataformas.
+pub fn ruta_blender_en_raiz(raiz: &std::path::Path) -> std::path::PathBuf {
+    let nombre = if cfg!(windows) { "blender.exe" } else { "blender" };
+    raiz.join("tools").join("blender").join(nombre)
+}
+
+/// Ruta del Blender portable que el Hub descarga junto al motor:
+/// se compone a partir del directorio padre del ejecutable actual.
+fn candidato_blender_local() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let raiz = exe.parent()?;
+    Some(ruta_blender_en_raiz(raiz))
 }
 
 /// Busca `blender` (y en Windows también `blender.exe`) en los directorios dados.
@@ -409,6 +431,13 @@ pub fn ejecutar_bridge_con_blender(
 ) -> Result<SalidaBridge, String> {
     let blender = resolver_blender().ok_or_else(|| MENSAJE_SIN_BLENDER.to_string())?;
     let mut comando = Command::new(&blender);
+    // El bridge vuelve a resolver Blender desde Python (su lista no conoce
+    // la copia portable del motor ni refleja la de Rust): se le pasa el ya
+    // resuelto por GLASS_BLENDER, que es su primera fuente tras bpy, para
+    // que ambas resoluciones coincidan siempre (defecto cazado en el test
+    // físico del bloque Blender portable: el .blend fallaba dentro del
+    // bridge aunque Rust sí había encontrado el portable).
+    comando.env("GLASS_BLENDER", &blender);
     comando
         .args(["-b", "--python-exit-code", "1", "--python"])
         .arg(bridge_script)
@@ -1196,5 +1225,43 @@ mod tests {
         .unwrap();
         assert_eq!(ruta_bridge_en_raiz(&raiz), None);
         let _ = std::fs::remove_dir_all(&raiz);
+    }
+    #[test]
+    fn ruta_blender_en_raiz_compone_ruta_por_plataforma() {
+        let raiz = std::path::Path::new("motor");
+        let esperado = if cfg!(windows) {
+            raiz.join("tools").join("blender").join("blender.exe")
+        } else {
+            raiz.join("tools").join("blender").join("blender")
+        };
+        assert_eq!(super::ruta_blender_en_raiz(raiz), esperado);
+    }
+
+    #[test]
+    fn local_es_ultimo_recurso_frente_al_instalado() {
+        let base = std::env::temp_dir().join(format!("glass_watcher_ultimo_{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let instalado = base.join("instalado_blender");
+        let local = base.join("local_blender");
+        std::fs::write(&instalado, b"").unwrap();
+        std::fs::write(&local, b"").unwrap();
+
+        let r = super::resolver_blender_desde(None, &[], &[instalado.clone(), local]);
+        assert_eq!(r, Some(instalado));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn local_se_encuentra_si_es_el_unico_candidato() {
+        let base = std::env::temp_dir().join(format!("glass_watcher_unico_{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let local = base.join("local_blender");
+        std::fs::write(&local, b"").unwrap();
+
+        let r = super::resolver_blender_desde(None, &[], std::slice::from_ref(&local));
+        assert_eq!(r, Some(local));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

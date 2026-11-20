@@ -1522,6 +1522,257 @@ pub fn motor_en_disco(tag: &str) -> bool {
     exe_en_disco_in(&data_root(), version)
 }
 
+// ---------------------------------------------------------------------------
+// Blender portable oficial (conversión de .blend sin Blender instalado)
+// ---------------------------------------------------------------------------
+
+/// Versión de Blender portable que descarga el launcher. Está fijada (LTS)
+/// para que el SHA-256 sea verificable y la conversión de .blend no cambie
+/// de comportamiento según el día en que el usuario descargue.
+pub const BLENDER_PORTABLE_VERSION: &str = "4.2.3";
+
+/// (url, nombre_archivo, sha256) del portable oficial para Windows x64.
+const BLENDER_PORTABLE_WINDOWS: (&str, &str, &str) = (
+    "https://download.blender.org/release/Blender4.2/blender-4.2.3-windows-x64.zip",
+    "blender-4.2.3-windows-x64.zip",
+    "7f8be9b1dc904e7689b3112659791c29cc9ed9d46ce57c4ea5b31a0621489b3a",
+);
+
+/// (url, nombre_archivo, sha256) del portable oficial para Linux x64.
+const BLENDER_PORTABLE_LINUX: (&str, &str, &str) = (
+    "https://download.blender.org/release/Blender4.2/blender-4.2.3-linux-x64.tar.xz",
+    "blender-4.2.3-linux-x64.tar.xz",
+    "3a64efd1982465395abab4259b4091d5c8c56054c7267e9633e4f702a71ea3f4",
+);
+
+/// Temporales dentro de `<dir_motor>/tools/`: al estar en el mismo sistema
+/// de archivos que el destino, el aplanado puede usar `rename` (rápido y sin
+/// copiar los ~1 GB de Blender).
+const NOMBRE_TMP_BLENDER: &str = ".blender-portable.tmp";
+const NOMBRE_EXTRACCION_BLENDER: &str = ".blender-extraccion";
+
+/// Paquete oficial de Blender portable para la plataforma actual:
+/// `(url, nombre_archivo, sha256)`. `None` si no hay portable oficial.
+pub fn paquete_blender_portable() -> Option<(&'static str, &'static str, &'static str)> {
+    if cfg!(windows) {
+        Some(BLENDER_PORTABLE_WINDOWS)
+    } else if cfg!(target_os = "linux") {
+        Some(BLENDER_PORTABLE_LINUX)
+    } else {
+        None
+    }
+}
+
+/// Nombre del ejecutable de Blender dentro del portable.
+fn nombre_ejecutable_blender() -> &'static str {
+    if cfg!(windows) {
+        "blender.exe"
+    } else {
+        "blender"
+    }
+}
+
+/// Directorio donde queda instalado el portable: `<dir_motor>/tools/blender/`.
+pub fn dir_blender_portable(dir_motor: &std::path::Path) -> std::path::PathBuf {
+    dir_motor.join("tools").join("blender")
+}
+
+/// Ruta del ejecutable del portable dentro de `dir_blender_portable`.
+pub fn ruta_blender_portable(dir_motor: &std::path::Path) -> std::path::PathBuf {
+    dir_blender_portable(dir_motor).join(nombre_ejecutable_blender())
+}
+
+/// `true` si el ejecutable del portable ya está en su sitio.
+pub fn blender_portable_instalado(dir_motor: &std::path::Path) -> bool {
+    ruta_blender_portable(dir_motor).is_file()
+}
+
+/// Descarga, verifica e instala el Blender portable oficial en
+/// `<dir_motor>/tools/blender/`. Devuelve la ruta del ejecutable.
+///
+/// El paquete se instala tal cual lo publica Blender (sin modificar su
+/// contenido); solo se aplana la carpeta raíz del archivo comprimido.
+pub fn descargar_blender_portable(
+    dir_motor: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let paquete = paquete_blender_portable().ok_or_else(|| {
+        "No hay Blender portable oficial para esta plataforma (solo Windows x64 y Linux x64). \
+         Instala Blender manualmente para poder convertir archivos .blend."
+            .to_string()
+    })?;
+
+    let herramientas = dir_motor.join("tools");
+    std::fs::create_dir_all(&herramientas)
+        .map_err(|e| format!("No se pudo crear {}: {e}", herramientas.display()))?;
+    let tmp = herramientas.join(NOMBRE_TMP_BLENDER);
+    let extraccion = herramientas.join(NOMBRE_EXTRACCION_BLENDER);
+
+    // Restos de un intento anterior interrumpido (cierre del launcher, corte de red…).
+    limpiar_temporales_blender(&tmp, &extraccion);
+    let resultado = instalar_blender_portable(dir_motor, paquete, &tmp, &extraccion);
+    // Se limpia siempre, haya ido bien o mal: los temporales pesan cientos de MB.
+    limpiar_temporales_blender(&tmp, &extraccion);
+    resultado
+}
+
+/// Borra el archivo descargado y el directorio de extracción. Los errores se
+/// ignoran a propósito: lo normal es que alguno de los dos no exista.
+fn limpiar_temporales_blender(tmp: &std::path::Path, extraccion: &std::path::Path) {
+    let _ = std::fs::remove_file(tmp);
+    let _ = std::fs::remove_dir_all(extraccion);
+}
+
+/// Pasos 2–6 de `descargar_blender_portable`, separados para que la
+/// limpieza de temporales se haga en un único sitio.
+fn instalar_blender_portable(
+    dir_motor: &std::path::Path,
+    (url, nombre, esperado): (&str, &str, &str),
+    tmp: &std::path::Path,
+    extraccion: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    // En streaming a disco: el paquete pesa cientos de MB (defecto 8c).
+    get_to_file(url, tmp).map_err(|e| {
+        format!("No se pudo descargar Blender {BLENDER_PORTABLE_VERSION} desde {url}: {e}")
+    })?;
+
+    let calculado = sha256_hex_file(tmp)
+        .map_err(|e| format!("No se pudo leer el paquete descargado {}: {e}", tmp.display()))?;
+    if !calculado.eq_ignore_ascii_case(esperado) {
+        let _ = std::fs::remove_file(tmp);
+        return Err(format!(
+            "El SHA-256 de {nombre} no coincide (esperado {esperado}, obtenido {calculado}). \
+             No se ha instalado nada."
+        ));
+    }
+
+    std::fs::create_dir_all(extraccion)
+        .map_err(|e| format!("No se pudo crear {}: {e}", extraccion.display()))?;
+    // El formato se decide por el nombre del paquete fijado, no por la
+    // plataforma, para que ambas ramas compilen y se comprueben en todas.
+    if nombre.ends_with(".zip") {
+        extract_zip_file(tmp, extraccion)
+            .map_err(|e| format!("No se pudo descomprimir {nombre}: {e}"))?;
+    } else {
+        extraer_tar_xz(tmp, extraccion)?;
+    }
+
+    aplanar_extraccion_blender(extraccion, &dir_blender_portable(dir_motor))?;
+
+    let ejecutable = ruta_blender_portable(dir_motor);
+    if !ejecutable.is_file() {
+        return Err(format!(
+            "El paquete de Blender se descomprimió, pero no contiene el ejecutable esperado ({}).",
+            ejecutable.display()
+        ));
+    }
+
+    // `rename` conserva los permisos del tar, pero se fuerzan por si el
+    // sistema de archivos o un umask restrictivo los perdieron.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&ejecutable, std::fs::Permissions::from_mode(0o755)).map_err(
+            |e| {
+                format!(
+                    "No se pudo dar permiso de ejecución a {}: {e}",
+                    ejecutable.display()
+                )
+            },
+        )?;
+    }
+
+    Ok(ejecutable)
+}
+
+/// Descomprime un .tar.xz con el `tar` del sistema (sin dependencias nuevas:
+/// el crate `zip` no lee xz). Se pasan rutas como argumentos, sin shell.
+fn extraer_tar_xz(archivo: &std::path::Path, destino: &std::path::Path) -> Result<(), String> {
+    let salida = std::process::Command::new("tar")
+        .arg("-xJf")
+        .arg(archivo)
+        .arg("-C")
+        .arg(destino)
+        .output()
+        .map_err(|e| {
+            format!(
+                "No se pudo ejecutar `tar` para descomprimir Blender ({e}). \
+                 Instala `tar` y `xz` (xz-utils) e inténtalo de nuevo."
+            )
+        })?;
+    if !salida.status.success() {
+        let stderr = String::from_utf8_lossy(&salida.stderr);
+        return Err(format!(
+            "`tar` no pudo descomprimir Blender ({}): {}. Comprueba que `xz` está instalado.",
+            salida.status,
+            stderr.trim()
+        ));
+    }
+    Ok(())
+}
+
+/// Mueve el CONTENIDO de la única carpeta raíz `blender-*` de `extraccion`
+/// a `destino`. Si ya había un portable en `destino`, se borra antes; esto se
+/// hace después de localizar la raíz para no perder el anterior si el
+/// paquete nuevo viene mal formado.
+fn aplanar_extraccion_blender(
+    extraccion: &std::path::Path,
+    destino: &std::path::Path,
+) -> Result<(), String> {
+    let entradas = std::fs::read_dir(extraccion)
+        .map_err(|e| format!("No se pudo leer {}: {e}", extraccion.display()))?;
+    let mut raices = Vec::new();
+    for entrada in entradas {
+        let entrada = entrada
+            .map_err(|e| format!("No se pudo leer {}: {e}", extraccion.display()))?;
+        let es_dir = entrada.file_type().is_ok_and(|t| t.is_dir());
+        if es_dir && entrada.file_name().to_string_lossy().starts_with("blender-") {
+            raices.push(entrada.path());
+        }
+    }
+    let raiz = match raices.as_slice() {
+        [unica] => unica.clone(),
+        [] => {
+            return Err(
+                "El paquete de Blender no contiene la carpeta raíz esperada (blender-…)."
+                    .to_string(),
+            )
+        }
+        _ => {
+            return Err(
+                "El paquete de Blender contiene varias carpetas raíz blender-…; no se sabe cuál instalar."
+                    .to_string(),
+            )
+        }
+    };
+
+    if destino.exists() {
+        std::fs::remove_dir_all(destino).map_err(|e| {
+            format!(
+                "No se pudo borrar el Blender portable anterior en {}: {e}",
+                destino.display()
+            )
+        })?;
+    }
+    std::fs::create_dir_all(destino)
+        .map_err(|e| format!("No se pudo crear {}: {e}", destino.display()))?;
+
+    let contenido = std::fs::read_dir(&raiz)
+        .map_err(|e| format!("No se pudo leer {}: {e}", raiz.display()))?;
+    for entrada in contenido {
+        let entrada =
+            entrada.map_err(|e| format!("No se pudo leer {}: {e}", raiz.display()))?;
+        let objetivo = destino.join(entrada.file_name());
+        std::fs::rename(entrada.path(), &objetivo).map_err(|e| {
+            format!(
+                "No se pudo mover {} a {}: {e}",
+                entrada.path().display(),
+                objetivo.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests_completar_instalacion {
     use super::*;
@@ -2965,5 +3216,93 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *glass.zip
         store.register_project("B", &dir.join("b"));
         assert_eq!(store.projects.len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// Directorio temporal único por proceso y por test: los tests corren en
+    /// paralelo dentro del mismo proceso, así que el pid solo no basta.
+    fn dir_temporal_blender_test(nombre: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "glass-blender-test-{}-{nombre}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn blender_portable_paquete_coherente() {
+        if let Some((url, nombre, sha)) = super::paquete_blender_portable() {
+            assert_eq!(sha.len(), 64);
+            assert!(sha.chars().all(|c| c.is_ascii_hexdigit()));
+            assert!(url.ends_with(nombre));
+            assert!(url.starts_with("https://download.blender.org/"));
+            assert!(url.contains(super::BLENDER_PORTABLE_VERSION));
+            assert!(nombre.contains(super::BLENDER_PORTABLE_VERSION));
+        }
+    }
+
+    #[test]
+    fn blender_portable_rutas() {
+        let motor = std::path::Path::new("motor");
+        let dir = super::dir_blender_portable(motor);
+        assert_eq!(dir, motor.join("tools").join("blender"));
+        let exe = if cfg!(windows) { "blender.exe" } else { "blender" };
+        assert_eq!(super::ruta_blender_portable(motor), dir.join(exe));
+    }
+
+    #[test]
+    fn blender_portable_aplanar_extraccion() {
+        let base = dir_temporal_blender_test("aplanar");
+        let extraccion = base.join("extraccion");
+        let raiz = extraccion.join("blender-4.2.3-test-x64");
+        let interior = raiz.join("4.2").join("datafiles");
+        std::fs::create_dir_all(&interior).unwrap();
+        let exe = super::nombre_ejecutable_blender();
+        std::fs::write(raiz.join(exe), b"ejecutable").unwrap();
+        std::fs::write(interior.join("ejemplo.txt"), b"contenido").unwrap();
+
+        // Un portable anterior debe sustituirse por completo.
+        let destino = base.join("destino");
+        std::fs::create_dir_all(&destino).unwrap();
+        std::fs::write(destino.join("viejo.txt"), b"viejo").unwrap();
+
+        super::aplanar_extraccion_blender(&extraccion, &destino).unwrap();
+
+        assert!(destino.join(exe).is_file());
+        assert_eq!(
+            std::fs::read(destino.join("4.2").join("datafiles").join("ejemplo.txt")).unwrap(),
+            b"contenido"
+        );
+        assert!(!destino.join("viejo.txt").exists());
+        assert!(!destino.join("blender-4.2.3-test-x64").exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn blender_portable_aplanar_sin_raiz_falla_y_conserva_destino() {
+        let base = dir_temporal_blender_test("sin-raiz");
+        let extraccion = base.join("extraccion");
+        std::fs::create_dir_all(extraccion.join("otra-carpeta")).unwrap();
+        let destino = base.join("destino");
+        std::fs::create_dir_all(&destino).unwrap();
+        std::fs::write(destino.join("previo.txt"), b"previo").unwrap();
+
+        assert!(super::aplanar_extraccion_blender(&extraccion, &destino).is_err());
+        assert!(destino.join("previo.txt").is_file());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn blender_portable_instalado_detecta_ejecutable() {
+        let motor = dir_temporal_blender_test("instalado");
+        assert!(!super::blender_portable_instalado(&motor));
+
+        std::fs::create_dir_all(super::dir_blender_portable(&motor)).unwrap();
+        std::fs::write(super::ruta_blender_portable(&motor), b"ejecutable").unwrap();
+        assert!(super::blender_portable_instalado(&motor));
+
+        let _ = std::fs::remove_dir_all(&motor);
     }
 }
