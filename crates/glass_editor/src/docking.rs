@@ -82,6 +82,14 @@ pub struct EditorDockingLayout {
     /// habría perdido con el frame): la app los encola aquí y
     /// `render` los importa en cuanto el editor está visible.
     soltados_encolados: Vec<std::path::PathBuf>,
+    /// Foto por frame de las fuentes en conversión (la escribe main.rs
+    /// antes del render; el render se la pasa al panel Proyecto).
+    pub conversiones_en_curso: Vec<std::path::PathBuf>,
+    /// Canal de vuelta del panel hacia main.rs: instante en que una
+    /// importación terminó. Se copia desde
+    /// `project.importacion_completada_en` en el render y main.rs lo
+    /// consume tras el render.
+    pub importacion_completada_en: Option<std::time::Instant>,
     pub shader_graph: ShaderGraphEditorPanel,
     pub mesh_tool: MeshToolPanel,
     /// Panel de edición de Canvas y UI.
@@ -196,6 +204,8 @@ impl EditorDockingLayout {
             console: ConsolePanel::default(),
             project: ProjectPanel::new(),
             soltados_encolados: Vec::new(),
+            conversiones_en_curso: Vec::new(),
+            importacion_completada_en: None,
             shader_graph: ShaderGraphEditorPanel::new(),
             mesh_tool: MeshToolPanel::new(),
             canvas_ui: CanvasPanel::new(),
@@ -507,6 +517,13 @@ impl EditorDockingLayout {
     /// layout no se renderizó (pantalla de carga): se importarán al
     /// directorio visible del panel Proyecto en el próximo `render`.
     pub fn encolar_soltados(&mut self, rutas: &[std::path::PathBuf]) {
+        // Durante la pantalla de carga `current_dir` puede no ser aún el
+        // definitivo, así que aquí solo se registra el conteo; el destino
+        // se registra en el consumo (render).
+        log::info!(
+            "Arrastre del SO: encolados {} archivo(s) durante la carga",
+            rutas.len()
+        );
         self.soltados_encolados.extend_from_slice(rutas);
     }
 
@@ -530,10 +547,36 @@ impl EditorDockingLayout {
             s.spacing.indent = 14.0;
         }
 
+        // Paso de las conversiones al panel Proyecto: main.rs rellena
+        // `conversiones_en_curso` cada frame. Con `take`, si un frame no
+        // hay foto, el panel recibe vacío en vez de una foto rancia.
+        self.project.conversiones_en_curso =
+            std::mem::take(&mut self.conversiones_en_curso);
+
+        // Canal de vuelta: si el panel marcó una importación completada y
+        // el layout aún no la ha recogido, se copia al layout y se limpia
+        // el panel (main.rs la consume tras el render).
+        if self.importacion_completada_en.is_none()
+            && self.project.importacion_completada_en.is_some()
+        {
+            self.importacion_completada_en = self.project.importacion_completada_en.take();
+        }
+
         // Drops encolados durante la pantalla de carga: se importan
         // ahora que el editor está visible (Bug F).
         if !self.soltados_encolados.is_empty() {
             let encolados = std::mem::take(&mut self.soltados_encolados);
+            // Sonda de campo: el destino que vale es el `current_dir` en
+            // el momento del consumo (es cuando la importación captura su
+            // destino), no el que hubiera durante la pantalla de carga.
+            log::info!(
+                "Arrastre del SO: soltados {} archivo(s) con destino {}",
+                encolados.len(),
+                crate::panels::project::ruta_legible(
+                    &self.project.assets_root,
+                    &self.project.current_dir
+                )
+            );
             self.project.importar_soltados(&encolados);
         }
 
@@ -549,6 +592,15 @@ impl EditorDockingLayout {
                 .collect()
         });
         if !soltados.is_empty() {
+            // Sonda de campo (Bug F): destino capturado por la importación.
+            log::info!(
+                "Arrastre del SO: soltados {} archivo(s) con destino {}",
+                soltados.len(),
+                crate::panels::project::ruta_legible(
+                    &self.project.assets_root,
+                    &self.project.current_dir
+                )
+            );
             self.project.importar_soltados(&soltados);
         }
         // Aviso mientras se sobrevuela arrastrando archivos.

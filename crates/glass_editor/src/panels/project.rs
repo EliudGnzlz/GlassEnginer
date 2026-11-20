@@ -516,6 +516,92 @@ pub fn importar_archivo(origen: &Path, dir_destino: &Path) -> Result<PathBuf, St
     Ok(destino)
 }
 
+/// Nombres de archivo (último componente) de un lote de rutas.
+fn nombres_de(rutas: &[PathBuf]) -> Vec<String> {
+    rutas
+        .iter()
+        .map(|r| {
+            r.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| r.to_string_lossy().into_owned())
+        })
+        .collect()
+}
+
+/// Describe un lote para la banda y el log: hasta 3 nombres separados por
+/// comas; con más de 3, «N archivos».
+fn describir_lote(nombres: &[String]) -> String {
+    if nombres.len() > 3 {
+        format!("{} archivos", nombres.len())
+    } else {
+        nombres.join(", ")
+    }
+}
+
+/// Normaliza una ruta para compararla: separadores '/', sin prefijo
+/// verbatim inicial, que tras cambiar separadores es «//?/» y en
+/// minúsculas.
+fn normalizar_ruta_conversion(ruta: &str) -> String {
+    let con_barras = ruta.replace('\\', "/");
+    let sin_prefijo = con_barras.strip_prefix("//?/").unwrap_or(&con_barras);
+    sin_prefijo.to_lowercase()
+}
+
+/// Nombres de los modelos (.blend/.fbx, sin distinguir mayúsculas) de la
+/// carpeta visible cuya conversión está en curso.
+///
+/// Regla de correspondencia (no conocemos la raíz del watcher, así que no
+/// se comparan rutas completas): se forma el sufijo
+/// «<carpeta visible>/<nombre>» (p. ej. «models/casa.blend» para
+/// «…/Assets/Models/casa.blend»), o solo «<nombre>» si la carpeta visible
+/// no tiene último componente con nombre. Hay coincidencia si la ruta en
+/// curso, normalizada (minúsculas, '/', sin «\\?\»), es igual al sufijo o
+/// termina en «/» + sufijo. La carpeta visible se extrae de la ruta YA
+/// normalizada, para que el cálculo sea idéntico con separadores de
+/// Windows o de Unix sea cual sea la plataforma que compila.
+pub fn nombres_convirtiendo(
+    entradas: &[Entrada],
+    en_curso: &[PathBuf],
+    current_dir: &Path,
+) -> Vec<String> {
+    if en_curso.is_empty() {
+        return Vec::new();
+    }
+    let en_curso_norm: Vec<String> = en_curso
+        .iter()
+        .map(|p| normalizar_ruta_conversion(&p.to_string_lossy()))
+        .collect();
+    let dir_norm = normalizar_ruta_conversion(&current_dir.to_string_lossy());
+    let carpeta = dir_norm
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    let mut nombres = Vec::new();
+    for entrada in entradas {
+        if entrada.es_dir {
+            continue;
+        }
+        let nombre_min = entrada.nombre.to_lowercase();
+        if !(nombre_min.ends_with(".blend") || nombre_min.ends_with(".fbx")) {
+            continue;
+        }
+        let sufijo = match &carpeta {
+            Some(c) => format!("{c}/{nombre_min}"),
+            None => nombre_min,
+        };
+        let con_barra = format!("/{sufijo}");
+        if en_curso_norm
+            .iter()
+            .any(|r| *r == sufijo || r.ends_with(&con_barra))
+        {
+            nombres.push(entrada.nombre.clone());
+        }
+    }
+    nombres
+}
+
 /// Mueve un elemento a `.project_trash/` (hermana de la raíz de
 /// assets). Nada se borra. Recibe la raíz de assets REAL del proyecto
 /// (con la capitalización que tenga en disco: `Assets` o `assets`):
@@ -924,6 +1010,20 @@ pub struct ProjectPanel {
     rename_focus: bool,
     /// Última línea de estado: (mensaje, es_error).
     pub status: Option<(String, bool)>,
+    /// Rutas FUENTE (.blend/.fbx) con conversión en vuelo. Las rellena el
+    /// docking cada frame (absolutas, quizá con prefijo verbatim).
+    pub conversiones_en_curso: Vec<PathBuf>,
+    /// Instante en que se aplicó el resultado de la última importación por
+    /// arrastre (con éxito o con errores). Lo consume la sonda de main.rs.
+    pub importacion_completada_en: Option<std::time::Instant>,
+    /// Receptor del lote que se está copiando en segundo plano: entrega
+    /// (importados, errores) cuando el hilo termina.
+    import_rx: Option<std::sync::mpsc::Receiver<(Vec<PathBuf>, Vec<String>)>>,
+    /// Nombres de archivo del lote en curso (para la banda de progreso).
+    importando: Vec<String>,
+    /// Lotes soltados mientras otro se importaba: (rutas, destino), con el
+    /// destino capturado en el momento del soltado.
+    importaciones_encoladas: Vec<(Vec<PathBuf>, PathBuf)>,
     /// Cola consumida por `EditorApp`: cargar escena.
     pub pending_scene_load: Option<PathBuf>,
     /// Cola consumida por `EditorApp`: instanciar prefab.
@@ -981,6 +1081,11 @@ impl ProjectPanel {
             rename_buffer: String::new(),
             rename_focus: false,
             status: None,
+            conversiones_en_curso: Vec::new(),
+            importacion_completada_en: None,
+            import_rx: None,
+            importando: Vec::new(),
+            importaciones_encoladas: Vec::new(),
             pending_scene_load: None,
             pending_prefab_instantiate: None,
             pending_conversion: None,
@@ -1079,36 +1184,110 @@ impl ProjectPanel {
         }
     }
 
-    /// Importa los archivos soltados desde el SO al directorio
-    /// visible: copia cada uno con nombre libre si colisiona, sin
-    /// que un error detenga el resto; anota el resultado en la
-    /// línea de estado y refresca la lista si entró algo.
+    /// Importa los archivos soltados desde el SO al directorio visible
+    /// SIN bloquear el frame: captura el destino ahora (la carpeta visible
+    /// en el momento del soltado) y copia en un hilo aparte. Si ya hay un
+    /// lote en curso, este se encola y se lanza al terminar el anterior.
+    /// El resultado se aplica en `recoger_importacion` (cada frame).
     pub fn importar_soltados(&mut self, rutas: &[PathBuf]) {
-        let mut importados: Vec<PathBuf> = Vec::new();
-        let mut errores: Vec<String> = Vec::new();
-        for ruta in rutas {
-            match importar_archivo(ruta, &self.current_dir) {
-                Ok(destino) => importados.push(destino),
-                Err(e) => errores.push(e),
+        if rutas.is_empty() {
+            return;
+        }
+        let destino = self.current_dir.clone();
+        if self.import_rx.is_some() {
+            let nombres = nombres_de(rutas);
+            self.importaciones_encoladas.push((rutas.to_vec(), destino));
+            self.set_info(format!(
+                "Importación en cola: {}",
+                describir_lote(&nombres)
+            ));
+            return;
+        }
+        self.lanzar_importacion(rutas.to_vec(), destino);
+    }
+
+    /// Lanza un lote en segundo plano. El hilo ejecuta el mismo bucle que
+    /// la versión síncrona (un error no detiene el resto) y solo envía el
+    /// resultado por el canal; nunca toca el panel.
+    fn lanzar_importacion(&mut self, rutas: Vec<PathBuf>, destino: PathBuf) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.importando = nombres_de(&rutas);
+        let lanzado = std::thread::Builder::new()
+            .name("glass-importar-soltados".into())
+            .spawn(move || {
+                let mut importados: Vec<PathBuf> = Vec::new();
+                let mut errores: Vec<String> = Vec::new();
+                for ruta in &rutas {
+                    match importar_archivo(ruta, &destino) {
+                        Ok(destino) => importados.push(destino),
+                        Err(e) => errores.push(e),
+                    }
+                }
+                // Si el panel ya no existe, el envío falla y no importa.
+                let _ = tx.send((importados, errores));
+            });
+        match lanzado {
+            Ok(_) => {
+                self.import_rx = Some(rx);
+                let msg = format!("Importando {}…", describir_lote(&self.importando));
+                self.set_info(msg);
+            }
+            Err(e) => {
+                self.importando.clear();
+                self.set_error(format!("No se pudo lanzar la importación: {e}"));
             }
         }
-        if !importados.is_empty() {
-            self.refrescar();
-            self.seleccion = importados.last().cloned();
+    }
+
+    /// Recoge, sin bloquear, el resultado del lote en curso y lo aplica con
+    /// la misma semántica que tenía la importación síncrona. Si el hilo
+    /// murió sin enviar nada, limpia el estado y lo anota como error. Al
+    /// terminar un lote, lanza el siguiente de la cola (con su destino).
+    fn recoger_importacion(&mut self) {
+        use std::sync::mpsc::TryRecvError;
+        let resultado = match self.import_rx.as_ref() {
+            None => return,
+            Some(rx) => match rx.try_recv() {
+                Ok(r) => Some(r),
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => None,
+            },
+        };
+        self.import_rx = None;
+        self.importando.clear();
+
+        match resultado {
+            None => {
+                self.set_error("La importación se interrumpió".to_string());
+            }
+            Some((importados, errores)) => {
+                if !importados.is_empty() {
+                    self.refrescar();
+                    self.seleccion = importados.last().cloned();
+                }
+                if let Some(primero) = errores.into_iter().next() {
+                    self.set_error(primero);
+                } else if importados.len() == 1 {
+                    self.set_info(format!(
+                        "Importado: {}",
+                        ruta_legible(&self.assets_root, &importados[0])
+                    ));
+                } else if importados.len() > 1 {
+                    self.set_info(format!(
+                        "Importados {} archivos en {}",
+                        importados.len(),
+                        self.ruta_actual_legible()
+                    ));
+                }
+            }
         }
-        if let Some(primero) = errores.into_iter().next() {
-            self.set_error(primero);
-        } else if importados.len() == 1 {
-            self.set_info(format!(
-                "Importado: {}",
-                ruta_legible(&self.assets_root, &importados[0])
-            ));
-        } else if importados.len() > 1 {
-            self.set_info(format!(
-                "Importados {} archivos en {}",
-                importados.len(),
-                self.ruta_actual_legible()
-            ));
+        // La sonda de main.rs mide desde el fin de la operación, también
+        // cuando el hilo murió sin entregar resultado.
+        self.importacion_completada_en = Some(std::time::Instant::now());
+
+        if !self.importaciones_encoladas.is_empty() {
+            let (rutas, destino) = self.importaciones_encoladas.remove(0);
+            self.lanzar_importacion(rutas, destino);
         }
     }
 
@@ -1287,6 +1466,13 @@ impl ProjectPanel {
 
     pub fn render(&mut self, ui: &mut Ui) {
         self.comprobar_cambios_externos();
+        self.recoger_importacion();
+        if self.import_rx.is_some() {
+            // Sin entrada del usuario egui no repinta: hay que sondear el
+            // canal aunque la banda no llegue a dibujarse.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
         self.rect_ultimo = ui.max_rect();
         // --- Barra superior ---------------------------------------------------
         let en_raiz = self.en_raiz();
@@ -1423,6 +1609,34 @@ impl ProjectPanel {
                 egui::vec2(ui.available_width(), altura_zonas),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
+        // --- Banda de progreso transitoria (importación / conversión) ---
+        // Solo existe mientras hay trabajo en curso: sin trabajo no ocupa
+        // nada. El Spinner pide repintado por sí mismo.
+        {
+            let debil = ui.visuals().weak_text_color();
+            let texto_importando = if self.importando.is_empty() {
+                None
+            } else {
+                Some(format!("Importando {}…", describir_lote(&self.importando)))
+            };
+            let convirtiendo = nombres_convirtiendo(
+                &self.entradas,
+                &self.conversiones_en_curso,
+                &self.current_dir,
+            );
+            let texto_convirtiendo = if convirtiendo.is_empty() {
+                None
+            } else {
+                Some(format!("Convirtiendo {}…", describir_lote(&convirtiendo)))
+            };
+            for texto in [texto_importando, texto_convirtiendo].into_iter().flatten() {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(12.0));
+                    ui.label(egui::RichText::new(texto).size(12.5).color(debil));
+                });
+            }
+        }
+
         if self.vista_rapida.is_some() {
             self.render_vista_rapida(ui);
         } else if self.tamano_iconos > 0.01 {
@@ -3400,5 +3614,146 @@ fn gemelos_convertidos_no_incluye_sidecar_sin_glb() {
         assert_eq!(panel.firma_directorio_actual, firma_antes);
 
         let _ = std::fs::remove_dir_all(&assets);
+    }
+
+    fn entrada(nombre: &str, es_dir: bool) -> Entrada {
+        Entrada {
+            nombre: nombre.to_string(),
+            es_dir,
+            bytes: 0,
+        }
+    }
+
+    #[test]
+    fn convirtiendo_coincide_con_ruta_verbatim() {
+        let dir = PathBuf::from(r"C:\Proyecto\Assets\Models");
+        let entradas = vec![entrada("casa.blend", false)];
+        let en_curso = vec![PathBuf::from(r"\\?\C:\Proyecto\Assets\Models\casa.blend")];
+        assert_eq!(
+            nombres_convirtiendo(&entradas, &en_curso, &dir),
+            vec!["casa.blend".to_string()]
+        );
+    }
+
+    #[test]
+    fn convirtiendo_ignora_mayusculas() {
+        let dir = PathBuf::from("/proyecto/Assets/Models");
+        let entradas = vec![entrada("Casa.FBX", false)];
+        let en_curso = vec![PathBuf::from("/PROYECTO/assets/MODELS/casa.fbx")];
+        assert_eq!(
+            nombres_convirtiendo(&entradas, &en_curso, &dir),
+            vec!["Casa.FBX".to_string()]
+        );
+    }
+
+    #[test]
+    fn convirtiendo_no_coincide_con_otro_nombre_ni_otra_carpeta() {
+        let dir = PathBuf::from("/proyecto/Assets/Models");
+        let entradas = vec![entrada("casa.blend", false)];
+        let otro_nombre = vec![PathBuf::from("/proyecto/Assets/Models/arbol.blend")];
+        assert!(nombres_convirtiendo(&entradas, &otro_nombre, &dir).is_empty());
+        // Sufijo de nombre sin separador: «micasa.blend» no es «casa.blend».
+        let prefijado = vec![PathBuf::from("/proyecto/Assets/Models/micasa.blend")];
+        assert!(nombres_convirtiendo(&entradas, &prefijado, &dir).is_empty());
+        let otra_carpeta = vec![PathBuf::from("/proyecto/Assets/Props/casa.blend")];
+        assert!(nombres_convirtiendo(&entradas, &otra_carpeta, &dir).is_empty());
+    }
+
+    #[test]
+    fn convirtiendo_ignora_carpetas_y_extensiones_no_modelo() {
+        let dir = PathBuf::from("/proyecto/Assets/Models");
+        let entradas = vec![
+            entrada("casa.blend", true),
+            entrada("casa.png", false),
+        ];
+        let en_curso = vec![
+            PathBuf::from("/proyecto/Assets/Models/casa.blend"),
+            PathBuf::from("/proyecto/Assets/Models/casa.png"),
+        ];
+        assert!(nombres_convirtiendo(&entradas, &en_curso, &dir).is_empty());
+    }
+
+    /// Directorio temporal único con «origen» y «Assets» dentro.
+    fn dir_temporal_importacion(etiqueta: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let raiz = std::env::temp_dir().join(format!(
+            "glass_import_{etiqueta}_{}_{nanos}",
+            std::process::id()
+        ));
+        let origen = raiz.join("origen");
+        let assets = raiz.join("Assets");
+        std::fs::create_dir_all(&origen).unwrap();
+        std::fs::create_dir_all(&assets).unwrap();
+        (raiz, origen, assets)
+    }
+
+    /// Sondea recoger_importacion() cada 10 ms hasta que no quede trabajo
+    /// en curso ni en cola y se haya completado al menos un lote.
+    fn esperar_importaciones(panel: &mut ProjectPanel) {
+        let limite = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            panel.recoger_importacion();
+            if panel.importacion_completada_en.is_some()
+                && panel.import_rx.is_none()
+                && panel.importaciones_encoladas.is_empty()
+            {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < limite,
+                "la importación no terminó a tiempo"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn importar_soltados_es_asincrono_y_selecciona() {
+        let (raiz, origen, assets) = dir_temporal_importacion("async");
+        let fuente = origen.join("modelo.txt");
+        std::fs::write(&fuente, b"contenido").unwrap();
+
+        let mut panel = ProjectPanel::new();
+        panel.assets_root = assets.clone();
+        panel.current_dir = assets.clone();
+        panel.importar_soltados(std::slice::from_ref(&fuente));
+        assert!(panel.importacion_completada_en.is_none());
+
+        esperar_importaciones(&mut panel);
+
+        let destino = assets.join("modelo.txt");
+        assert!(destino.exists());
+        let sel = panel.seleccion.clone().expect("debe haber selección");
+        assert!(sel.exists());
+        assert_eq!(sel.file_name(), destino.file_name());
+        assert!(panel.importando.is_empty());
+
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn importar_soltados_encola_lotes_seguidos() {
+        let (raiz, origen, assets) = dir_temporal_importacion("cola");
+        let a = origen.join("a.txt");
+        let b = origen.join("b.txt");
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+
+        let mut panel = ProjectPanel::new();
+        panel.assets_root = assets.clone();
+        panel.current_dir = assets.clone();
+        panel.importar_soltados(&[a]);
+        panel.importar_soltados(&[b]);
+        assert_eq!(panel.importaciones_encoladas.len(), 1);
+
+        esperar_importaciones(&mut panel);
+
+        assert!(assets.join("a.txt").exists());
+        assert!(assets.join("b.txt").exists());
+
+        let _ = std::fs::remove_dir_all(&raiz);
     }
 }

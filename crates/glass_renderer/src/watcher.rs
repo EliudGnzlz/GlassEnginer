@@ -143,6 +143,20 @@ fn fuente_en_vuelo(glb: &Path) -> bool {
     }
 }
 
+/// Rutas fuente (.blend/.fbx) con una conversión en curso en este
+/// instante (foto del conjunto en vuelo). La usa el editor para
+/// mostrar qué archivos del panel Proyecto se están convirtiendo.
+pub fn conversiones_en_curso() -> Vec<PathBuf> {
+    if let Ok(guard) = IN_FLIGHT.lock() {
+        guard
+            .as_ref()
+            .map(|set| set.iter().cloned().collect())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    }
+}
+
 /// Resumen del resultado del bridge: última línea GLASS_BRIDGE_RESULT o
 /// los últimos 300 caracteres de stdout.
 fn resumen_bridge(stdout: &str) -> String {
@@ -1468,7 +1482,10 @@ pub fn resolver_glb_por_stem(raices: &[&std::path::Path], stem: &str) -> Option<
 
 #[cfg(test)]
 mod tests {
-    use super::{resolver_glb_por_stem, ruta_bridge_en_raiz};
+    use super::{
+        conversiones_en_curso, resolver_glb_por_stem, ruta_bridge_en_raiz,
+        sin_prefijo_verbatim, EnVuelo,
+    };
 
     #[test]
     fn resolver_glb_encuentra_en_subcarpeta_y_respeta_orden() {
@@ -1579,6 +1596,22 @@ mod tests {
         assert_eq!(r, Some(local));
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn conversiones_en_curso_refleja_el_alta_y_la_baja_de_una_marca() {
+        let ruta = std::env::temp_dir().join(format!(
+            "glassenginer-sonda-conversion-{}-archivo-improbable.blend",
+            std::process::id()
+        ));
+        let clave = sin_prefijo_verbatim(&ruta);
+        let marca = EnVuelo::intentar(&ruta).expect("la ruta única no debía estar en vuelo");
+
+        assert!(conversiones_en_curso().contains(&clave));
+
+        drop(marca);
+
+        assert!(!conversiones_en_curso().contains(&clave));
     }
 }
 

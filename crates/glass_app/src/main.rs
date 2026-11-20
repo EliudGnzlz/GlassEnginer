@@ -1840,6 +1840,10 @@ struct GlassEngineApp {
     /// Throttle de la sonda de la bandera `cerrar-<pid>.flag`.
     #[cfg(feature = "editor")]
     ultima_sonda_cierre_hub: std::time::Instant,
+    /// Sonda del Bug F: instante en que el panel completó una importación
+    /// por arrastre, a la espera del primer frame presentado tras ella.
+    #[cfg(feature = "editor")]
+    sonda_importacion_en: Option<std::time::Instant>,
     /// Este proceso es un motor gestionado por el Hub (su exe vive
     /// en engines/<versión>/): solo estos obedecen la bandera de
     /// cierre del Hub.
@@ -2346,6 +2350,8 @@ impl GlassEngineApp {
             cierre_desde_hub_pendiente: false,
             #[cfg(feature = "editor")]
             ultima_sonda_cierre_hub: std::time::Instant::now(),
+            #[cfg(feature = "editor")]
+            sonda_importacion_en: None,
             #[cfg(feature = "editor")]
             gestionado: glass_launcher::updates::es_gestionado(),
             #[cfg(feature = "editor")]
@@ -7513,6 +7519,8 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                     pantalla_carga_motor(ui);
                 } else {
                     editor_layout.hub_disponible = self.hub_disponible;
+                    editor_layout.conversiones_en_curso =
+                        glass_renderer::watcher::conversiones_en_curso();
                     editor_layout.render(
                         ui,
                         scene_tid,
@@ -7520,6 +7528,15 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                         scene_state,
                         scene_manager,
                     );
+                    // Sonda del Bug F: el layout trae de vuelta el instante
+                    // en que una importación por arrastre se completó; se
+                    // guarda para medir el primer frame presentado tras ella.
+                    if let Some(t) = editor_layout.importacion_completada_en {
+                        if self.sonda_importacion_en.is_none() {
+                            self.sonda_importacion_en = Some(t);
+                        }
+                        editor_layout.importacion_completada_en = None;
+                    }
                 }
             });
             egui_winit.handle_platform_output(&window.inner, full_output.platform_output);
@@ -7862,13 +7879,27 @@ self.salir_del_proceso = true;
                     .swapchains(&swapchains)
                     .image_indices(&image_indices);
 
+                let mut presento_ok = false;
                 match renderer.swapchain.loader.queue_present(vk_ctx.present_queue, &present_info) {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        presento_ok = true;
+                    }
                     Err(vk::Result::ERROR_OUT_OF_DATE_KHR) | Err(vk::Result::SUBOPTIMAL_KHR) => {
                         let size = window.inner.inner_size();
                         let _ = renderer.resize(vk_ctx, size.width, size.height);
                     }
                     Err(e) => log::warn!("Aviso durante queue_present: {:?}", e),
+                }
+                // Sonda del Bug F: primer frame presentado tras completar
+                // una importación por arrastre (si el present falló o la
+                // swapchain se recreó, la sonda espera al siguiente frame).
+                if presento_ok {
+                    if let Some(t) = self.sonda_importacion_en.take() {
+                        log::info!(
+                            "Arrastre del SO: primer frame presentado tras completar la importación (+{} ms)",
+                            t.elapsed().as_millis()
+                        );
+                    }
                 }
             }
         }
