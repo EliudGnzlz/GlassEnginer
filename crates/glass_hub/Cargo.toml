@@ -21,3 +21,6 @@ serde_json.workspace = true
 # Diálogos nativos (selector de carpetas del botón «Abrir» del Hub).
 rfd = "0.15"
 image.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+tray-icon = "0.21"

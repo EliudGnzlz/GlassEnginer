@@ -126,6 +126,11 @@ pub input_axes_edit: Option<Vec<glass_scripting::input_axes::InputAxisDef>>,
     /// Hash (undo::scene_hash) de la escena en el último guardado o carga:
     /// si el hash actual difiere, la escena tiene cambios sin guardar.
     hash_guardado: u64,
+    /// Último momento en que la escena quedó igual que en disco
+    /// (guardado con éxito o carga): lo fija `marcar_guardada`, que
+    /// es el paso común de todo guardado (manual, Save As, diálogo
+    /// de cierre, autoguardado y la carga, que nace limpia).
+    pub ultimo_guardado: Option<std::time::Instant>,
     /// Nombre de la escena activa nueva cuando el vigía detecta un cambio
     /// (carga o reemplazo); la app lo consume para invalidar su ruta.
     pub cambio_escena: Option<String>,
@@ -211,6 +216,7 @@ impl EditorDockingLayout {
             show_save_as_dialog: false,
             save_as_name: String::new(),
             hash_guardado: 0,
+            ultimo_guardado: None,
             cambio_escena: None,
             autosave_minutos: crate::updates::LauncherStore::load().autosave_minutes,
             show_preferences_dialog: false,
@@ -344,6 +350,7 @@ impl EditorDockingLayout {
     /// Marca la escena como guardada con su contenido actual.
     pub fn marcar_guardada(&mut self, scene: &SceneState) {
         self.hash_guardado = crate::undo::scene_hash(&scene.entities, scene.next_entity_id);
+        self.ultimo_guardado = Some(std::time::Instant::now());
     }
 }
 
@@ -411,7 +418,7 @@ impl EditorDockingLayout {
             };
             let mensaje = match scene.save_to_json(&ruta.to_string_lossy()) {
                 Ok(()) => {
-                    self.hash_guardado = crate::undo::scene_hash(&scene.entities, scene.next_entity_id);
+                    self.marcar_guardada(&scene);
                     format!("Escena guardada en {}", ruta.display())
                 }
                 Err(e) => format!("No se pudo guardar {}: {e}", ruta.display()),
@@ -440,7 +447,7 @@ impl EditorDockingLayout {
 
         let mensaje = match scene.save_to_json(&path.to_string_lossy()) {
             Ok(()) => {
-                self.hash_guardado = crate::undo::scene_hash(&scene.entities, scene.next_entity_id);
+                self.marcar_guardada(&scene);
                 if save_as.is_some() {
                     // La escena pasa a "ser" ese archivo: el siguiente Ctrl+S
                     // reescribe esta clave en lugar de volver a preguntar.
@@ -1487,7 +1494,7 @@ impl EditorDockingLayout {
             self.cambio_escena = Some(nombre_escena);
             if let Ok(sc) = scene_state.lock() {
                 self.undo_history.reset(&sc.entities, sc.next_entity_id);
-                self.hash_guardado = crate::undo::scene_hash(&sc.entities, sc.next_entity_id);
+                self.marcar_guardada(&sc);
             }
         }
         if self.viewport.play_state != PlayState::Edit {

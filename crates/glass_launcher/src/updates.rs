@@ -8,7 +8,7 @@
 //! No se usan tokens: solo se soportan repositorios públicos. Un error 404
 //! debe interpretarse como repositorio privado o inexistente.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::Digest;
@@ -1164,6 +1164,40 @@ pub struct LockSesion {
     _archivo: std::fs::File,
 }
 
+/// Guarda del lock exclusivo de instancia única del Hub: mientras
+/// vive, ningún otro Hub puede arrancar en esta raíz de datos (una
+/// segunda instancia pide despertar a la primera y sale). El lock
+/// se libera al soltar la guarda (Drop), es decir, al salir el
+/// proceso.
+pub struct BloqueoHub {
+    _archivo: std::fs::File,
+}
+
+/// Ruta del archivo de lock de instancia única del Hub.
+pub fn ruta_bloqueo_hub_en(root: &Path) -> PathBuf {
+    root.join("hub.lock")
+}
+
+/// Intenta tomar el lock exclusivo del Hub bajo `root`, sin
+/// esperar. Ante cualquier error (ocupado o de E/S) devuelve None:
+/// fail-closed, se asume que ya hay otro Hub.
+pub fn tomar_bloqueo_hub_en(root: &Path) -> Option<BloqueoHub> {
+    std::fs::create_dir_all(root).ok()?;
+    let archivo = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(ruta_bloqueo_hub_en(root))
+        .ok()?;
+    archivo.try_lock().ok()?;
+    Some(BloqueoHub { _archivo: archivo })
+}
+
+/// Intenta tomar el lock exclusivo del Hub en la raíz de datos.
+pub fn tomar_bloqueo_hub() -> Option<BloqueoHub> {
+    tomar_bloqueo_hub_en(&data_root())
+}
+
 /// Objetivo de la sonda de GPU: el motor GESTIONADO en uso bajo
 /// `root` — su ejecutable y su version. None si no hay motor en uso
 /// o su ejecutable no esta en disco (el llamante sondea entonces el
@@ -1275,6 +1309,63 @@ pub fn version_con_sesion_activa(version: &str) -> bool {
     version_con_sesion_activa_en(&data_root(), version)
 }
 
+/// Ruta de la bandera con la que el Hub solicita el cierre del
+/// motor con `pid` (Bug A): el motor la sondea y se cierra con su
+/// propia regla de guardado.
+pub fn ruta_solicitud_cierre_en(root: &Path, pid: u32) -> PathBuf {
+    root.join(format!("cerrar-{pid}.flag"))
+}
+
+/// Solicita el cierre del motor con `pid` dejando su bandera en la
+/// raíz de datos. Devuelve false si no se pudo escribir.
+pub fn solicitar_cierre_motor(pid: u32) -> bool {
+    let root = data_root();
+    if std::fs::create_dir_all(&root).is_err() {
+        return false;
+    }
+    std::fs::write(ruta_solicitud_cierre_en(&root, pid), pid.to_string()).is_ok()
+}
+
+/// ¿Hay una solicitud de cierre para ESTE proceso?
+pub fn solicitud_cierre_propia() -> bool {
+    ruta_solicitud_cierre_en(&data_root(), std::process::id()).is_file()
+}
+
+/// Retira la solicitud de cierre de este proceso, si existe.
+pub fn retirar_solicitud_cierre_propia() {
+    let _ = std::fs::remove_file(ruta_solicitud_cierre_en(
+        &data_root(),
+        std::process::id(),
+    ));
+}
+
+/// Ruta de la bandera con la que una segunda instancia del Hub
+/// pide a la primera (en segundo plano) que se muestre.
+pub fn ruta_despertar_hub_en(root: &Path) -> PathBuf {
+    root.join("hub-despierta.flag")
+}
+
+/// Pide despertar al Hub en segundo plano. Devuelve false si no
+/// se pudo escribir la bandera.
+pub fn solicitar_despertar_hub() -> bool {
+    let root = data_root();
+    if std::fs::create_dir_all(&root).is_err() {
+        return false;
+    }
+    std::fs::write(ruta_despertar_hub_en(&root), "").is_ok()
+}
+
+/// Consume la bandera de despertar bajo `root`: si existía y pudo
+/// borrarse, devuelve true (una sola vez).
+pub fn consumir_despertar_hub_en(root: &Path) -> bool {
+    std::fs::remove_file(ruta_despertar_hub_en(root)).is_ok()
+}
+
+/// Consume la bandera de despertar de la raíz de datos.
+pub fn consumir_despertar_hub() -> bool {
+    consumir_despertar_hub_en(&data_root())
+}
+
 /// Si este proceso ES un motor gestionado (su ejecutable vive en
 /// engines/<version>/ de la raiz de datos), toma el lock de sesion
 /// de su version y lo devuelve; si no, None.
@@ -1293,6 +1384,19 @@ pub fn bloquear_sesion_si_gestionado() -> Option<LockSesion> {
             None
         }
     }
+}
+
+/// ¿Es ESTE proceso un motor gestionado (su ejecutable vive en
+/// engines/<version>/ de la raíz de datos)? No toma ningún lock:
+/// es la mitad de solo lectura de `bloquear_sesion_si_gestionado`.
+pub fn es_gestionado() -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let Ok(dentro) = exe.strip_prefix(engines_dir()) else {
+        return false;
+    };
+    dentro.components().next().is_some()
 }
 
 /// Completa los borrados diferidos bajo `root`: de las versiones en
@@ -3304,5 +3408,92 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *glass.zip
         assert!(super::blender_portable_instalado(&motor));
 
         let _ = std::fs::remove_dir_all(&motor);
+    }
+}
+
+#[cfg(test)]
+mod tests_banderas_hub {
+    use super::*;
+
+    struct RaizTemporal {
+        ruta: PathBuf,
+    }
+
+    impl RaizTemporal {
+        fn nueva(nombre: &str) -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+
+            static CONTADOR: AtomicU64 = AtomicU64::new(0);
+            let ruta = std::env::temp_dir().join(format!(
+                "glass-launcher-{nombre}-{}-{}",
+                std::process::id(),
+                CONTADOR.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&ruta).unwrap();
+            Self { ruta }
+        }
+    }
+
+    impl Drop for RaizTemporal {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.ruta);
+        }
+    }
+
+    #[test]
+    fn solicitud_de_cierre_escribe_la_bandera_del_pid() {
+        let raiz = RaizTemporal::nueva("cierre");
+        let pid = 123;
+        let ruta = ruta_solicitud_cierre_en(&raiz.ruta, pid);
+
+        assert!(!ruta.exists());
+        std::fs::write(&ruta, pid.to_string()).unwrap();
+        assert!(ruta.is_file());
+    }
+
+    #[test]
+    fn solicitud_de_cierre_propia_se_escribe_y_se_retira() {
+        retirar_solicitud_cierre_propia();
+        assert!(!solicitud_cierre_propia());
+
+        assert!(solicitar_cierre_motor(std::process::id()));
+        assert!(solicitud_cierre_propia());
+
+        retirar_solicitud_cierre_propia();
+        assert!(!solicitud_cierre_propia());
+    }
+
+    #[test]
+    fn despertar_hub_se_consume_una_sola_vez() {
+        let raiz = RaizTemporal::nueva("despertar");
+
+        assert!(!consumir_despertar_hub_en(&raiz.ruta));
+        std::fs::write(ruta_despertar_hub_en(&raiz.ruta), "").unwrap();
+        assert!(consumir_despertar_hub_en(&raiz.ruta));
+        assert!(!consumir_despertar_hub_en(&raiz.ruta));
+    }
+
+    #[test]
+    fn bloqueo_hub_es_exclusivo_y_se_libera_al_soltar_la_guarda() {
+        let raiz = RaizTemporal::nueva("bloqueo-hub");
+
+        let bloqueo = tomar_bloqueo_hub_en(&raiz.ruta);
+        assert!(bloqueo.is_some());
+        assert!(tomar_bloqueo_hub_en(&raiz.ruta).is_none());
+
+        drop(bloqueo);
+        assert!(tomar_bloqueo_hub_en(&raiz.ruta).is_some());
+    }
+
+    #[test]
+    fn rutas_de_banderas_y_bloqueo_usan_los_nombres_exactos() {
+        let raiz = Path::new("raiz");
+
+        assert_eq!(
+            ruta_solicitud_cierre_en(raiz, 123),
+            raiz.join("cerrar-123.flag")
+        );
+        assert_eq!(ruta_despertar_hub_en(raiz), raiz.join("hub-despierta.flag"));
+        assert_eq!(ruta_bloqueo_hub_en(raiz), raiz.join("hub.lock"));
     }
 }

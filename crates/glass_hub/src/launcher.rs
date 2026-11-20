@@ -118,6 +118,10 @@ pub struct LauncherPanel {
     blender_rx: Option<std::sync::mpsc::Receiver<BlenderMsg>>,
     /// Acción tras actualizar el Hub; la consume main.rs al pintar el frame.
     pub accion_hub_pendiente: Option<glass_launcher::updates::AccionHub>,
+    /// «Salir del Hub» pulsado en el pie de la barra lateral; lo
+    /// consume main.rs al pintar el frame (cierra también los
+    /// motores en curso, con su regla de guardado).
+    pub solicita_salir: bool,
     /// Si está presente, sustituye a «Cargando el motor…» en la pantalla de carga.
     pub texto_carga: Option<String>,
     /// Fin del splash tras `--tras-actualizar-hub`.
@@ -360,6 +364,7 @@ impl Default for LauncherPanel {
             hub_update_state: UpdateUiState::Idle,
             hub_update_rx: None,
             accion_hub_pendiente: None,
+            solicita_salir: false,
             texto_carga: None,
             splash_hub_hasta: None,
             update_rx: None,
@@ -596,6 +601,23 @@ impl LauncherPanel {
                     }
                     ui.add_space(8.0);
                     ui.separator();
+                    if self.es_hub {
+                        // Salida real del Hub (cerrar la ventana solo
+                        // lo oculta): queda encima del grupo del pie
+                        // porque el layout es bottom_up.
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(16.0);
+                            if ui
+                                .button(RichText::new("Salir del Hub").size(12.0).color(TEXT_DIM))
+                                .on_hover_text("Cierra el Hub y los motores abiertos (con su aviso de guardado)")
+                                .clicked()
+                            {
+                                self.solicita_salir = true;
+                            }
+                        });
+                        ui.add_space(2.0);
+                    }
                 });
             });
 

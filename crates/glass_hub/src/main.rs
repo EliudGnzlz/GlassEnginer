@@ -159,7 +159,36 @@ fn main() {
         eprintln!("{mensaje}");
         std::process::exit(2);
     }
-    mantenimiento_instalaciones(args.iter().any(|a| a == "--tras-actualizar-hub"));
+    let tras_actualizar = args.iter().any(|a| a == "--tras-actualizar-hub");
+
+    // Instancia única (Bug A): si ya hay un Hub vivo (visible o en
+    // segundo plano), esta instancia le pide que se muestre y sale;
+    // el mantenimiento de instalaciones lo hace solo el Hub vivo.
+    // Tras una auto-actualización, el Hub viejo aún puede tener el
+    // bloqueo unos instantes: se reintenta hasta ~5 s.
+    let intentos: u32 = if tras_actualizar { 50 } else { 1 };
+    let mut bloqueo = None;
+    for intento in 0..intentos {
+        if let Some(b) = glass_launcher::updates::tomar_bloqueo_hub() {
+            bloqueo = Some(b);
+            break;
+        }
+        if intento + 1 < intentos {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+    let Some(bloqueo) = bloqueo else {
+        let avisado = glass_launcher::updates::solicitar_despertar_hub();
+        log::info!(
+            "Ya hay un GlassEnginer Hub en ejecución: se le pide que se muestre (bandera escrita: {avisado}); esta instancia sale."
+        );
+        return;
+    };
+    // Una bandera de despertar vieja (de una sesión anterior) no
+    // debe provocar un «mostrar» espurio al arrancar.
+    let _ = glass_launcher::updates::consumir_despertar_hub();
+
+    mantenimiento_instalaciones(tras_actualizar);
 
     #[allow(unused_mut)]
     let mut builder = EventLoop::builder();
@@ -184,19 +213,120 @@ fn main() {
         }
     };
 
-    let mut app = HubApp { estado: None };
+    let mut app = HubApp {
+        estado: None,
+        bloqueo_hub: Some(bloqueo),
+    };
     if let Err(e) = event_loop.run_app(&mut app) {
         log::error!("El bucle de eventos terminó con error: {e:?}");
     }
 }
 
+/// Bandeja del sistema (solo Windows): icono con menú «Abrir
+/// GlassEnginer Hub» / «Salir». En Linux no hay bandeja: el
+/// respaldo es ocultar al cerrar + despertar al relanzar
+/// (instancia única) + el botón «Salir del Hub» del panel.
+#[cfg(target_os = "windows")]
+mod bandeja {
+    use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+    use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+
+    const ID_ABRIR: &str = "abrir";
+    const ID_SALIR: &str = "salir";
+
+    /// Icono de bandeja del Hub. Soltarlo retira el icono.
+    pub struct Bandeja {
+        _icono: TrayIcon,
+        _abrir: MenuItem,
+        _salir: MenuItem,
+    }
+
+    impl Bandeja {
+        pub fn crear() -> Result<Self, String> {
+            let icono = cargar_icono()?;
+            let menu = Menu::new();
+            let abrir = MenuItem::with_id(ID_ABRIR, "Abrir GlassEnginer Hub", true, None);
+            let separador = PredefinedMenuItem::separator();
+            let salir = MenuItem::with_id(ID_SALIR, "Salir", true, None);
+            menu.append_items(&[&abrir, &separador, &salir])
+                .map_err(|e| format!("no se pudo montar el menú de bandeja: {e}"))?;
+            let tray = TrayIconBuilder::new()
+                .with_menu(Box::new(menu))
+                .with_tooltip("GlassEnginer Hub")
+                .with_icon(icono)
+                .build()
+                .map_err(|e| format!("no se pudo crear el icono de bandeja: {e}"))?;
+            Ok(Self {
+                _icono: tray,
+                _abrir: abrir,
+                _salir: salir,
+            })
+        }
+
+        /// Vacía las colas de eventos de bandeja. Devuelve (abrir, salir).
+        pub fn sondear(&self) -> (bool, bool) {
+            let mut abrir = false;
+            let mut salir = false;
+            while let Ok(ev) = MenuEvent::receiver().try_recv() {
+                match ev.id.0.as_str() {
+                    ID_ABRIR => abrir = true,
+                    ID_SALIR => salir = true,
+                    _ => {}
+                }
+            }
+            while let Ok(ev) = TrayIconEvent::receiver().try_recv() {
+                match ev {
+                    TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    }
+                    | TrayIconEvent::DoubleClick { .. } => abrir = true,
+                    _ => {}
+                }
+            }
+            (abrir, salir)
+        }
+    }
+
+    fn cargar_icono() -> Result<Icon, String> {
+        let bytes = include_bytes!("../../../installer/glassenginer.png");
+        let img = image::load_from_memory(bytes)
+            .map_err(|e| format!("no se pudo decodificar el icono: {e}"))?;
+        let img = if img.width() > 32 || img.height() > 32 {
+            img.resize(32, 32, image::imageops::FilterType::Lanczos3)
+        } else {
+            img
+        };
+        let rgba = img.into_rgba8();
+        let (w, h) = rgba.dimensions();
+        Icon::from_rgba(rgba.into_raw(), w, h).map_err(|e| format!("icono de bandeja no válido: {e}"))
+    }
+}
+
 struct HubApp {
     estado: Option<Estado>,
+    /// Lock de instancia única: vive lo que el proceso; al soltarlo
+    /// (salida) otro Hub puede arrancar.
+    #[allow(dead_code)]
+    bloqueo_hub: Option<glass_launcher::updates::BloqueoHub>,
 }
 
 // El orden de los campos fija el orden de Drop: primero lo que depende del device,
 // después allocator, device, contexto Vulkan y la ventana.
 struct Estado {
+    /// Motores lanzados por este Hub que siguen vivos (los cosecha
+    /// `about_to_wait` con try_wait; sustituye al hilo recoge-zombis).
+    motores: Vec<std::process::Child>,
+    /// Ventana cerrada por el usuario: el Hub sigue en segundo plano.
+    oculto: bool,
+    /// «Salir» pedido con motores abiertos: el proceso sale cuando
+    /// el registro de motores se vacíe.
+    saliendo: bool,
+    /// Icono de bandeja (solo Windows; en el resto no hay bandeja y
+    /// el respaldo es relanzar el Hub para despertarlo).
+    #[cfg(target_os = "windows")]
+    bandeja: Option<bandeja::Bandeja>,
     egui_renderer: egui_ash_renderer::Renderer<GpuAllocator>,
     panel: LauncherPanel,
     egui_winit: egui_winit::State,
@@ -236,7 +366,14 @@ impl ApplicationHandler for HubApp {
         };
         let _ = estado.egui_winit.on_window_event(&estado.window.inner, &event);
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                // Como Steam: cerrar la ventana deja el Hub en
+                // segundo plano; la salida real es «Salir» (botón
+                // del panel o menú de la bandeja). El motor lanzado
+                // sigue gestionado por este proceso.
+                estado.ocultar();
+                log::info!("Ventana del Hub cerrada: el Hub sigue en segundo plano (relánzalo para mostrarlo o usa «Salir»).");
+            }
             WindowEvent::Resized(size) => {
                 estado.resize_pendiente = Some((size.width, size.height));
             }
@@ -256,8 +393,64 @@ impl ApplicationHandler for HubApp {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(estado) = self.estado.as_ref() {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(estado) = self.estado.as_mut() else {
+            return;
+        };
+
+        // Cosecha de motores terminados (sustituye al hilo que hacía
+        // wait() de cada hijo: sin zombis y con el registro al día).
+        estado.motores.retain_mut(|motor| match motor.try_wait() {
+            Ok(None) => true,
+            Ok(Some(status)) => {
+                log::info!("Motor (pid {}) terminado: {status}", motor.id());
+                false
+            }
+            Err(e) => {
+                log::warn!(
+                    "No se puede vigilar el motor (pid {}): {e}; se retira del registro",
+                    motor.id()
+                );
+                false
+            }
+        });
+
+        if estado.saliendo && estado.motores.is_empty() {
+            log::info!("Todos los motores cerrados: el Hub sale.");
+            event_loop.exit();
+            return;
+        }
+
+        if glass_launcher::updates::consumir_despertar_hub() {
+            log::info!("Petición de despertar recibida: se muestra el Hub.");
+            estado.reabrir();
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let (abrir, salir) = estado
+                .bandeja
+                .as_ref()
+                .map_or((false, false), |b| b.sondear());
+            if abrir {
+                estado.reabrir();
+            }
+            if salir {
+                estado.iniciar_salir(event_loop);
+                if event_loop.exiting() {
+                    return;
+                }
+            }
+        }
+
+        if estado.oculto {
+            // Reposo real en segundo plano: sin dibujar; el bucle se
+            // despierta cada 200 ms para las sondas de arriba.
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+                std::time::Instant::now() + std::time::Duration::from_millis(200),
+            ));
+        } else {
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
             estado.window.inner.request_redraw();
         }
     }
@@ -376,7 +569,24 @@ impl Estado {
         panel.es_hub = true;
         panel.gpu_aviso = vk_ctx.gpu_aviso.clone();
 
+        // Bandeja del sistema (hilo principal, requisito de tray-icon
+        // en Windows). Sin bandeja el Hub funciona igual: cerrar la
+        // ventana lo oculta y relanzarlo lo despierta.
+        #[cfg(target_os = "windows")]
+        let bandeja = match bandeja::Bandeja::crear() {
+            Ok(b) => Some(b),
+            Err(e) => {
+                log::warn!("No se pudo crear el icono de bandeja del Hub: {e}");
+                None
+            }
+        };
+
         Ok(Self {
+            motores: Vec::new(),
+            oculto: false,
+            saliendo: false,
+            #[cfg(target_os = "windows")]
+            bandeja,
             egui_renderer,
             panel,
             egui_winit,
@@ -440,6 +650,9 @@ impl Estado {
     }
 
     fn frame(&mut self, event_loop: &ActiveEventLoop) -> Result<(), String> {
+        if self.oculto {
+            return Ok(());
+        }
         if let Some((w, h)) = self.resize_pendiente {
             if w == 0 || h == 0 {
                 return Ok(());
@@ -458,7 +671,9 @@ impl Estado {
             .handle_platform_output(&self.window.inner, full_output.platform_output);
 
         if let Some(action) = accion {
-            ejecutar_accion_hub(&mut self.panel, action);
+            if let Some(hijo) = ejecutar_accion_hub(&mut self.panel, action) {
+                self.motores.push(hijo);
+            }
             self.egui_ctx.request_repaint();
         }
 
@@ -488,6 +703,13 @@ impl Estado {
                 }
                 None => {}
             }
+        }
+
+        if self.panel.solicita_salir {
+            self.panel.solicita_salir = false;
+            // El frame sigue hasta el final a propósito: cortarlo aquí
+            // perdería los textures_delta de egui de este frame.
+            self.iniciar_salir(event_loop);
         }
 
         // Un solo frame en vuelo: tras esperar el fence la GPU ya no usa nada del frame anterior.
@@ -608,6 +830,60 @@ impl Estado {
         }
 
         Ok(())
+    }
+}
+
+impl Estado {
+    /// Cerrar la ventana: el Hub queda en segundo plano.
+    fn ocultar(&mut self) {
+        self.window.inner.set_visible(false);
+        self.oculto = true;
+    }
+
+    fn mostrar(&mut self) {
+        self.window.inner.set_visible(true);
+        self.window.inner.focus_window();
+        self.oculto = false;
+        self.window.inner.request_redraw();
+    }
+
+    /// Mostrar a petición del usuario (relanzar el Hub o «Abrir» en
+    /// la bandeja). Si había un «Salir» esperando a los motores, se
+    /// cancela: las peticiones de cierre ya salieron, pero si un
+    /// motor sigue abierto tras su diálogo, el Hub vuelve a estar
+    /// disponible (semántica decidida del Bug A).
+    fn reabrir(&mut self) {
+        if self.saliendo {
+            self.saliendo = false;
+            log::info!("Salida del Hub cancelada: el usuario volvió a abrir el Hub.");
+        }
+        self.mostrar();
+    }
+
+    /// Salida real del Hub: pide a cada motor en curso que se cierre
+    /// con su regla de guardado y sale cuando no quede ninguno.
+    /// Nunca mata un motor: si uno no sale (su usuario canceló el
+    /// guardado), el Hub se queda en segundo plano a la espera.
+    fn iniciar_salir(&mut self, event_loop: &ActiveEventLoop) {
+        for motor in &self.motores {
+            let pid = motor.id();
+            if glass_launcher::updates::solicitar_cierre_motor(pid) {
+                log::info!("Pedido el cierre del motor (pid {pid}).");
+            } else {
+                log::warn!("No se pudo pedir el cierre del motor (pid {pid}).");
+            }
+        }
+        if self.motores.is_empty() {
+            log::info!("Saliendo del Hub.");
+            event_loop.exit();
+            return;
+        }
+        log::info!(
+            "Saliendo del Hub: se espera en segundo plano a que cierren {} motor(es).",
+            self.motores.len()
+        );
+        self.saliendo = true;
+        self.ocultar();
     }
 }
 
@@ -781,9 +1057,9 @@ fn construir_escena_fisica(state: &mut SceneState) {
 /// (GLASS_LAUNCHER_HOME) pero NO hereda los overrides GLASS_*
 /// de prueba/desarrollo del entorno del Hub (p. ej.
 /// GLASS_UPDATE_API): se retiran todos menos
-/// GLASS_LAUNCHER_HOME (auditoría S6). Un hilo recoge al hijo
-/// al salir para no dejar procesos zombi.
-fn lanzar_motor_hijo(panel: &mut LauncherPanel, args: &[&str]) {
+/// GLASS_LAUNCHER_HOME (auditoría S6). Devuelve el hijo para que
+/// el Hub lo registre y lo coseche en about_to_wait (sin zombis).
+fn lanzar_motor_hijo(panel: &mut LauncherPanel, args: &[&str]) -> Option<std::process::Child> {
     match glass_launcher::updates::objetivo_sonda() {
         Some((exe, _)) => {
             let mut cmd = std::process::Command::new(&exe);
@@ -804,13 +1080,11 @@ fn lanzar_motor_hijo(panel: &mut LauncherPanel, args: &[&str]) {
             match cmd.spawn() {
                 Ok(hijo) => {
                     log::info!("Motor lanzado ({}, pid {}) con {:?}", exe.display(), hijo.id(), args);
-                    let mut hijo = hijo;
-                    std::thread::spawn(move || {
-                        let _ = hijo.wait();
-                    });
+                    Some(hijo)
                 }
                 Err(e) => {
                     panel.status_message = Some(format!("⚠ No se pudo lanzar el motor: {e}"));
+                    None
                 }
             }
         }
@@ -818,6 +1092,7 @@ fn lanzar_motor_hijo(panel: &mut LauncherPanel, args: &[&str]) {
             panel.status_message = Some(
                 "⚠ No hay motor instalado: ve a Instalaciones y descarga el motor.".into(),
             );
+            None
         }
     }
 }
@@ -827,35 +1102,37 @@ fn lanzar_motor_hijo(panel: &mut LauncherPanel, args: &[&str]) {
 /// abre nada en el editor. El registro de la apertura lo hace
 /// el propio hijo en su abrir_proyecto (escritor único del
 /// registro: si el Hub también registrara al lanzar, los dos
-/// guardados se pisarían — auditoría S6).
-fn ejecutar_accion_hub(panel: &mut LauncherPanel, action: LauncherAction) {
+/// guardados se pisarían — auditoría S6). Devuelve el motor
+/// lanzado, si lo hubo, para el registro de motores en curso.
+fn ejecutar_accion_hub(panel: &mut LauncherPanel, action: LauncherAction) -> Option<std::process::Child> {
     match action {
         LauncherAction::OpenProject(path) => {
             let abs = absolutizar(&path);
             let ruta = abs.to_string_lossy().into_owned();
-            lanzar_motor_hijo(panel, &["--project", ruta.as_str()]);
+            lanzar_motor_hijo(panel, &["--project", ruta.as_str()])
         }
         LauncherAction::CreateProject { name, path, template } => {
             match crear_proyecto_en_disco(&name, &path, template) {
                 Ok(dir) => {
                     log::info!("Proyecto '{}' creado en disco: {:?}", name, dir);
                     let ruta = dir.to_string_lossy().into_owned();
-                    lanzar_motor_hijo(panel, &["--project", ruta.as_str()]);
+                    lanzar_motor_hijo(panel, &["--project", ruta.as_str()])
                 }
                 Err(e) => {
                     log::error!("No se pudo crear el proyecto '{}': {}", name, e);
                     panel.status_message = Some(format!("⚠ No se pudo crear el proyecto: {e}"));
+                    None
                 }
             }
         }
         LauncherAction::LoadSampleScene(preset) => {
             let clave = clave_de_sample(preset);
-            lanzar_motor_hijo(panel, &["--sample", clave.as_str()]);
+            lanzar_motor_hijo(panel, &["--sample", clave.as_str()])
         }
         LauncherAction::OpenSceneFile(ruta) => {
             let abs = absolutizar(&ruta);
             let ruta = abs.to_string_lossy().into_owned();
-            lanzar_motor_hijo(panel, &["--scene", ruta.as_str()]);
+            lanzar_motor_hijo(panel, &["--scene", ruta.as_str()])
         }
     }
 }

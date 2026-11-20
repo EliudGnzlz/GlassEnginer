@@ -1832,6 +1832,19 @@ struct GlassEngineApp {
     /// eventos la recoge tras el frame y cierra el proceso.
     #[cfg(feature = "editor")]
     salir_del_proceso: bool,
+    /// Hay una petición de cierre del Hub esperando la decisión del
+    /// diálogo «Cambios sin guardar» (al resolverse NO se relanza
+    /// el Hub: es él quien está saliendo).
+    #[cfg(feature = "editor")]
+    cierre_desde_hub_pendiente: bool,
+    /// Throttle de la sonda de la bandera `cerrar-<pid>.flag`.
+    #[cfg(feature = "editor")]
+    ultima_sonda_cierre_hub: std::time::Instant,
+    /// Este proceso es un motor gestionado por el Hub (su exe vive
+    /// en engines/<versión>/): solo estos obedecen la bandera de
+    /// cierre del Hub.
+    #[cfg(feature = "editor")]
+    gestionado: bool,
     /// V3: hay un Hub localizable en este equipo; gobierna la
     /// visibilidad del botón «Hub» del editor.
     #[cfg(feature = "editor")]
@@ -2329,6 +2342,12 @@ impl GlassEngineApp {
             volver_al_hub_pendiente: false,
             #[cfg(feature = "editor")]
             salir_del_proceso: false,
+            #[cfg(feature = "editor")]
+            cierre_desde_hub_pendiente: false,
+            #[cfg(feature = "editor")]
+            ultima_sonda_cierre_hub: std::time::Instant::now(),
+            #[cfg(feature = "editor")]
+            gestionado: glass_launcher::updates::es_gestionado(),
             #[cfg(feature = "editor")]
             hub_disponible: glass_launcher::updates::ruta_hub().is_some(),
             #[cfg(feature = "editor")]
@@ -7560,6 +7579,42 @@ self.salir_del_proceso = true;
                 }
             }
 
+            // --- Cierre pedido por el Hub (Bug A): al salir, el Hub
+            // escribe cerrar-<pid>.flag y el motor responde con su
+            // propia regla: silencio si la escena está limpia o el
+            // último guardado es de hace ≤ 5 s; diálogo de guardado
+            // en caso contrario. Solo los motores gestionados
+            // sondean (un editor suelto no obedece banderas).
+            if self.gestionado
+                && self.ultima_sonda_cierre_hub.elapsed() >= std::time::Duration::from_millis(500)
+            {
+                self.ultima_sonda_cierre_hub = std::time::Instant::now();
+                if glass_launcher::updates::solicitud_cierre_propia() {
+                    glass_launcher::updates::retirar_solicitud_cierre_propia();
+                    if self.is_standalone {
+                        log::info!("Cierre pedido por el Hub: saliendo (modo juego).");
+                        self.salir_del_proceso = true;
+                    } else {
+                        let sucia = editor_layout.viewport.play_state == glass_editor::PlayState::Edit
+                            && matches!(scene_state.lock(), Ok(sc) if editor_layout.escena_sucia(&sc));
+                        let guardado_reciente = editor_layout
+                            .ultimo_guardado
+                            .is_some_and(|t| t.elapsed() <= std::time::Duration::from_secs(5));
+                        if !sucia || guardado_reciente {
+                            log::info!(
+                                "Cierre pedido por el Hub: saliendo sin preguntar (sucia={sucia}, guardado_reciente={guardado_reciente})."
+                            );
+                            self.salir_del_proceso = true;
+                        } else {
+                            log::info!("Cierre pedido por el Hub con cambios sin guardar: pidiendo decisión.");
+                            self.cierre_desde_hub_pendiente = true;
+                            editor_layout.dialogo_guardar_cierre = true;
+                        }
+                    }
+                    self.egui_ctx.request_repaint();
+                }
+            }
+
             // --- Guardado (B2): cambios de escena, decisión y autoguardado ---
             if editor_layout
                 .cambio_escena
@@ -7600,7 +7655,13 @@ self.salir_del_proceso = true;
                                 Ok(()) => {
                                     self.ultimo_autoguardado = std::time::Instant::now();
                                     self.volver_al_hub_pendiente = false;
-                                    Self::lanzar_hub_al_salir();
+                                    if self.cierre_desde_hub_pendiente {
+                                        // El cierre lo pidió el Hub (que
+                                        // está saliendo): no relanzarlo.
+                                        self.cierre_desde_hub_pendiente = false;
+                                    } else {
+                                        Self::lanzar_hub_al_salir();
+                                    }
 self.salir_del_proceso = true;
                                     self.egui_ctx.request_repaint();
                                 }
@@ -7630,12 +7691,20 @@ self.salir_del_proceso = true;
                             editor_layout.marcar_guardada(&sc);
                         }
                         self.volver_al_hub_pendiente = false;
-                        Self::lanzar_hub_al_salir();
+                        if self.cierre_desde_hub_pendiente {
+                            // El cierre lo pidió el Hub: salir sin relanzarlo.
+                            self.cierre_desde_hub_pendiente = false;
+                        } else {
+                            Self::lanzar_hub_al_salir();
+                        }
 self.salir_del_proceso = true;
                         self.egui_ctx.request_repaint();
                     }
                     glass_editor::DecisionCierre::Cancelar => {
                         self.volver_al_hub_pendiente = false;
+                        // Si el cierre lo pidió el Hub, queda cancelado:
+                        // el Hub se queda a la espera en segundo plano.
+                        self.cierre_desde_hub_pendiente = false;
                     }
                 }
             }
@@ -7647,10 +7716,20 @@ self.salir_del_proceso = true;
                 self.esperando_save_as = false;
                 // Guardado o cancelado, la espera termina aquí.
                 let volver = self.volver_al_hub_pendiente;
+                let desde_hub = self.cierre_desde_hub_pendiente;
                 self.volver_al_hub_pendiente = false;
-                if volver && !sucia {
-                    Self::lanzar_hub_al_salir();
-self.salir_del_proceso = true;
+                if desde_hub && sucia {
+                    // Save As cancelado y la escena sigue sucia: el
+                    // cierre pedido por el Hub continúa pendiente (la
+                    // bandera no se limpia) y no se sale.
+                } else if !sucia && (volver || desde_hub) {
+                    if desde_hub {
+                        // Cierre pedido por el Hub: salir sin relanzarlo.
+                        self.cierre_desde_hub_pendiente = false;
+                    } else {
+                        Self::lanzar_hub_al_salir();
+                    }
+                    self.salir_del_proceso = true;
                     self.egui_ctx.request_repaint();
                 }
             }
