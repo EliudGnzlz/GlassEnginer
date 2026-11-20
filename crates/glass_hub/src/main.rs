@@ -691,17 +691,14 @@ fn crear_proyecto_en_disco(
     path: &Path,
     template: ProjectTemplate,
 ) -> Result<std::path::PathBuf, String> {
-    // La Ubicación del Hub ya es la carpeta del proyecto (su texto lo
-    // dice: «la carpeta del proyecto se crea en esa ubicación» y el
-    // valor por defecto es GlassProjects/<nombre>). Unir el nombre
-    // otra vez creaba GlassProjects/<nombre>/<nombre> y el proyecto
-    // nunca aparecía en la lista del Hub, que busca project.glass en
-    // GlassProjects/*. Se acepta también la ruta padre por robustez.
-    let project_dir = if path.file_name().map(|n| n == name).unwrap_or(false) {
-        path.to_path_buf()
-    } else {
-        path.join(name)
-    };
+    // Validación de nombre y carpeta destino (espejo del Unity Hub:
+    // la carpeta debe ser única en la ubicación; crear sobre un
+    // proyecto existente sobrescribía su escena y su project.glass).
+    // `name` queda sombreado por el nombre recortado y `project_dir`
+    // es la carpeta ya resuelta; no se vuelve a derivar.
+    let (nombre_recortado, project_dir) =
+        glass_launcher::archivos::validar_creacion_proyecto(name, path)?;
+    let name: &str = nombre_recortado.as_str();
     // Estructura de carpetas tipo Unity.
     for sub in [
         "Assets/Scenes",

@@ -1069,6 +1069,14 @@ impl LauncherPanel {
     /// (plantillas a la izquierda, ajustes a la derecha) convertido en una
     /// página del Launcher, SIN ventana emergente.
     fn render_create_view(&mut self, ui: &mut Ui, action: &mut Option<LauncherAction>) {
+        // Validación en vivo del formulario (la misma que aplica la
+        // creación en disco): si la carpeta destino ya tiene un proyecto
+        // o contenido, el botón se apaga y el motivo se ve bajo la
+        // ubicación, como en el Unity Hub.
+        let validacion_creacion = glass_launcher::archivos::validar_creacion_proyecto(
+            &self.new_name,
+            std::path::Path::new(&self.new_path),
+        );
         ui.label(RichText::new("Crear un proyecto nuevo").size(20.0).strong().color(TEXT_MAIN));
         let texto_cabecera = if self.es_hub {
             format!("GlassEnginer Hub v{} • Todo se crea en tu equipo, sin conexión.", glass_launcher::updates::HUB_VERSION)
@@ -1120,6 +1128,14 @@ impl LauncherPanel {
                         .size(11.5)
                         .color(TEXT_DIM),
                 );
+                if let Err(motivo) = &validacion_creacion {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!("⚠ {motivo}"))
+                            .size(11.5)
+                            .color(egui::Color32::from_rgb(200, 60, 50)),
+                    );
+                }
                 ui.add_space(16.0);
                 ui.label(RichText::new("Así se verá en tu lista de proyectos:").size(12.0).color(TEXT_DIM));
                 ui.add_space(6.0);
@@ -1145,7 +1161,7 @@ impl LauncherPanel {
         ui.separator();
         ui.add_space(12.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let name_ok = !self.new_name.trim().is_empty();
+            let name_ok = validacion_creacion.is_ok();
             let create = ui.add_enabled_ui(name_ok, |ui| {
                 Self::primary_button(ui, "Crear proyecto", Vec2::new(150.0, 32.0))
             });
