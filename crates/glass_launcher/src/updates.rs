@@ -1899,7 +1899,7 @@ mod tests_completar_instalacion {
     #[test]
     fn completar_instalacion_activa_la_version_en_disco() {
         let root = raiz_temporal("activa");
-        registrar_en_uso(&root, "0.10.20.9-beta");
+        registrar_en_uso(&root, "0.10.17.1-beta");
         let exe = motor_exe_in(&root, "0.10.18.2-beta");
         std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
         std::fs::write(&exe, b"").unwrap();
@@ -1921,8 +1921,8 @@ mod tests_completar_instalacion {
         assert_eq!(store.en_uso.as_deref(), Some("0.10.18.2-beta"));
         // La adopción nunca destruye la última versión sana: la
         // previa queda conservada y su carpeta intacta.
-        assert_eq!(store.conservada.as_deref(), Some("0.10.20.9-beta"));
-        assert!(engines_dir_in(&root).join("0.10.20.9-beta").exists());
+        assert_eq!(store.conservada.as_deref(), Some("0.10.17.1-beta"));
+        assert!(engines_dir_in(&root).join("0.10.17.1-beta").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1931,7 +1931,7 @@ mod tests_completar_instalacion {
         // La varada tiene ejecutable: es adoptable, no basura. La
         // carpeta de versión SIN ejecutable sí se reconcilia.
         let root = raiz_temporal("reconciliar");
-        registrar_en_uso(&root, "0.10.20.9-beta");
+        registrar_en_uso(&root, "0.10.17.1-beta");
         let exe = motor_exe_in(&root, "0.10.18.2-beta");
         std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
         std::fs::write(&exe, b"").unwrap();
@@ -1950,7 +1950,7 @@ mod tests_completar_instalacion {
         // Pendientes heredada de un código anterior que sí la marcó:
         // siendo más nueva que la en uso y con ejecutable, sobrevive.
         let root = raiz_temporal("procesar");
-        registrar_en_uso(&root, "0.10.20.9-beta");
+        registrar_en_uso(&root, "0.10.17.1-beta");
         let exe = motor_exe_in(&root, "0.10.18.2-beta");
         std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
         std::fs::write(&exe, b"").unwrap();
@@ -1974,14 +1974,14 @@ mod tests_completar_instalacion {
         // un borrado parcial. Adoptarla dejaría un motor que no
         // arranca y destruiría la previa: se rechaza.
         let root = raiz_temporal("incompleta");
-        registrar_en_uso(&root, "0.10.20.9-beta");
+        registrar_en_uso(&root, "0.10.17.1-beta");
         let exe = motor_exe_in(&root, "0.10.18.2-beta");
         std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
         std::fs::write(&exe, b"").unwrap();
 
         assert!(completar_instalacion_en_disco(&root, "0.10.18.2-beta", &[]).is_err());
         let store = EngineStore::load_in(&root);
-        assert_eq!(store.en_uso.as_deref(), Some("0.10.20.9-beta"));
+        assert_eq!(store.en_uso.as_deref(), Some("0.10.17.1-beta"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1989,25 +1989,25 @@ mod tests_completar_instalacion {
     fn registrar_sin_carpeta_en_disco_es_error() {
         // El registro nunca apunta a una carpeta inexistente.
         let root = raiz_temporal("registrar");
-        registrar_en_uso(&root, "0.10.20.9-beta");
+        registrar_en_uso(&root, "0.10.17.1-beta");
 
         assert!(registrar_motor_en_uso(&root, "0.10.18.2-beta", &[]).is_err());
         let store = EngineStore::load_in(&root);
-        assert_eq!(store.en_uso.as_deref(), Some("0.10.20.9-beta"));
+        assert_eq!(store.en_uso.as_deref(), Some("0.10.17.1-beta"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn completar_sin_carpeta_es_error() {
         let root = raiz_temporal("sin_carpeta");
-        registrar_en_uso(&root, "0.10.20.9-beta");
+        registrar_en_uso(&root, "0.10.17.1-beta");
 
         let r = completar_instalacion_en_disco(&root, "0.10.18.2-beta", &[]);
 
         assert!(r.is_err());
         let store = EngineStore::load_in(&root);
-        assert_eq!(store.en_uso.as_deref(), Some("0.10.20.9-beta"));
-        assert!(engines_dir_in(&root).join("0.10.20.9-beta").exists());
+        assert_eq!(store.en_uso.as_deref(), Some("0.10.17.1-beta"));
+        assert!(engines_dir_in(&root).join("0.10.17.1-beta").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 }
