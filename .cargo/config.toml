@@ -1,0 +1,7 @@
+# Bug D: en Windows (MSVC) el CRT se enlaza estático para que ni el motor
+# ni el Hub dependan del redistribuible de Visual C++ (VCRUNTIME140.dll,
+# VCRUNTIME140_1.dll, MSVCP140.dll): sin él, el .exe no llegaba ni a main
+# en un equipo limpio y no dejaba log. El runtime de .NET 8 NO se
+# empaqueta: lo chequea el Hub (Instalaciones → Dependencias).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

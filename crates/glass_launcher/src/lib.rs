@@ -8,6 +8,7 @@
 pub mod archivos;
 pub mod tipos;
 pub mod plugins;
+pub mod dependencias;
 pub mod updates;
 
 use egui::{FontData, FontDefinitions, FontFamily};

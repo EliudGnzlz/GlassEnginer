@@ -9,6 +9,7 @@ license.workspace = true
 egui.workspace = true
 log.workspace = true
 serde.workspace = true
+netcorehost = "0.22.0"
 serde_json.workspace = true
 sha2.workspace = true
 # Cliente HTTP con TLS, lectura de .zip y SHA-256 para las descargas

@@ -71,6 +71,35 @@ jobs:
         if: env.FAMILY == 'engine'
         run: cargo build --release -p glass_app --locked
 
+      # Bug D (gate permanente): con el CRT estático (.cargo/config.toml)
+      # ningún .exe puede volver a importar las DLL del redistribuible de
+      # Visual C++: sin él el programa no arranca en un equipo limpio y no
+      # deja log. Si una dependencia futura reintroduce el enlace dinámico,
+      # la release falla aquí y no en el equipo del usuario.
+      - name: Gate de importaciones (sin VCRUNTIME/MSVCP)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prohibidas = @('VCRUNTIME140.dll', 'VCRUNTIME140_1.dll', 'MSVCP140.dll')
+          $objdump = (Get-Command llvm-objdump -ErrorAction SilentlyContinue).Source
+          if (-not $objdump) {
+            $candidata = 'C:\Program Files\LLVM\bin\llvm-objdump.exe'
+            if (Test-Path $candidata) { $objdump = $candidata }
+          }
+          if (-not $objdump) {
+            throw 'Gate de importaciones: no se encontró llvm-objdump en el runner.'
+          }
+          foreach ($exe in @('target/release/glass_hub.exe', 'target/release/glass_app.exe')) {
+            if (-not (Test-Path $exe)) { continue }
+            $salida = & $objdump -p $exe | Select-String -Pattern 'DLL Name:\s*(\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value }
+            foreach ($dll in $salida) {
+              if ($prohibidas -contains $dll) {
+                throw "Gate de importaciones: $exe importa $dll (CRT dinámico). Revisa .cargo/config.toml (+crt-static)."
+              }
+            }
+            Write-Host "Gate OK: $exe no importa el CRT dinámico."
+          }
+
       - name: Compilar GlassEngine.Core (sin -c, queda en bin/Debug/net8.0)
         if: env.FAMILY == 'engine'
         run: dotnet build managed/GlassEngine.Core/GlassEngine.Core.csproj

@@ -8,6 +8,8 @@
     <RootNamespace>GlassEngine.Core</RootNamespace>
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+    <!-- Bug D: sin dependencia de ICU; basta Microsoft.NETCore.App 8. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
 </Project>

@@ -16,6 +16,8 @@ use glass_core::{GlassWindow, SceneManager, SceneState, WindowConfig};
 #[cfg(feature = "editor")]
 use glass_editor::EditorDockingLayout;
 #[cfg(feature = "editor")]
+use glass_editor::docking::AvisoBanner;
+#[cfg(feature = "editor")]
 use glass_launcher::tipos::{ProjectTemplate, SampleScenePreset};
 
 /// Acción de apertura pendiente: la siembra el arranque (la CLI:
@@ -48,6 +50,7 @@ use glass_scripting::{
     register_scene_bridge, SceneBridge, SceneLoadRejection, ScriptHost, SpawnSpec, TransformFfi,
     SPAWN_PHYSICS_KINEMATIC, SPAWN_PHYSICS_STATIC,
 };
+use glass_scripting::host::FalloDotnet;
 mod bake;
 mod canvas_ui;
 mod luces_objeto;
@@ -1909,6 +1912,12 @@ struct GlassEngineApp {
     #[allow(dead_code)]
     start_time: Instant,
     pub script_host: ScriptHost,
+    /// Causa de .NET ausente detectada en el arranque (Bug D).
+    fallo_dotnet: Option<FalloDotnet>,
+    /// Último fallo ya volcado a la consola (para no duplicar líneas).
+    aviso_dotnet_consola_hecho: Option<FalloDotnet>,
+    /// Si ya se avisó en consola de que la escena tiene scripts sin instanciar.
+    aviso_escena_consola_hecho: bool,
     pub audio_system: Arc<AudioSystem>,
     pub physics_world: Arc<Mutex<PhysicsWorld>>,
     /// Lightmap horneado de la escena en curso (bake, etapa 3b): el
@@ -2383,6 +2392,9 @@ impl GlassEngineApp {
             asset_watchers_raices: Vec::new(),
             start_time: Instant::now(),
             script_host: ScriptHost::new(),
+            fallo_dotnet: None,
+            aviso_dotnet_consola_hecho: None,
+            aviso_escena_consola_hecho: false,
             audio_system,
             physics_world,
             lightmap_runtime: None,
@@ -4591,6 +4603,71 @@ let resueltos = if body.has_collider {
         self.instantiate_scene_scripts(&scripted);
     }
 
+    /// Registra un fallo de .NET: guarda el estado y, en el editor, pinta la
+    /// banda de aviso y escribe una única entrada en consola por cada estado
+    /// distinto (y otra si es por escena). En el juego standalone no hay
+    /// banda ni consola: el estado queda guardado y el log ya lo cuenta.
+    fn notificar_fallo_dotnet(&mut self, fallo: FalloDotnet, por_escena: bool) {
+        self.fallo_dotnet = Some(fallo);
+
+        // En la build de juego (sin editor) glass_launcher no se enlaza:
+        // allí no hay banda ni consola que pintar, así que el valor no se usa.
+        #[cfg(feature = "editor")]
+        let gestionado = glass_launcher::updates::es_gestionado();
+        #[cfg(not(feature = "editor"))]
+        let gestionado = false;
+        let (titulo, cuerpo) = match fallo {
+            FalloDotnet::SinHostfxr => (
+                "No se puede ejecutar C#: no se encontró .NET",
+                if gestionado {
+                    "El editor no encontró ninguna instalación de .NET utilizable. Los scripts C# no se ejecutarán. Abre el Hub → Instalaciones → Dependencias e instala «.NET 8 Runtime». Después, reinicia el editor."
+                } else {
+                    "El editor no encontró ninguna instalación de .NET utilizable. Los scripts C# no se ejecutarán. Instala «.NET 8 Runtime» desde https://dotnet.microsoft.com/download/dotnet/8.0 y reinicia el editor."
+                },
+            ),
+            FalloDotnet::SinFrameworkNet8 => (
+                "No se puede ejecutar C#: falta Microsoft.NETCore.App 8",
+                if gestionado {
+                    "Se detectó .NET, pero no está instalado Microsoft.NETCore.App 8.0.x, necesario para ejecutar C#. Abre el Hub → Instalaciones → Dependencias e instala «.NET 8 Runtime». Después, reinicia el editor."
+                } else {
+                    "Se detectó .NET, pero no está instalado Microsoft.NETCore.App 8.0.x, necesario para ejecutar C#. Instala «.NET 8 Runtime» desde https://dotnet.microsoft.com/download/dotnet/8.0 y reinicia el editor."
+                },
+            ),
+        };
+
+        let primera_vez_estado = self.aviso_dotnet_consola_hecho != Some(fallo);
+        if primera_vez_estado {
+            self.aviso_dotnet_consola_hecho = Some(fallo);
+        }
+        let primera_vez_escena = por_escena && !self.aviso_escena_consola_hecho;
+        if por_escena {
+            self.aviso_escena_consola_hecho = true;
+        }
+
+        #[cfg(feature = "editor")]
+        {
+            // Banda en la parte superior del editor.
+            self.editor_layout.mostrar_aviso_dotnet(AvisoBanner {
+                titulo: titulo.to_string(),
+                cuerpo: cuerpo.to_string(),
+            });
+            if primera_vez_estado {
+                self.editor_layout
+                    .empujar_consola(format!("{titulo}. {cuerpo}"), "ERROR");
+            }
+            if primera_vez_escena {
+                self.editor_layout.empujar_consola(
+                    "La escena contiene scripts C#; sus componentes no se instanciarán hasta que se reinicie el editor con .NET 8 disponible.".into(),
+                    "ERROR",
+                );
+            }
+        }
+        #[cfg(not(feature = "editor"))]
+        {
+            let _ = (titulo, cuerpo, primera_vez_estado, primera_vez_escena);
+        }
+    }
+
     /// Instancia en `ScriptHost` los scripts declarados por la escena cargada.
     fn instantiate_scene_scripts(&mut self, scripted: &[(u64, String)]) {
         if !self.script_host.is_initialized {
@@ -4598,6 +4675,11 @@ let resueltos = if body.has_collider {
                 "ScriptHost no inicializado: {} script(s) de la escena quedan sin instanciar.",
                 scripted.len()
             );
+            // Si el arranque ya conoce la causa, repite el aviso con el matiz de escena.
+            // Si es `None` no sabemos por qué, así que no inventamos causa.
+            if let Some(f) = self.fallo_dotnet {
+                self.notificar_fallo_dotnet(f, true);
+            }
             return;
         }
         for (entity_id, class_name) in scripted {
@@ -8124,7 +8206,12 @@ impl ApplicationHandler for GlassEngineApp {
                     // `drm_syncobj_timeline_wait` (VK_TIMEOUT falsos).
                     install_signal_handlers();
                 }
-                Err(e) => log::warn!("main: ScriptHost no inicializado: {}", e),
+                Err(e) => {
+                    log::warn!("main: ScriptHost no inicializado: {}", e);
+                    if let Some(f) = e.fallo_dotnet() {
+                        self.notificar_fallo_dotnet(f, false);
+                    }
+                }
             }
         }
 

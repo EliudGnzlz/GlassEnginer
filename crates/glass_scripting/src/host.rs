@@ -22,6 +22,10 @@ pub enum ScriptError {
     InstantiationFailed(String),
     #[error("Invalid C-String: {0}")]
     InvalidCString(String),
+    #[error("No se encontró el host de .NET (hostfxr): {0}")]
+    SinHostfxr(String),
+    #[error("Falta el framework Microsoft.NETCore.App 8: {0}")]
+    SinFrameworkNet8(String),
 }
 
 type InitBridgeFn = unsafe extern "system" fn(*const c_void, *const c_void, *const c_void);
@@ -406,8 +410,15 @@ impl ScriptHost {
         }
 
         log::info!("Cargando hostfxr para .NET CoreCLR...");
-        let hostfxr = nethost::load_hostfxr()
-            .map_err(|e| ScriptError::InitFailed(format!("Error cargando libhostfxr: {e:?}")))?;
+        // Si el runtime nativo de .NET no está, hostfxr devuelve CoreHostLibMissingFailure.
+        let hostfxr = nethost::load_hostfxr().map_err(|e| {
+            let dbg = format!("{e:?}");
+            if dbg.contains("CoreHostLibMissingFailure") {
+                ScriptError::SinHostfxr(dbg)
+            } else {
+                ScriptError::InitFailed(format!("Error cargando libhostfxr: {dbg}"))
+            }
+        })?;
 
         let config_pdc = PdCString::from_os_str(config_path.as_os_str())
             .map_err(|e| ScriptError::InitFailed(format!("Error en config path: {e:?}")))?;
@@ -415,8 +426,17 @@ impl ScriptHost {
             .map_err(|e| ScriptError::InitFailed(format!("Error en dll path: {e:?}")))?;
 
         log::info!("Inicializando runtime CoreCLR desde: {}", config_path.display());
-        let context = hostfxr.initialize_for_runtime_config(&config_pdc)
-            .map_err(|e| ScriptError::InitFailed(format!("Error inicializando config: {e:?}")))?;
+        // Hay .NET pero no la versión 8.0.x → FrameworkMissingFailure.
+        let context = hostfxr
+            .initialize_for_runtime_config(&config_pdc)
+            .map_err(|e| {
+                let dbg = format!("{e:?}");
+                if dbg.contains("FrameworkMissingFailure") {
+                    ScriptError::SinFrameworkNet8(dbg)
+                } else {
+                    ScriptError::InitFailed(format!("Error inicializando config: {dbg}"))
+                }
+            })?;
 
         let loader = context.get_delegate_loader_for_assembly(dll_pdc)
             .map_err(|e| ScriptError::InitFailed(format!("Error obteniendo loader: {e:?}")))?;
@@ -1290,5 +1310,47 @@ impl ScriptHost {
 
     pub fn active_instance_count(&self) -> usize {
         self.active_instances.len()
+    }
+}
+
+/// Fallos de .NET que la UI sabe cómo remediar (instalar el runtime).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FalloDotnet {
+    SinHostfxr,
+    SinFrameworkNet8,
+}
+
+impl ScriptError {
+    /// Devuelve `Some(..)` sólo si el error se debe a una dependencia .NET ausente
+    /// y accionable por el usuario. El resto de errores no se clasifican.
+    pub fn fallo_dotnet(&self) -> Option<FalloDotnet> {
+        match self {
+            ScriptError::SinHostfxr(_) => Some(FalloDotnet::SinHostfxr),
+            ScriptError::SinFrameworkNet8(_) => Some(FalloDotnet::SinFrameworkNet8),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_fallo_dotnet {
+    use super::*;
+
+    #[test]
+    fn sin_hostfxr_se_clasifica() {
+        let e = ScriptError::SinHostfxr("CoreHostLibMissingFailure".into());
+        assert_eq!(e.fallo_dotnet(), Some(FalloDotnet::SinHostfxr));
+    }
+
+    #[test]
+    fn sin_framework_se_clasifica() {
+        let e = ScriptError::SinFrameworkNet8("FrameworkMissingFailure".into());
+        assert_eq!(e.fallo_dotnet(), Some(FalloDotnet::SinFrameworkNet8));
+    }
+
+    #[test]
+    fn init_failed_no_se_clasifica() {
+        let e = ScriptError::InitFailed("otra cosa".into());
+        assert_eq!(e.fallo_dotnet(), None);
     }
 }

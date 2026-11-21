@@ -68,6 +68,13 @@ pub fn destino_supr(toque: ToqueSupr, hay_asset: bool, hay_entidad: bool) -> Sup
     }
 }
 
+/// Aviso persistente que se pinta como banda horizontal en la parte superior del editor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AvisoBanner {
+    pub titulo: String,
+    pub cuerpo: String,
+}
+
 pub struct EditorDockingLayout {
     pub hierarchy: HierarchyPanel,
     pub viewport: ViewportPanel,
@@ -90,6 +97,10 @@ pub struct EditorDockingLayout {
     /// `project.importacion_completada_en` en el render y main.rs lo
     /// consume tras el render.
     pub importacion_completada_en: Option<std::time::Instant>,
+    /// Aviso vigente sobre dependencias .NET (banda superior). `None` = no hay aviso.
+    pub aviso_dotnet: Option<AvisoBanner>,
+    /// El usuario cerró la banda con «✕» para el aviso vigente.
+    aviso_dotnet_oculto: bool,
     pub shader_graph: ShaderGraphEditorPanel,
     pub mesh_tool: MeshToolPanel,
     /// Panel de edición de Canvas y UI.
@@ -206,6 +217,8 @@ impl EditorDockingLayout {
             soltados_encolados: Vec::new(),
             conversiones_en_curso: Vec::new(),
             importacion_completada_en: None,
+            aviso_dotnet: None,
+            aviso_dotnet_oculto: false,
             shader_graph: ShaderGraphEditorPanel::new(),
             mesh_tool: MeshToolPanel::new(),
             canvas_ui: CanvasPanel::new(),
@@ -527,6 +540,75 @@ impl EditorDockingLayout {
         self.soltados_encolados.extend_from_slice(rutas);
     }
 
+    /// Muestra (o reemplaza) el aviso de .NET. Sólo se resetea el estado «oculto» si
+    /// cambia el título: así, tras cerrarlo, no reaparece mientras el estado no cambie.
+    pub fn mostrar_aviso_dotnet(&mut self, aviso: AvisoBanner) {
+        let mismo_titulo = self
+            .aviso_dotnet
+            .as_ref()
+            .map(|a| a.titulo == aviso.titulo)
+            .unwrap_or(false);
+        if !mismo_titulo {
+            self.aviso_dotnet_oculto = false;
+        }
+        self.aviso_dotnet = Some(aviso);
+    }
+
+    /// Añade una línea al panel de consola del editor con tope de 300 entradas.
+    pub fn empujar_consola(&mut self, texto: String, nivel: &'static str) {
+        const TOPE: usize = 300;
+        let logs = &mut self.console.logs;
+        logs.push((texto, nivel));
+        if logs.len() > TOPE {
+            let sobra = logs.len() - TOPE;
+            logs.drain(0..sobra);
+        }
+    }
+
+    /// Pinta la banda roja con el aviso de .NET si hay uno y no está oculto.
+    /// Se dibuja sobre una franja de altura exacta reservada con
+    /// `allocate_exact_size`: un `Frame::show` a este nivel se expandía a
+    /// todo el alto disponible y tapaba el editor entero (cazado en el test
+    /// físico del Bug D).
+    fn pintar_aviso_dotnet(&mut self, ui: &mut egui::Ui) {
+        let Some(aviso) = self.aviso_dotnet.clone() else { return };
+        if self.aviso_dotnet_oculto {
+            return;
+        }
+        let ancho = ui.available_width();
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(ancho, 38.0), egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, 0.0, egui::Color32::from_rgb(120, 40, 36));
+
+        // Botón «✕» a la derecha, centrado en la franja.
+        let rect_boton = egui::Rect::from_min_size(
+            egui::pos2(rect.max.x - 30.0, rect.min.y + 7.0),
+            egui::vec2(24.0, 24.0),
+        );
+        let mut ui_boton = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect_boton)
+                .layout(egui::Layout::top_down(egui::Align::Center)),
+        );
+        if ui_boton.button("✕").on_hover_text("Ocultar aviso").clicked() {
+            self.aviso_dotnet_oculto = true;
+        }
+
+        // Título y cuerpo a la izquierda del botón.
+        let rect_texto = egui::Rect::from_min_max(
+            egui::pos2(rect.min.x + 10.0, rect.min.y + 5.0),
+            egui::pos2(rect.max.x - 36.0, rect.max.y - 3.0),
+        );
+        let mut ui_texto = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect_texto)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        ui_texto.label(egui::RichText::new(&aviso.titulo).strong());
+        ui_texto.label(egui::RichText::new(&aviso.cuerpo).small());
+    }
+
     pub fn render(
         &mut self,
         ui: &mut egui::Ui,
@@ -546,6 +628,9 @@ impl EditorDockingLayout {
             s.spacing.button_padding = egui::vec2(8.0, 3.0);
             s.spacing.indent = 14.0;
         }
+
+        // Bug D: banda de aviso de dependencias .NET (sólo ocupa su altura).
+        self.pintar_aviso_dotnet(ui);
 
         // Paso de las conversiones al panel Proyecto: main.rs rellena
         // `conversiones_en_curso` cada frame. Con `take`, si un frame no

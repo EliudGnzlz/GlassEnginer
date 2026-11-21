@@ -116,6 +116,18 @@ pub struct LauncherPanel {
     blender_state: PluginUiState,
     /// Canal con el hilo que descarga el Blender portable.
     blender_rx: Option<std::sync::mpsc::Receiver<BlenderMsg>>,
+    /// Estado de la comprobación de .NET (pestaña Instalaciones, Bug D).
+    dep_estado: Option<glass_launcher::dependencias::EstadoDotnet>,
+    /// Canal con el hilo que comprueba .NET o descarga su instalador.
+    dep_rx: Option<std::sync::mpsc::Receiver<DepMsg>>,
+    /// Texto del trabajo de dependencias en curso («Comprobando .NET…», …).
+    dep_trabajando: Option<String>,
+    /// Cuándo se lanzó el instalador de .NET (para re-comprobar hasta que surta efecto).
+    dep_instalador_lanzado_en: Option<std::time::Instant>,
+    /// Último sondeo de .NET tras lanzar el instalador.
+    dep_ultimo_sondeo: Option<std::time::Instant>,
+    /// La comprobación inicial de .NET ya se lanzó (no relanzarla cada frame).
+    dep_comprobacion_iniciada: bool,
     /// Acción tras actualizar el Hub; la consume main.rs al pintar el frame.
     pub accion_hub_pendiente: Option<glass_launcher::updates::AccionHub>,
     /// «Salir del Hub» pulsado en el pie de la barra lateral; lo
@@ -272,6 +284,13 @@ pub enum BlenderMsg {
     Descargado(Result<std::path::PathBuf, String>),
 }
 
+/// Mensajes de los hilos de dependencias .NET (Bug D).
+#[derive(Debug)]
+pub enum DepMsg {
+    Comprobado(glass_launcher::dependencias::EstadoDotnet),
+    Instalador(Result<std::path::PathBuf, String>),
+}
+
 fn descubrir_proyectos(
     registrados: &[glass_launcher::updates::ProjectEntry],
     ocultos: &[String],
@@ -370,6 +389,12 @@ impl Default for LauncherPanel {
             update_rx: None,
             blender_state: PluginUiState::Idle,
             blender_rx: None,
+            dep_estado: None,
+            dep_rx: None,
+            dep_trabajando: None,
+            dep_instalador_lanzado_en: None,
+            dep_ultimo_sondeo: None,
+            dep_comprobacion_iniciada: false,
             plugin_store: glass_launcher::plugins::PluginStore::load(),
             plugin_catalog: None,
             plugin_state: PluginUiState::Idle,
@@ -800,10 +825,12 @@ impl LauncherPanel {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         if response.clicked() {
+            self.avisar_dotnet_antes_de_abrir();
             *action = Some(LauncherAction::OpenProject(dir.to_path_buf()));
         }
         response.context_menu(|ui| {
             if ui.button("Abrir").clicked() {
+                self.avisar_dotnet_antes_de_abrir();
                 *action = Some(LauncherAction::OpenProject(dir.to_path_buf()));
                 ui.close();
             }
@@ -1338,8 +1365,406 @@ impl LauncherPanel {
         self.es_hub && Self::motor_lanzable().is_none()
     }
 
+    fn lanzar_comprobacion_dotnet(
+        &mut self,
+        req: &glass_launcher::dependencias::RequisitoDotnet,
+    ) {
+        let req = glass_launcher::dependencias::RequisitoDotnet {
+            framework: req.framework.clone(),
+            mayor: req.mayor,
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        self.dep_rx = Some(rx);
+        self.dep_comprobacion_iniciada = true;
+        self.dep_trabajando = Some("Comprobando .NET…".into());
+
+        std::thread::spawn(move || {
+            let estado = glass_launcher::dependencias::comprobar_dotnet(&req);
+            let _ = tx.send(DepMsg::Comprobado(estado));
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    fn lanzar_descarga_dotnet(
+        &mut self,
+        req: &glass_launcher::dependencias::RequisitoDotnet,
+    ) {
+        let req = glass_launcher::dependencias::RequisitoDotnet {
+            framework: req.framework.clone(),
+            mayor: req.mayor,
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        self.dep_rx = Some(rx);
+        self.dep_trabajando =
+            Some(format!("Descargando .NET {} Runtime…", req.mayor));
+
+        std::thread::spawn(move || {
+            let resultado = (|| -> Result<std::path::PathBuf, String> {
+                let inst =
+                    glass_launcher::dependencias::instalador_dotnet_windows(&req)?;
+                let cache = glass_launcher::updates::data_root().join("cache");
+                std::fs::create_dir_all(&cache).map_err(|e| {
+                    format!("No se pudo crear la carpeta de caché: {e}")
+                })?;
+
+                let ruta = cache.join(format!(
+                    "dotnet-runtime-{}.exe",
+                    inst.version
+                ));
+                glass_launcher::dependencias::descargar_instalador_dotnet(
+                    &inst, &ruta,
+                )?;
+                Ok(ruta)
+            })();
+
+            let _ = tx.send(DepMsg::Instalador(resultado));
+        });
+    }
+
+    fn recoger_dependencias(
+        &mut self,
+        ui: &mut egui::Ui,
+        req: &glass_launcher::dependencias::RequisitoDotnet,
+    ) {
+        const ESPERA_INSTALACION: &str =
+            "Esperando a que termine la instalación…";
+
+        let mensaje = self
+            .dep_rx
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok());
+
+        if let Some(mensaje) = mensaje {
+            self.dep_rx = None;
+
+            match mensaje {
+                DepMsg::Comprobado(estado) => {
+                    let es_ok = matches!(
+                        &estado,
+                        glass_launcher::dependencias::EstadoDotnet::Ok { .. }
+                    );
+                    let venia_del_instalador =
+                        self.dep_instalador_lanzado_en.is_some();
+
+                    self.dep_estado = Some(estado);
+                    self.dep_trabajando = None;
+
+                    if venia_del_instalador {
+                        if es_ok {
+                            self.dep_instalador_lanzado_en = None;
+                            self.dep_ultimo_sondeo = None;
+                            self.status_message = Some(
+                                "✔ .NET 8 instalado. Si el editor ya estaba abierto, ciérralo y vuelve a abrirlo para activar los scripts C#."
+                                    .into(),
+                            );
+                        } else {
+                            self.dep_trabajando =
+                                Some(ESPERA_INSTALACION.into());
+                        }
+                    }
+                }
+                DepMsg::Instalador(Ok(ruta)) => {
+                    #[cfg(target_os = "windows")]
+                    {
+                        match std::process::Command::new(&ruta).spawn() {
+                            Ok(_) => {
+                                self.dep_instalador_lanzado_en =
+                                    Some(std::time::Instant::now());
+                                self.dep_ultimo_sondeo =
+                                    Some(std::time::Instant::now());
+                                self.dep_trabajando =
+                                    Some(ESPERA_INSTALACION.into());
+                            }
+                            Err(e) => {
+                                self.dep_trabajando = None;
+                                self.status_message = Some(format!(
+                                    "✖ No se pudo abrir el instalador de .NET: {e}"
+                                ));
+                            }
+                        }
+                    }
+
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        let _ = ruta;
+                        self.dep_trabajando = None;
+                    }
+                }
+                DepMsg::Instalador(Err(e)) => {
+                    self.dep_trabajando = None;
+                    self.status_message =
+                        Some(format!("✖ No se pudo descargar .NET: {e}"));
+                }
+            }
+        }
+
+        if let Some(lanzado_en) = self.dep_instalador_lanzado_en {
+            if lanzado_en.elapsed() >= std::time::Duration::from_secs(10 * 60) {
+                self.dep_instalador_lanzado_en = None;
+                self.dep_ultimo_sondeo = None;
+                self.dep_trabajando = None;
+                self.dep_rx = None;
+            } else {
+                ui.ctx().request_repaint_after(
+                    std::time::Duration::from_secs(3),
+                );
+
+                let toca_sondear = self
+                    .dep_ultimo_sondeo
+                    .map(|ultimo| {
+                        ultimo.elapsed()
+                            >= std::time::Duration::from_secs(3)
+                    })
+                    .unwrap_or(true);
+
+                if toca_sondear && self.dep_rx.is_none() {
+                    self.dep_ultimo_sondeo =
+                        Some(std::time::Instant::now());
+                    self.lanzar_comprobacion_dotnet(req);
+                    self.dep_trabajando = Some(ESPERA_INSTALACION.into());
+                }
+            }
+        }
+    }
+
+    fn seccion_dependencias(
+        &mut self,
+        ui: &mut egui::Ui,
+        req: &glass_launcher::dependencias::RequisitoDotnet,
+    ) {
+        use glass_launcher::dependencias::EstadoDotnet;
+
+        ui.label(
+            RichText::new("Dependencias")
+                .size(14.0)
+                .strong(),
+        );
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(
+                "El motor usa el runtime de .NET 8 de Microsoft para ejecutar los scripts C# de tus escenas. Sin él, el motor funciona, pero los scripts no se ejecutan. El Hub no instala nada por su cuenta: el botón descarga el instalador oficial de Microsoft y lo abre para que lo instales tú.",
+            )
+            .size(12.0)
+            .color(TEXT_DIM),
+        );
+        ui.add_space(6.0);
+
+        if self.dep_estado.is_none()
+            && self.dep_trabajando.is_none()
+            && !self.dep_comprobacion_iniciada
+        {
+            self.lanzar_comprobacion_dotnet(req);
+        }
+
+        if let Some(texto) = self.dep_trabajando.clone() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(
+                    RichText::new(texto)
+                        .size(12.0)
+                        .color(TEXT_DIM),
+                );
+            });
+            ui.add_space(4.0);
+        }
+
+        let mut recomprobar = false;
+        #[cfg(target_os = "windows")]
+        let mut descargar = false;
+
+        ui.add_enabled_ui(self.dep_trabajando.is_none(), |ui| {
+            match self.dep_estado.as_ref() {
+                Some(EstadoDotnet::Ok { version, raiz }) => {
+                    ui.label(
+                        RichText::new(format!(
+                            "✔ .NET {version} instalado en {}",
+                            raiz.display()
+                        ))
+                        .size(12.0)
+                        .color(OK_GREEN),
+                    );
+                    if ui.button("Comprobar de nuevo").clicked() {
+                        recomprobar = true;
+                    }
+                }
+                Some(EstadoDotnet::SinDotnet) => {
+                    ui.label(
+                        RichText::new(
+                            "✖ No hay ningún .NET instalado. Sin .NET 8 el motor funciona, pero los scripts C# de tus escenas no se ejecutan.",
+                        )
+                        .size(12.0),
+                    );
+                }
+                Some(EstadoDotnet::SinNet8 {
+                    encontradas,
+                    ..
+                }) => {
+                    let texto = if encontradas.is_empty() {
+                        "✖ Hay .NET instalado, pero no .NET 8, que es el que necesita este motor. Sin él, los scripts C# no se ejecutan."
+                            .to_owned()
+                    } else {
+                        format!(
+                            "✖ Hay .NET instalado ({}), pero no .NET 8, que es el que necesita este motor. Sin él, los scripts C# no se ejecutan.",
+                            encontradas.join(", ")
+                        )
+                    };
+                    ui.label(RichText::new(texto).size(12.0));
+                }
+                Some(EstadoDotnet::ConflictoDotnetRoot {
+                    raiz_env,
+                    raiz_buena,
+                    version,
+                }) => {
+                    ui.label(
+                        RichText::new(format!(
+                            "⚠ La variable de entorno DOTNET_ROOT apunta a {}, donde no está .NET 8. Sí hay .NET 8 ({version}) en {}. Corrige o elimina DOTNET_ROOT para que el motor lo use.",
+                            raiz_env.display(),
+                            raiz_buena.display()
+                        ))
+                        .size(12.0),
+                    );
+                    if ui.button("Comprobar de nuevo").clicked() {
+                        recomprobar = true;
+                    }
+                }
+                Some(EstadoDotnet::Error(e)) => {
+                    ui.label(
+                        RichText::new(format!(
+                            "⚠ No se pudo comprobar .NET: {e}"
+                        ))
+                        .size(12.0),
+                    );
+                    if ui.button("Comprobar de nuevo").clicked() {
+                        recomprobar = true;
+                    }
+                }
+                None => {}
+            }
+
+            let mostrar_acciones = matches!(
+                self.dep_estado.as_ref(),
+                Some(EstadoDotnet::SinDotnet)
+                    | Some(EstadoDotnet::SinNet8 { .. })
+            );
+
+            if mostrar_acciones {
+                ui.add_space(4.0);
+
+                #[cfg(target_os = "windows")]
+                {
+                    if ui
+                        .button("Descargar e instalar .NET 8")
+                        .clicked()
+                    {
+                        descargar = true;
+                    }
+                }
+
+                #[cfg(target_os = "linux")]
+                {
+                    if let Some((distro, comando)) =
+                        glass_launcher::dependencias::comando_instalacion_linux()
+                    {
+                        ui.label(
+                            RichText::new(format!(
+                                "En {distro} puedes instalarlo con:"
+                            ))
+                            .size(12.0)
+                            .color(TEXT_DIM),
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(&comando).monospace(),
+                            );
+                            if ui.button("Copiar comando").clicked() {
+                                ui.ctx().copy_text(comando.clone());
+                            }
+                        });
+                    } else {
+                        ui.hyperlink_to(
+                            glass_launcher::dependencias::URL_DESCARGA_MANUAL,
+                            glass_launcher::dependencias::URL_DESCARGA_MANUAL,
+                        );
+                    }
+                }
+
+                #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+                {
+                    ui.hyperlink_to(
+                        glass_launcher::dependencias::URL_DESCARGA_MANUAL,
+                        glass_launcher::dependencias::URL_DESCARGA_MANUAL,
+                    );
+                }
+            }
+        });
+
+        if recomprobar {
+            self.lanzar_comprobacion_dotnet(req);
+        }
+
+        #[cfg(target_os = "windows")]
+        if descargar {
+            self.lanzar_descarga_dotnet(req);
+        }
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(8.0);
+    }
+
+    /// Aviso no bloqueante antes de abrir un proyecto: comprueba .NET contra
+    /// el motor en uso y, si falta, deja el aviso en la barra de estado y el
+    /// estado guardado para Instalaciones. El editor se abre igual.
+    fn avisar_dotnet_antes_de_abrir(&mut self) {
+        let Some(dir_motor) = glass_launcher::updates::EngineStore::load()
+            .en_uso
+            .map(|v| {
+                glass_launcher::updates::engines_dir_in(
+                    &glass_launcher::updates::data_root(),
+                )
+                .join(v)
+            })
+        else {
+            return;
+        };
+        let req_dotnet =
+            glass_launcher::dependencias::requisito_desde_runtimeconfig(&dir_motor);
+        let estado_dotnet = glass_launcher::dependencias::comprobar_dotnet(&req_dotnet);
+        if !matches!(
+            &estado_dotnet,
+            glass_launcher::dependencias::EstadoDotnet::Ok { .. }
+        ) {
+            self.status_message = Some(
+                "Este motor necesita .NET 8 para los scripts C#. El motor abrirá igual; revisa Instalaciones → Dependencias."
+                    .into(),
+            );
+        }
+        self.dep_estado = Some(estado_dotnet);
+    }
+
     fn render_installs_tab(&mut self, ui: &mut Ui) {
         Self::tab_title(ui, "Instalaciones", "Versiones del motor en este equipo y actualizaciones desde GitHub Releases. Es la única parte del Launcher que usa internet, y solo cuando tú lo pides.");
+        // Bug D: sección «Dependencias» encima de la lista de versiones.
+        // El requisito sale del runtimeconfig del motor en uso (sin motor, .NET 8).
+        let dir_motor_dep = glass_launcher::updates::EngineStore::load()
+            .en_uso
+            .map(|v| {
+                glass_launcher::updates::engines_dir_in(
+                    &glass_launcher::updates::data_root(),
+                )
+                .join(v)
+            });
+        let req_dotnet = dir_motor_dep
+            .as_deref()
+            .map(glass_launcher::dependencias::requisito_desde_runtimeconfig)
+            .unwrap_or(glass_launcher::dependencias::RequisitoDotnet {
+                framework: "Microsoft.NETCore.App".into(),
+                mayor: 8,
+            });
+        self.recoger_dependencias(ui, &req_dotnet);
+        self.seccion_dependencias(ui, &req_dotnet);
         // Recoger el resultado de la descarga de Blender portable, si ya llegó.
         if let Some(rx) = &self.blender_rx {
             match rx.try_recv() {
