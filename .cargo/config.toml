@@ -5,3 +5,11 @@
 # empaqueta: lo chequea el Hub (Instalaciones → Dependencias).
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# La otra mitad del CRT estatico: la libreria C++ de manifold
+# (manifold-csg-sys) se compila con CMake, que no ve el rustflag y por
+# defecto usa /MD. El toolchain de tools/cmake le fija el CRT estatico;
+# CMake lo inicializa desde esta variable de entorno al configurar.
+# En Linux es inocuo (la variable solo afecta a MSVC).
+[env]
+CMAKE_TOOLCHAIN_FILE = { value = "tools/cmake/windows-static-crt.cmake", relative = true }
