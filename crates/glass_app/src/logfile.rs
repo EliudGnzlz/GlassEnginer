@@ -4,6 +4,11 @@
 //! que sin este módulo cualquier cierre es mudo. Todo lo que pasa por `log`
 //! se escribe en `glass.log` (además de stderr), y los pánicos se anotan
 //! en el mismo archivo antes de delegar en el hook anterior.
+//!
+//! Refuerzo del Bug I (2026-11-22): el informe del pánico incluye ahora el
+//! backtrace capturado y se escribe TAMBIÉN en `glass_crash.log`, junto al
+//! registro de la sesión, para que una caída de campo deje archivo, línea
+//! y rastro completos en un archivo dedicado fácil de pedir al usuario.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -34,6 +39,11 @@ fn data_root() -> PathBuf {
 /// Ruta del archivo de registro de la sesión.
 pub fn ruta_log() -> PathBuf {
     data_root().join("glass.log")
+}
+
+/// Ruta del archivo dedicado a informes de pánico, junto al registro.
+pub fn ruta_crash() -> PathBuf {
+    data_root().join("glass_crash.log")
 }
 
 /// Si el registro supera `TAMANO_MAX_LOG`, lo renombra a `glass.log.old`
@@ -97,6 +107,35 @@ pub fn formatear_panico(mensaje: &str, ubicacion: Option<(String, u32)>) -> Stri
     }
 }
 
+/// Compone el informe completo de un pánico: la línea `PANIC:`, el hilo
+/// que lo sufrió y el backtrace capturado en el momento del pánico.
+pub fn componer_informe(
+    mensaje: &str,
+    ubicacion: Option<(String, u32)>,
+    hilo: &str,
+    backtrace: &str,
+) -> String {
+    let linea = formatear_panico(mensaje, ubicacion);
+    format!("{linea}\nHilo: {hilo}\nBacktrace:\n{backtrace}")
+}
+
+/// Escribe el informe de un pánico en el registro de la sesión y en el
+/// archivo dedicado `glass_crash.log` (con una línea en blanco tras cada
+/// informe en este último). Nunca falla ni entra en pánico: cualquier
+/// error de E/S se ignora, porque esto corre dentro del hook de pánico.
+pub fn escribir_informe(ruta_log: &Path, ruta_crash: &Path, informe: &str) {
+    // Se reabren los archivos en vez de usar el Mutex del logger: el
+    // pánico pudo producirse con ese Mutex tomado.
+    if let Ok(mut archivo) = abrir_append(ruta_log) {
+        let _ = writeln!(archivo, "{informe}");
+        let _ = archivo.flush();
+    }
+    if let Ok(mut archivo) = abrir_append(ruta_crash) {
+        let _ = writeln!(archivo, "{informe}\n");
+        let _ = archivo.flush();
+    }
+}
+
 /// Abre el registro en modo append, creándolo si no existe.
 fn abrir_append(ruta: &Path) -> io::Result<File> {
     OpenOptions::new().create(true).append(true).open(ruta)
@@ -129,12 +168,13 @@ pub fn iniciar() -> PathBuf {
         }
     }
 
-    instalar_hook_panico(ruta.clone());
+    instalar_hook_panico(ruta.clone(), ruta_crash());
     ruta
 }
 
-/// Añade al hook de pánico existente la escritura de la línea en el registro.
-fn instalar_hook_panico(ruta: PathBuf) {
+/// Añade al hook de pánico existente la escritura del informe completo
+/// (línea, hilo y backtrace) en el registro y en `glass_crash.log`.
+fn instalar_hook_panico(ruta: PathBuf, ruta_crash: PathBuf) {
     let anterior = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let payload = info.payload();
@@ -144,14 +184,15 @@ fn instalar_hook_panico(ruta: PathBuf) {
             .or_else(|| payload.downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "pánico sin mensaje".to_owned());
         let ubicacion = info.location().map(|l| (l.file().to_owned(), l.line()));
-        let linea = formatear_panico(&mensaje, ubicacion);
+        let linea = formatear_panico(&mensaje, ubicacion.clone());
+        let hilo = std::thread::current()
+            .name()
+            .unwrap_or("<sin nombre>")
+            .to_owned();
+        let backtrace = std::backtrace::Backtrace::force_capture().to_string();
+        let informe = componer_informe(&mensaje, ubicacion, &hilo, &backtrace);
 
-        // Se reabre el archivo en vez de usar el Mutex del logger: el pánico
-        // pudo producirse con ese Mutex tomado.
-        if let Ok(mut archivo) = abrir_append(&ruta) {
-            let _ = writeln!(archivo, "{linea}");
-            let _ = archivo.flush();
-        }
+        escribir_informe(&ruta, &ruta_crash, &informe);
         eprintln!("{linea}");
 
         anterior(info);
@@ -169,5 +210,42 @@ mod tests {
             formatear_panico("boom", Some(("src/main.rs".to_owned(), 42))),
             "PANIC: boom (en src/main.rs:42)"
         );
+    }
+
+    #[test]
+    fn componer_informe_lleva_linea_hilo_y_backtrace() {
+        let informe = componer_informe(
+            "boom",
+            Some(("src/main.rs".to_owned(), 42)),
+            "main",
+            "  0: frame_uno\n  1: frame_dos",
+        );
+        assert!(informe.starts_with("PANIC: boom (en src/main.rs:42)\n"));
+        assert!(informe.contains("Hilo: main\n"));
+        assert!(informe.contains("Backtrace:\n  0: frame_uno\n  1: frame_dos"));
+    }
+
+    #[test]
+    fn escribir_informe_deja_el_informe_en_ambos_archivos() {
+        let carpeta = std::env::temp_dir().join(format!(
+            "glass_logfile_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::create_dir_all(&carpeta);
+        let ruta_log = carpeta.join("glass.log");
+        let ruta_crash = carpeta.join("glass_crash.log");
+        let _ = fs::remove_file(&ruta_log);
+        let _ = fs::remove_file(&ruta_crash);
+
+        escribir_informe(&ruta_log, &ruta_crash, "PANIC: boom\nHilo: main\nBacktrace:\n  0: x");
+        escribir_informe(&ruta_log, &ruta_crash, "PANIC: otro");
+
+        let log = fs::read_to_string(&ruta_log).unwrap();
+        assert!(log.contains("PANIC: boom"));
+        assert!(log.contains("PANIC: otro"));
+        let crash = fs::read_to_string(&ruta_crash).unwrap();
+        assert!(crash.contains("PANIC: boom\nHilo: main\nBacktrace:\n  0: x"));
+        assert!(crash.contains("PANIC: otro"));
+        let _ = fs::remove_dir_all(&carpeta);
     }
 }

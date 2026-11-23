@@ -10051,6 +10051,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ruta_log = logfile::iniciar();
     log::info!("Registro de la sesión en {}", ruta_log.display());
 
+    // Prueba controlada del hook de pánicos (solo builds de depuración):
+    // con GLASS_PANIC_TEST definida, se provoca un pánico nada más arrancar
+    // para verificar que el informe queda en glass.log y glass_crash.log.
+    #[cfg(debug_assertions)]
+    if std::env::var_os("GLASS_PANIC_TEST").is_some() {
+        panic!("pánico de prueba del hook (GLASS_PANIC_TEST)");
+    }
+
     let args: Vec<String> = std::env::args().collect();
 
     // Modo hijo de la sonda de GPU: ejecuta la secuencia gráfica arriesgada
