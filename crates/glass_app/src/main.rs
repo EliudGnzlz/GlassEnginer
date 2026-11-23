@@ -10320,6 +10320,172 @@ mod spawn_bridge_tests {
         bridge.physics_counts().expect("conteos con puente real")
     }
 
+    // ── Tests DORADOS del bloque Physics Material (C0) ─────────────────
+    // Fijan el comportamiento ACTUAL de las rutas de autorado antes del
+    // refactor de materiales. El hecho central: el CRUCE HISTÓRICO está
+    // VIVO — create_body (y su gemelo rebuild_physics_from_scene) pasan
+    // (friction, restitution) a firmas (restitution, friction), así que
+    // un cuerpo autorado con friction 0.3 / restitution 0.8 corre en
+    // Rapier con friction 0.8 / restitution 0.3. Estos tests NO corrigen
+    // el cruce: lo fijan. Si el refactor lo altera en una sola ruta,
+    // deben ponerse en rojo.
+
+    const EPS_DORADO: f32 = 1e-6;
+
+    fn cerca_dorado(actual: f32, esperado: f32) {
+        assert!(
+            (actual - esperado).abs() <= EPS_DORADO,
+            "esperado {esperado}, obtenido {actual}"
+        );
+    }
+
+    fn spec_dorado(entity_id: u64) -> SpawnedBodySpec {
+        SpawnedBodySpec {
+            entity_id,
+            body_type: BodyType::Dynamic,
+            position: [0.0, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            friction: 0.3,
+            restitution: 0.8,
+            colliders: Vec::new(),
+            colliders_son_specs: false,
+            mesh_collider: glass_core::MeshColliderMode::None,
+            model: String::new(),
+            world_scale: [1.0, 1.0, 1.0],
+            constraints: 0,
+            mass: 2.5,
+            linear_damping: 1.5,
+            angular_damping: 0.0,
+            solver_iterations: 4,
+            max_depenetration_velocity: 0.0,
+            solver_velocity_iterations: 4,
+            include_layers: u32::MAX,
+            exclude_layers: 0,
+            automatic_center_of_mass: true,
+            automatic_inertia_tensor: true,
+            use_gravity: true,
+            ccd: false,
+            interpolate: false,
+        }
+    }
+
+    fn caja_dorada() -> (ColliderShape, ColliderConfig, [f32; 3]) {
+        (
+            ColliderShape::Cuboid { half_extents: [0.5, 0.5, 0.5] },
+            ColliderConfig { layer: 0, mask: u32::MAX, is_trigger: false },
+            [0.0, 0.0, 0.0],
+        )
+    }
+
+    fn insertar_cubo_dorado(bridge: &EngineSceneBridge) {
+        let vertices = vec![
+            [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [-0.5, 0.5, -0.5],
+            [-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5],
+        ];
+        let indices = vec![
+            0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4,
+            3, 7, 6, 3, 6, 2, 0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5,
+        ];
+        bridge
+            .asset_cache
+            .write()
+            .unwrap()
+            .geometries
+            .insert("malla_dorada".to_owned(), (vertices, indices));
+    }
+
+    fn afirmar_material_cruzado(bridge: &EngineSceneBridge, entity_id: u64, esperados: usize) {
+        let world = bridge.physics_world.lock().unwrap();
+        let handle = world
+            .get_body_by_entity(entity_id)
+            .expect("create_body debe registrar el cuerpo por entidad");
+        let materiales = world.collider_friction_restitution(handle);
+        assert_eq!(materiales.len(), esperados);
+        for (friction, restitution) in materiales {
+            cerca_dorado(friction, 0.8);
+            cerca_dorado(restitution, 0.3);
+        }
+    }
+
+    #[test]
+    fn dorado_specs_cruzados() {
+        // Specs explícitos: Rapier recibe friction=0.8 / restitution=0.3 (cruce vivo).
+        let bridge = make_bridge();
+        let mut spec = spec_dorado(101);
+        spec.colliders_son_specs = true;
+        spec.colliders = vec![caja_dorada()];
+        bridge.create_body(spec);
+        afirmar_material_cruzado(&bridge, 101, 1);
+    }
+
+    #[test]
+    fn dorado_inferido_cruzado() {
+        // El collider inferido (sin specs) conserva el mismo cruce.
+        let bridge = make_bridge();
+        let mut spec = spec_dorado(102);
+        spec.colliders_son_specs = false;
+        spec.colliders = vec![caja_dorada()];
+        bridge.create_body(spec);
+        afirmar_material_cruzado(&bridge, 102, 1);
+    }
+
+    #[test]
+    fn dorado_estatico_cruzado() {
+        // Un cuerpo Static (el suelo) también va cruzado.
+        let bridge = make_bridge();
+        let mut spec = spec_dorado(103);
+        spec.body_type = BodyType::Static;
+        spec.colliders_son_specs = true;
+        spec.colliders = vec![caja_dorada()];
+        bridge.create_body(spec);
+        afirmar_material_cruzado(&bridge, 103, 1);
+    }
+
+    #[test]
+    fn dorado_mesh_convex_cruzado() {
+        // Mesh Collider Convex: un único collider de malla, cruzado.
+        let bridge = make_bridge();
+        insertar_cubo_dorado(&bridge);
+        let mut spec = spec_dorado(104);
+        spec.model = "malla_dorada".to_owned();
+        spec.mesh_collider = glass_core::MeshColliderMode::Convex;
+        spec.colliders_son_specs = false;
+        spec.colliders.clear();
+        bridge.create_body(spec);
+        afirmar_material_cruzado(&bridge, 104, 1);
+    }
+
+    #[test]
+    fn dorado_mesh_trimesh_estatico_cruzado() {
+        // Mesh Collider TriMesh en cuerpo estático: un único collider, cruzado.
+        let bridge = make_bridge();
+        insertar_cubo_dorado(&bridge);
+        let mut spec = spec_dorado(105);
+        spec.body_type = BodyType::Static;
+        spec.model = "malla_dorada".to_owned();
+        spec.mesh_collider = glass_core::MeshColliderMode::TriMesh;
+        spec.colliders_son_specs = false;
+        spec.colliders.clear();
+        bridge.create_body(spec);
+        afirmar_material_cruzado(&bridge, 105, 1);
+    }
+
+    #[test]
+    fn dorado_masa() {
+        // set_mass manda: tras un step (cuando Rapier recalcula las
+        // propiedades de masa desde las densidades reescaladas), la masa
+        // efectiva del cuerpo Dynamic es la del spec (2.5).
+        let bridge = make_bridge();
+        let mut spec = spec_dorado(106);
+        spec.colliders_son_specs = true;
+        spec.colliders = vec![caja_dorada()];
+        bridge.create_body(spec);
+        let mut world = bridge.physics_world.lock().unwrap();
+        let handle = world.get_body_by_entity(106).expect("cuerpo registrado");
+        world.step(1.0 / 60.0);
+        cerca_dorado(world.body_mass(handle).expect("masa del cuerpo"), 2.5);
+    }
+
     #[test]
     fn spawn_dinamico_crea_entidad_cuerpo_y_collider() {
         let bridge = make_bridge();

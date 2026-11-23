@@ -2890,6 +2890,30 @@ impl PhysicsWorld {
         self.body_map.get(&body_handle).copied()
     }
 
+    /// Diagnóstico/tests: (fricción, restitución) EFECTIVOS de cada
+    /// collider de Rapier del cuerpo, en el orden de `RigidBody::colliders`.
+    /// Es la lectura que usan los tests dorados del bloque de Physics
+    /// Material para fijar qué recibe realmente el solver.
+    pub fn collider_friction_restitution(&self, body_handle: BodyHandle) -> Vec<(f32, f32)> {
+        let Some((rapier_handle, _)) = self.get_rapier_handle(body_handle) else {
+            return Vec::new();
+        };
+        let Some(rb) = self.rigid_body_set.get(rapier_handle) else {
+            return Vec::new();
+        };
+        rb.colliders()
+            .iter()
+            .filter_map(|&ch| self.collider_set.get(ch))
+            .map(|c| (c.friction(), c.restitution()))
+            .collect()
+    }
+
+    /// Diagnóstico/tests: masa efectiva del cuerpo en Rapier.
+    pub fn body_mass(&self, body_handle: BodyHandle) -> Option<f32> {
+        let (rapier_handle, _) = self.get_rapier_handle(body_handle)?;
+        self.rigid_body_set.get(rapier_handle).map(|rb| rb.mass())
+    }
+
     /// Lanza un rayo contra los colliders del mundo y devuelve el primer
     /// impacto (entidad, punto, normal y distancia). La QueryPipeline se
     /// actualiza en cada llamada: el mundo se reconstruye al cambiar de
@@ -3287,6 +3311,39 @@ pub struct RayHit {
 mod tests {
     use super::*;
     use crate::types::collider_shape_for_builtin;
+
+    /// DORADO (bloque Physics Material, C0): la ruta FFI/mundo recibe
+    /// (restitution, friction) en el orden de su firma y Rapier recibe
+    /// los valores RECTOS, sin el cruce de las rutas de autorado.
+    #[test]
+    fn dorado_ffi_recto() {
+        let mut world = PhysicsWorld::new();
+        let body = world.create_rigid_body(42, BodyType::Dynamic, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        world.attach_box_collider(body, [0.5, 0.5, 0.5], 0.8, 0.3);
+        let materiales = world.collider_friction_restitution(body);
+        assert_eq!(materiales.len(), 1);
+        assert!((materiales[0].0 - 0.3).abs() <= 1e-6, "friction recta: {}", materiales[0].0);
+        assert!((materiales[0].1 - 0.8).abs() <= 1e-6, "restitution recta: {}", materiales[0].1);
+    }
+
+    /// DORADO (bloque Physics Material, C0): el material del
+    /// CharacterController va RECTO: set_character_material(e, 0.3, 0.8)
+    /// se lee de vuelta como (0.3, 0.8), sin el cruce de autorado.
+    #[test]
+    fn dorado_character_recto() {
+        let mut world = PhysicsWorld::new();
+        let cfg = crate::character::CharacterConfig {
+            radius: 0.4,
+            height: 1.6,
+            skin: 0.02,
+            step_offset: 0.3,
+            slope_limit_deg: 45.0,
+            snap: 0.2,
+        };
+        assert!(world.create_character(777, [0.0, 0.0, 0.0], cfg));
+        assert!(world.set_character_material(777, 0.3, 0.8));
+        assert_eq!(world.get_character_material(777), Some((0.3, 0.8)));
+    }
 
     /// Mundo mínimo: suelo fijo (caja ancha con la superficie en
     /// y = 0) y pasos de 1/60 hasta que el cuerpo de prueba se asiente.
