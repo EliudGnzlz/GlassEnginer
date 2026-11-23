@@ -3354,7 +3354,15 @@ impl GlassRenderer {
                         self.frame_pipeline_binds
                             .set(self.frame_pipeline_binds.get() + 1);
                     }
-                    if *tex_set != vk::DescriptorSet::null() {
+                    // El set 0 solo se enlaza si el pipeline del lote lo
+                    // declara: los pipelines de contorno (selección y
+                    // toon) tienen layout SIN sets — su shader solo lee
+                    // push constants — y enlazarles el set de texturas
+                    // del modelo es UB que mata el driver (Bug I:
+                    // 0xc0000005 al soltar un modelo y dibujar su
+                    // contorno de selección). Es la misma guarda que
+                    // ya usan los sets 2/3/4/5/6 en este bucle.
+                    if *tex_set != vk::DescriptorSet::null() && pipe.descriptor_set_layout.is_some() {
                         self.device.cmd_bind_descriptor_sets(
                             cmd,
                             vk::PipelineBindPoint::GRAPHICS,
@@ -3371,7 +3379,7 @@ impl GlassRenderer {
             self.bind_ibl_set(cmd, pipe);
                     {
                         let mut desc = 0u32;
-                        if *tex_set != vk::DescriptorSet::null() {
+                        if *tex_set != vk::DescriptorSet::null() && pipe.descriptor_set_layout.is_some() {
                             desc += 1;
                         }
                         if pipe.globals_set_layout.is_some() {
