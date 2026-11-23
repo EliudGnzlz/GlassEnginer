@@ -1824,6 +1824,10 @@ struct GlassEngineApp {
     /// recarga — cargar en frío a mitad del primer frame segfaultaba el
     /// driver (llvmpipe; verificado contra la base a19062a, 2026-11-18).
     modelos_expulsados: std::collections::HashSet<String>,
+    /// Instante del frame anterior para el reloj de la caché de
+    /// activos: la ociosidad se mide en tiempo real (delta entre
+    /// frames), no en frames contados (Bug I).
+    reloj_expulsion_previo: Option<Instant>,
     /// Nombre activo de la escena cuando se fijó la ruta; si el vigía del
     /// editor anuncia otro nombre, la ruta ya no vale.
     #[cfg(feature = "editor")]
@@ -2349,6 +2353,7 @@ impl GlassEngineApp {
             lock_proyecto: None,
             recarga_bajo_demanda: std::collections::HashSet::new(),
             modelos_expulsados: std::collections::HashSet::new(),
+            reloj_expulsion_previo: None,
             #[cfg(feature = "editor")]
             nombre_escena_con_ruta: String::new(),
             #[cfg(feature = "editor")]
@@ -5681,10 +5686,14 @@ let resueltos = if body.has_collider {
 
         // Expulsión de activos ociosos (P2): la caché no debe crecer sin
         // límite en sesiones procedurales que crean y descartan mundos. Se
-        // expulsa lo no dibujado en los últimos ~10 s (600 ticks) que la
-        // escena actual no referencie; el cubo nunca se expulsa. Es seguro
-        // hacerlo aquí: un modelo ocioso no participó en el frame anterior,
-        // así que la GPU no lo está usando.
+        // expulsa lo no dibujado en los últimos ~10 s REALES que la
+        // escena actual no referencie; el cubo nunca se expulsa. El
+        // horizonte es tiempo de reloj (delta entre frames), no frames
+        // contados: con el bucle sin capar, 600 frames eran 1-2 s en un
+        // equipo rápido y la expulsión devoraba modelos recién cargados
+        // (Bug I). Es seguro hacerlo aquí: un modelo ocioso no
+        // participó en el frame anterior, así que la GPU no lo está
+        // usando.
         {
             let protected: std::collections::HashSet<String> = {
                 let mut set = std::collections::HashSet::new();
@@ -5701,8 +5710,14 @@ let resueltos = if body.has_collider {
             };
             let mut alloc = renderer.allocator.lock().unwrap();
             let mut cache = self.asset_cache.write().unwrap();
-            cache.advance_tick();
-            let evicted = cache.evict_idle(&renderer.device, &mut alloc, 600, &protected);
+            let ahora_frame = Instant::now();
+            let delta_ms = self
+                .reloj_expulsion_previo
+                .map(|prev| ahora_frame.duration_since(prev).as_millis() as u64)
+                .unwrap_or(0);
+            self.reloj_expulsion_previo = Some(ahora_frame);
+            cache.advance_time_ms(delta_ms);
+            let evicted = cache.evict_idle(&renderer.device, &mut alloc, 10_000, &protected);
             for nombre in &evicted {
                 self.modelos_expulsados.insert(nombre.clone());
             }

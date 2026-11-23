@@ -61,12 +61,17 @@ pub struct AssetCache {
     default_texture: Option<GpuTexture>,
     sampler: Option<vk::Sampler>,
     descriptor_pool: Option<vk::DescriptorPool>,
-    /// Último tick en que cada modelo fue dibujado o insertado (para la
-    /// expulsión de ociosos). Mutex interior: marcar uso debe ser posible
-    /// con la caché en lectura compartida durante el bucle de dibujo.
+    /// Último instante (ms del reloj de la caché) en que cada modelo
+    /// fue dibujado o insertado (para la expulsión de ociosos). Mutex
+    /// interior: marcar uso debe ser posible con la caché en lectura
+    /// compartida durante el bucle de dibujo.
     last_used: Mutex<HashMap<String, u64>>,
-    /// Contador de frames/ticks del motor para medir la ociosidad.
-    tick: AtomicU64,
+    /// Reloj de la caché en milisegundos REALES acumulados (la app lo
+    /// avanza con el delta de tiempo de cada frame, no por frame): la
+    /// ociosidad se mide contra tiempo de reloj, no contra frames —
+    /// con el bucle sin capar, 600 frames podían ser 1-2 s y la
+    /// expulsión devoraba modelos recién cargados (Bug I).
+    now_ms: AtomicU64,
 }
 
 impl Default for AssetCache {
@@ -90,7 +95,7 @@ impl Default for AssetCache {
             sampler: None,
             descriptor_pool: None,
             last_used: Mutex::new(HashMap::new()),
-            tick: AtomicU64::new(0),
+            now_ms: AtomicU64::new(0),
         }
     }
 }
@@ -473,27 +478,30 @@ impl AssetCache {
         Some(set)
     }
 
-    /// Marca un modelo como usado en el tick actual.
+    /// Marca un modelo como usado en el instante actual del reloj.
     pub fn touch(&self, name: &str) {
-        let now = self.tick.load(Ordering::Relaxed);
+        let now = self.now_ms.load(Ordering::Relaxed);
         if let Ok(mut map) = self.last_used.lock() {
             map.insert(name.to_string(), now);
         }
     }
 
-    /// Avanza el contador de ticks (una vez por frame) y devuelve el nuevo.
-    pub fn advance_tick(&self) -> u64 {
-        self.tick.fetch_add(1, Ordering::Relaxed) + 1
+    /// Avanza el reloj de la caché en `delta_ms` milisegundos reales
+    /// (la app lo llama una vez por frame con el delta medido) y
+    /// devuelve el nuevo instante acumulado.
+    pub fn advance_time_ms(&self, delta_ms: u64) -> u64 {
+        self.now_ms.fetch_add(delta_ms, Ordering::Relaxed) + delta_ms
     }
 
-    /// Decisión pura de expulsión: modelos con malla en VRAM que llevan más
-    /// de `max_idle_ticks` sin dibujarse ni insertarse, que no estén en
-    /// `protected`. Las primitivas integradas nunca se expulsan: el cubo
+    /// Decisión pura de expulsión: modelos con malla en VRAM que llevan
+    /// más de `max_idle_ms` milisegundos reales sin dibujarse ni
+    /// insertarse, que no estén en `protected`. Las primitivas
+    /// integradas nunca se expulsan: el cubo
     /// es el respaldo de todas las entidades sin modelo, y el plano, la
     /// esfera, la cápsula y el cilindro son las otras mallas que el
     /// motor registra por código, no desde un archivo.
-    pub fn select_evictions(&self, max_idle_ticks: u64, protected: &HashSet<String>) -> Vec<String> {
-        let now = self.tick.load(Ordering::Relaxed);
+    pub fn select_evictions(&self, max_idle_ms: u64, protected: &HashSet<String>) -> Vec<String> {
+        let now = self.now_ms.load(Ordering::Relaxed);
         let used = self.last_used.lock().map(|m| m.clone()).unwrap_or_default();
         // Claves de AMBOS mapas de mallas (rígidas y con piel), sin repetir.
         let mut keys: Vec<&String> = self.meshes.keys().collect();
@@ -512,7 +520,7 @@ impl AssetCache {
             .filter(|k| !protected.contains(*k))
             .filter(|k| {
                 let last = used.get(*k).copied().unwrap_or(0);
-                now.saturating_sub(last) > max_idle_ticks
+                now.saturating_sub(last) > max_idle_ms
             })
             .cloned()
             .collect()
@@ -526,10 +534,10 @@ impl AssetCache {
         &mut self,
         device: &ash::Device,
         allocator: &mut Allocator,
-        max_idle_ticks: u64,
+        max_idle_ms: u64,
         protected: &HashSet<String>,
     ) -> Vec<String> {
-        let keys = self.select_evictions(max_idle_ticks, protected);
+        let keys = self.select_evictions(max_idle_ms, protected);
         for key in &keys {
             self.geometries.remove(key);
             self.bounds.remove(key);
@@ -640,7 +648,7 @@ mod tests {
         let mut cache = AssetCache::default();
         cache.meshes.insert("cube".into(), fake_mesh());
         // Las demás primitivas integradas tampoco se expulsan nunca,
-        // aunque lleven los 1.000 ticks sin usarse y no estén en
+        // aunque lleven 16 s sin usarse y no estén en
         // `protected`.
         cache.meshes.insert("plane".into(), fake_mesh());
         cache.meshes.insert("sphere".into(), fake_mesh());
@@ -649,19 +657,20 @@ mod tests {
         cache.meshes.insert("viejo".into(), fake_mesh());
         cache.meshes.insert("reciente".into(), fake_mesh());
         cache.meshes.insert("protegido".into(), fake_mesh());
-        // Tick 0: se "usa" todo menos "viejo" y "protegido".
+        // Instante 0: se "usa" todo menos "viejo" y "protegido".
         cache.touch("cube");
         cache.touch("reciente");
         cache.touch("protegido");
-        // El tiempo pasa: 1.000 ticks sin usar nada.
+        // El tiempo pasa: 16 s reales sin usar nada (1.000 avances de
+        // 16 ms, el delta típico de un frame a 60 fps).
         for _ in 0..1000 {
-            cache.advance_tick();
+            cache.advance_time_ms(16);
         }
         // "reciente" se vuelve a dibujar en el presente.
         cache.touch("reciente");
 
         let protected: HashSet<String> = ["protegido".to_string()].into_iter().collect();
-        let evictions = cache.select_evictions(600, &protected);
+        let evictions = cache.select_evictions(10_000, &protected);
         assert_eq!(evictions, vec!["viejo".to_string()]);
     }
 
@@ -671,9 +680,9 @@ mod tests {
         cache.meshes.insert("mundo_1".into(), fake_mesh());
         cache.touch("mundo_1");
         for _ in 0..10 {
-            cache.advance_tick();
+            cache.advance_time_ms(16);
         }
-        let evictions = cache.select_evictions(600, &HashSet::new());
+        let evictions = cache.select_evictions(10_000, &HashSet::new());
         assert!(evictions.is_empty());
     }
 }
