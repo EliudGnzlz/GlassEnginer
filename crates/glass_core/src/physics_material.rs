@@ -447,4 +447,76 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(directorio);
     }
+    const HIELO_JSON_C4: &str = r#"{
+  "dynamic_friction": 0.11,
+  "static_friction": 0.12,
+  "bounciness": 0.13,
+  "friction_combine": "Average",
+  "bounce_combine": "Average"
+}"#;
+
+    #[test]
+    fn borrar_el_archivo_no_cambia_la_resolucion_cacheada() {
+        let directorio = directorio_temporal_physmat("c4_cache_viva");
+        let carpeta = directorio.join("Materials");
+        std::fs::create_dir_all(&carpeta).unwrap();
+        let archivo = carpeta.join("Hielo.physmat.json");
+        std::fs::write(&archivo, HIELO_JSON_C4).unwrap();
+
+        let physics = crate::scene::PhysicsData::default();
+        let mut lib = PhysicsMaterialLibrary::new(directorio.clone());
+
+        let (material_vivo, origen_vivo) =
+            resolve_collider_material("Materials/Hielo.physmat.json", &physics, &mut lib);
+        assert_eq!(material_vivo.dynamic_friction, 0.11);
+        assert_eq!(material_vivo.static_friction, 0.12);
+        assert_eq!(material_vivo.bounciness, 0.13);
+        assert!(matches!(origen_vivo, MaterialOrigin::Asset));
+
+        // El archivo desaparece del disco; la resolución cacheada no cambia.
+        std::fs::remove_file(&archivo).unwrap();
+
+        let (tras_borrar, origen_tras_borrar) =
+            resolve_collider_material("Materials/Hielo.physmat.json", &physics, &mut lib);
+        assert_eq!(tras_borrar.dynamic_friction, material_vivo.dynamic_friction);
+        assert_eq!(tras_borrar.static_friction, material_vivo.static_friction);
+        assert_eq!(tras_borrar.bounciness, material_vivo.bounciness);
+        assert!(matches!(origen_tras_borrar, MaterialOrigin::Asset));
+
+        let _ = std::fs::remove_dir_all(directorio);
+    }
+
+    #[test]
+    fn sin_cache_borrar_el_archivo_cae_al_legado() {
+        let directorio = directorio_temporal_physmat("c4_sin_cache");
+        let carpeta = directorio.join("Materials");
+        std::fs::create_dir_all(&carpeta).unwrap();
+        let archivo = carpeta.join("Hielo.physmat.json");
+        std::fs::write(&archivo, HIELO_JSON_C4).unwrap();
+
+        let physics = crate::scene::PhysicsData {
+            legacy_friction: Some(0.3),
+            legacy_restitution: Some(0.8),
+            ..crate::scene::PhysicsData::default()
+        };
+
+        let mut lib_con_archivo = PhysicsMaterialLibrary::new(directorio.clone());
+        let (material_asset, origen_asset) =
+            resolve_collider_material("Materials/Hielo.physmat.json", &physics, &mut lib_con_archivo);
+        assert!(matches!(origen_asset, MaterialOrigin::Asset));
+        assert_eq!(material_asset.dynamic_friction, 0.11);
+
+        std::fs::remove_file(&archivo).unwrap();
+
+        // Librería NUEVA: sin caché y sin archivo, la cadena cae al legado.
+        let mut lib_nueva = PhysicsMaterialLibrary::new(directorio.clone());
+        let (material_legado, origen_legado) =
+            resolve_collider_material("Materials/Hielo.physmat.json", &physics, &mut lib_nueva);
+        assert_eq!(material_legado.dynamic_friction, 0.3);
+        assert_eq!(material_legado.bounciness, 0.8);
+        assert!(!matches!(origen_legado, MaterialOrigin::Asset));
+
+        let _ = std::fs::remove_dir_all(directorio);
+    }
+
 }

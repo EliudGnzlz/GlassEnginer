@@ -18,6 +18,19 @@ pub fn apply_material(builder: ColliderBuilder, m: &PhysicsMaterial) -> Collider
         .restitution_combine_rule(combine_rule(&m.bounce_combine))
 }
 
+/// Aplica `m` a un collider ya insertado en el `ColliderSet`, sin reconstruirlo.
+///
+/// Mismo mapeo que `apply_material`: friction = dynamic_friction,
+/// restitution = bounciness y ambas reglas de combinación. El handle y los
+/// contactos del collider se conservan; el cambio surte efecto en el
+/// siguiente step.
+pub fn aplicar_material_en_sitio(collider: &mut rapier3d::geometry::Collider, m: &PhysicsMaterial) {
+    collider.set_friction(m.dynamic_friction);
+    collider.set_restitution(m.bounciness);
+    collider.set_friction_combine_rule(combine_rule(&m.friction_combine));
+    collider.set_restitution_combine_rule(combine_rule(&m.bounce_combine));
+}
+
 fn combine_rule(combine: &MaterialCombine) -> CoefficientCombineRule {
     match combine {
         MaterialCombine::Average => CoefficientCombineRule::Average,
@@ -70,6 +83,17 @@ impl MaterialTable {
         self.entries
             .insert(referencia.to_owned(), (id, *material));
         id
+    }
+
+    /// Sustituye el material guardado para `referencia` y devuelve su id.
+    ///
+    /// Si la referencia no está registrada devuelve `None` y no la registra.
+    /// El id se conserva, así que los colliders que ya lo tienen asignado
+    /// no cambian de id.
+    pub fn actualizar(&mut self, referencia: &str, material: &PhysicsMaterial) -> Option<MaterialId> {
+        let (id, guardado) = self.entries.get_mut(referencia)?;
+        *guardado = *material;
+        Some(*id)
     }
 
     pub fn material(&self, id: MaterialId) -> Option<&PhysicsMaterial> {

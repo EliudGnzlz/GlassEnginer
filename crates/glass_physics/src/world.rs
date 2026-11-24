@@ -3,7 +3,7 @@ use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::pipeline::ChannelEventCollector;
 use rapier3d::prelude::*;
 use glass_core::TransformFfi;
-use crate::material::{apply_material, capsule_rotation, MaterialId, MaterialTable};
+use crate::material::{aplicar_material_en_sitio, apply_material, capsule_rotation, MaterialId, MaterialTable};
 use glass_core::physics_material::PhysicsMaterial;
 use rapier3d::na::UnitQuaternion;
 use crate::types::{ContactInfo, 
@@ -706,6 +706,89 @@ impl PhysicsWorld {
     /// no se registró por esta vía).
     pub fn collider_material_id(&self, handle: ColliderHandle) -> Option<MaterialId> {
         self.collider_material_ids.get(&handle).copied()
+    }
+
+    /// Refresco en caliente de un Physics Material (§5.3).
+    ///
+    /// Actualiza en sitio todos los colliders vivos cuyo `MaterialId`
+    /// corresponde a `referencia`. No reconstruye ningún collider, así que
+    /// se conservan los handles y los contactos. El nuevo material surte
+    /// efecto en el siguiente step. También sustituye la copia guardada en
+    /// la tabla para que no diverja de los vivos.
+    ///
+    /// Si la referencia es desconocida, no hace nada y devuelve 0. No toca
+    /// colliders sin material (`MaterialId(0)`) ni los de otras
+    /// referencias. Devuelve cuántos colliders se actualizaron.
+    pub fn refresh_asset(&mut self, referencia: &str, nuevo: &PhysicsMaterial) -> usize {
+        let Some(id) = self.material_table.actualizar(referencia, nuevo) else {
+            return 0;
+        };
+        if id == MaterialId(0) {
+            return 0;
+        }
+
+        let claves: std::collections::HashSet<ColliderHandle> = self
+            .collider_material_ids
+            .iter()
+            .filter(|(_, material_id)| **material_id == id)
+            .map(|(clave, _)| *clave)
+            .collect();
+        if claves.is_empty() {
+            return 0;
+        }
+
+        let mut actualizados = 0;
+        let mut padres: Vec<rapier3d::prelude::RigidBodyHandle> = Vec::new();
+        for (ch, collider) in self.collider_set.iter_mut() {
+            if claves.contains(&(ch.into_raw_parts().0 as u64)) {
+                aplicar_material_en_sitio(collider, nuevo);
+                if let Some(padre) = collider.parent() {
+                    if !padres.contains(&padre) {
+                        padres.push(padre);
+                    }
+                }
+                actualizados += 1;
+            }
+        }
+        // Un cuerpo dormido no nota el cambio de fricción hasta despertar:
+        // sin esto, bajar la fricción de un cuerpo en reposo no tendría el
+        // efecto «en el siguiente step» que promete el §5.3.
+        for padre in padres {
+            if let Some(rb) = self.rigid_body_set.get_mut(padre) {
+                rb.wake_up(true);
+            }
+        }
+        actualizados
+    }
+
+    /// Aplica `material` en sitio a un único collider, identificado por la
+    /// clave del mundo `handle`.
+    ///
+    /// No reconstruye el collider ni cambia su `MaterialId`, así que un
+    /// `refresh_asset` posterior de su referencia volverá a sobrescribirlo.
+    /// El cambio surte efecto en el siguiente step. Devuelve `true` si el
+    /// collider existía.
+    pub fn set_material(&mut self, handle: ColliderHandle, material: &PhysicsMaterial) -> bool {
+        let encontrado = self
+            .collider_set
+            .iter_mut()
+            .find(|(ch, _)| ch.into_raw_parts().0 as u64 == handle)
+            .map(|(_, collider)| {
+                let padre = collider.parent();
+                aplicar_material_en_sitio(collider, material);
+                padre
+            });
+        match encontrado {
+            Some(padre) => {
+                if let Some(padre) = padre {
+                    if let Some(rb) = self.rigid_body_set.get_mut(padre) {
+                        rb.wake_up(true);
+                    }
+                }
+                true
+            }
+            None => false,
+        }
     }
 
     /// Diagnóstico/tests: la rotación local del collider Rapier.
@@ -4802,5 +4885,198 @@ fn convex_hull_sostiene_como_caja() {
         for _ in 1..20 {
             assert_eq!(correr(), referencia);
         }
+    }
+
+    #[test]
+    fn refresco_solo_afecta_a_los_que_referencian() {
+        fn comprobar_material(
+            world: &PhysicsWorld,
+            body: BodyHandle,
+            esperado: (f32, f32),
+            contexto: &str,
+        ) {
+            let valores = world.collider_friction_restitution(body);
+            assert_eq!(valores.len(), 1, "{contexto}: el cuerpo debe tener un collider");
+            let tolerancia = 1.0e-6;
+            assert!(
+                (valores[0].0 - esperado.0).abs() <= tolerancia,
+                "{contexto}: fricción esperada {}, obtenida {}",
+                esperado.0,
+                valores[0].0
+            );
+            assert!(
+                (valores[0].1 - esperado.1).abs() <= tolerancia,
+                "{contexto}: restitución esperada {}, obtenida {}",
+                esperado.1,
+                valores[0].1
+            );
+        }
+
+        let mut world = PhysicsWorld::default();
+        let material_inicial = material(1.0, 0.0);
+
+        let cuerpo_a = crear_cuerpo(&mut world, 1, true, [0.0, 5.0, 0.0]);
+        let collider_a = world
+            .attach_box_collider(
+                cuerpo_a,
+                [0.5, 0.5, 0.5],
+                &material_inicial,
+                "materials/hielo",
+            )
+            .expect("debe crearse el collider de A");
+
+        let cuerpo_b = crear_cuerpo(&mut world, 2, true, [3.0, 5.0, 0.0]);
+        let collider_b = world
+            .attach_box_collider(
+                cuerpo_b,
+                [0.5, 0.5, 0.5],
+                &material_inicial,
+                "materials/roca",
+            )
+            .expect("debe crearse el collider de B");
+
+        let cuerpo_c = crear_cuerpo(&mut world, 3, true, [6.0, 5.0, 0.0]);
+        let collider_c = world
+            .attach_box_collider(cuerpo_c, [0.5, 0.5, 0.5], &material_inicial, "")
+            .expect("debe crearse el collider de C");
+
+        let id_a = world.collider_material_id(collider_a);
+        let id_b = world.collider_material_id(collider_b);
+        let id_c = world.collider_material_id(collider_c);
+
+        let actualizados = world.refresh_asset("materials/hielo", &material(0.25, 0.5));
+        assert_eq!(
+            actualizados, 1,
+            "solo el collider que referencia materials/hielo debe actualizarse"
+        );
+
+        comprobar_material(&world, cuerpo_a, (0.25, 0.5), "A tras refrescar hielo");
+        comprobar_material(&world, cuerpo_b, (1.0, 0.0), "B tras refrescar hielo");
+        comprobar_material(&world, cuerpo_c, (1.0, 0.0), "C tras refrescar hielo");
+
+        assert_eq!(
+            world.collider_material_id(collider_a),
+            id_a,
+            "el MaterialId de A no debe cambiar al refrescar"
+        );
+        assert_eq!(
+            world.collider_material_id(collider_b),
+            id_b,
+            "el MaterialId de B no debe cambiar al refrescar"
+        );
+        assert_eq!(
+            world.collider_material_id(collider_c),
+            id_c,
+            "el MaterialId de C no debe cambiar al refrescar"
+        );
+
+        let actualizados = world.refresh_asset("materials/inexistente", &material(0.1, 0.1));
+        assert_eq!(
+            actualizados, 0,
+            "una referencia desconocida no debe actualizar ningún collider"
+        );
+
+        comprobar_material(&world, cuerpo_a, (0.25, 0.5), "A tras referencia inexistente");
+        comprobar_material(&world, cuerpo_b, (1.0, 0.0), "B tras referencia inexistente");
+        comprobar_material(&world, cuerpo_c, (1.0, 0.0), "C tras referencia inexistente");
+
+        assert_eq!(world.collider_material_id(collider_a), id_a);
+        assert_eq!(world.collider_material_id(collider_b), id_b);
+        assert_eq!(world.collider_material_id(collider_c), id_c);
+    }
+
+    #[test]
+    fn caja_en_rampa_se_desliza_tras_refrescar() {
+        // Con Average, la primera fase usa fricción 1.0 > tan(30°) y la segunda
+        // usa 0.5 < tan(30°), por lo que se conserva la estructura de dos fases.
+        let mut world = PhysicsWorld::default();
+
+        let rampa = world.create_rigid_body(
+            10,
+            BodyType::Static,
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, -0.258_819, 0.965_926],
+        );
+        world
+            .attach_box_collider(
+                rampa,
+                [5.0, 0.5, 5.0],
+                &material(1.0, 0.0),
+                "materials/rampa",
+            )
+            .expect("debe crearse el collider de la rampa");
+
+        let caja = crear_cuerpo(&mut world, 11, true, [0.51, 0.884, 0.0]);
+        let collider_caja = world
+            .attach_box_collider(
+                caja,
+                [0.5, 0.5, 0.5],
+                &material(1.0, 0.0),
+                "materials/hielo",
+            )
+            .expect("debe crearse el collider de la caja");
+        let handle_antes = collider_caja;
+        let material_id_antes = world.collider_material_id(collider_caja);
+
+        // Dejamos asentar el contacto antes de tomar la referencia de desplazamiento.
+        for _ in 0..60 {
+            world.step(1.0 / 60.0);
+        }
+        let posicion_asentada = world
+            .get_transform(caja)
+            .expect("debe existir la transformación asentada de la caja")
+            .position;
+
+        for _ in 0..120 {
+            world.step(1.0 / 60.0);
+        }
+        let posicion_alta_friccion = world
+            .get_transform(caja)
+            .expect("debe existir la transformación de la caja tras la primera fase")
+            .position;
+
+        let desplazamiento_x = posicion_alta_friccion[0] - posicion_asentada[0];
+        let desplazamiento_z = posicion_alta_friccion[2] - posicion_asentada[2];
+        let desplazamiento_horizontal = desplazamiento_x.hypot(desplazamiento_z);
+        assert!(
+            desplazamiento_horizontal < 0.05,
+            "con fricción alta la caja no debe deslizarse: desplazamiento horizontal {desplazamiento_horizontal}"
+        );
+
+        let actualizados = world.refresh_asset("materials/hielo", &material(0.0, 0.0));
+        assert_eq!(
+            actualizados, 1,
+            "el refresco debe actualizar únicamente el collider de la caja"
+        );
+
+        for _ in 0..120 {
+            world.step(1.0 / 60.0);
+        }
+        let posicion_baja_friccion = world
+            .get_transform(caja)
+            .expect("debe existir la transformación de la caja tras la segunda fase")
+            .position;
+
+        let delta = [
+            posicion_baja_friccion[0] - posicion_alta_friccion[0],
+            posicion_baja_friccion[1] - posicion_alta_friccion[1],
+            posicion_baja_friccion[2] - posicion_alta_friccion[2],
+        ];
+        let desplazamiento_pendiente =
+            delta[0] * 0.866_025_4 + delta[1] * -0.5;
+        assert!(
+            desplazamiento_pendiente > 0.3,
+            "con fricción baja la caja debe deslizarse por la pendiente: desplazamiento {desplazamiento_pendiente}"
+        );
+
+        assert_eq!(
+            collider_caja, handle_antes,
+            "el refresco no debe sustituir el handle del collider"
+        );
+        assert_eq!(
+            world.collider_material_id(collider_caja),
+            material_id_antes,
+            "el refresco debe conservar el MaterialId del collider"
+        );
     }
 }
