@@ -1206,6 +1206,78 @@ pub fn collider_dibujo(ent: &EntityData, world_scale: [f32; 3]) -> ColliderDibuj
         )
     }
 }
+/// El collider cuyo componente está expandido en el Inspector: es el
+/// ÚNICO que se dibuja en verde de edición (E7/E8). `Spec(i)` es el
+/// índice en `PhysicsData.colliders` (con la lista vacía, el spec
+/// virtual que muestra el Inspector); `Malla` es el Mesh Collider;
+/// `Personaje` es el Character Controller (su cápsula se dibuja por
+/// su propia vía, no por `collider_dibujo_activo`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColliderActivo {
+    Spec(usize),
+    Malla,
+    Personaje,
+}
+
+/// Como `collider_dibujo`, pero restringido al ÚNICO collider activo de
+/// edición (E7/E8): solo devuelve la forma del componente expandido en el
+/// Inspector.
+///
+/// - `Spec(i)` con specs: solo la forma del spec `i` (fuera de rango →
+///   `Ninguno`). Con la lista vacía: la forma histórica inferida, igual
+///   que la rama de lista vacía de `collider_dibujo`.
+/// - `Malla`: solo el alambre de la malla, sin formas de specs, si hay
+///   Mesh Collider; si no, `Ninguno`.
+/// - `Personaje`: `Ninguno` (su cápsula se dibuja por su propia vía).
+///
+/// `world_scale` es la escala MUNDIAL de la entidad (la misma que recibe
+/// `collider_shape_for_builtin` al construir el cuerpo).
+pub fn collider_dibujo_activo(
+    ent: &EntityData,
+    world_scale: [f32; 3],
+    activo: ColliderActivo,
+) -> ColliderDibujo {
+    let Some(physics) = ent.physics.as_ref() else {
+        return ColliderDibujo::Ninguno;
+    };
+    if !physics.has_collider {
+        return ColliderDibujo::Ninguno;
+    }
+    match activo {
+        ColliderActivo::Spec(i) => {
+            if physics.colliders.is_empty() {
+                // Spec virtual del Inspector: misma inferencia histórica que
+                // `collider_dibujo` (sin modelo, `""` da la caja de box_extents).
+                let modelo = ent.mesh.as_ref().map(|m| m.model.as_str()).unwrap_or("");
+                return ColliderDibujo::Formas(vec![(
+                    glass_physics::collider_shape_for_builtin(
+                        modelo,
+                        world_scale,
+                        physics.box_extents,
+                    ),
+                    physics.box_offset,
+                    [0.0; 3],
+                )]);
+            }
+            match physics.colliders.get(i) {
+                Some(spec) => {
+                    let (forma, rot) = forma_de_spec(spec);
+                    ColliderDibujo::Formas(vec![(forma, spec.offset, rot)])
+                }
+                None => ColliderDibujo::Ninguno,
+            }
+        }
+        ColliderActivo::Malla => {
+            if physics.mesh_collider != glass_core::MeshColliderMode::None {
+                ColliderDibujo::Malla
+            } else {
+                ColliderDibujo::Ninguno
+            }
+        }
+        ColliderActivo::Personaje => ColliderDibujo::Ninguno,
+    }
+}
+
 /// Dibuja las 12 aristas del paralelepípedo local [lo, hi] transformado por
 /// `world`, en una sola pasada (sin halo ni vértices ancla, a diferencia de
 /// la caja de selección). Mismo orden de esquinas y aristas que
@@ -3120,5 +3192,128 @@ mod tests_gizmos {
             }
             otro => panic!("se esperaba Formas, llegó {otro:?}"),
         }
+    }
+
+    #[test]
+    fn activo_spec_1_solo_devuelve_la_segunda_forma() {
+        let mut fisica = fisica_base();
+        fisica["colliders"] = serde_json::json!([
+            {
+                "shape": "Box",
+                "size": [0.5, 0.5, 0.5],
+                "offset": [0.0, 0.0, 0.0],
+                "is_trigger": false,
+            },
+            {
+                "shape": "Sphere",
+                "size": [0.4, 0.0, 0.0],
+                "offset": [0.0, 0.6, 0.0],
+                "is_trigger": false,
+            },
+        ]);
+        let ent = entidad_con_fisica(fisica);
+
+        match collider_dibujo_activo(&ent, [1.0; 3], ColliderActivo::Spec(1)) {
+            ColliderDibujo::Formas(formas) => {
+                assert_eq!(formas.len(), 1);
+                match formas[0] {
+                    (ColliderShape::Ball { radius }, off, _rot) => {
+                        assert!((radius - 0.4).abs() < EPS, "radio = {}", radius);
+                        assert_eq!(off, [0.0, 0.6, 0.0]);
+                    }
+                    otra => panic!("se esperaba Ball, llegó {:?}", otra),
+                }
+            }
+            otra => panic!("se esperaba Formas, llegó {:?}", otra),
+        }
+    }
+
+    #[test]
+    fn activo_spec_fuera_de_rango_es_ninguno() {
+        let mut fisica = fisica_base();
+        fisica["colliders"] = serde_json::json!([
+            {
+                "shape": "Box",
+                "size": [0.5, 0.5, 0.5],
+                "offset": [0.0, 0.0, 0.0],
+                "is_trigger": false,
+            },
+            {
+                "shape": "Sphere",
+                "size": [0.4, 0.0, 0.0],
+                "offset": [0.0, 0.6, 0.0],
+                "is_trigger": false,
+            },
+        ]);
+        let ent = entidad_con_fisica(fisica);
+        assert_eq!(
+            collider_dibujo_activo(&ent, [1.0; 3], ColliderActivo::Spec(5)),
+            ColliderDibujo::Ninguno
+        );
+    }
+
+    #[test]
+    fn activo_spec_0_sin_specs_devuelve_la_inferida() {
+        let mut fisica = fisica_base();
+        fisica["colliders"] = serde_json::json!([]);
+        let mut ent = entidad_con_fisica(fisica);
+        ent.mesh = None;
+
+        match collider_dibujo_activo(&ent, [1.0; 3], ColliderActivo::Spec(0)) {
+            ColliderDibujo::Formas(formas) => assert_eq!(formas.len(), 1),
+            otra => panic!("se esperaba Formas, llegó {:?}", otra),
+        }
+    }
+
+    #[test]
+    fn activo_malla_con_specs_devuelve_solo_malla() {
+        let mut fisica = fisica_base();
+        fisica["colliders"] = serde_json::json!([{
+            "shape": "Box",
+            "size": [0.5, 0.5, 0.5],
+            "offset": [0.0, 0.0, 0.0],
+            "is_trigger": false,
+        }]);
+        fisica["mesh_collider"] = serde_json::json!("Convex");
+        let ent = entidad_con_fisica(fisica);
+
+        assert_eq!(
+            collider_dibujo_activo(&ent, [1.0; 3], ColliderActivo::Malla),
+            ColliderDibujo::Malla
+        );
+    }
+
+    #[test]
+    fn activo_malla_sin_mesh_es_ninguno() {
+        let mut fisica = fisica_base();
+        fisica["colliders"] = serde_json::json!([{
+            "shape": "Box",
+            "size": [0.5, 0.5, 0.5],
+            "offset": [0.0, 0.0, 0.0],
+            "is_trigger": false,
+        }]);
+        let ent = entidad_con_fisica(fisica);
+
+        assert_eq!(
+            collider_dibujo_activo(&ent, [1.0; 3], ColliderActivo::Malla),
+            ColliderDibujo::Ninguno
+        );
+    }
+
+    #[test]
+    fn activo_personaje_es_ninguno() {
+        let mut fisica = fisica_base();
+        fisica["colliders"] = serde_json::json!([{
+            "shape": "Box",
+            "size": [0.5, 0.5, 0.5],
+            "offset": [0.0, 0.0, 0.0],
+            "is_trigger": false,
+        }]);
+        let ent = entidad_con_fisica(fisica);
+
+        assert_eq!(
+            collider_dibujo_activo(&ent, [1.0; 3], ColliderActivo::Personaje),
+            ColliderDibujo::Ninguno
+        );
     }
 }

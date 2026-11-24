@@ -283,7 +283,11 @@ pub struct ViewportPanel {
     /// entonces se dibuja su contorno: seleccionar ya no basta
     /// (decisión del usuario, 2026-11-20). Lo copia el docking desde
     /// el Inspector antes de renderizar esta vista.
-    pub collider_en_edicion: bool,
+    /// Collider de la entidad seleccionada que el Inspector tiene en
+    /// edición (spec de la lista, malla o personaje). Solo entonces se
+    /// dibuja su contorno: seleccionar ya no basta. Lo copia el docking
+    /// desde el Inspector antes de renderizar esta vista.
+    pub collider_activo: Option<gizmo_3d::ColliderActivo>,
     // Fuente .blend/.fbx soltada cuyo .glb falta o está desactualizado:
     // la app pide su conversión al vigía que corresponda y la vacía.
     pub pending_conversion: Option<std::path::PathBuf>,
@@ -324,7 +328,7 @@ impl Default for ViewportPanel {
             rect_escena: egui::Rect::NOTHING,
             mesh_bounds: std::collections::HashMap::new(),
             mesh_wireframes: std::collections::HashMap::new(),
-            collider_en_edicion: false,
+            collider_activo: None,
             pending_conversion: None,
             pending_carga: None,
         }
@@ -604,17 +608,30 @@ impl ViewportPanel {
 
                     // Regla del usuario (2026-11-20): el contorno del
                     // collider NO se dibuja por estar seleccionada la
-                    // entidad; solo si su componente está expandido en
-                    // el Inspector (en edición) o si la opción global
+                    // entidad; solo si su collider concreto está en
+                    // edición en el Inspector o si la opción global
                     // «contornos siempre» está activa.
                     if self.gizmos.gizmo_collider
                         && (self.gizmos.colliders_always
-                            || (is_sel && self.collider_en_edicion))
+                            || (is_sel && self.collider_activo.is_some()))
                     {
-                        match gizmo_3d::collider_dibujo(
-                            ent,
-                            glass_core::mat4_scale(world),
-                        ) {
+                        // Con «contornos siempre» se dibuja todo (incluidos
+                        // Malla+Formas a la vez); en edición normal, SOLO el
+                        // collider activo del Inspector.
+                        let dibujo = if self.gizmos.colliders_always {
+                            gizmo_3d::collider_dibujo(ent, glass_core::mat4_scale(world))
+                        } else {
+                            match self.collider_activo {
+                                Some(activo) => gizmo_3d::collider_dibujo_activo(
+                                    ent,
+                                    glass_core::mat4_scale(world),
+                                    activo,
+                                ),
+                                None => gizmo_3d::ColliderDibujo::Ninguno,
+                            }
+                        };
+
+                        match dibujo {
                             gizmo_3d::ColliderDibujo::Formas(formas) => {
                                 // Las formas ya vienen en tamaño de mundo
                                 // (como las coloca la física): la pose de
@@ -749,7 +766,9 @@ impl ViewportPanel {
                     // global «contornos siempre».
                     if self.gizmos.gizmo_character
                         && (self.gizmos.colliders_always
-                            || (is_sel && self.collider_en_edicion))
+                            || (is_sel
+                                && self.collider_activo
+                                    == Some(gizmo_3d::ColliderActivo::Personaje)))
                     {
                         if let Some(ch) = &ent.character {
                             gizmo_3d::draw_character_gizmo(

@@ -1198,7 +1198,7 @@ pub struct InspectorPanel {
     /// está EXPANDIDA en este frame? El viewport lo lee para dibujar el
     /// contorno del collider solo en edición (decisión del usuario,
     /// 2026-11-20). Se reinicia al principio de cada render.
-    pub collider_seccion_abierta: bool,
+    pub collider_activo: Option<crate::panels::gizmo_3d::ColliderActivo>,
     /// Asset .physmat.json cargado en el editor del Inspector (E2).
     physmat_ruta: Option<PathBuf>,
     /// Copia editable del material físico.
@@ -1223,7 +1223,7 @@ impl InspectorPanel {
             model_names_for: None,
             model_names_dirty: true,
             rescan_for_model: None,
-            collider_seccion_abierta: false,
+            collider_activo: None,
             physmat_ruta: None,
             physmat_valor: None,
             physmat_error: None,
@@ -1436,7 +1436,7 @@ impl InspectorPanel {
             self.physmat_disponibles = listar_physmats(assets_root);
             self.physmat_disponibles_root = Some(assets_root.to_path_buf());
         }
-        self.collider_seccion_abierta = false;
+        self.collider_activo = None;
         ui.horizontal(|ui| {
             ui.heading("🔍 Inspector");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2128,7 +2128,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         // pueden tomar prestado self mientras tanto (E4).
                         let disponibles = self.physmat_disponibles.clone();
                         let mut acciones: Vec<AccionCollider> = Vec::new();
-                        let mut alguna_abierta = false;
+                        let mut activo: Option<crate::panels::gizmo_3d::ColliderActivo> = None;
 
                         if phys.colliders.is_empty()
                             && phys.mesh_collider == glass_core::MeshColliderMode::None
@@ -2161,7 +2161,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                 },
                             );
                             if let Some(cambiado) = resultado {
-                                alguna_abierta = true;
+                                activo = Some(crate::panels::gizmo_3d::ColliderActivo::Spec(0));
                                 if cambiado {
                                     // Materialización: desde aquí es un spec real.
                                     phys.colliders.push(editado);
@@ -2209,7 +2209,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                     },
                                 );
                                 if let Some(duplicar) = resultado {
-                                    alguna_abierta = true;
+                                    activo = Some(crate::panels::gizmo_3d::ColliderActivo::Spec(i));
                                     if duplicar {
                                         acciones.push(AccionCollider::Duplicar(i));
                                     }
@@ -2280,15 +2280,15 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                 },
                             );
                             if resultado.is_some() {
-                                alguna_abierta = true;
+                                activo = Some(crate::panels::gizmo_3d::ColliderActivo::Malla);
                             }
                             if let Some(AccionCollider::Quitar(_)) = accion {
                                 acciones.push(AccionCollider::QuitarMesh);
                             }
                         }
 
-                        if alguna_abierta {
-                            self.collider_seccion_abierta = true;
+                        if activo.is_some() {
+                            self.collider_activo = activo;
                         }
 
                         // Copiar se resuelve aquí (gana la última del frame).
@@ -2428,7 +2428,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                     )
                     .is_open()
                     {
-                        self.collider_seccion_abierta = true;
+                        self.collider_activo = Some(crate::panels::gizmo_3d::ColliderActivo::Personaje);
                     }
                 }
                 if accion_character == AccionCabecera::Quitar {

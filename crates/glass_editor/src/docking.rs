@@ -2029,7 +2029,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 // El viewport dibuja el contorno del collider solo si su
                 // componente está expandido en el Inspector (regla del
                 // usuario, 2026-11-20): se copia el estado del frame.
-                self.viewport.collider_en_edicion = self.inspector.collider_seccion_abierta;
+                self.viewport.collider_activo = self.inspector.collider_activo;
                 // Con sesión de malla activa, el viewport recibe el panel
                 // y la entidad en edición: dibuja el overlay y enruta la
                 // entrada a la malla (R2). Sin sesión, None (flujo normal).
