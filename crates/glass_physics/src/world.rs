@@ -5079,4 +5079,140 @@ fn convex_hull_sostiene_como_caja() {
             "el refresco debe conservar el MaterialId del collider"
         );
     }
+    #[test]
+    fn apply_character_material_mapea_campos_nombrados() {
+        use glass_core::physics_material::PhysicsMaterial;
+
+        let mut world = PhysicsWorld::new();
+        let cfg = crate::character::CharacterConfig {
+            radius: 0.4,
+            height: 1.6,
+            skin: 0.02,
+            step_offset: 0.3,
+            slope_limit_deg: 45.0,
+            snap: 0.2,
+        };
+        assert!(world.create_character(777, [0.0, 0.0, 0.0], cfg));
+
+        let material = PhysicsMaterial {
+            dynamic_friction: 0.3,
+            bounciness: 0.8,
+            ..PhysicsMaterial::PROJECT_DEFAULT
+        };
+        assert!(world.apply_character_material(777, &material));
+        assert_eq!(world.get_character_material(777), Some((0.3, 0.8)));
+        assert_eq!(
+            world.character_collider_friction_restitution(777),
+            Some((0.3, 0.8))
+        );
+
+        let invalido = PhysicsMaterial {
+            dynamic_friction: -0.5,
+            ..PhysicsMaterial::PROJECT_DEFAULT
+        };
+        assert!(!world.apply_character_material(777, &invalido));
+        assert_eq!(world.get_character_material(777), Some((0.3, 0.8)));
+        assert_eq!(
+            world.character_collider_friction_restitution(777),
+            Some((0.3, 0.8))
+        );
+    }
+
+    fn config_dorada_cc() -> crate::character::CharacterConfig {
+        crate::character::CharacterConfig {
+            radius: 0.4,
+            height: 1.6,
+            skin: 0.02,
+            step_offset: 0.3,
+            slope_limit_deg: 45.0,
+            snap: 0.2,
+        }
+    }
+
+    fn afirmar_material_cc(material: &PhysicsMaterial, dinamica: f32, restitucion: f32) {
+        assert!(
+            (material.dynamic_friction - dinamica).abs() < 1e-6,
+            "dynamic_friction esperada {} pero se obtuvo {}",
+            dinamica, material.dynamic_friction
+        );
+        assert!(
+            (material.bounciness - restitucion).abs() < 1e-6,
+            "bounciness esperada {} pero se obtuvo {}",
+            restitucion, material.bounciness
+        );
+    }
+
+    #[test]
+    fn cc_nuevo_recibe_project_default_via_fallback() {
+        let mut world = PhysicsWorld::new();
+        assert!(
+            world.create_character(42, [0.0, 0.0, 0.0], config_dorada_cc()),
+            "el personaje 42 debería crearse correctamente"
+        );
+
+        let material = glass_core::PhysicsData::default().body_fallback_material();
+        afirmar_material_cc(&material, 0.7, 0.05);
+
+        assert!(
+            world.apply_character_material(42, &material),
+            "apply_character_material(42) debería devolver true para un personaje existente"
+        );
+        assert_eq!(
+            world.get_character_material(42),
+            Some((0.7, 0.05)),
+            "el personaje 42 debería tener (0.7, 0.05) por el material de reserva del proyecto"
+        );
+        assert_eq!(
+            world.character_collider_friction_restitution(42),
+            Some((0.7, 0.05)),
+            "el collider Rapier del personaje 42 debería reflejar (0.7, 0.05)"
+        );
+    }
+
+    #[test]
+    fn cc_con_legado_aplica_su_legado_via_fallback() {
+        let mut world = PhysicsWorld::new();
+        assert!(
+            world.create_character(43, [0.0, 0.0, 0.0], config_dorada_cc()),
+            "el personaje 43 debería crearse correctamente"
+        );
+
+        let data = glass_core::PhysicsData {
+            legacy_friction: Some(0.3),
+            legacy_restitution: Some(0.8),
+            ..Default::default()
+        };
+        let material = data.body_fallback_material();
+        afirmar_material_cc(&material, 0.3, 0.8);
+
+        assert!(
+            world.apply_character_material(43, &material),
+            "apply_character_material(43) debería devolver true para un personaje existente"
+        );
+        assert_eq!(
+            world.get_character_material(43),
+            Some((0.3, 0.8)),
+            "una escena vieja debe conservar su legado exacto (0.3, 0.8) en el personaje 43"
+        );
+        assert_eq!(
+            world.character_collider_friction_restitution(43),
+            Some((0.3, 0.8)),
+            "el collider Rapier del personaje 43 debería reflejar el legado exacto (0.3, 0.8)"
+        );
+    }
+
+    #[test]
+    fn apply_character_material_entidad_inexistente_devuelve_false() {
+        let mut world = PhysicsWorld::new();
+        assert!(
+            !world.apply_character_material(9999, &PhysicsMaterial::PROJECT_DEFAULT),
+            "apply_character_material(9999) debería devolver false si no existe el personaje"
+        );
+        assert_eq!(
+            world.get_character_material(9999),
+            None,
+            "el personaje 9999 no existe y su material debe ser None"
+        );
+    }
+
 }

@@ -4262,26 +4262,40 @@ fn lanzar_hub_al_salir() {
                 self.editor_layout.viewport.active_tab = glass_editor::ViewportTab::GameView;
                 self.editor_layout.focus_game_tab();
 
-                // Personajes autorados: (id, datos, centro de la cápsula en mundo).
+                // Personajes autorados: (id, datos, centro de la cápsula en mundo, material).
+                // El material del CharacterController sale del cuerpo de su
+                // entidad (§5.4): su legado si lo hay; si no, PROJECT_DEFAULT.
                 let autorados: Vec<_> = match self.scene_state.lock() {
                     Ok(scene) => scene
                         .entities
                         .iter()
                         .filter(|e| e.active)
-                        .filter_map(|e| e.character.as_ref().map(|d| (e.id, d.clone())))
-                        .map(|(id, d)| {
+                        .filter_map(|e| {
+                            e.character.as_ref().map(|d| {
+                                let material = e
+                                    .physics
+                                    .as_ref()
+                                    .map(|physics| physics.body_fallback_material())
+                                    .unwrap_or_else(|| {
+                                        glass_core::PhysicsData::default()
+                                            .body_fallback_material()
+                                    });
+                                (e.id, d.clone(), material)
+                            })
+                        })
+                        .map(|(id, d, material)| {
                             let centro = glass_core::mat4_transform_point(
                                 scene.compute_world_matrix(id),
                                 d.center,
                             );
-                            (id, d, centro)
+                            (id, d, centro, material)
                         })
                         .collect(),
                     Err(_) => Vec::new(),
                 };
                 if !autorados.is_empty() {
                     if let Ok(mut physics) = self.physics_world.lock() {
-                        for (id, data, centro) in &autorados {
+                        for (id, data, centro, material) in &autorados {
                             let (radius, height, skin, step_offset, slope_limit_deg, snap) =
                                 data.config();
                             let creado = physics.create_character_autorado(
@@ -4302,6 +4316,10 @@ fn lanzar_hub_al_salir() {
                             );
                             if creado {
                                 self.cc_autorados_en_play.push(*id);
+                                // Sin esto la cápsula quedaría con la fricción
+                                // 0.0 de nacimiento en vez del material del
+                                // cuerpo (§5.4).
+                                physics.apply_character_material(*id, material);
                             }
                         }
                     }

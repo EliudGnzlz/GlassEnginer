@@ -883,6 +883,25 @@ impl PhysicsWorld {
         true
     }
 
+    /// Aplica un `PhysicsMaterial` al personaje `entity_id`.
+    ///
+    /// El CharacterController no tiene material propio, así que este
+    /// envoltorio solo traduce los campos nombrados del material y delega
+    /// en `set_character_material`:
+    /// - fricción ← `dynamic_friction`
+    /// - restitución ← `bounciness`
+    ///
+    /// La validación (valores finitos y no negativos) la hereda de
+    /// `set_character_material`. Devuelve el mismo `bool`: `false` si los
+    /// valores no son válidos o si el personaje no existe.
+    pub fn apply_character_material(
+        &mut self,
+        entity_id: u64,
+        material: &glass_core::physics_material::PhysicsMaterial,
+    ) -> bool {
+        self.set_character_material(entity_id, material.dynamic_friction, material.bounciness)
+    }
+
     pub fn get_character_material(&self, entity_id: u64) -> Option<(f32, f32)> {
         self.characters.get(&entity_id).map(|s| (s.friction, s.restitution))
     }
