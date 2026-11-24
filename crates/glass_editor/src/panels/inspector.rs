@@ -7,6 +7,7 @@ use glass_core::{
     UIImageData,
     UIDragData,
 };
+use super::project::ArrastreAsset;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -547,11 +548,160 @@ fn nombre_physmat(ruta: &Path) -> String {
     }
 }
 
+/// Lista las referencias de los `.physmat.json` del proyecto,
+/// relativas a la raíz de Assets con '/', ordenadas y sin duplicados.
+/// Los errores de lectura se ignoran (una carpeta ilegible no aporta).
+pub fn listar_physmats(assets_root: &Path) -> Vec<String> {
+    fn recorrer(directorio: &Path, assets_root: &Path, referencias: &mut Vec<String>) {
+        let Ok(entradas) = std::fs::read_dir(directorio) else {
+            return;
+        };
+        for entrada in entradas.flatten() {
+            let Ok(tipo) = entrada.file_type() else {
+                continue;
+            };
+            if tipo.is_dir() {
+                recorrer(&entrada.path(), assets_root, referencias);
+            } else if tipo.is_file() {
+                let nombre = entrada.file_name();
+                if glass_core::physics_material::es_physmat(nombre.to_string_lossy().as_ref()) {
+                    referencias.push(referencia_physmat(&entrada.path(), assets_root));
+                }
+            }
+        }
+    }
+
+    let mut referencias = Vec::new();
+    recorrer(assets_root, assets_root, &mut referencias);
+    referencias.sort();
+    referencias.dedup();
+    referencias
+}
+
+/// Estado de una referencia a `.physmat.json` para el campo Material.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EstadoRef {
+    /// Cadena vacía: el collider usa el material de reserva.
+    PorDefecto,
+    /// La referencia existe (en la lista cacheada o en el disco).
+    Valida,
+    /// La referencia no se encuentra: se muestra como Missing.
+    Missing,
+}
+
+/// Clasifica una referencia: vacía es PorDefecto; si está en la lista
+/// de disponibles o el archivo existe en el disco es Valida (la lista
+/// cacheada puede ir por detrás del disco); si no, Missing.
+pub fn estado_referencia(
+    referencia: &str,
+    disponibles: &[String],
+    assets_root: &Path,
+) -> EstadoRef {
+    if referencia.is_empty() {
+        return EstadoRef::PorDefecto;
+    }
+    if disponibles.iter().any(|d| d == referencia) || assets_root.join(referencia).is_file() {
+        EstadoRef::Valida
+    } else {
+        EstadoRef::Missing
+    }
+}
+
+/// Referencia que deja una soltada sobre el campo Material: solo se
+/// acepta un `.physmat.json` de dentro de la raíz de Assets.
+pub fn ref_de_arrastre(ruta: &Path, assets_root: &Path) -> Option<String> {
+    let nombre = ruta.file_name()?.to_str()?;
+    if !glass_core::physics_material::es_physmat(nombre) {
+        return None;
+    }
+    let rel = ruta.strip_prefix(assets_root).ok()?;
+    if rel.as_os_str().is_empty() {
+        return None;
+    }
+    Some(referencia_physmat(ruta, assets_root))
+}
+
 /// Devuelve, en orden de escena y sin duplicar por entidad+origen,
 /// los pares (nombre de entidad, origen) que referencian el asset
 /// `referencia`: la etiqueta del `shape` de cada collider que
 /// coincide, más "Mesh Collider" si `mesh_collider_material`
 /// coincide. Con `referencia` vacía devuelve vacío.
+/// Object field del material físico de un collider (E4): desplegable
+/// con «<Por defecto>» y los `.physmat.json` del proyecto, referencia
+/// rota como «Missing: <ruta>» en rojo y soltada de assets aceptada
+/// solo si es un Physics Material de dentro de la raíz. Devuelve true
+/// solo si la referencia cambió.
+pub fn campo_material_physmat(
+    ui: &mut Ui,
+    id_salt: &str,
+    referencia: &mut String,
+    disponibles: &[String],
+    assets_root: &Path,
+) -> bool {
+    const ROJO: Color32 = Color32::from_rgb(235, 90, 90);
+    const VERDE: Color32 = Color32::from_rgb(80, 200, 120);
+
+    let estado = estado_referencia(referencia, disponibles, assets_root);
+    let texto = match estado {
+        EstadoRef::PorDefecto => RichText::new("<Por defecto>").weak(),
+        EstadoRef::Valida => RichText::new(referencia.as_str()),
+        EstadoRef::Missing => RichText::new(format!("Missing: {referencia}")).color(ROJO),
+    };
+
+    let mut cambiado = false;
+    ui.horizontal(|ui| {
+        ui.label("Material");
+
+        let mut elegido = referencia.clone();
+        let respuesta = egui::ComboBox::from_id_salt(id_salt)
+            .selected_text(texto)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut elegido, String::new(), "<Por defecto>");
+                if estado == EstadoRef::Missing {
+                    // Entrada informativa, no seleccionable.
+                    ui.label(RichText::new(format!("Missing: {referencia}")).color(ROJO));
+                }
+                for r in disponibles {
+                    ui.selectable_value(&mut elegido, r.clone(), r.as_str());
+                }
+            })
+            .response;
+
+        if elegido != *referencia {
+            *referencia = elegido;
+            cambiado = true;
+        }
+
+        // Realce durante el arrastre: verde si se aceptaría, rojo si no.
+        if let Some(payload) = respuesta.dnd_hover_payload::<ArrastreAsset>() {
+            let color = if ref_de_arrastre(&payload.ruta, assets_root).is_some() {
+                VERDE
+            } else {
+                ROJO
+            };
+            ui.painter().rect_stroke(
+                respuesta.rect,
+                2.0,
+                egui::Stroke::new(2.0, color),
+                egui::StrokeKind::Outside,
+            );
+        }
+
+        // Soltada: solo se acepta si da una referencia válida y distinta.
+        if let Some(payload) = respuesta.dnd_release_payload::<ArrastreAsset>() {
+            if let Some(nueva) = ref_de_arrastre(&payload.ruta, assets_root) {
+                if nueva != *referencia {
+                    *referencia = nueva;
+                    cambiado = true;
+                }
+            }
+            // None: soltada rechazada, se ignora.
+        }
+    });
+
+    cambiado
+}
+
 pub fn referencias_a_physmat(scene: &SceneState, referencia: &str) -> Vec<(String, String)> {
     let mut resultado: Vec<(String, String)> = Vec::new();
 
@@ -1017,6 +1167,11 @@ pub struct InspectorPanel {
     /// Portapapeles propio de specs de collider (E3), independiente
     /// del portapapeles de componentes de P6.
     pub portapapeles_collider: Option<ColliderSpec>,
+    /// Referencias de `.physmat.json` del proyecto, cacheadas para el
+    /// campo Material de los colliders (E4); se recargan al cambiar
+    /// la raíz de Assets.
+    physmat_disponibles: Vec<String>,
+    physmat_disponibles_root: Option<PathBuf>,
     /// Candado de escala proporcional del Transform y a qué entidad
     /// pertenece (se suelta al cambiar la selección).
     escala_bloqueada: bool,
@@ -1059,6 +1214,8 @@ impl InspectorPanel {
             pending_physmat_refresh: None,
             portapapeles: None,
             portapapeles_collider: None,
+            physmat_disponibles: Vec::new(),
+            physmat_disponibles_root: None,
             escala_bloqueada: false,
             escala_bloqueada_para: None,
         }
@@ -1255,7 +1412,12 @@ impl InspectorPanel {
         selected_id: Option<u64>,
         scene_state: &Arc<Mutex<SceneState>>,
         model_bounds: &std::collections::HashMap<String, ([f32; 3], [f32; 3])>,
+        assets_root: &Path,
     ) {
+        if self.physmat_disponibles_root.as_deref() != Some(assets_root) {
+            self.physmat_disponibles = listar_physmats(assets_root);
+            self.physmat_disponibles_root = Some(assets_root.to_path_buf());
+        }
         self.collider_seccion_abierta = false;
         ui.horizontal(|ui| {
             ui.heading("🔍 Inspector");
@@ -1803,18 +1965,21 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                             spec: &mut glass_core::ColliderSpec,
                             modelo: &str,
                             cotas: ([f32; 3], [f32; 3]),
+                            id_base: &str,
+                            disponibles: &[String],
+                            assets_root: &Path,
                         ) -> bool {
                             let trigger_cambiado = ui.checkbox(&mut spec.is_trigger, "Is Trigger").changed();
 
-                            // Solo lectura hasta E4 (object field de material).
-                            ui.horizontal(|ui| {
-                                ui.label("Material");
-                                if spec.material.is_empty() {
-                                    ui.label(RichText::new("<Por defecto>").weak());
-                                } else {
-                                    ui.label(spec.material.as_str());
-                                }
-                            });
+                            // Material (E4): object field completo con
+                            // selector, Missing y arrastre.
+                            let material_cambiado = campo_material_physmat(
+                                ui,
+                                &format!("{id_base}_material"),
+                                &mut spec.material,
+                                disponibles,
+                                assets_root,
+                            );
 
                             let mut center = spec.offset;
                             let mut size = spec.size;
@@ -1923,10 +2088,13 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                 spec.offset = center;
                                 spec.size = size;
                             }
-                            trigger_cambiado || cambiado
+                            trigger_cambiado || cambiado || material_cambiado
                         }
 
                         let hay_portapapeles = self.portapapeles_collider.is_some();
+                        // Copia local: los cierres de las secciones no
+                        // pueden tomar prestado self mientras tanto (E4).
+                        let disponibles = self.physmat_disponibles.clone();
                         let mut acciones: Vec<AccionCollider> = Vec::new();
                         let mut alguna_abierta = false;
 
@@ -1948,7 +2116,17 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                 hay_portapapeles,
                                 true,
                                 &mut accion,
-                                |ui| editar_spec(ui, &mut editado, &modelo_entidad, cotas_entidad),
+                                |ui| {
+                                    editar_spec(
+                                        ui,
+                                        &mut editado,
+                                        &modelo_entidad,
+                                        cotas_entidad,
+                                        "collider_spec_0",
+                                        &disponibles,
+                                        assets_root,
+                                    )
+                                },
                             );
                             if let Some(cambiado) = resultado {
                                 alguna_abierta = true;
@@ -1980,7 +2158,15 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                     true,
                                     &mut accion,
                                     |ui| {
-                                        editar_spec(ui, spec, &modelo_entidad, cotas_entidad);
+                                        editar_spec(
+                                            ui,
+                                            spec,
+                                            &modelo_entidad,
+                                            cotas_entidad,
+                                            &format!("collider_spec_{i}"),
+                                            &disponibles,
+                                            assets_root,
+                                        );
                                         let mut duplicar = false;
                                         ui.horizontal(|ui| {
                                             if ui.small_button("⧉ Duplicar").clicked() {
@@ -2024,6 +2210,15 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                     ui.label(
                                         RichText::new("Se adapta a la malla real del objeto.")
                                             .weak(),
+                                    );
+                                    // Material del Mesh Collider (E4): el
+                                    // mismo object field que el de los specs.
+                                    let _ = campo_material_physmat(
+                                        ui,
+                                        "mesh_collider_material",
+                                        &mut phys.mesh_collider_material,
+                                        &disponibles,
+                                        assets_root,
                                     );
                                     let mut convex =
                                         phys.mesh_collider == glass_core::MeshColliderMode::Convex;
@@ -2691,9 +2886,10 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
 #[cfg(test)]
 mod tests {
     use super::{
-        aplicar_acciones_colliders, aplicar_datos, escala_proporcional, extraer_componente,
-        instalar_componente, referencias_a_physmat, scan_model_names_in, spec_virtual,
-        tamano_convertido, AccionCollider, TipoComponente,
+        aplicar_acciones_colliders, aplicar_datos, escala_proporcional, estado_referencia,
+        extraer_componente, instalar_componente, listar_physmats, ref_de_arrastre,
+        referencias_a_physmat, scan_model_names_in, spec_virtual, tamano_convertido,
+        AccionCollider, EstadoRef, TipoComponente,
     };
     use glass_core::physics_material::PhysicsMaterial;
     use glass_core::{CameraData, ColliderSpec, EntityData, PhysicsData, SceneState};
@@ -2968,6 +3164,166 @@ mod tests {
             vec![("A".to_string(), "Box Collider".to_string())],
             "dos specs Box con la misma referencia deben aparecer una sola vez"
         );
+    }
+
+    fn dir_temporal_physmat(nombre: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let ruta = std::env::temp_dir().join(format!(
+            "glass_editor_physmat_{}_{}_{}",
+            std::process::id(),
+            nombre,
+            nanos
+        ));
+        std::fs::create_dir_all(&ruta).unwrap();
+        ruta
+    }
+
+    #[test]
+    fn listar_recoge_recursivo_y_ordenado() {
+        let raiz = dir_temporal_physmat("recursivo_ordenado");
+        std::fs::create_dir_all(raiz.join("materials/sub")).unwrap();
+        for archivo in [
+            "Hielo.physmat.json",
+            "materials/Roca.physmat.json",
+            "materials/sub/Hielo2.physmat.json",
+            "notas.txt",
+            "Falso.physmat.json.txt",
+        ] {
+            std::fs::write(raiz.join(archivo), "").unwrap();
+        }
+        assert_eq!(
+            listar_physmats(&raiz),
+            vec![
+                "Hielo.physmat.json".to_string(),
+                "materials/Roca.physmat.json".to_string(),
+                "materials/sub/Hielo2.physmat.json".to_string(),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(raiz);
+    }
+
+    #[test]
+    fn listar_raiz_inexistente_devuelve_vacio() {
+        let raiz = dir_temporal_physmat("raiz_inexistente");
+        std::fs::remove_dir_all(&raiz).unwrap();
+        assert!(listar_physmats(&raiz).is_empty());
+    }
+
+    #[test]
+    fn estado_segun_lista_y_disco() {
+        let raiz = dir_temporal_physmat("estado_referencia");
+        let disponibles = Vec::new();
+        std::fs::write(raiz.join("Suelo.physmat.json"), "").unwrap();
+        assert_eq!(
+            estado_referencia("Suelo.physmat.json", &disponibles, &raiz),
+            EstadoRef::Valida
+        );
+        assert_eq!(
+            estado_referencia("Ausente.physmat.json", &disponibles, &raiz),
+            EstadoRef::Missing
+        );
+        assert_eq!(
+            estado_referencia("", &disponibles, &raiz),
+            EstadoRef::PorDefecto
+        );
+        let disponibles = vec!["SoloEnLista.physmat.json".to_string()];
+        assert_eq!(
+            estado_referencia("SoloEnLista.physmat.json", &disponibles, &raiz),
+            EstadoRef::Valida
+        );
+        let _ = std::fs::remove_dir_all(raiz);
+    }
+
+    #[test]
+    fn arrastre_physmat_dentro_devuelve_referencia() {
+        let raiz = dir_temporal_inspector("e4_arrastre_physmat_dentro");
+        let materials = raiz.join("materials");
+        std::fs::create_dir_all(&materials).unwrap();
+        let dentro = materials.join("Hielo.physmat.json");
+        std::fs::write(&dentro, b"").unwrap();
+        assert_eq!(
+            ref_de_arrastre(&dentro, &raiz),
+            Some("materials/Hielo.physmat.json".to_string())
+        );
+        let en_raiz = raiz.join("Hielo.physmat.json");
+        std::fs::write(&en_raiz, b"").unwrap();
+        assert_eq!(
+            ref_de_arrastre(&en_raiz, &raiz),
+            Some("Hielo.physmat.json".to_string())
+        );
+        let _ = std::fs::remove_dir_all(raiz);
+    }
+
+    #[test]
+    fn arrastre_rechaza_otros_assets() {
+        let raiz = dir_temporal_inspector("e4_arrastre_rechaza_otros");
+        let material = raiz.join("Pared.material.json");
+        std::fs::write(&material, b"").unwrap();
+        assert_eq!(ref_de_arrastre(&material, &raiz), None);
+        let glb = raiz.join("Modelo.glb");
+        std::fs::write(&glb, b"").unwrap();
+        assert_eq!(ref_de_arrastre(&glb, &raiz), None);
+        let _ = std::fs::remove_dir_all(raiz);
+    }
+
+    #[test]
+    fn arrastre_rechaza_fuera_de_la_raiz() {
+        let raiz = dir_temporal_inspector("e4_arrastre_rechaza_fuera");
+        let hermano = raiz.parent().unwrap().join(format!(
+            "e4_arrastre_physmat_hermano_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&hermano).unwrap();
+        let fuera = hermano.join("Fuera.physmat.json");
+        std::fs::write(&fuera, b"").unwrap();
+        assert_eq!(ref_de_arrastre(&fuera, &raiz), None);
+        let _ = std::fs::remove_dir_all(raiz);
+        let _ = std::fs::remove_dir_all(hermano);
+    }
+
+    #[test]
+    fn listar_respeta_mayusculas_del_sufijo() {
+        let raiz = dir_temporal_inspector("e4_listar_mayusculas_sufijo");
+        let archivo = raiz.join("Roca.PHYSMAT.JSON");
+        std::fs::write(&archivo, b"").unwrap();
+        let lista = listar_physmats(&raiz);
+        assert!(lista.iter().any(|r| r.as_str() == "Roca.PHYSMAT.JSON"));
+        let _ = std::fs::remove_dir_all(raiz);
+    }
+
+    #[test]
+    fn estado_referencia_casos_borde() {
+        let raiz = dir_temporal_inspector("e4_estado_referencia_bordes");
+        let sin_lista: Vec<String> = Vec::new();
+        assert!(matches!(
+            estado_referencia("inexistente/NoExiste.physmat.json", &sin_lista, &raiz),
+            EstadoRef::Missing
+        ));
+        let carpeta = raiz.join("Carpeta");
+        std::fs::create_dir_all(&carpeta).unwrap();
+        let ref_exacta = "Carpeta/Hielo.physmat.json";
+        let lista_caja_distinta = vec!["carpeta/hielo.physmat.json".to_string()];
+        // La lista compara exacto: otra capitalización no valida.
+        assert!(matches!(
+            estado_referencia(ref_exacta, &lista_caja_distinta, &raiz),
+            EstadoRef::Missing
+        ));
+        let exacto = carpeta.join("Hielo.physmat.json");
+        std::fs::write(&exacto, b"").unwrap();
+        assert!(matches!(
+            estado_referencia(ref_exacta, &lista_caja_distinta, &raiz),
+            EstadoRef::Valida
+        ));
+        let otro = carpeta.join("Otra.physmat.json");
+        std::fs::write(&otro, b"").unwrap();
+        assert!(matches!(
+            estado_referencia("Carpeta/NoEsta.physmat.json", &lista_caja_distinta, &raiz),
+            EstadoRef::Missing
+        ));
+        let _ = std::fs::remove_dir_all(raiz);
     }
 
     fn dir_temporal_inspector(nombre: &str) -> PathBuf {

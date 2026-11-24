@@ -2072,8 +2072,14 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                         .render_physmat(ui, &ruta, &assets_root, self.scene_state);
                 } else {
                     let mesh_bounds = &self.viewport.mesh_bounds;
-                    self.inspector
-                        .render(ui, *self.selected_entity_id, self.scene_state, mesh_bounds);
+                    let assets_root = self.project.assets_root.clone();
+                    self.inspector.render(
+                        ui,
+                        *self.selected_entity_id,
+                        self.scene_state,
+                        mesh_bounds,
+                        &assets_root,
+                    );
                 }
             }
             EditorTab::Console => {

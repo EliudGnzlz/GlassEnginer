@@ -680,7 +680,14 @@ impl HierarchyPanel {
         let arrastre_asset =
             egui::DragAndDrop::payload::<super::project::ArrastreAsset>(ui.ctx());
         if let (Some(mp), Some(payload)) = (mouse_pos, arrastre_asset) {
-            if panel_rect.contains(mp) {
+            // Solo instanciables: un .physmat.json arrastrado va al campo
+            // Material del Inspector, no a la jerarquía (E4).
+            let nombre_payload = payload
+                .ruta
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if panel_rect.contains(mp) && super::project::es_instanciable(nombre_payload, false) {
                 ui.painter().rect_stroke(
                     panel_rect,
                     0.0,

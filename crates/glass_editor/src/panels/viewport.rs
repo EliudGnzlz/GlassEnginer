@@ -1601,6 +1601,12 @@ impl ViewportPanel {
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("asset");
+                    // Solo los instanciables se sueltan en la escena; un
+                    // .physmat.json arrastrado va al campo Material del
+                    // Inspector y aquí no se promete instanciación (E4).
+                    if !super::project::es_instanciable(nombre, false) {
+                        // Sin realce ni soltada para este destino.
+                    } else {
                     painter.rect_stroke(
                         rect,
                         0.0,
@@ -1614,12 +1620,22 @@ impl ViewportPanel {
                         egui::FontId::proportional(13.0),
                         Color32::from_rgb(160, 255, 190),
                     );
+                    }
                 }
 
                 if let Some(payload) =
                     response.dnd_release_payload::<super::project::ArrastreAsset>()
                 {
                     let ruta = payload.ruta.clone();
+                    let nombre_soltado = ruta
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if !super::project::es_instanciable(&nombre_soltado, false) {
+                        // No instanciable (p. ej. un .physmat.json para el
+                        // campo Material): este destino lo ignora (E4).
+                    } else {
                     let pos = ui
                         .input(|i| i.pointer.interact_pos())
                         .unwrap_or(rect.center());
@@ -1686,6 +1702,7 @@ impl ViewportPanel {
                         }
                     }
                     ui.ctx().request_repaint();
+                    }
                 }
             }
 

@@ -867,6 +867,17 @@ pub fn es_instanciable(nombre: &str, es_dir: bool) -> bool {
     !es_dir && (es_prefab(nombre) || es_modelo(nombre))
 }
 
+/// ¿Puede este asset iniciar un arrastre desde el panel? Los
+/// instanciables van a la escena o la jerarquía; los `.physmat.json`
+/// van al campo Material de los colliders (E4). Los destinos
+/// discriminan por tipo: la escena y la jerarquía solo aceptan
+/// instanciables e `instanciar_asset` rechaza el resto con un
+/// error limpio, sin crear entidades.
+pub fn es_arrastrable(nombre: &str, es_dir: bool) -> bool {
+    !es_dir
+        && (es_instanciable(nombre, es_dir) || glass_core::physics_material::es_physmat(nombre))
+}
+
 /// Carga útil del arrastre de un asset del panel Proyecto hacia la escena o la jerarquía.
 #[derive(Debug, Clone)]
 pub struct ArrastreAsset {
@@ -1937,7 +1948,7 @@ impl ProjectPanel {
                     let origen_en_fila = ui
                         .input(|i| i.pointer.press_origin())
                         .is_some_and(|o| resp.rect.contains(o));
-                    if es_instanciable(nombre, *es_dir)
+                    if es_arrastrable(nombre, *es_dir)
                         && origen_en_fila
                         && ui.input(|i| i.pointer.is_decidedly_dragging())
                     {
@@ -2511,7 +2522,7 @@ impl ProjectPanel {
                         let origen_en_fila = ui
                             .input(|i| i.pointer.press_origin())
                             .is_some_and(|o| resp.rect.contains(o));
-                        if es_instanciable(&nombre, false)
+                        if es_arrastrable(&nombre, false)
                             && origen_en_fila
                             && ui.input(|i| i.pointer.is_decidedly_dragging())
                         {
@@ -2826,7 +2837,7 @@ impl ProjectPanel {
                         let origen_en_celda = ui
                             .input(|i| i.pointer.press_origin())
                             .is_some_and(|o| resp.rect.contains(o));
-                        if es_instanciable(&nombre, es_dir)
+                        if es_arrastrable(&nombre, es_dir)
                             && origen_en_celda
                             && ui.input(|i| i.pointer.is_decidedly_dragging())
                         {
@@ -2998,6 +3009,22 @@ impl ProjectPanel {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn es_arrastrable_acepta_instanciables_y_physmat() {
+        // Instanciables de siempre.
+        assert!(es_arrastrable("a.glb", false));
+        assert!(es_arrastrable("a.prefab.json", false));
+        // El .physmat.json se arrastra al campo Material (E4)...
+        assert!(es_arrastrable("Hielo.physmat.json", false));
+        assert!(es_arrastrable("Hielo.PHYSMAT.JSON", false));
+        // ...pero sigue sin ser instanciable en la escena.
+        assert!(!es_instanciable("Hielo.physmat.json", false));
+        // Otros assets y las carpetas no inician arrastre.
+        assert!(!es_arrastrable("a.material.json", false));
+        assert!(!es_arrastrable("a.png", false));
+        assert!(!es_arrastrable("Hielo.physmat.json", true));
+    }
+
     #[test]
     fn es_modelo_acepta_extensiones_de_modelo() {
         assert!(es_modelo("a.GLB"));
