@@ -1,8 +1,8 @@
 use egui::{Color32, DragValue, RichText, Slider, Ui};
 use glass_core::physics_material::{MaterialCombine, PhysicsMaterial};
 use glass_core::{
-    AudioSourceData, CameraData, CanvasData, CharacterData, EntityData, LightData, MeshData,
-    PhysicsData,
+    AudioSourceData, CameraData, CanvasData, CharacterData, ColliderSpec, EntityData, LightData,
+    MeshData, PhysicsData,
     RectTransformData, SceneState, ScriptComponentData, UIButtonData, UITextData,
     UIImageData,
     UIDragData,
@@ -177,11 +177,136 @@ fn botones_collider_menu(
 /// Acción estructural pedida desde una sección de collider (P3): se
 /// recoge mientras se pinta y se aplica después, para no mutar la lista
 /// durante la iteración.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum AccionCollider {
+#[derive(Clone)]
+pub enum AccionCollider {
+    /// Copia el spec al portapapeles de colliders del Inspector.
+    CopiarSpec(glass_core::ColliderSpec),
+    /// Sustituye el spec `i` por el del portapapeles (con la lista
+    /// vacía —sección virtual— materializa: push del pegado).
+    PegarEn(usize),
+    /// Inserta el portapapeles como spec nuevo tras el spec `i`.
+    PegarComoNuevo(usize),
     Duplicar(usize),
     Quitar(usize),
     QuitarMesh,
+}
+
+/// Convierte `size` entre familias de forma: Box (half-extents) →
+/// Sphere [radio=x]; → Capsule/Cylinder [half_height=y, radio=x].
+/// Sphere → Box [r,r,r]; → Capsule/Cylinder [r,r]. Capsule/Cylinder
+/// ([half_height, radio]) → Box [r, hh, r]; → Sphere radio=r.
+/// Capsule ↔ Cylinder comparten disposición: se conserva.
+pub fn tamano_convertido(desde: &str, hacia: &str, s: [f32; 3]) -> [f32; 3] {
+    let familia = |t: &str| match t {
+        "Box" => 0,
+        "Sphere" => 1,
+        _ => 2,
+    };
+    match (familia(desde), familia(hacia)) {
+        (0, 1) => [s[0], 0.0, 0.0],
+        (0, 2) => [s[1], s[0], 0.0],
+        (1, 0) => [s[0], s[0], s[0]],
+        (1, 2) => [s[0], s[0], 0.0],
+        (2, 0) => [s[1], s[0], s[1]],
+        (2, 1) => [s[1], 0.0, 0.0],
+        _ => s,
+    }
+}
+
+/// El spec que representa el collider heredado de lista vacía (la vía
+/// sin specs): forma inferida del modelo, tamaño convertido desde
+/// `box_extents`, centro `box_offset` y trigger del cuerpo.
+pub fn spec_virtual(phys: &PhysicsData, modelo: &str) -> ColliderSpec {
+    let shape = match modelo {
+        "sphere" => "Sphere",
+        "capsule" => "Capsule",
+        "cylinder" => "Cylinder",
+        _ => "Box",
+    };
+    ColliderSpec {
+        shape: shape.to_string(),
+        size: tamano_convertido("Box", shape, phys.box_extents),
+        offset: phys.box_offset,
+        is_trigger: phys.is_trigger,
+        material: String::new(),
+        direction: "Y".to_string(),
+    }
+}
+
+/// Aplica las acciones estructurales de un frame sobre la lista de
+/// colliders, reconstruyéndola una vez para que los índices (referidos
+/// a la lista original) no se desplacen entre acciones del mismo
+/// frame. `CopiarSpec` se ignora: lo resuelve el llamador. Devuelve
+/// true si al final no quedan specs ni Mesh Collider.
+pub fn aplicar_acciones_colliders(
+    phys: &mut PhysicsData,
+    acciones: &[AccionCollider],
+    portapapeles: Option<&ColliderSpec>,
+) -> bool {
+    // Comparaciones por patrón: el enum no deriva PartialEq porque
+    // ColliderSpec no lo implementa.
+    let quitar = |i: usize| {
+        acciones
+            .iter()
+            .any(|a| matches!(a, AccionCollider::Quitar(j) if *j == i))
+    };
+    let pegar_en = |i: usize| {
+        acciones
+            .iter()
+            .any(|a| matches!(a, AccionCollider::PegarEn(j) if *j == i))
+    };
+    let pegar_nuevo = |i: usize| {
+        acciones
+            .iter()
+            .any(|a| matches!(a, AccionCollider::PegarComoNuevo(j) if *j == i))
+    };
+    let duplicar = |i: usize| {
+        acciones
+            .iter()
+            .any(|a| matches!(a, AccionCollider::Duplicar(j) if *j == i))
+    };
+
+    let originales = std::mem::take(&mut phys.colliders);
+    let mut resultantes = Vec::new();
+
+    let materializa_virtual =
+        originales.is_empty() && portapapeles.is_some() && (pegar_en(0) || pegar_nuevo(0));
+    if materializa_virtual {
+        if let Some(copiado) = portapapeles {
+            resultantes.push(copiado.clone());
+        }
+    } else {
+        for (i, spec) in originales.into_iter().enumerate() {
+            if quitar(i) {
+                continue;
+            }
+            let resultante = if pegar_en(i) {
+                portapapeles.cloned().unwrap_or(spec)
+            } else {
+                spec
+            };
+            resultantes.push(resultante.clone());
+            if duplicar(i) {
+                resultantes.push(resultante);
+            }
+            if pegar_nuevo(i) {
+                if let Some(copiado) = portapapeles {
+                    resultantes.push(copiado.clone());
+                }
+            }
+        }
+    }
+
+    phys.colliders = resultantes;
+
+    if acciones
+        .iter()
+        .any(|a| matches!(a, AccionCollider::QuitarMesh))
+    {
+        phys.mesh_collider = glass_core::MeshColliderMode::None;
+    }
+
+    phys.colliders.is_empty() && phys.mesh_collider == glass_core::MeshColliderMode::None
 }
 
 
@@ -677,6 +802,115 @@ pub fn menu_componente(
     accion
 }
 
+/// Elección hecha en el menú contextual de un spec. El menú no conoce
+/// ni el spec ni su índice: devuelve este marcador y
+/// `seccion_collider_spec`, que sí los conoce, lo traduce a
+/// `AccionCollider`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AccionMenuSpec {
+    Copiar,
+    Pegar,
+    PegarComoNuevo,
+    Quitar,
+}
+
+/// Menú contextual de la cabecera de un spec de collider. Con
+/// `menu_completo == false` (Mesh Collider) solo ofrece «🗑 Quitar».
+pub fn menu_collider_spec(
+    ui: &mut Ui,
+    hay_portapapeles: bool,
+    menu_completo: bool,
+) -> Option<AccionMenuSpec> {
+    let mut accion = None;
+    if menu_completo {
+        if ui.button("📋 Copiar").clicked() {
+            accion = Some(AccionMenuSpec::Copiar);
+            ui.close();
+        }
+        if ui
+            .add_enabled(hay_portapapeles, egui::Button::new("📥 Pegar"))
+            .clicked()
+        {
+            accion = Some(AccionMenuSpec::Pegar);
+            ui.close();
+        }
+        if ui
+            .add_enabled(hay_portapapeles, egui::Button::new("📥 Pegar como nuevo"))
+            .clicked()
+        {
+            accion = Some(AccionMenuSpec::PegarComoNuevo);
+            ui.close();
+        }
+        ui.separator();
+    }
+    if ui.button("🗑 Quitar").clicked() {
+        accion = Some(AccionMenuSpec::Quitar);
+        ui.close();
+    }
+    accion
+}
+
+/// Sección de un spec de collider, gemela visual de
+/// `seccion_componente`: mismo id `("seccion_componente", id_salt)`,
+/// cerrada por defecto, título que alterna, menú con clic derecho
+/// sobre el título y ✕ a la derecha. Con `menu_completo == false` el
+/// menú solo ofrece Quitar y se ignora `hay_portapapeles` (lo usa el
+/// Mesh Collider, cuyo `spec_actual` es de relleno y cuyo Quitar
+/// traduce el llamador a `QuitarMesh`). Devuelve el resultado del
+/// cuerpo si se pintó (sección abierta).
+#[allow(clippy::too_many_arguments)]
+pub fn seccion_collider_spec<R>(
+    ui: &mut Ui,
+    id_salt: &str,
+    titulo: &str,
+    spec_actual: &ColliderSpec,
+    indice: usize,
+    hay_portapapeles: bool,
+    menu_completo: bool,
+    accion_out: &mut Option<AccionCollider>,
+    cuerpo: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
+    let id = ui.make_persistent_id(("seccion_componente", id_salt));
+    let estado =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    let mut alternar = false;
+    let mut cabecera = estado.show_header(ui, |ui| {
+        let resp_titulo = ui.add(
+            egui::Button::new(RichText::new(titulo).strong())
+                .frame(false)
+                .wrap_mode(egui::TextWrapMode::Extend),
+        );
+        if resp_titulo.clicked() {
+            alternar = true;
+        }
+        resp_titulo.context_menu(|ui| {
+            if let Some(a) = menu_collider_spec(ui, hay_portapapeles && menu_completo, menu_completo)
+            {
+                *accion_out = Some(match a {
+                    AccionMenuSpec::Copiar => AccionCollider::CopiarSpec(spec_actual.clone()),
+                    AccionMenuSpec::Pegar => AccionCollider::PegarEn(indice),
+                    AccionMenuSpec::PegarComoNuevo => AccionCollider::PegarComoNuevo(indice),
+                    AccionMenuSpec::Quitar => AccionCollider::Quitar(indice),
+                });
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .small_button("✕")
+                .on_hover_text("Quitar collider")
+                .clicked()
+            {
+                *accion_out = Some(AccionCollider::Quitar(indice));
+            }
+        });
+    });
+    if alternar {
+        cabecera.toggle();
+    }
+    let (_, _, cuerpo_resp) = cabecera.body(cuerpo);
+    cuerpo_resp.map(|r| r.inner)
+}
+
 /// Sección de componente con la cabecera común de P6: flecha y título
 /// (el título también alterna), menú contextual con clic derecho sobre
 /// el título y, si es quitable, el botón ✕ a la derecha de la cabecera.
@@ -780,6 +1014,9 @@ pub struct InspectorPanel {
     rescan_for_model: Option<String>,
     /// Portapapeles de componentes de P6 (copiar datos / componente).
     portapapeles: Option<PortapapelesComponente>,
+    /// Portapapeles propio de specs de collider (E3), independiente
+    /// del portapapeles de componentes de P6.
+    pub portapapeles_collider: Option<ColliderSpec>,
     /// Candado de escala proporcional del Transform y a qué entidad
     /// pertenece (se suelta al cambiar la selección).
     escala_bloqueada: bool,
@@ -821,6 +1058,7 @@ impl InspectorPanel {
             physmat_error_guardado: None,
             pending_physmat_refresh: None,
             portapapeles: None,
+            portapapeles_collider: None,
             escala_bloqueada: false,
             escala_bloqueada_para: None,
         }
@@ -1452,8 +1690,6 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                 // Separados como en Unity: un Collider sin Rigidbody es estático.
                 // ==========================================
                 let mut accion_rb = AccionCabecera::Nada;
-                let mut accion_col = AccionCabecera::Nada;
-                let mut accion_cols = AccionCabecera::Nada;
                 let mut remove_rigidbody = false;
                 let mut remove_collider = false;
                 // Datos de la entidad que la sección Collider necesita sin
@@ -1558,426 +1794,228 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         });
                     }
 
-                    if phys.has_collider
-                        && phys.colliders.is_empty()
-                        && phys.mesh_collider == glass_core::MeshColliderMode::None
-                    {
-                        seccion_componente(ui, "collider", "🧊 Collider", TipoComponente::Collider, true, self.portapapeles.as_ref(), &mut accion_col, |ui| {
-                            use glass_core::scene::{ColliderSpec, MeshColliderMode};
+                    if phys.has_collider {
+                        /// Campos comunes de un spec. Edita sobre copias locales de
+                        /// center/size y solo escribe si cambian. Devuelve true si
+                        /// cambió cualquier campo (trigger incluido).
+                        fn editar_spec(
+                            ui: &mut Ui,
+                            spec: &mut glass_core::ColliderSpec,
+                            modelo: &str,
+                            cotas: ([f32; 3], [f32; 3]),
+                        ) -> bool {
+                            let trigger_cambiado = ui.checkbox(&mut spec.is_trigger, "Is Trigger").changed();
 
-                            // Convierte `size` entre familias de forma con un criterio simple:
-                            // · Box (half-extents) → Sphere: radio = x; → Capsule/Cylinder: [half_height = y, radio = x].
-                            // · Sphere (radio r) → Box: [r, r, r]; → Capsule/Cylinder: [r, r].
-                            // · Capsule/Cylinder ([hh, r]) → Box: [r, hh, r]; → Sphere: radio = r.
-                            // Capsule ↔ Cylinder comparten disposición [half_height, radio]: se conserva.
-                            fn tamano_convertido(desde: &str, hacia: &str, s: [f32; 3]) -> [f32; 3] {
-                                let familia = |t: &str| match t {
-                                    "Box" => 0,
-                                    "Sphere" => 1,
-                                    _ => 2,
-                                };
-                                match (familia(desde), familia(hacia)) {
-                                    (0, 1) => [s[0], 0.0, 0.0],
-                                    (0, 2) => [s[1], s[0], 0.0],
-                                    (1, 0) => [s[0], s[0], s[0]],
-                                    (1, 2) => [s[0], s[0], 0.0],
-                                    (2, 0) => [s[1], s[0], s[1]],
-                                    (2, 1) => [s[1], 0.0, 0.0],
-                                    _ => s,
-                                }
-                            }
-
-                            // En Unity fricción y elasticidad son del material del collider.
-                            let material_efectivo = phys.body_fallback_material();
-                            let mut friccion_mostrada = material_efectivo.dynamic_friction;
-                            if ui.add(Slider::new(&mut friccion_mostrada, 0.0..=1.0).text("Fricción")).changed() {
-                                phys.legacy_friction = Some(friccion_mostrada);
-                            }
-                            let mut bounciness_mostrado = material_efectivo.bounciness;
-                            if ui.add(Slider::new(&mut bounciness_mostrado, 0.0..=1.0).text("Elasticidad (Bounciness)")).changed() {
-                                phys.legacy_restitution = Some(bounciness_mostrado);
-                            }
-
-                            let modelo: String = modelo_entidad.clone();
-                            let inferido: &str = match modelo.as_str() {
-                                "sphere" => "Sphere",
-                                "capsule" => "Capsule",
-                                "cylinder" => "Cylinder",
-                                _ => "Box",
-                            };
-                            let tipo_actual: String = match phys.mesh_collider {
-                                MeshColliderMode::Convex => "Mesh (Convex)".to_string(),
-                                MeshColliderMode::TriMesh => "Mesh (TriMesh)".to_string(),
-                                MeshColliderMode::None => match phys.colliders.first() {
-                                    Some(c) => c.shape.clone(),
-                                    None => inferido.to_string(),
-                                },
-                            };
-
-                            let mut tipo_nuevo = tipo_actual.clone();
+                            // Solo lectura hasta E4 (object field de material).
                             ui.horizontal(|ui| {
-                                ui.label("Tipo");
-                                egui::ComboBox::from_id_salt(format!("collider_tipo_{}", selected_id.unwrap_or(0)))
-                                    .selected_text(tipo_actual.clone())
-                                    .show_ui(ui, |ui| {
-                                        for t in ["Box", "Sphere", "Capsule", "Cylinder", "Mesh (Convex)", "Mesh (TriMesh)"] {
-                                            ui.selectable_value(&mut tipo_nuevo, t.to_string(), t);
-                                        }
-                                    });
+                                ui.label("Material");
+                                if spec.material.is_empty() {
+                                    ui.label(RichText::new("<Por defecto>").weak());
+                                } else {
+                                    ui.label(spec.material.as_str());
+                                }
                             });
 
-                            if tipo_nuevo != tipo_actual {
-                                match tipo_nuevo.as_str() {
-                                    "Mesh (Convex)" => phys.mesh_collider = MeshColliderMode::Convex,
-                                    "Mesh (TriMesh)" => phys.mesh_collider = MeshColliderMode::TriMesh,
-                                    prim => {
-                                        phys.mesh_collider = MeshColliderMode::None;
-                                        if phys.colliders.is_empty() {
-                                            // Box → Box con lista vacía: se sigue editando box_extents/box_offset.
-                                            if !(prim == "Box" && tipo_actual == "Box") {
-                                                let size = tamano_convertido("Box", prim, phys.box_extents);
-                                                let is_trigger = phys.is_trigger;
-                                                phys.colliders.push(ColliderSpec {
-                                                    shape: prim.to_string(),
-                                                    size,
-                                                    offset: phys.box_offset,
-                                                    is_trigger,
-                                                    material: String::new(),
-                                                    direction: "Y".to_string(),
-                                                });
-                                            }
-                                        } else {
-                                            let c = &mut phys.colliders[0];
-                                            if c.shape != prim {
-                                                c.size = tamano_convertido(&c.shape, prim, c.size);
-                                                c.shape = prim.to_string();
-                                            }
-                                        }
-                                    }
+                            let mut center = spec.offset;
+                            let mut size = spec.size;
+                            let mut cambiado = false;
+
+                            ui.horizontal(|ui| {
+                                ui.label("Center");
+                                for (eje, v) in ["X", "Y", "Z"].iter().zip(center.iter_mut()) {
+                                    ui.label(*eje);
+                                    cambiado |= ui.add(DragValue::new(v).speed(0.05)).changed();
                                 }
-                            }
-                            let tipo = tipo_nuevo;
+                            });
 
-                            if let Some(c) = phys.colliders.first_mut() {
-                                ui.checkbox(&mut c.is_trigger, "Is Trigger");
-                            } else {
-                                ui.checkbox(&mut phys.is_trigger, "Is Trigger");
-                            }
-
-                            if tipo.starts_with("Mesh") {
-                                if modelo.is_empty() {
-                                    ui.label(RichText::new("(sin malla: caerá a los primitivos)").weak());
-                                } else {
-                                    ui.label(format!("Malla: {modelo}"));
-                                }
-                                if matches!(phys.mesh_collider, MeshColliderMode::TriMesh)
-                                    && phys.has_rigidbody
-                                    && phys.body_type != "Static"
-                                {
-                                    ui.label(
-                                        RichText::new("En cuerpos dinámicos TriMesh se degrada a Convex al simular.")
-                                            .color(Color32::from_rgb(255, 190, 80)),
-                                    );
-                                }
-                            } else {
-                                // Copias locales del offset/size efectivos. `cambiado` es la bandera de
-                                // materialización perezosa: solo al editar se escribe (y, con lista vacía
-                                // y tipo no-Box, se crea el spec equivalente).
-                                let (mut center, mut size) = match phys.colliders.first() {
-                                    Some(c) => (c.offset, c.size),
-                                    None => (phys.box_offset, tamano_convertido("Box", &tipo, phys.box_extents)),
-                                };
-                                let mut cambiado = false;
-
-                                ui.horizontal(|ui| {
-                                    ui.label("Center");
-                                    for (eje, v) in ["X", "Y", "Z"].iter().zip(center.iter_mut()) {
-                                        ui.label(*eje);
-                                        cambiado |= ui.add(DragValue::new(v).speed(0.05)).changed();
-                                    }
-                                });
-
-                                match tipo.as_str() {
-                                    "Box" => {
-                                        ui.horizontal(|ui| {
-                                            ui.label("Size");
-                                            for (eje, h) in ["X", "Y", "Z"].iter().zip(size.iter_mut()) {
-                                                ui.label(*eje);
-                                                let mut completo = *h * 2.0;
-                                                if ui
-                                                    .add(DragValue::new(&mut completo).speed(0.05).range(0.01..=f32::INFINITY))
-                                                    .changed()
-                                                {
-                                                    *h = completo.max(0.01) * 0.5;
-                                                    cambiado = true;
-                                                }
-                                            }
-                                        });
-                                    }
-                                    "Sphere" => {
-                                        ui.horizontal(|ui| {
-                                            ui.label("Radius");
-                                            cambiado |= ui
-                                                .add(DragValue::new(&mut size[0]).speed(0.05).range(0.01..=f32::INFINITY))
-                                                .changed();
-                                        });
-                                    }
-                                    "Capsule" => {
-                                        ui.horizontal(|ui| {
-                                            ui.label("Radius");
-                                            cambiado |= ui
-                                                .add(DragValue::new(&mut size[1]).speed(0.05).range(0.01..=f32::INFINITY))
-                                                .changed();
-                                        });
-                                        let mut altura = 2.0 * (size[0] + size[1]);
-                                        ui.horizontal(|ui| {
-                                            ui.label("Height");
-                                            if ui
-                                                .add(DragValue::new(&mut altura).speed(0.05).range(0.0..=f32::INFINITY))
-                                                .changed()
-                                            {
-                                                size[0] = (altura * 0.5 - size[1]).max(0.0);
-                                                cambiado = true;
-                                            }
-                                        });
-                                        ui.label(RichText::new("Dirección: Y").weak());
-                                    }
-                                    "Cylinder" => {
-                                        ui.horizontal(|ui| {
-                                            ui.label("Radius");
-                                            cambiado |= ui
-                                                .add(DragValue::new(&mut size[1]).speed(0.05).range(0.01..=f32::INFINITY))
-                                                .changed();
-                                        });
-                                        let mut altura = 2.0 * size[0];
-                                        ui.horizontal(|ui| {
-                                            ui.label("Height");
-                                            if ui
-                                                .add(DragValue::new(&mut altura).speed(0.05).range(0.0..=f32::INFINITY))
-                                                .changed()
-                                            {
-                                                size[0] = altura.max(0.0) * 0.5;
-                                                cambiado = true;
-                                            }
-                                        });
-                                    }
-                                    _ => {}
-                                }
-
-                                if tipo == "Box" || tipo == "Sphere" {
-                                    let pulsado = ui
-                                        .add_enabled_ui(!modelo.is_empty(), |ui| ui.button("🎯 Ajustar a la malla").clicked())
-                                        .inner;
-                                    if pulsado {
-                                        let (lo, hi) = cotas_entidad;
-                                        for i in 0..3 {
-                                            center[i] = (lo[i] + hi[i]) * 0.5;
-                                        }
-                                        if tipo == "Box" {
-                                            for i in 0..3 {
-                                                size[i] = ((hi[i] - lo[i]) * 0.5).max(0.005);
-                                            }
-                                        } else {
-                                            let mayor = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(hi[2] - lo[2]);
-                                            size[0] = (mayor * 0.5).max(0.01);
-                                        }
-                                        cambiado = true;
-                                    }
-                                }
-
-                                if cambiado {
-                                    if let Some(c) = phys.colliders.first_mut() {
-                                        c.offset = center;
-                                        c.size = size;
-                                    } else if tipo == "Box" {
-                                        phys.box_offset = center;
-                                        phys.box_extents = size;
-                                    } else {
-                                        let is_trigger = phys.is_trigger;
-                                        phys.colliders.push(ColliderSpec {
-                                            shape: tipo.clone(),
-                                            size,
-                                            offset: center,
-                                            is_trigger,
-                                            material: String::new(),
-                                            direction: "Y".to_string(),
-                                        });
-                                    }
-                                }
-                            }
-
-                        });
-                        if egui::collapsing_header::CollapsingState::load_with_default_open(
-                            ui.ctx(),
-                            ui.make_persistent_id(("seccion_componente", "collider")),
-                            false,
-                        )
-                        .is_open()
-                        {
-                            self.collider_seccion_abierta = true;
-                        }
-                    } else if phys.has_collider {
-                        // P3: cada collider es su propio componente, como
-                        // en Unity. Fricción y elasticidad son del cuerpo
-                        // (compartidos) y van una sola vez, arriba.
-                        seccion_componente(ui, "colliders", "🧊 Colliders", TipoComponente::Collider, true, self.portapapeles.as_ref(), &mut accion_cols, |ui| {
-                            let material_efectivo = phys.body_fallback_material();
-                            let mut friccion_mostrada = material_efectivo.dynamic_friction;
-                            if ui.add(Slider::new(&mut friccion_mostrada, 0.0..=1.0).text("Fricción")).changed() {
-                                phys.legacy_friction = Some(friccion_mostrada);
-                            }
-                            let mut bounciness_mostrado = material_efectivo.bounciness;
-                            if ui.add(Slider::new(&mut bounciness_mostrado, 0.0..=1.0).text("Elasticidad (Bounciness)")).changed() {
-                                phys.legacy_restitution = Some(bounciness_mostrado);
-                            }
-                            ui.label(
-                                RichText::new("Fricción y elasticidad son del cuerpo: las comparten sus colliders.")
-                                    .weak(),
-                            );
-                        });
-                        if egui::collapsing_header::CollapsingState::load_with_default_open(
-                            ui.ctx(),
-                            ui.make_persistent_id(("seccion_componente", "colliders")),
-                            false,
-                        )
-                        .is_open()
-                        {
-                            self.collider_seccion_abierta = true;
-                        }
-
-                        let mut acciones: Vec<AccionCollider> = Vec::new();
-                        for i in 0..phys.colliders.len() {
-                            let titulo = format!("{} Collider", phys.colliders[i].shape);
-                            egui::CollapsingHeader::new(titulo)
-                                .id_salt(("collider_spec", selected_id.unwrap_or(0), i))
-                                .default_open(true)
-                                .show(ui, |ui| {
-                                    let spec = &mut phys.colliders[i];
-                                    ui.checkbox(&mut spec.is_trigger, "Is Trigger");
-
-                                    let mut center = spec.offset;
-                                    let mut size = spec.size;
-                                    let mut cambiado = false;
-
+                            match spec.shape.as_str() {
+                                "Sphere" => {
                                     ui.horizontal(|ui| {
-                                        ui.label("Center");
-                                        for (eje, v) in ["X", "Y", "Z"].iter().zip(center.iter_mut()) {
-                                            ui.label(*eje);
-                                            cambiado |= ui.add(DragValue::new(v).speed(0.05)).changed();
-                                        }
+                                        ui.label("Radius");
+                                        cambiado |= ui
+                                            .add(DragValue::new(&mut size[0]).speed(0.05).range(0.01..=f32::INFINITY))
+                                            .changed();
                                     });
-
-                                    match spec.shape.as_str() {
-                                        "Sphere" => {
-                                            ui.horizontal(|ui| {
-                                                ui.label("Radius");
-                                                cambiado |= ui
-                                                    .add(DragValue::new(&mut size[0]).speed(0.05).range(0.01..=f32::INFINITY))
-                                                    .changed();
-                                            });
-                                        }
-                                        "Capsule" => {
-                                            ui.horizontal(|ui| {
-                                                ui.label("Radius");
-                                                cambiado |= ui
-                                                    .add(DragValue::new(&mut size[1]).speed(0.05).range(0.01..=f32::INFINITY))
-                                                    .changed();
-                                            });
-                                            let mut altura = 2.0 * (size[0] + size[1]);
-                                            ui.horizontal(|ui| {
-                                                ui.label("Height");
-                                                if ui
-                                                    .add(DragValue::new(&mut altura).speed(0.05).range(0.0..=f32::INFINITY))
-                                                    .changed()
-                                                {
-                                                    size[0] = (altura * 0.5 - size[1]).max(0.0);
-                                                    cambiado = true;
-                                                }
-                                            });
-                                            ui.label(RichText::new("Dirección: Y").weak());
-                                        }
-                                        "Cylinder" => {
-                                            ui.horizontal(|ui| {
-                                                ui.label("Radius");
-                                                cambiado |= ui
-                                                    .add(DragValue::new(&mut size[1]).speed(0.05).range(0.01..=f32::INFINITY))
-                                                    .changed();
-                                            });
-                                            let mut altura = 2.0 * size[0];
-                                            ui.horizontal(|ui| {
-                                                ui.label("Height");
-                                                if ui
-                                                    .add(DragValue::new(&mut altura).speed(0.05).range(0.0..=f32::INFINITY))
-                                                    .changed()
-                                                {
-                                                    size[0] = altura.max(0.0) * 0.5;
-                                                    cambiado = true;
-                                                }
-                                            });
-                                        }
-                                        _ => {
-                                            // Box (y cualquier forma desconocida).
-                                            ui.horizontal(|ui| {
-                                                ui.label("Size");
-                                                for (eje, h) in ["X", "Y", "Z"].iter().zip(size.iter_mut()) {
-                                                    ui.label(*eje);
-                                                    let mut completo = *h * 2.0;
-                                                    if ui
-                                                        .add(DragValue::new(&mut completo).speed(0.05).range(0.01..=f32::INFINITY))
-                                                        .changed()
-                                                    {
-                                                        *h = completo.max(0.01) * 0.5;
-                                                        cambiado = true;
-                                                    }
-                                                }
-                                            });
-                                        }
-                                    }
-
-                                    if spec.shape == "Box" || spec.shape == "Sphere" {
-                                        let pulsado = ui
-                                            .add_enabled_ui(!modelo_entidad.is_empty(), |ui| {
-                                                ui.button("🎯 Ajustar a la malla").clicked()
-                                            })
-                                            .inner;
-                                        if pulsado {
-                                            let (lo, hi) = cotas_entidad;
-                                            for k in 0..3 {
-                                                center[k] = (lo[k] + hi[k]) * 0.5;
-                                            }
-                                            if spec.shape == "Box" {
-                                                for k in 0..3 {
-                                                    size[k] = ((hi[k] - lo[k]) * 0.5).max(0.005);
-                                                }
-                                            } else {
-                                                let mayor = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(hi[2] - lo[2]);
-                                                size[0] = (mayor * 0.5).max(0.01);
-                                            }
+                                }
+                                "Capsule" => {
+                                    ui.horizontal(|ui| {
+                                        ui.label("Radius");
+                                        cambiado |= ui
+                                            .add(DragValue::new(&mut size[1]).speed(0.05).range(0.01..=f32::INFINITY))
+                                            .changed();
+                                    });
+                                    let mut altura = 2.0 * (size[0] + size[1]);
+                                    ui.horizontal(|ui| {
+                                        ui.label("Height");
+                                        if ui
+                                            .add(DragValue::new(&mut altura).speed(0.05).range(0.0..=f32::INFINITY))
+                                            .changed()
+                                        {
+                                            size[0] = (altura * 0.5 - size[1]).max(0.0);
                                             cambiado = true;
                                         }
-                                    }
-
-                                    if cambiado {
-                                        spec.offset = center;
-                                        spec.size = size;
-                                    }
-
+                                    });
+                                    // El desplegable de dirección llega en E5.
+                                    ui.label(RichText::new("Dirección: Y").weak());
+                                }
+                                "Cylinder" => {
                                     ui.horizontal(|ui| {
-                                        if ui.small_button("⧉ Duplicar").clicked() {
-                                            acciones.push(AccionCollider::Duplicar(i));
-                                        }
-                                        if ui.small_button("🗑 Quitar").clicked() {
-                                            acciones.push(AccionCollider::Quitar(i));
+                                        ui.label("Radius");
+                                        cambiado |= ui
+                                            .add(DragValue::new(&mut size[1]).speed(0.05).range(0.01..=f32::INFINITY))
+                                            .changed();
+                                    });
+                                    let mut altura = 2.0 * size[0];
+                                    ui.horizontal(|ui| {
+                                        ui.label("Height");
+                                        if ui
+                                            .add(DragValue::new(&mut altura).speed(0.05).range(0.0..=f32::INFINITY))
+                                            .changed()
+                                        {
+                                            size[0] = altura.max(0.0) * 0.5;
+                                            cambiado = true;
                                         }
                                     });
-                                });
+                                }
+                                _ => {
+                                    // Box (y cualquier forma desconocida): tamaño completo.
+                                    ui.horizontal(|ui| {
+                                        ui.label("Size");
+                                        for (eje, h) in ["X", "Y", "Z"].iter().zip(size.iter_mut()) {
+                                            ui.label(*eje);
+                                            let mut completo = *h * 2.0;
+                                            if ui
+                                                .add(DragValue::new(&mut completo).speed(0.05).range(0.01..=f32::INFINITY))
+                                                .changed()
+                                            {
+                                                *h = completo.max(0.01) * 0.5;
+                                                cambiado = true;
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+
+                            if spec.shape == "Box" || spec.shape == "Sphere" {
+                                let pulsado = ui
+                                    .add_enabled_ui(!modelo.is_empty(), |ui| {
+                                        ui.button("🎯 Ajustar a la malla").clicked()
+                                    })
+                                    .inner;
+                                if pulsado {
+                                    let (lo, hi) = cotas;
+                                    for k in 0..3 {
+                                        center[k] = (lo[k] + hi[k]) * 0.5;
+                                    }
+                                    if spec.shape == "Box" {
+                                        for k in 0..3 {
+                                            size[k] = ((hi[k] - lo[k]) * 0.5).max(0.005);
+                                        }
+                                    } else {
+                                        let mayor = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(hi[2] - lo[2]);
+                                        size[0] = (mayor * 0.5).max(0.01);
+                                    }
+                                    cambiado = true;
+                                }
+                            }
+
+                            if cambiado {
+                                spec.offset = center;
+                                spec.size = size;
+                            }
+                            trigger_cambiado || cambiado
+                        }
+
+                        let hay_portapapeles = self.portapapeles_collider.is_some();
+                        let mut acciones: Vec<AccionCollider> = Vec::new();
+                        let mut alguna_abierta = false;
+
+                        if phys.colliders.is_empty()
+                            && phys.mesh_collider == glass_core::MeshColliderMode::None
+                        {
+                            // Sección virtual respaldada por el legado. Comparte id con
+                            // el spec 0 para seguir abierta tras materializar.
+                            let spec_mostrado = spec_virtual(phys, &modelo_entidad);
+                            let titulo = format!("🧊 {} Collider", spec_mostrado.shape);
+                            let mut editado = spec_mostrado.clone();
+                            let mut accion: Option<AccionCollider> = None;
+                            let resultado = seccion_collider_spec(
+                                ui,
+                                "collider_spec_0",
+                                &titulo,
+                                &spec_mostrado,
+                                0,
+                                hay_portapapeles,
+                                true,
+                                &mut accion,
+                                |ui| editar_spec(ui, &mut editado, &modelo_entidad, cotas_entidad),
+                            );
+                            if let Some(cambiado) = resultado {
+                                alguna_abierta = true;
+                                if cambiado {
+                                    // Materialización: desde aquí es un spec real.
+                                    phys.colliders.push(editado);
+                                }
+                            }
+                            match accion {
+                                // No hay spec que borrar: se quita el componente.
+                                Some(AccionCollider::Quitar(_)) => remove_collider = true,
+                                Some(a) => acciones.push(a),
+                                None => {}
+                            }
+                        } else {
+                            for i in 0..phys.colliders.len() {
+                                let spec_actual = phys.colliders[i].clone();
+                                let titulo = format!("🧊 {} Collider", spec_actual.shape);
+                                let id_salt = format!("collider_spec_{i}");
+                                let mut accion: Option<AccionCollider> = None;
+                                let spec = &mut phys.colliders[i];
+                                let resultado = seccion_collider_spec(
+                                    ui,
+                                    &id_salt,
+                                    &titulo,
+                                    &spec_actual,
+                                    i,
+                                    hay_portapapeles,
+                                    true,
+                                    &mut accion,
+                                    |ui| {
+                                        editar_spec(ui, spec, &modelo_entidad, cotas_entidad);
+                                        let mut duplicar = false;
+                                        ui.horizontal(|ui| {
+                                            if ui.small_button("⧉ Duplicar").clicked() {
+                                                duplicar = true;
+                                            }
+                                        });
+                                        duplicar
+                                    },
+                                );
+                                if let Some(duplicar) = resultado {
+                                    alguna_abierta = true;
+                                    if duplicar {
+                                        acciones.push(AccionCollider::Duplicar(i));
+                                    }
+                                }
+                                if let Some(a) = accion {
+                                    acciones.push(a);
+                                }
+                            }
                         }
 
                         if phys.mesh_collider != glass_core::MeshColliderMode::None {
-                            egui::CollapsingHeader::new("Mesh Collider")
-                                .id_salt(("mesh_collider", selected_id.unwrap_or(0)))
-                                .default_open(true)
-                                .show(ui, |ui| {
+                            // Spec de relleno: con menu_completo = false no se copia ni pega.
+                            let relleno = glass_core::spec_por_defecto("Box");
+                            let mut accion: Option<AccionCollider> = None;
+                            let resultado = seccion_collider_spec(
+                                ui,
+                                "mesh_collider",
+                                "🧊 Mesh Collider",
+                                &relleno,
+                                0,
+                                false,
+                                false,
+                                &mut accion,
+                                |ui| {
                                     if modelo_entidad.is_empty() {
                                         ui.label(RichText::new("(sin malla: caerá a los primitivos)").weak());
                                     } else {
@@ -2005,44 +2043,42 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                                 .color(Color32::from_rgb(255, 190, 80)),
                                         );
                                     }
-                                    if ui.small_button("🗑 Quitar").clicked() {
-                                        acciones.push(AccionCollider::QuitarMesh);
-                                    }
-                                });
+                                },
+                            );
+                            if resultado.is_some() {
+                                alguna_abierta = true;
+                            }
+                            if let Some(AccionCollider::Quitar(_)) = accion {
+                                acciones.push(AccionCollider::QuitarMesh);
+                            }
                         }
 
-                        if !acciones.is_empty() {
-                            // Aplicar tras pintar, reconstruyendo la lista
-                            // para que varias acciones en el mismo frame
-                            // no desplacen índices.
-                            let originales = std::mem::take(&mut phys.colliders);
-                            let mut nuevos = Vec::with_capacity(originales.len() + 1);
-                            for (i, spec) in originales.into_iter().enumerate() {
-                                let quitar = acciones.contains(&AccionCollider::Quitar(i));
-                                let duplicar = acciones.contains(&AccionCollider::Duplicar(i));
-                                match (quitar, duplicar) {
-                                    (true, false) => {}
-                                    (false, true) => {
-                                        let copia = spec.clone();
-                                        nuevos.push(spec);
-                                        nuevos.push(copia);
-                                    }
-                                    _ => nuevos.push(spec),
-                                }
-                            }
-                            phys.colliders = nuevos;
-                            if acciones.contains(&AccionCollider::QuitarMesh) {
-                                phys.mesh_collider = glass_core::MeshColliderMode::None;
-                            }
-                            // Sin specs y sin mesh no queda ningún
-                            // collider: apagar el componente para no
-                            // resucitar el inferido legacy.
-                            if phys.colliders.is_empty()
-                                && phys.mesh_collider == glass_core::MeshColliderMode::None
-                            {
-                                phys.has_collider = false;
-                                remove_collider = true;
-                            }
+                        if alguna_abierta {
+                            self.collider_seccion_abierta = true;
+                        }
+
+                        // Copiar se resuelve aquí (gana la última del frame).
+                        if let Some(spec) = acciones.iter().rev().find_map(|a| match a {
+                            AccionCollider::CopiarSpec(s) => Some(s.clone()),
+                            _ => None,
+                        }) {
+                            self.portapapeles_collider = Some(spec);
+                        }
+
+                        // Solo se aplica si hay acciones estructurales. Con la lista
+                        // vacía (sección virtual) aplicar devolvería true y quitaría
+                        // el collider cada frame.
+                        let hay_estructurales = acciones
+                            .iter()
+                            .any(|a| !matches!(a, AccionCollider::CopiarSpec(_)));
+                        if hay_estructurales
+                            && aplicar_acciones_colliders(
+                                phys,
+                                &acciones,
+                                self.portapapeles_collider.as_ref(),
+                            )
+                        {
+                            remove_collider = true;
                         }
                     }
                     ui.separator();
@@ -2051,16 +2087,6 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                     remove_rigidbody = true;
                 } else {
                     self.ejecutar_accion_cabecera(entity, TipoComponente::Rigidbody, accion_rb);
-                }
-                if accion_col == AccionCabecera::Quitar {
-                    remove_collider = true;
-                } else {
-                    self.ejecutar_accion_cabecera(entity, TipoComponente::Collider, accion_col);
-                }
-                if accion_cols == AccionCabecera::Quitar {
-                    remove_collider = true;
-                } else {
-                    self.ejecutar_accion_cabecera(entity, TipoComponente::Collider, accion_cols);
                 }
                 if remove_rigidbody || remove_collider {
                     if let Some(ref mut phys) = entity.physics {
@@ -2665,8 +2691,9 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
 #[cfg(test)]
 mod tests {
     use super::{
-        aplicar_datos, escala_proporcional, extraer_componente, instalar_componente,
-        referencias_a_physmat, scan_model_names_in, TipoComponente,
+        aplicar_acciones_colliders, aplicar_datos, escala_proporcional, extraer_componente,
+        instalar_componente, referencias_a_physmat, scan_model_names_in, spec_virtual,
+        tamano_convertido, AccionCollider, TipoComponente,
     };
     use glass_core::physics_material::PhysicsMaterial;
     use glass_core::{CameraData, ColliderSpec, EntityData, PhysicsData, SceneState};
@@ -3003,6 +3030,293 @@ mod tests {
             "el archivo inválido no se toca"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn spec_completa(
+        shape: &str,
+        material: &str,
+        direction: &str,
+        size: [f32; 3],
+    ) -> ColliderSpec {
+        ColliderSpec {
+            shape: shape.to_string(),
+            size,
+            offset: [0.0; 3],
+            is_trigger: false,
+            material: material.to_string(),
+            direction: direction.to_string(),
+        }
+    }
+
+    fn assert_spec(
+        spec: &ColliderSpec,
+        shape: &str,
+        material: &str,
+        direction: &str,
+        size: [f32; 3],
+    ) {
+        assert_eq!(spec.shape, shape);
+        assert_eq!(spec.material, material);
+        assert_eq!(spec.direction, direction);
+        assert_eq!(spec.size, size);
+    }
+
+    #[test]
+    fn quitar_el_del_medio_no_toca_a_los_demas() {
+        let mut phys = PhysicsData {
+            colliders: vec![
+                spec_completa("Box", "madera", "Y", [1.0, 2.0, 3.0]),
+                spec_completa("Sphere", "metal", "X", [4.0, 0.0, 0.0]),
+                spec_completa("Capsule", "piedra", "Z", [0.5, 2.0, 0.0]),
+            ],
+            ..Default::default()
+        };
+
+        aplicar_acciones_colliders(&mut phys, &[AccionCollider::Quitar(1)], None);
+
+        assert_eq!(phys.colliders.len(), 2);
+        assert_spec(&phys.colliders[0], "Box", "madera", "Y", [1.0, 2.0, 3.0]);
+        assert_spec(&phys.colliders[1], "Capsule", "piedra", "Z", [0.5, 2.0, 0.0]);
+    }
+
+    #[test]
+    fn pegar_copia_tambien_material_y_direction() {
+        let copiado = spec_completa(
+            "Capsule",
+            "materials/hielo.physmat.json",
+            "X",
+            [0.25, 1.5, 0.0],
+        );
+        let mut phys = PhysicsData {
+            colliders: vec![spec_completa("Box", "madera", "Y", [1.0; 3])],
+            ..Default::default()
+        };
+
+        aplicar_acciones_colliders(&mut phys, &[AccionCollider::PegarEn(0)], Some(&copiado));
+
+        assert_eq!(phys.colliders.len(), 1);
+        assert_spec(
+            &phys.colliders[0],
+            "Capsule",
+            "materials/hielo.physmat.json",
+            "X",
+            [0.25, 1.5, 0.0],
+        );
+    }
+
+    #[test]
+    fn pegar_como_nuevo_inserta_tras_el_indice() {
+        let copiado = spec_completa("Capsule", "hielo", "X", [0.25, 2.0, 0.0]);
+        let mut phys = PhysicsData {
+            colliders: vec![
+                spec_completa("Box", "madera", "Y", [1.0; 3]),
+                spec_completa("Sphere", "metal", "Y", [0.5, 0.0, 0.0]),
+            ],
+            ..Default::default()
+        };
+
+        aplicar_acciones_colliders(
+            &mut phys,
+            &[AccionCollider::PegarComoNuevo(0)],
+            Some(&copiado),
+        );
+
+        assert_eq!(phys.colliders.len(), 3);
+        assert_spec(&phys.colliders[0], "Box", "madera", "Y", [1.0; 3]);
+        assert_spec(&phys.colliders[1], "Capsule", "hielo", "X", [0.25, 2.0, 0.0]);
+        assert_spec(&phys.colliders[2], "Sphere", "metal", "Y", [0.5, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn quitar_el_ultimo_sin_mesh_devuelve_true() {
+        let mut phys = PhysicsData {
+            colliders: vec![spec_completa("Box", "", "Y", [0.5; 3])],
+            ..Default::default()
+        };
+        assert!(aplicar_acciones_colliders(
+            &mut phys,
+            &[AccionCollider::Quitar(0)],
+            None
+        ));
+    }
+
+    #[test]
+    fn quitar_el_ultimo_con_mesh_devuelve_false() {
+        let mut phys = PhysicsData {
+            colliders: vec![spec_completa("Box", "", "Y", [0.5; 3])],
+            mesh_collider: glass_core::MeshColliderMode::Convex,
+            ..Default::default()
+        };
+        assert!(!aplicar_acciones_colliders(
+            &mut phys,
+            &[AccionCollider::Quitar(0)],
+            None
+        ));
+    }
+
+    #[test]
+    fn spec_virtual_de_caja_y_de_esfera() {
+        let phys = PhysicsData {
+            box_extents: [0.5, 0.25, 0.5],
+            box_offset: [0.0, 1.0, 0.0],
+            is_trigger: true,
+            ..Default::default()
+        };
+
+        let caja = spec_virtual(&phys, "");
+        assert_spec(&caja, "Box", "", "Y", [0.5, 0.25, 0.5]);
+        assert_eq!(caja.offset, [0.0, 1.0, 0.0]);
+        assert!(caja.is_trigger);
+
+        let esfera = spec_virtual(&phys, "sphere");
+        assert_spec(&esfera, "Sphere", "", "Y", [0.5, 0.0, 0.0]);
+        assert_eq!(esfera.offset, [0.0, 1.0, 0.0]);
+        assert!(esfera.is_trigger);
+    }
+
+    fn spec_simple(shape: &str, material: &str) -> ColliderSpec {
+        let mut s = glass_core::spec_por_defecto(shape);
+        s.material = material.to_string();
+        s.direction = "Y".to_string();
+        s
+    }
+
+    #[test]
+    fn acciones_del_mismo_frame_no_desplazan_indices() {
+        let mut p = PhysicsData {
+            colliders: vec![
+                spec_simple("Box", "box"),
+                spec_simple("Sphere", "sphere"),
+                spec_simple("Capsule", "capsule"),
+            ],
+            ..Default::default()
+        };
+        let acciones = [AccionCollider::Quitar(0), AccionCollider::Duplicar(2)];
+
+        let quedan = aplicar_acciones_colliders(&mut p, &acciones, None);
+
+        assert!(!quedan);
+        assert_eq!(p.colliders.len(), 3);
+        assert_eq!(p.colliders[0].shape, "Sphere");
+        assert_eq!(p.colliders[0].material, "sphere");
+        assert_eq!(p.colliders[1].shape, "Capsule");
+        assert_eq!(p.colliders[1].material, "capsule");
+        assert_eq!(p.colliders[2].shape, "Capsule");
+        assert_eq!(p.colliders[2].material, "capsule");
+    }
+
+    #[test]
+    fn copiar_spec_es_ignorada_por_aplicar() {
+        let mut p = PhysicsData {
+            colliders: vec![spec_simple("Box", "box")],
+            ..Default::default()
+        };
+        let otra = spec_simple("Sphere", "otra");
+        let acciones = [AccionCollider::CopiarSpec(otra)];
+
+        let quedan = aplicar_acciones_colliders(&mut p, &acciones, None);
+
+        assert!(!quedan);
+        assert_eq!(p.colliders.len(), 1);
+        assert_eq!(p.colliders[0].shape, "Box");
+        assert_eq!(p.colliders[0].material, "box");
+    }
+
+    #[test]
+    fn pegar_sin_portapapeles_no_hace_nada() {
+        let mut p = PhysicsData {
+            colliders: vec![spec_simple("Box", "box")],
+            ..Default::default()
+        };
+        let acciones = [AccionCollider::PegarEn(0), AccionCollider::PegarComoNuevo(0)];
+
+        let quedan = aplicar_acciones_colliders(&mut p, &acciones, None);
+
+        assert!(!quedan);
+        assert_eq!(p.colliders.len(), 1);
+        assert_eq!(p.colliders[0].shape, "Box");
+    }
+
+    #[test]
+    fn indices_fuera_de_rango_se_ignoran() {
+        let mut p = PhysicsData {
+            colliders: vec![spec_simple("Box", "box")],
+            ..Default::default()
+        };
+        let clip = spec_simple("Sphere", "clip");
+        let acciones = [
+            AccionCollider::Quitar(7),
+            AccionCollider::Duplicar(9),
+            AccionCollider::PegarEn(4),
+        ];
+
+        let quedan = aplicar_acciones_colliders(&mut p, &acciones, Some(&clip));
+
+        assert!(!quedan);
+        assert_eq!(p.colliders.len(), 1);
+        assert_eq!(p.colliders[0].shape, "Box");
+        assert_eq!(p.colliders[0].material, "box");
+    }
+
+    #[test]
+    fn pegar_en_virtual_materializa() {
+        let mut p = PhysicsData {
+            colliders: Vec::new(),
+            ..Default::default()
+        };
+        let clip = spec_simple("Sphere", "clip");
+        let acciones = [AccionCollider::PegarEn(0)];
+
+        let quedan = aplicar_acciones_colliders(&mut p, &acciones, Some(&clip));
+
+        assert!(!quedan);
+        assert_eq!(p.colliders.len(), 1);
+        assert_eq!(p.colliders[0].shape, "Sphere");
+        assert_eq!(p.colliders[0].material, "clip");
+    }
+
+    #[test]
+    fn quitar_todo_y_mesh_devuelve_true() {
+        let mut p = PhysicsData {
+            colliders: vec![spec_simple("Box", "box")],
+            ..Default::default()
+        };
+        p.mesh_collider = glass_core::MeshColliderMode::TriMesh;
+        let acciones = [AccionCollider::Quitar(0), AccionCollider::QuitarMesh];
+
+        let quedan = aplicar_acciones_colliders(&mut p, &acciones, None);
+
+        assert!(quedan);
+        assert!(p.colliders.is_empty());
+        assert!(matches!(p.mesh_collider, glass_core::MeshColliderMode::None));
+    }
+
+    #[test]
+    fn spec_virtual_capsula_convierte_tamanos() {
+        let p = PhysicsData {
+            box_extents: [0.4, 0.9, 0.4],
+            box_offset: [1.0, 2.0, 3.0],
+            is_trigger: true,
+            ..Default::default()
+        };
+
+        let s = spec_virtual(&p, "capsule");
+
+        assert_eq!(s.shape, "Capsule");
+        assert_eq!(s.size, [0.9, 0.4, 0.0]);
+        assert_eq!(s.offset, [1.0, 2.0, 3.0]);
+        assert!(s.is_trigger);
+        assert_eq!(s.material, "");
+        assert_eq!(s.direction, "Y");
+    }
+
+    #[test]
+    fn conversiones_entre_familias() {
+        assert_eq!(tamano_convertido("Sphere", "Box", [0.3, 0.0, 0.0]), [0.3, 0.3, 0.3]);
+        assert_eq!(tamano_convertido("Capsule", "Sphere", [0.8, 0.3, 0.0]), [0.3, 0.0, 0.0]);
+        assert_eq!(tamano_convertido("Box", "Capsule", [0.2, 0.7, 0.2]), [0.7, 0.2, 0.0]);
+        assert_eq!(tamano_convertido("Capsule", "Cylinder", [1.0, 2.0, 3.0]), [1.0, 2.0, 3.0]);
+        assert_eq!(tamano_convertido("Box", "Box", [0.1, 0.2, 0.3]), [0.1, 0.2, 0.3]);
     }
 
 }
