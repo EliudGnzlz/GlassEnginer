@@ -4887,31 +4887,31 @@ fn convex_hull_sostiene_como_caja() {
         }
     }
 
+    fn comprobar_material(
+        world: &PhysicsWorld,
+        body: BodyHandle,
+        esperado: (f32, f32),
+        contexto: &str,
+    ) {
+        let valores = world.collider_friction_restitution(body);
+        assert_eq!(valores.len(), 1, "{contexto}: el cuerpo debe tener un collider");
+        let tolerancia = 1.0e-6;
+        assert!(
+            (valores[0].0 - esperado.0).abs() <= tolerancia,
+            "{contexto}: fricción esperada {}, obtenida {}",
+            esperado.0,
+            valores[0].0
+        );
+        assert!(
+            (valores[0].1 - esperado.1).abs() <= tolerancia,
+            "{contexto}: restitución esperada {}, obtenida {}",
+            esperado.1,
+            valores[0].1
+        );
+    }
+
     #[test]
     fn refresco_solo_afecta_a_los_que_referencian() {
-        fn comprobar_material(
-            world: &PhysicsWorld,
-            body: BodyHandle,
-            esperado: (f32, f32),
-            contexto: &str,
-        ) {
-            let valores = world.collider_friction_restitution(body);
-            assert_eq!(valores.len(), 1, "{contexto}: el cuerpo debe tener un collider");
-            let tolerancia = 1.0e-6;
-            assert!(
-                (valores[0].0 - esperado.0).abs() <= tolerancia,
-                "{contexto}: fricción esperada {}, obtenida {}",
-                esperado.0,
-                valores[0].0
-            );
-            assert!(
-                (valores[0].1 - esperado.1).abs() <= tolerancia,
-                "{contexto}: restitución esperada {}, obtenida {}",
-                esperado.1,
-                valores[0].1
-            );
-        }
-
         let mut world = PhysicsWorld::default();
         let material_inicial = material(1.0, 0.0);
 
@@ -4983,6 +4983,112 @@ fn convex_hull_sostiene_como_caja() {
         assert_eq!(world.collider_material_id(collider_a), id_a);
         assert_eq!(world.collider_material_id(collider_b), id_b);
         assert_eq!(world.collider_material_id(collider_c), id_c);
+    }
+
+    #[test]
+    fn refresh_asset_actualiza_dos_colliders_compartidos() {
+        let mut world = PhysicsWorld::new();
+
+        let material_inicial = material(1.0, 0.0);
+
+        let cuerpo_1 = crear_cuerpo(&mut world, 1, true, [0.0, 1.0, 0.0]);
+        let collider_1 = world
+            .attach_box_collider(
+                cuerpo_1,
+                [0.5, 0.5, 0.5],
+                &material_inicial,
+                "materials/hielo",
+            )
+            .expect("collider de hielo 1");
+
+        let cuerpo_2 = crear_cuerpo(&mut world, 2, true, [2.0, 1.0, 0.0]);
+        let collider_2 = world
+            .attach_box_collider(
+                cuerpo_2,
+                [0.5, 0.5, 0.5],
+                &material_inicial,
+                "materials/hielo",
+            )
+            .expect("collider de hielo 2");
+
+        let cuerpo_3 = crear_cuerpo(&mut world, 3, true, [4.0, 1.0, 0.0]);
+        let _collider_3 = world
+            .attach_box_collider(
+                cuerpo_3,
+                [0.5, 0.5, 0.5],
+                &material_inicial,
+                "materials/roca",
+            )
+            .expect("collider de roca");
+
+        let id_1_antes = world.collider_material_id(collider_1);
+        let id_2_antes = world.collider_material_id(collider_2);
+
+        let actualizados = world.refresh_asset("materials/hielo", &material(0.25, 0.5));
+        assert_eq!(
+            actualizados, 2,
+            "el refresco debe actualizar exactamente los dos colliders compartidos de hielo"
+        );
+
+        comprobar_material(
+            &world,
+            cuerpo_1,
+            (0.25, 0.5),
+            "el cuerpo 1 debe usar los valores refrescados de hielo",
+        );
+        comprobar_material(
+            &world,
+            cuerpo_2,
+            (0.25, 0.5),
+            "el cuerpo 2 debe usar los valores refrescados de hielo",
+        );
+        comprobar_material(
+            &world,
+            cuerpo_3,
+            (1.0, 0.0),
+            "el cuerpo de roca no debe cambiar con el refresco de hielo",
+        );
+
+        assert_eq!(
+            world.collider_material_id(collider_1),
+            id_1_antes,
+            "el id estable por referencia no debe cambiar para el collider de hielo 1"
+        );
+        assert_eq!(
+            world.collider_material_id(collider_2),
+            id_2_antes,
+            "el id estable por referencia no debe cambiar para el collider de hielo 2"
+        );
+    }
+
+    #[test]
+    fn cuerpo_con_legado_usa_sus_valores_efectivos() {
+        let mut world = PhysicsWorld::new();
+        let cuerpo = crear_cuerpo(&mut world, 1, true, [0.0, 1.0, 0.0]);
+
+        let material_legado = material(0.1, 0.6);
+        let _collider = world
+            .attach_box_collider(
+                cuerpo,
+                [0.5, 0.5, 0.5],
+                &material_legado,
+                "",
+            )
+            .expect("collider con material de legado");
+
+        let efectivos = world.collider_friction_restitution(cuerpo);
+        assert_eq!(
+            efectivos,
+            vec![(0.1, 0.6)],
+            "Play debe usar los valores efectivos del material de legado, no el defecto del proyecto (0.7, 0.05)"
+        );
+
+        comprobar_material(
+            &world,
+            cuerpo,
+            (0.1, 0.6),
+            "el cuerpo autorado con legado debe conservar sus valores efectivos",
+        );
     }
 
     /// E6: el cfg del collider de malla manda: con `is_trigger` la lámina

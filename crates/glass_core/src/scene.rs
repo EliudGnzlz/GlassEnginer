@@ -3806,4 +3806,135 @@ mod scene_index_tests {
         assert_eq!(specs_mesh.total_colliders(), 3);
     }
 
+const TOL: f32 = 1e-6;
+
+    fn assert_f32(actual: f32, esperado: f32, que: &str) {
+        assert!(
+            (actual - esperado).abs() < TOL,
+            "{que}: esperado {esperado}, obtenido {actual}"
+        );
+    }
+
+    fn assert_opt_f32(actual: Option<f32>, esperado: f32, que: &str) {
+        match actual {
+            Some(v) => assert_f32(v, esperado, que),
+            None => panic!("{que}: esperado Some({esperado}), obtenido None"),
+        }
+    }
+
+    fn assert_arr3(actual: [f32; 3], esperado: [f32; 3], que: &str) {
+        for i in 0..3 {
+            assert_f32(actual[i], esperado[i], &format!("{que}[{i}]"));
+        }
+    }
+
+    /// Busca una cadena exacta en cualquier nivel de un `serde_json::Value`.
+    /// Se usa para comprobar `mesh` sin depender de su tipo concreto.
+    fn json_contiene_cadena(v: &serde_json::Value, buscada: &str) -> bool {
+        match v {
+            serde_json::Value::String(s) => s == buscada,
+            serde_json::Value::Array(xs) => xs.iter().any(|x| json_contiene_cadena(x, buscada)),
+            serde_json::Value::Object(m) => m.values().any(|x| json_contiene_cadena(x, buscada)),
+            _ => false,
+        }
+    }
+
+    fn entidad<'a>(escena: &'a [EntityData], nombre: &str) -> &'a EntityData {
+        escena
+            .iter()
+            .find(|e| e.name == nombre)
+            .unwrap_or_else(|| panic!("la escena no contiene la entidad «{nombre}»"))
+    }
+
+    #[test]
+    fn escena_antigua_real_carga_con_legado() {
+        let texto = include_str!("../../../assets/scenes/PrimitivesPhysicsTest.scene.json");
+        let escena: Vec<EntityData> =
+            serde_json::from_str(texto).expect("la escena antigua debe deserializar");
+
+        // «Suelo Fisico»
+        let suelo = entidad(&escena, "Suelo Fisico");
+        let fis = suelo
+            .physics
+            .as_ref()
+            .expect("«Suelo Fisico» debe tener physics");
+
+        assert_opt_f32(fis.legacy_friction, 0.1, "Suelo.legacy_friction");
+        assert_opt_f32(fis.legacy_restitution, 0.6, "Suelo.legacy_restitution");
+        assert!(
+            fis.colliders.is_empty(),
+            "una escena antigua no trae specs de collider; obtenidos {}",
+            fis.colliders.len()
+        );
+        assert_eq!(fis.mesh_collider, MeshColliderMode::None);
+        assert_arr3(fis.box_extents, [15.0, 0.5, 15.0], "Suelo.box_extents");
+        assert_eq!(fis.body_type, "Static");
+
+        let mat = fis.body_fallback_material();
+        assert_f32(mat.dynamic_friction, 0.1, "Suelo.fallback.dynamic_friction");
+        assert_f32(mat.bounciness, 0.6, "Suelo.fallback.bounciness");
+        // Guardas explícitas contra caer en el defecto del proyecto (0.7 / 0.05).
+        assert!((mat.dynamic_friction - 0.7).abs() > TOL, "usa el defecto 0.7 en vez del legado");
+        assert!((mat.bounciness - 0.05).abs() > TOL, "usa el defecto 0.05 en vez del legado");
+
+        // «Esfera»
+        let esfera = entidad(&escena, "Esfera");
+        let fis_esfera = esfera
+            .physics
+            .as_ref()
+            .expect("«Esfera» debe tener physics");
+        assert_opt_f32(fis_esfera.legacy_friction, 0.1, "Esfera.legacy_friction");
+
+        let mesh = serde_json::to_value(&esfera.mesh).expect("mesh serializa");
+        assert!(
+            json_contiene_cadena(&mesh, "sphere"),
+            "«Esfera» debe usar el modelo \"sphere\"; mesh = {mesh}"
+        );
+    }
+
+    #[test]
+    fn escena_de_bloque_conserva_referencia_trigger_y_malla() {
+        let fisica_json = physics_json_con(&[
+            (
+                "colliders",
+                serde_json::json!([{
+                    "shape": "Box",
+                    "size": [0.5, 0.5, 0.5],
+                    "offset": [0.0, 0.0, 0.0],
+                    "is_trigger": true,
+                    "material": "materials/hielo",
+                    "direction": "Y"
+                }]),
+            ),
+            ("mesh_collider", serde_json::json!("Convex")),
+            ("mesh_collider_material", serde_json::json!("materials/hielo")),
+            ("mesh_collider_is_trigger", serde_json::json!(true)),
+        ]);
+
+        // Carga
+        let fis: PhysicsData = serde_json::from_value(fisica_json)
+            .expect("el JSON de bloque debe deserializar a PhysicsData");
+
+        assert_eq!(fis.colliders.len(), 1, "debe haber exactamente un spec");
+        let spec = &fis.colliders[0];
+        assert_eq!(spec.material, "materials/hielo");
+        assert!(spec.is_trigger, "el spec debe seguir siendo trigger");
+        assert_eq!(fis.mesh_collider, MeshColliderMode::Convex);
+        assert!(fis.mesh_collider_is_trigger);
+        assert_eq!(fis.mesh_collider_material, "materials/hielo");
+
+        // Guardado: cargar + guardar no debe reescribir los specs.
+        let guardado = serde_json::to_value(&fis).expect("PhysicsData serializa");
+
+        let specs = guardado["colliders"]
+            .as_array()
+            .expect("`colliders` guardado debe ser un array");
+        assert_eq!(specs.len(), 1, "el guardado debe conservar un único spec");
+        assert_eq!(specs[0]["material"], serde_json::json!("materials/hielo"));
+        assert_eq!(specs[0]["is_trigger"], serde_json::json!(true));
+        assert_eq!(guardado["mesh_collider_is_trigger"], serde_json::json!(true));
+        assert_eq!(guardado["mesh_collider_material"], serde_json::json!("materials/hielo"));
+        assert_eq!(guardado["mesh_collider"], serde_json::json!("Convex"));
+    }
+
 }

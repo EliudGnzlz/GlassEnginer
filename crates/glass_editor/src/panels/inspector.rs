@@ -3761,4 +3761,39 @@ mod tests {
         assert_eq!(tamano_convertido("Box", "Box", [0.1, 0.2, 0.3]), [0.1, 0.2, 0.3]);
     }
 
+    #[test]
+    fn spec_virtual_de_entidad_antigua_muestra_el_legado() {
+        let phys = PhysicsData {
+            box_extents: [15.0, 0.5, 15.0],
+            legacy_friction: Some(0.1),
+            legacy_restitution: Some(0.6),
+            ..Default::default()
+        };
+
+        let spec = spec_virtual(&phys, "");
+        assert_eq!(spec.shape, "Box");
+        assert_eq!(spec.size, [15.0, 0.5, 15.0]);
+        assert_eq!(spec.offset, phys.box_offset);
+        assert_eq!(spec.material, "");
+
+        let material = phys.body_fallback_material();
+        assert!((material.dynamic_friction - 0.1).abs() < 1e-6);
+        assert!((material.bounciness - 0.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn spec_virtual_de_esfera_antigua() {
+        let phys = PhysicsData {
+            box_extents: [0.5, 0.5, 0.5],
+            legacy_friction: Some(0.1),
+            legacy_restitution: Some(0.6),
+            ..Default::default()
+        };
+
+        let spec = spec_virtual(&phys, "sphere");
+        assert_eq!(spec.shape, "Sphere");
+        assert!((spec.size[0] - 0.5).abs() < 1e-6);
+        assert_eq!(spec.material, "");
+    }
+
 }
