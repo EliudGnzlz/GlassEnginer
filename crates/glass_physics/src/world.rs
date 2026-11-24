@@ -2890,10 +2890,12 @@ impl PhysicsWorld {
         self.body_map.get(&body_handle).copied()
     }
 
-    /// Diagnóstico/tests: (fricción, restitución) EFECTIVOS de cada
-    /// collider de Rapier del cuerpo, en el orden de `RigidBody::colliders`.
-    /// Es la lectura que usan los tests dorados del bloque de Physics
-    /// Material para fijar qué recibe realmente el solver.
+    /// Diagnóstico/tests: (fricción, restitución) con los que cada
+    /// collider de Rapier del cuerpo quedó registrado, en el orden
+    /// de `RigidBody::colliders`. Es la lectura que usan los tests
+    /// dorados del bloque de Physics Material. Ojo: son los
+    /// coeficientes por collider; lo que el solver aplica por par de
+    /// contacto pasa además por la regla de combinación.
     pub fn collider_friction_restitution(&self, body_handle: BodyHandle) -> Vec<(f32, f32)> {
         let Some((rapier_handle, _)) = self.get_rapier_handle(body_handle) else {
             return Vec::new();
@@ -2908,7 +2910,45 @@ impl PhysicsWorld {
             .collect()
     }
 
-    /// Diagnóstico/tests: masa efectiva del cuerpo en Rapier.
+    /// Diagnóstico/tests: el tipo de forma de cada collider de
+    /// Rapier del cuerpo ("cuboid", "convex", "trimesh", "ball",
+    /// "capsule", "otro"), en el orden de `RigidBody::colliders`.
+    /// Los tests dorados lo usan para probar que la ruta ejercida
+    /// creó la forma esperada y no cayó a un collider de respaldo.
+    pub fn collider_shape_kinds(&self, body_handle: BodyHandle) -> Vec<&'static str> {
+        let Some((rapier_handle, _)) = self.get_rapier_handle(body_handle) else {
+            return Vec::new();
+        };
+        let Some(rb) = self.rigid_body_set.get(rapier_handle) else {
+            return Vec::new();
+        };
+        rb.colliders()
+            .iter()
+            .filter_map(|&ch| self.collider_set.get(ch))
+            .map(|c| {
+                let shape = c.shape();
+                if shape.as_cuboid().is_some() {
+                    "cuboid"
+                } else if shape.as_convex_polyhedron().is_some() {
+                    "convex"
+                } else if shape.as_trimesh().is_some() {
+                    "trimesh"
+                } else if shape.as_ball().is_some() {
+                    "ball"
+                } else if shape.as_capsule().is_some() {
+                    "capsule"
+                } else {
+                    "otro"
+                }
+            })
+            .collect()
+    }
+
+    /// Diagnóstico/tests: masa del cuerpo según `RigidBody::mass()`
+    /// de Rapier. Rapier la recalcula de forma diferida: hay que dar
+    /// un `step` antes de leerla tras crear o modificar el cuerpo.
+    /// En cuerpos estáticos o cinemáticos devuelve la masa local
+    /// calculada por densidad, no la efectiva (infinita).
     pub fn body_mass(&self, body_handle: BodyHandle) -> Option<f32> {
         let (rapier_handle, _) = self.get_rapier_handle(body_handle)?;
         self.rigid_body_set.get(rapier_handle).map(|rb| rb.mass())
@@ -3343,6 +3383,14 @@ mod tests {
         assert!(world.create_character(777, [0.0, 0.0, 0.0], cfg));
         assert!(world.set_character_material(777, 0.3, 0.8));
         assert_eq!(world.get_character_material(777), Some((0.3, 0.8)));
+        // Y el collider Rapier de verdad, no solo el estado: la ruta
+        // del CharacterController aplica (fricción, restitución)
+        // rectos (re-endurecido en el re-análisis de C0: comparar
+        // setter contra getter solo probaba la simetría interna).
+        assert_eq!(
+            world.character_collider_friction_restitution(777),
+            Some((0.3, 0.8))
+        );
     }
 
     /// Mundo mínimo: suelo fijo (caja ancha con la superficie en

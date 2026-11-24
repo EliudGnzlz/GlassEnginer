@@ -887,6 +887,16 @@ impl PhysicsWorld {
         self.characters.get(&entity_id).map(|s| (s.friction, s.restitution))
     }
 
+    /// Diagnóstico de solo lectura (tests dorados C0): la (fricción,
+    /// restitución) con las que el collider Rapier del personaje
+    /// quedó registrado de verdad — no los campos del estado, que
+    /// podrían divergir de lo aplicado al collider.
+    pub fn character_collider_friction_restitution(&self, entity_id: u64) -> Option<(f32, f32)> {
+        let state = self.characters.get(&entity_id)?;
+        let collider = self.collider_set.get(state.rapier_collider)?;
+        Some((collider.friction(), collider.restitution()))
+    }
+
     /// Raycast analítico contra la cápsula del personaje (Y-arriba, centrada en `pos`).
     /// Devuelve (distancia, punto, normal). `dir` se normaliza aquí.
     pub fn character_raycast(

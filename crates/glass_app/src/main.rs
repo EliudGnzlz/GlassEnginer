@@ -1828,6 +1828,10 @@ struct GlassEngineApp {
     /// activos: la ociosidad se mide en tiempo real (delta entre
     /// frames), no en frames contados (Bug I).
     reloj_expulsion_previo: Option<Instant>,
+    /// Resto sub-milisegundo del reloj de expulsión: la fracción de
+    /// milisegundo que `delta_expulsion_ms` no entrega entera se
+    /// acumula aquí para no perderla frame a frame.
+    reloj_expulsion_resto_ms: f64,
     /// Nombre activo de la escena cuando se fijó la ruta; si el vigía del
     /// editor anuncia otro nombre, la ruta ya no vale.
     #[cfg(feature = "editor")]
@@ -2354,6 +2358,7 @@ impl GlassEngineApp {
             recarga_bajo_demanda: std::collections::HashSet::new(),
             modelos_expulsados: std::collections::HashSet::new(),
             reloj_expulsion_previo: None,
+            reloj_expulsion_resto_ms: 0.0,
             #[cfg(feature = "editor")]
             nombre_escena_con_ruta: String::new(),
             #[cfg(feature = "editor")]
@@ -5693,7 +5698,12 @@ let resueltos = if body.has_collider {
         // equipo rápido y la expulsión devoraba modelos recién cargados
         // (Bug I). Es seguro hacerlo aquí: un modelo ocioso no
         // participó en el frame anterior, así que la GPU no lo está
-        // usando.
+        // usando. Esa premisa la sostiene `delta_expulsion_ms`: cada
+        // frame suma como mucho 250 ms al reloj, así que un modelo
+        // dibujado en el frame anterior jamás cruza el horizonte de
+        // 10 s de un salto (pausa larga, diálogo modal, primer frame
+        // lento tras la carga): hacen falta 40 frames seguidos sin
+        // dibujarlo.
         {
             let protected: std::collections::HashSet<String> = {
                 let mut set = std::collections::HashSet::new();
@@ -5711,11 +5721,12 @@ let resueltos = if body.has_collider {
             let mut alloc = renderer.allocator.lock().unwrap();
             let mut cache = self.asset_cache.write().unwrap();
             let ahora_frame = Instant::now();
-            let delta_ms = self
+            let bruto_ms = self
                 .reloj_expulsion_previo
-                .map(|prev| ahora_frame.duration_since(prev).as_millis() as u64)
-                .unwrap_or(0);
+                .map(|prev| ahora_frame.duration_since(prev).as_secs_f64() * 1000.0)
+                .unwrap_or(0.0);
             self.reloj_expulsion_previo = Some(ahora_frame);
+            let delta_ms = delta_expulsion_ms(bruto_ms, &mut self.reloj_expulsion_resto_ms);
             cache.advance_time_ms(delta_ms);
             let evicted = cache.evict_idle(&renderer.device, &mut alloc, 10_000, &protected);
             for nombre in &evicted {
@@ -10062,6 +10073,26 @@ fn comprobar_sonda_gpu() -> Option<String> {
     }
 }
 
+/// Cuánto avanza el reloj de expulsión de la caché en un frame.
+///
+/// Dos protecciones sobre el delta real entre frames (re-análisis
+/// del arreglo del Bug I, 2026-11-23):
+/// - **Tope de 250 ms por frame**: una pausa larga (diálogo modal,
+///   ventana minimizada, primer frame lento) no puede hacer que un
+///   modelo dibujado en el frame anterior cuente como ocioso de
+///   golpe; cruzar el horizonte de 10 s exige 40 frames seguidos sin
+///   dibujarlo, que es la premisa de seguridad de la expulsión.
+/// - **Resto sub-milisegundo acumulado**: la fracción que no llega a
+///   un milisegundo entero no se pierde; sin esto, a 300-600 fps
+///   (frames de 1,7-3,3 ms) el truncado ralentizaba el reloj hasta
+///   un ~40 %, y con frames de menos de 1 ms lo congelaba.
+fn delta_expulsion_ms(bruto_ms: f64, resto_ms: &mut f64) -> u64 {
+    let total = bruto_ms.clamp(0.0, 250.0) + *resto_ms;
+    let entero = total.floor();
+    *resto_ms = total - entero;
+    entero as u64
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ruta_log = logfile::iniciar();
     log::info!("Registro de la sesión en {}", ruta_log.display());
@@ -10329,6 +10360,13 @@ mod spawn_bridge_tests {
     // Rapier con friction 0.8 / restitution 0.3. Estos tests NO corrigen
     // el cruce: lo fijan. Si el refactor lo altera en una sola ruta,
     // deben ponerse en rojo.
+    // ALCANCE HONESTO (re-análisis de C0, 2026-11-23): los tests pasan
+    // por create_body; rebuild_physics_from_scene comparte la
+    // derivación (body_spec_for) pero tiene su propio bloque de
+    // adjuntos duplicado, que estos tests no ejercen. Esa duplicación
+    // se elimina en C3, donde la red quedará completa; mientras tanto
+    // el cruce en rebuild está verificado por lectura de código, no
+    // por test.
 
     const EPS_DORADO: f32 = 1e-6;
 
@@ -10407,6 +10445,17 @@ mod spawn_bridge_tests {
         }
     }
 
+    /// La forma real del único collider del cuerpo: prueba que la
+    /// ruta ejercida creó la forma esperada y no cayó a un collider
+    /// de respaldo (falso verde cazado en el re-análisis de C0).
+    fn afirmar_forma(bridge: &EngineSceneBridge, entity_id: u64, forma: &'static str) {
+        let world = bridge.physics_world.lock().unwrap();
+        let handle = world
+            .get_body_by_entity(entity_id)
+            .expect("create_body debe registrar el cuerpo por entidad");
+        assert_eq!(world.collider_shape_kinds(handle), vec![forma]);
+    }
+
     #[test]
     fn dorado_specs_cruzados() {
         // Specs explícitos: Rapier recibe friction=0.8 / restitution=0.3 (cruce vivo).
@@ -10453,6 +10502,7 @@ mod spawn_bridge_tests {
         spec.colliders.clear();
         bridge.create_body(spec);
         afirmar_material_cruzado(&bridge, 104, 1);
+        afirmar_forma(&bridge, 104, "convex");
     }
 
     #[test]
@@ -10468,6 +10518,7 @@ mod spawn_bridge_tests {
         spec.colliders.clear();
         bridge.create_body(spec);
         afirmar_material_cruzado(&bridge, 105, 1);
+        afirmar_forma(&bridge, 105, "trimesh");
     }
 
     #[test]
@@ -11446,5 +11497,36 @@ mod sonda_gpu_tests {
         let texto = texto_diagnostico_sonda("Intel UHD", &lista);
         assert!(texto.contains("100.9415"), "{texto}");
         assert!(!texto.contains("dedicada"), "{texto}");
+    }
+}
+
+#[cfg(test)]
+mod expulsion_clock_tests {
+    use super::delta_expulsion_ms;
+
+    /// Una pausa de 30 s suma 250 ms, no 30.000: el modelo dibujado
+    /// en el frame anterior no cruza el horizonte de un salto.
+    #[test]
+    fn delta_largo_se_acota_a_250_ms() {
+        let mut resto = 0.0;
+        assert_eq!(delta_expulsion_ms(30_000.0, &mut resto), 250);
+        assert_eq!(delta_expulsion_ms(16.7, &mut resto), 16);
+    }
+
+    /// La fracción sub-milisegundo se acumula: tres frames de 1,7 ms
+    /// avanzan 5 ms en total (1+2+2), no 3.
+    #[test]
+    fn resto_sub_milisegundo_se_acumula() {
+        let mut resto = 0.0;
+        let a = delta_expulsion_ms(1.7, &mut resto);
+        let b = delta_expulsion_ms(1.7, &mut resto);
+        let c = delta_expulsion_ms(1.7, &mut resto);
+        assert_eq!((a, b, c), (1, 2, 2));
+        // Y un frame de 0,4 ms no congela el reloj: dos suman 0 y el
+        // tercero ya entrega 1.
+        let mut r2 = 0.0;
+        assert_eq!(delta_expulsion_ms(0.4, &mut r2), 0);
+        assert_eq!(delta_expulsion_ms(0.4, &mut r2), 0);
+        assert_eq!(delta_expulsion_ms(0.4, &mut r2), 1);
     }
 }
