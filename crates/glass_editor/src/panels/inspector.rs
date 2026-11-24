@@ -136,7 +136,9 @@ fn anadir_collider_componente(
             phys.anadir_collider(glass_core::spec_por_defecto(forma));
         }
         NuevoCollider::Mesh => {
-            phys.mesh_collider = glass_core::MeshColliderMode::Convex;
+            // Diseño §6.3: el alta de Mesh Collider nace en TriMesh
+            // (Convex se marca después en el Inspector si se quiere).
+            phys.mesh_collider = glass_core::MeshColliderMode::TriMesh;
         }
     }
     if !entity.components.iter().any(|c| c == "Collider") {
@@ -2232,15 +2234,9 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                 false,
                                 &mut accion,
                                 |ui| {
-                                    if modelo_entidad.is_empty() {
-                                        ui.label(RichText::new("(sin malla: caerá a los primitivos)").weak());
-                                    } else {
-                                        ui.label(format!("Malla: {modelo_entidad}"));
-                                    }
-                                    ui.label(
-                                        RichText::new("Se adapta a la malla real del objeto.")
-                                            .weak(),
-                                    );
+                                    // Orden del diseño (§6.3): Is Trigger,
+                                    // Material, Convex, Mesh de solo lectura.
+                                    ui.checkbox(&mut phys.mesh_collider_is_trigger, "Is Trigger");
                                     // Material del Mesh Collider (E4): el
                                     // mismo object field que el de los specs.
                                     let _ = campo_material_physmat(
@@ -2266,6 +2262,19 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                         ui.label(
                                             RichText::new("En cuerpos dinámicos TriMesh se degrada a Convex al simular.")
                                                 .color(Color32::from_rgb(255, 190, 80)),
+                                        );
+                                    }
+                                    if modelo_entidad.is_empty() {
+                                        ui.label("Mesh: Ninguna");
+                                        ui.label(
+                                            RichText::new("Sin malla usable: el collider de malla no se creará y se usarán los primitivos.")
+                                                .color(Color32::from_rgb(255, 190, 80)),
+                                        );
+                                    } else {
+                                        ui.label(format!("Mesh: {modelo_entidad}"));
+                                        ui.label(
+                                            RichText::new("Se adapta a la malla real del objeto.")
+                                                .weak(),
                                         );
                                     }
                                 },
@@ -3367,6 +3376,40 @@ mod tests {
         assert_eq!(direccion_capsula("W"), "Y");
         assert_eq!(direccion_capsula("Z"), "Z");
         assert_eq!(direccion_capsula(""), "Y");
+    }
+
+    #[test]
+    fn quitar_mesh_no_toca_specs_ni_al_reves() {
+        let mut phys = PhysicsData {
+            colliders: vec![
+                glass_core::spec_por_defecto("Box"),
+                glass_core::spec_por_defecto("Sphere"),
+            ],
+            mesh_collider: glass_core::MeshColliderMode::Convex,
+            ..Default::default()
+        };
+        let specs_originales = phys.colliders.clone();
+
+        // QuitarMesh solo toca el mesh_collider; quedan specs: devuelve false.
+        let mutado = aplicar_acciones_colliders(&mut phys, &[AccionCollider::QuitarMesh], None);
+        assert!(!mutado, "quitar solo el mesh debe devolver false porque quedan specs");
+        assert_eq!(phys.colliders.len(), 2, "no deben desaparecer specs");
+        assert_eq!(phys.mesh_collider, glass_core::MeshColliderMode::None);
+        for (orig, actual) in specs_originales.iter().zip(phys.colliders.iter()) {
+            assert_eq!(orig.shape, actual.shape, "el shape del spec no debe cambiar");
+            assert_eq!(orig.size, actual.size, "el size del spec no debe cambiar");
+        }
+
+        // Quitar los dos specs en un lote (índices de la lista original):
+        // sin specs y sin mesh, la función devuelve true.
+        let mutado = aplicar_acciones_colliders(
+            &mut phys,
+            &[AccionCollider::Quitar(0), AccionCollider::Quitar(1)],
+            None,
+        );
+        assert!(mutado, "sin specs y sin mesh la función debe devolver true");
+        assert!(phys.colliders.is_empty(), "no deben quedar specs");
+        assert_eq!(phys.mesh_collider, glass_core::MeshColliderMode::None);
     }
 
     fn dir_temporal_inspector(nombre: &str) -> PathBuf {

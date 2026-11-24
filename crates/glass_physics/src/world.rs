@@ -4985,6 +4985,63 @@ fn convex_hull_sostiene_como_caja() {
         assert_eq!(world.collider_material_id(collider_c), id_c);
     }
 
+    /// E6: el cfg del collider de malla manda: con `is_trigger` la lámina
+    /// convexa deja pasar; sin él, detiene. Es el comportamiento que el
+    /// campo `mesh_collider_is_trigger` produce al llegar al mundo.
+    #[test]
+    fn mesh_trigger_deja_pasar_y_solido_detiene() {
+        fn montar(is_trigger: bool) -> (PhysicsWorld, BodyHandle) {
+            let mut world = PhysicsWorld::default();
+            let mat = material(0.5, 0.0);
+            let centro = [0.0f32, 1.0, 0.0];
+            let half = [2.0f32, 0.1, 2.0];
+            let mut puntos: Vec<[f32; 3]> = Vec::with_capacity(8);
+            for &sx in &[-1.0f32, 1.0] {
+                for &sy in &[-1.0f32, 1.0] {
+                    for &sz in &[-1.0f32, 1.0] {
+                        puntos.push([
+                            centro[0] + sx * half[0],
+                            centro[1] + sy * half[1],
+                            centro[2] + sz * half[2],
+                        ]);
+                    }
+                }
+            }
+            let lamina = crear_cuerpo(&mut world, 1, false, [0.0, 0.0, 0.0]);
+            let cfg = ColliderConfig { is_trigger, ..Default::default() };
+            assert!(
+                world
+                    .attach_convex_collider(lamina, &puntos, &mat, "lamina", cfg)
+                    .is_some(),
+                "no se pudo adjuntar el collider convexo de la lámina"
+            );
+            let caja = crear_cuerpo(&mut world, 2, true, [0.0, 3.0, 0.0]);
+            assert!(
+                world
+                    .attach_box_collider(caja, [0.3, 0.3, 0.3], &mat, "caja")
+                    .is_some(),
+                "no se pudo adjuntar la caja"
+            );
+            (world, caja)
+        }
+
+        // Lámina sólida: la caja se apoya en y = 1.0 + 0.1 + 0.3 = 1.4.
+        let (mut world, caja) = montar(false);
+        for _ in 0..240 {
+            world.step(1.0 / 60.0);
+        }
+        let y = world.get_transform(caja).expect("transform de la caja").position[1];
+        assert!((y - 1.4).abs() < 0.05, "con lámina sólida la caja debe quedar en y ≈ 1.4, pero y = {y}");
+
+        // Lámina trigger: la caja la atraviesa y sigue cayendo.
+        let (mut world, caja) = montar(true);
+        for _ in 0..240 {
+            world.step(1.0 / 60.0);
+        }
+        let y = world.get_transform(caja).expect("transform de la caja").position[1];
+        assert!(y < 0.5, "con lámina trigger la caja debe atravesarla y caer, pero y = {y}");
+    }
+
     /// E5: la dirección de la cápsula manda en la física por el camino
     /// real (`attach_collider_with_config_at` con `direction`). Sobre un
     /// suelo plano con la cara superior en y=0, la cápsula de

@@ -126,6 +126,10 @@ struct SpawnedBodySpec {
     /// Material efectivo del collider de malla y su referencia de asset.
     mesh_material: PhysicsMaterial,
     mesh_material_ref: String,
+    /// Config del collider de malla (capa, máscara y trigger), construida
+    /// desde los campos del propio cuerpo (`layer`, `collision_mask`,
+    /// `mesh_collider_is_trigger`), no heredada del primer spec (E6).
+    mesh_cfg: ColliderConfig,
     /// Nombre del modelo de la entidad (para buscar su geometría).
     model: String,
     /// Escala de mundo (para escalar los puntos del collider).
@@ -330,6 +334,11 @@ impl EngineSceneBridge {
             mesh_collider: body.mesh_collider,
             mesh_material,
             mesh_material_ref,
+            mesh_cfg: ColliderConfig {
+                layer: body.layer,
+                mask: body.collision_mask,
+                is_trigger: body.mesh_collider_is_trigger,
+            },
             model: model.to_string(),
             world_scale: glass_core::mat4_scale(world),
             constraints: body.constraints,
@@ -414,7 +423,9 @@ impl EngineSceneBridge {
         // (PhysicsMaterial y referencia de asset); no hay pares
         // posicionales (friction, restitution) que cruzar. Misma ruta
         // que rebuild_physics_from_scene (C3).
-        let mesh_cfg = spec.colliders.first().map(|c| c.1).unwrap_or_default();
+        // La config de la malla (capa, máscara, trigger) viaja en el
+        // spec, construida desde el propio cuerpo (E6).
+        let mesh_cfg = spec.mesh_cfg;
         let _via_mesh = adjuntar_colliders_autorados(
             &mut physics,
             handle,
@@ -2232,7 +2243,9 @@ type DescriptorCuerpo = (
     PhysicsMaterial,
     String,
     [f32; 3],
-    Option<(glass_core::MeshColliderMode, String, [f32; 3], bool)>,
+    // Malla pedida: modo, modelo, escala de mundo, es estático y config
+    // del collider de malla construida desde el propio cuerpo (E6).
+    Option<(glass_core::MeshColliderMode, String, [f32; 3], bool, ColliderConfig)>,
     // P3: true si los resueltos vienen de specs explícitos (componen con
     // la malla); false si traen solo el inferido (respaldo de la malla).
     bool,
@@ -4518,7 +4531,8 @@ let resueltos = if body.has_collider {
     Vec::new()
 };
                 // Si el cuerpo pide malla real, guardamos los datos para resolverla
-                // tras el bucle de escena (hace falta el AssetCache).
+                // tras el bucle de escena (hace falta el AssetCache). La config
+                // de la malla sale de los campos del propio cuerpo (E6).
                 let mesh = if !body.has_collider {
                     None
                 } else if body.mesh_collider != glass_core::MeshColliderMode::None {
@@ -4527,6 +4541,11 @@ let resueltos = if body.has_collider {
                         model.to_string(),
                         glass_core::mat4_scale(world),
                         body.body_type == "Static",
+                        ColliderConfig {
+                            layer: body.layer,
+                            mask: body.collision_mask,
+                            is_trigger: body.mesh_collider_is_trigger,
+                        },
                     ))
                 } else {
                     None
@@ -4642,21 +4661,21 @@ let resueltos = if body.has_collider {
             // Misma ruta de adjunto que create_body (C3): el material
             // viaja resuelto con campos nombrados; no hay pares
             // posicionales (friction, restitution) que cruzar.
-            let mesh_cfg = resueltos.first().map(|c| c.1).unwrap_or_default();
-            let (modo_malla, modelo_malla, escala_malla, es_estatico_malla) = match &mesh {
-                Some((modo, modelo, escala, estatico)) => {
-                    (modo, modelo.as_str(), *escala, *estatico)
+            let (modo_malla, modelo_malla, escala_malla, es_estatico_malla, mesh_cfg) = match &mesh {
+                Some((modo, modelo, escala, estatico, cfg)) => {
+                    (modo, modelo.as_str(), *escala, *estatico, *cfg)
                 }
                 None => (
                     &glass_core::MeshColliderMode::None,
                     "",
                     [1.0, 1.0, 1.0],
                     false,
+                    ColliderConfig::default(),
                 ),
             };
             let geometria_malla = mesh
                 .as_ref()
-                .and_then(|(_, model_name, _, _)| geometrias.get(model_name))
+                .and_then(|(_, model_name, _, _, _)| geometrias.get(model_name))
                 .map(|(v, i)| (v.as_slice(), i.as_slice()));
             let _via_mesh = adjuntar_colliders_autorados(
                 &mut physics,
@@ -10524,6 +10543,7 @@ mod spawn_bridge_tests {
             mesh_collider: glass_core::MeshColliderMode::None,
             mesh_material: material_dorado(0.3, 0.8),
             mesh_material_ref: String::new(),
+            mesh_cfg: ColliderConfig { layer: 0, mask: u32::MAX, is_trigger: false },
             model: String::new(),
             world_scale: [1.0, 1.0, 1.0],
             constraints: 0,
@@ -10711,9 +10731,10 @@ mod spawn_bridge_tests {
         spec.model = "malla_dorada".to_owned();
         spec.mesh_collider = glass_core::MeshColliderMode::TriMesh;
         spec.colliders_son_specs = false;
-        let mut caja = caja_dorada();
-        caja.1.is_trigger = true;
-        spec.colliders = vec![caja];
+        // Desde E6 el trigger de la malla vive en `mesh_cfg` (campo
+        // `mesh_collider_is_trigger` del cuerpo), no en el primer spec.
+        spec.mesh_cfg.is_trigger = true;
+        spec.colliders = vec![caja_dorada()];
         bridge.create_body(spec);
         afirmar_material(&bridge, 108, 1);
         afirmar_forma(&bridge, 108, "convex");
