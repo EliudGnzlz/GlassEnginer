@@ -1084,15 +1084,19 @@ pub fn draw_selection_outline(
 /// reglas que la construcción de física (ver `collider_dibujo`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ColliderDibujo {
-    /// Primitivos de Rapier, cada uno con su offset local respecto al cuerpo.
-    Formas(Vec<(glass_physics::ColliderShape, [f32; 3])>),
+    /// Primitivos de Rapier. Cada tupla es (forma, offset local respecto al
+    /// cuerpo, rotación local como vector eje×ángulo). La rotación es
+    /// `[0.0; 3]` salvo en cápsulas con `direction` "X" o "Z", donde coincide
+    /// con `glass_physics::material::capsule_rotation`.
+    Formas(Vec<(glass_physics::ColliderShape, [f32; 3], [f32; 3])>),
     /// Solo collider de malla: se dibuja el alambre de su forma verdadera
     /// (casco o aristas de la malla); la caja de cotas es el respaldo si
     /// no hay geometría retenida.
     Malla,
     /// Collider de malla Y primitivos de specs a la vez (P3: componen):
-    /// el alambre de la malla más una forma por spec.
-    MallaYFormas(Vec<(glass_physics::ColliderShape, [f32; 3])>),
+    /// el alambre de la malla más una forma por spec. Las tuplas tienen el
+    /// mismo significado que en `Formas` (forma, offset, rotación eje×ángulo).
+    MallaYFormas(Vec<(glass_physics::ColliderShape, [f32; 3], [f32; 3])>),
     /// Sin componente de física o sin Collider.
     Ninguno,
 }
@@ -1100,14 +1104,54 @@ pub enum ColliderDibujo {
 /// la misma forma que recibe Rapier para que el gizmo no mienta. Vive
 /// duplicada porque glass_app es el binario y el editor no puede depender
 /// de él; si cambia allí, debe cambiar aquí.
-fn forma_de_spec(spec: &glass_core::ColliderSpec) -> glass_physics::ColliderShape {
+///
+/// Devuelve (forma, rotación local eje×ángulo): la rotación se deriva
+/// siempre de `spec.direction` y solo aplica a "Capsule"; el resto
+/// devuelve `[0.0; 3]`. El offset lo compone quien llama con `spec.offset`.
+fn forma_de_spec(spec: &glass_core::ColliderSpec) -> (glass_physics::ColliderShape, [f32; 3]) {
     use glass_physics::ColliderShape;
     match spec.shape.as_str() {
-        "Sphere" => ColliderShape::Ball { radius: spec.size[0].max(0.01) },
-        "Capsule" => ColliderShape::Capsule { half_height: spec.size[0].max(0.0), radius: spec.size[1].max(0.01) },
-        "Cylinder" => ColliderShape::Cylinder { half_height: spec.size[0].max(0.0), radius: spec.size[1].max(0.01) },
-        _ => ColliderShape::Cuboid { half_extents: spec.size },
+        "Sphere" => (ColliderShape::Ball { radius: spec.size[0].max(0.01) }, [0.0; 3]),
+        "Capsule" => {
+            let v = glass_physics::material::capsule_rotation(&spec.direction);
+            (
+                ColliderShape::Capsule { half_height: spec.size[0].max(0.0), radius: spec.size[1].max(0.01) },
+                [v[0], v[1], v[2]],
+            )
+        }
+        "Cylinder" => (
+            ColliderShape::Cylinder { half_height: spec.size[0].max(0.0), radius: spec.size[1].max(0.01) },
+            [0.0; 3],
+        ),
+        _ => (ColliderShape::Cuboid { half_extents: spec.size }, [0.0; 3]),
     }
+}
+
+/// Rota `p` alrededor de `centro` según el vector eje×ángulo `eje_ang`
+/// (dirección = eje, norma = ángulo en radianes), con la fórmula de
+/// Rodrigues: v' = v·cosθ + (k×v)·sinθ + k·(k·v)·(1−cosθ).
+/// Con vector nulo (norma ~0) devuelve `p` sin cambios. Es la misma
+/// rotación que la física aplica a la cápsula (E5): el wireframe la
+/// deriva del `direction` del spec, nunca la acumula.
+pub fn rotar_punto(p: [f32; 3], centro: [f32; 3], eje_ang: [f32; 3]) -> [f32; 3] {
+    let ang = (eje_ang[0] * eje_ang[0] + eje_ang[1] * eje_ang[1] + eje_ang[2] * eje_ang[2]).sqrt();
+    if ang <= 1e-6 {
+        return p;
+    }
+    let k = [eje_ang[0] / ang, eje_ang[1] / ang, eje_ang[2] / ang];
+    let v = [p[0] - centro[0], p[1] - centro[1], p[2] - centro[2]];
+    let (s, c) = ang.sin_cos();
+    let kxv = [
+        k[1] * v[2] - k[2] * v[1],
+        k[2] * v[0] - k[0] * v[2],
+        k[0] * v[1] - k[1] * v[0],
+    ];
+    let tt = (k[0] * v[0] + k[1] * v[1] + k[2] * v[2]) * (1.0 - c);
+    [
+        centro[0] + v[0] * c + kxv[0] * s + k[0] * tt,
+        centro[1] + v[1] * c + kxv[1] * s + k[1] * tt,
+        centro[2] + v[2] * c + kxv[2] * s + k[2] * tt,
+    ]
 }
 /// Resuelve el collider de `ent` con las mismas reglas que la física
 /// (`colliders_resueltos` en glass_app): sin Collider no hay nada; el
@@ -1133,7 +1177,10 @@ pub fn collider_dibujo(ent: &EntityData, world_scale: [f32; 3]) -> ColliderDibuj
             physics
                 .colliders
                 .iter()
-                .map(|spec| (forma_de_spec(spec), spec.offset))
+                .map(|spec| {
+                    let (forma, rot) = forma_de_spec(spec);
+                    (forma, spec.offset, rot)
+                })
                 .collect(),
         );
     }
@@ -1144,13 +1191,17 @@ pub fn collider_dibujo(ent: &EntityData, world_scale: [f32; 3]) -> ColliderDibuj
         ColliderDibujo::Formas(vec![(
             glass_physics::collider_shape_for_builtin(modelo, world_scale, physics.box_extents),
             physics.box_offset,
+            [0.0; 3],
         )])
     } else {
         ColliderDibujo::Formas(
             physics
                 .colliders
                 .iter()
-                .map(|spec| (forma_de_spec(spec), spec.offset))
+                .map(|spec| {
+                    let (forma, rot) = forma_de_spec(spec);
+                    (forma, spec.offset, rot)
+                })
                 .collect(),
         )
     }
@@ -1318,7 +1369,7 @@ fn dibujar_polilinea_local(
 /// local del cuerpo con su offset; Rapier orienta cápsula y cilindro sobre +Y.
 fn dibujar_formas(
     painter: &Painter,
-    formas: &[(glass_physics::ColliderShape, [f32; 3])],
+    formas: &[(glass_physics::ColliderShape, [f32; 3], [f32; 3])],
     world: &[f32; 16],
     vp: &[f32; 16],
     rect: Rect,
@@ -1336,7 +1387,7 @@ fn dibujar_formas(
     let stroke = Stroke::new(grosor, color);
     let desplazar = |o: [f32; 3], dx: f32, dy: f32, dz: f32| [o[0] + dx, o[1] + dy, o[2] + dz];
 
-    for &(forma, off) in formas {
+    for &(forma, off, rot) in formas {
         match forma {
             ColliderShape::Cuboid { half_extents: he } => {
                 let lo = [off[0] - he[0], off[1] - he[1], off[2] - he[2]];
@@ -1351,14 +1402,24 @@ fn dibujar_formas(
                 }
             }
             ColliderShape::Capsule { half_height, radius } => {
-                // Perfiles en los planos XY y ZY.
+                // Perfiles en los planos XY y ZY, rotados según la
+                // dirección del spec (E5): la rotación se aplica a cada
+                // punto alrededor del offset, como hace la física.
                 for u in [EJE_X, EJE_Z] {
-                    let perfil = capsula_puntos_perfil(off, u, half_height, radius, SEGS_ARCO);
+                    let perfil: Vec<[f32; 3]> =
+                        capsula_puntos_perfil(off, u, half_height, radius, SEGS_ARCO)
+                            .into_iter()
+                            .map(|p| rotar_punto(p, off, rot))
+                            .collect();
                     dibujar_polilinea_local(painter, &perfil, world, vp, rect, stroke);
                 }
                 // Anillos XZ donde el tramo recto se une a los casquetes.
                 for y in [half_height, -half_height] {
-                    let anillo = circulo_puntos(desplazar(off, 0.0, y, 0.0), EJE_X, EJE_Z, radius, SEGS_ANILLO);
+                    let anillo: Vec<[f32; 3]> =
+                        circulo_puntos(desplazar(off, 0.0, y, 0.0), EJE_X, EJE_Z, radius, SEGS_ANILLO)
+                            .into_iter()
+                            .map(|p| rotar_punto(p, off, rot))
+                            .collect();
                     dibujar_polilinea_local(painter, &anillo, world, vp, rect, stroke);
                 }
             }
@@ -1390,7 +1451,7 @@ fn dibujar_formas(
 /// trazo opaco y más grueso.
 pub fn draw_collider_gizmo(
     painter: &Painter,
-    formas: &[(glass_physics::ColliderShape, [f32; 3])],
+    formas: &[(glass_physics::ColliderShape, [f32; 3], [f32; 3])],
     world: &[f32; 16],
     vp: &[f32; 16],
     rect: Rect,
@@ -1422,7 +1483,7 @@ pub fn draw_character_gizmo(
     } else {
         (Color32::from_rgba_unmultiplied(90, 225, 255, 130), 1.2)
     };
-    dibujar_formas(painter, &[(forma, ch.center)], world, vp, rect, color, grosor);
+    dibujar_formas(painter, &[(forma, ch.center, [0.0; 3])], world, vp, rect, color, grosor);
 }
 
 /// Base de una cámara para el dibujo del frustum: posición y ejes de mundo.
@@ -2901,7 +2962,7 @@ mod tests_gizmos {
         let ent = entidad_con_fisica(fisica);
         assert_eq!(
             collider_dibujo(&ent, [1.0; 3]),
-            ColliderDibujo::Formas(vec![(ColliderShape::Ball { radius: 0.7 }, [0.0, 1.0, 0.0])])
+            ColliderDibujo::Formas(vec![(ColliderShape::Ball { radius: 0.7 }, [0.0, 1.0, 0.0], [0.0; 3])])
         );
     }
 
@@ -2920,7 +2981,7 @@ mod tests_gizmos {
             ColliderDibujo::Formas(formas) => {
                 assert_eq!(formas.len(), 1);
                 match formas[0] {
-                    (ColliderShape::Ball { radius }, off) => {
+                    (ColliderShape::Ball { radius }, off, _rot) => {
                         assert!((radius - 1.0).abs() < EPS, "radio = {}", radius);
                         assert_eq!(off, [0.0, 0.25, 0.0]);
                     }
@@ -2956,8 +3017,9 @@ mod tests_gizmos {
                 (
                     glass_physics::ColliderShape::Cuboid { half_extents: [1.0, 2.0, 3.0] },
                     [4.0, 0.0, 0.0],
+                    [0.0; 3],
                 ),
-                (ColliderShape::Ball { radius: 0.7 }, [0.0, 1.0, 0.0]),
+                (ColliderShape::Ball { radius: 0.7 }, [0.0, 1.0, 0.0], [0.0; 3]),
             ])
         );
     }
@@ -2973,6 +3035,90 @@ mod tests_gizmos {
         match collider_dibujo(&ent, [1.0; 3]) {
             ColliderDibujo::MallaYFormas(formas) => assert_eq!(formas.len(), 1),
             otro => panic!("se esperaba MallaYFormas, llegó {:?}", otro),
+        }
+    }
+
+    fn cerca3(a: [f32; 3], b: [f32; 3]) -> bool {
+        (a[0] - b[0]).abs() < 1e-5 && (a[1] - b[1]).abs() < 1e-5 && (a[2] - b[2]).abs() < 1e-5
+    }
+
+    fn entidad_capsula(direction: &str) -> EntityData {
+        let mut fisica = fisica_base();
+        fisica["colliders"] = serde_json::json!([{
+            "shape": "Capsule",
+            "size": [0.5, 0.3, 0.0],
+            "offset": [0.0, 0.0, 0.0],
+            "is_trigger": false,
+            "direction": direction,
+        }]);
+        entidad_con_fisica(fisica)
+    }
+
+    #[test]
+    fn rotar_punto_con_vector_cero_es_identidad() {
+        let p = [1.5, -2.25, 3.75];
+        assert!(cerca3(rotar_punto(p, [0.0; 3], [0.0; 3]), p));
+        assert!(cerca3(rotar_punto(p, [10.0, -4.0, 2.5], [0.0; 3]), p));
+    }
+
+    #[test]
+    fn rotar_punto_eje_z_negativo_lleva_y_a_x() {
+        use std::f32::consts::FRAC_PI_2;
+        let r = rotar_punto([0.0, 1.0, 0.0], [0.0; 3], [0.0, 0.0, -FRAC_PI_2]);
+        assert!(cerca3(r, [1.0, 0.0, 0.0]), "got {r:?}");
+        // Rodrigues: k=[1,0,0], θ=π/2, v=[0,0,1] → [0,-1,0].
+        let r2 = rotar_punto([0.0, 0.0, 1.0], [0.0; 3], [FRAC_PI_2, 0.0, 0.0]);
+        assert!(cerca3(r2, [0.0, -1.0, 0.0]), "got {r2:?}");
+    }
+
+    #[test]
+    fn rotar_punto_respeta_el_centro() {
+        use std::f32::consts::FRAC_PI_2;
+        let r = rotar_punto([0.0, 2.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -FRAC_PI_2]);
+        assert!(cerca3(r, [1.0, 1.0, 0.0]), "got {r:?}");
+    }
+
+    #[test]
+    fn dibujo_capsula_en_x_lleva_la_rotacion_de_la_fisica() {
+        use std::f32::consts::FRAC_PI_2;
+        let ent = entidad_capsula("X");
+        match collider_dibujo(&ent, [1.0; 3]) {
+            ColliderDibujo::Formas(formas) => {
+                assert_eq!(formas.len(), 1);
+                let (forma, _off, rot) = formas[0];
+                assert_eq!(forma, ColliderShape::Capsule { half_height: 0.5, radius: 0.3 });
+                assert!(cerca3(rot, [0.0, 0.0, -FRAC_PI_2]), "got {rot:?}");
+                let fisica = glass_physics::material::capsule_rotation("X");
+                assert!(cerca3(rot, [fisica[0], fisica[1], fisica[2]]));
+            }
+            otro => panic!("se esperaba Formas, llegó {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn dibujo_capsula_en_y_sin_rotacion_y_esfera_sin_rotacion() {
+        let ent = entidad_capsula("Y");
+        match collider_dibujo(&ent, [1.0; 3]) {
+            ColliderDibujo::Formas(formas) => {
+                assert!(cerca3(formas[0].2, [0.0; 3]), "got {:?}", formas[0].2);
+            }
+            otro => panic!("se esperaba Formas, llegó {otro:?}"),
+        }
+        // La esfera ignora el campo direction: rotación cero aunque diga "X".
+        let mut fisica = fisica_base();
+        fisica["colliders"] = serde_json::json!([{
+            "shape": "Sphere",
+            "size": [0.25, 0.0, 0.0],
+            "offset": [0.0, 0.0, 0.0],
+            "is_trigger": false,
+            "direction": "X",
+        }]);
+        let ent2 = entidad_con_fisica(fisica);
+        match collider_dibujo(&ent2, [1.0; 3]) {
+            ColliderDibujo::Formas(formas) => {
+                assert!(cerca3(formas[0].2, [0.0; 3]), "got {:?}", formas[0].2);
+            }
+            otro => panic!("se esperaba Formas, llegó {otro:?}"),
         }
     }
 }

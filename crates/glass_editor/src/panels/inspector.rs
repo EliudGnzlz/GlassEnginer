@@ -702,7 +702,23 @@ pub fn campo_material_physmat(
     cambiado
 }
 
-pub fn referencias_a_physmat(scene: &SceneState, referencia: &str) -> Vec<(String, String)> {
+/// Indica si una dirección de cápsula es válida: `"X"`, `"Y"` o `"Z"`.
+pub fn direccion_capsula_valida(d: &str) -> bool {
+    matches!(d, "X" | "Y" | "Z")
+}
+
+/// Devuelve la dirección recibida si es válida, o `"Y"` para normalizar
+/// valores inválidos al mostrar (el dato guardado no se pisa hasta que
+/// el usuario elija otra en el desplegable, E5).
+pub fn direccion_capsula(d: &str) -> &str {
+    if direccion_capsula_valida(d) {
+        d
+    } else {
+        "Y"
+    }
+}
+
+fn referencias_a_physmat(scene: &SceneState, referencia: &str) -> Vec<(String, String)> {
     let mut resultado: Vec<(String, String)> = Vec::new();
 
     if referencia.is_empty() {
@@ -1984,6 +2000,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                             let mut center = spec.offset;
                             let mut size = spec.size;
                             let mut cambiado = false;
+                            let mut direccion = spec.direction.clone();
 
                             ui.horizontal(|ui| {
                                 ui.label("Center");
@@ -2020,8 +2037,20 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                             cambiado = true;
                                         }
                                     });
-                                    // El desplegable de dirección llega en E5.
-                                    ui.label(RichText::new("Dirección: Y").weak());
+                                    ui.horizontal(|ui| {
+                                        ui.label("Direction");
+                                        let direccion_anterior = direccion.clone();
+                                        egui::ComboBox::from_id_salt(format!("{id_base}_direction"))
+                                            .selected_text(direccion.as_str())
+                                            .show_ui(ui, |ui| {
+                                                ui.selectable_value(&mut direccion, "X".to_string(), "X");
+                                                ui.selectable_value(&mut direccion, "Y".to_string(), "Y");
+                                                ui.selectable_value(&mut direccion, "Z".to_string(), "Z");
+                                            });
+                                        if direccion != direccion_anterior {
+                                            cambiado = true;
+                                        }
+                                    });
                                 }
                                 "Cylinder" => {
                                     ui.horizontal(|ui| {
@@ -2087,6 +2116,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                             if cambiado {
                                 spec.offset = center;
                                 spec.size = size;
+                                spec.direction = direccion;
                             }
                             trigger_cambiado || cambiado || material_cambiado
                         }
@@ -2886,10 +2916,10 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
 #[cfg(test)]
 mod tests {
     use super::{
-        aplicar_acciones_colliders, aplicar_datos, escala_proporcional, estado_referencia,
-        extraer_componente, instalar_componente, listar_physmats, ref_de_arrastre,
-        referencias_a_physmat, scan_model_names_in, spec_virtual, tamano_convertido,
-        AccionCollider, EstadoRef, TipoComponente,
+        aplicar_acciones_colliders, aplicar_datos, direccion_capsula, direccion_capsula_valida,
+        escala_proporcional, estado_referencia, extraer_componente, instalar_componente,
+        listar_physmats, ref_de_arrastre, referencias_a_physmat, scan_model_names_in,
+        spec_virtual, tamano_convertido, AccionCollider, EstadoRef, TipoComponente,
     };
     use glass_core::physics_material::PhysicsMaterial;
     use glass_core::{CameraData, ColliderSpec, EntityData, PhysicsData, SceneState};
@@ -3324,6 +3354,19 @@ mod tests {
             EstadoRef::Missing
         ));
         let _ = std::fs::remove_dir_all(raiz);
+    }
+
+    #[test]
+    fn direccion_capsula_normaliza() {
+        assert!(direccion_capsula_valida("X"));
+        assert!(direccion_capsula_valida("Y"));
+        assert!(direccion_capsula_valida("Z"));
+        assert!(!direccion_capsula_valida(""));
+        assert!(!direccion_capsula_valida("x"));
+        assert!(!direccion_capsula_valida("W"));
+        assert_eq!(direccion_capsula("W"), "Y");
+        assert_eq!(direccion_capsula("Z"), "Z");
+        assert_eq!(direccion_capsula(""), "Y");
     }
 
     fn dir_temporal_inspector(nombre: &str) -> PathBuf {

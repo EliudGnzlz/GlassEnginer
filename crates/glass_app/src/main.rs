@@ -4313,6 +4313,15 @@ fn lanzar_hub_al_salir() {
                 self.editor_layout.viewport.active_tab = glass_editor::ViewportTab::GameView;
                 self.editor_layout.focus_game_tab();
 
+                // El mundo de Play nace de la escena autorada TAL COMO ESTÁ
+                // al pulsar Jugar: sin esta reconstrucción, Play reutilizaba
+                // el mundo armado al cargar el proyecto (o el restaurado en
+                // el Stop anterior) y cualquier edición de física hecha en
+                // el Inspector — forma, tamaño, material, dirección —
+                // tardaba un ciclo entero de Play en tener efecto
+                // (defecto cazado por el test físico de E5, 2026-11-24).
+                self.rebuild_physics_from_scene();
+
                 // Personajes autorados: (id, datos, centro de la cápsula en mundo, material).
                 // El material del CharacterController sale del cuerpo de su
                 // entidad (§5.4): su legado si lo hay; si no, PROJECT_DEFAULT.

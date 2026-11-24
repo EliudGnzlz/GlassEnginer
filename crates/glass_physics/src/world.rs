@@ -4985,6 +4985,48 @@ fn convex_hull_sostiene_como_caja() {
         assert_eq!(world.collider_material_id(collider_c), id_c);
     }
 
+    /// E5: la dirección de la cápsula manda en la física por el camino
+    /// real (`attach_collider_with_config_at` con `direction`). Sobre un
+    /// suelo plano con la cara superior en y=0, la cápsula de
+    /// half_height 0.5 y radio 0.3 reposa con el centro a 0.8 si va en Y
+    /// (de pie) y a 0.3 si va en X o en Z (tumbada). Este test es el que
+    /// dirime la coherencia en Play del §8 de E5 sin geometría de escena
+    /// de por medio.
+    #[test]
+    fn capsula_segun_direccion_reposa_a_su_altura() {
+        for (direccion, altura_esperada) in [("Y", 0.8), ("X", 0.3), ("Z", 0.3)] {
+            let mut world = PhysicsWorld::default();
+            let suelo = crear_cuerpo(&mut world, 20, false, [0.0, -0.5, 0.0]);
+            world
+                .attach_box_collider(suelo, [5.0, 0.5, 5.0], &material(0.7, 0.0), "")
+                .expect("collider del suelo");
+            let cuerpo = crear_cuerpo(&mut world, 21, true, [0.0, 1.2, 0.0]);
+            world
+                .attach_collider_with_config_at(
+                    cuerpo,
+                    ColliderShape::Capsule { half_height: 0.5, radius: 0.3 },
+                    &material(0.7, 0.0),
+                    "",
+                    ColliderConfig::default(),
+                    [0.0, 0.0, 0.0],
+                    direccion,
+                )
+                .expect("collider de la cápsula");
+            for _ in 0..240 {
+                world.step(1.0 / 60.0);
+            }
+            let pos = world
+                .get_transform(cuerpo)
+                .expect("transform de la cápsula")
+                .position;
+            assert!(
+                (pos[1] - altura_esperada).abs() < 0.05,
+                "direction {direccion}: centro en reposo {}, esperado ≈{altura_esperada}",
+                pos[1]
+            );
+        }
+    }
+
     #[test]
     fn caja_en_rampa_se_desliza_tras_refrescar() {
         // Con Average, la primera fase usa fricción 1.0 > tan(30°) y la segunda
