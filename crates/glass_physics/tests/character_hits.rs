@@ -12,7 +12,7 @@ const PJ: u64 = 10;
 // Arnés: misma creación de cuerpos estáticos que character_steps.rs.
 fn caja_estatica(w: &mut PhysicsWorld, entity: u64, centro: [f32; 3], semiejes: [f32; 3]) {
     let h = w.create_rigid_body(entity, glass_physics::BodyType::Static, centro, [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(h, semiejes, 0.0, 0.5);
+    w.attach_box_collider(h, semiejes, &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
 }
 
 fn mundo_con_suelo() -> PhysicsWorld {

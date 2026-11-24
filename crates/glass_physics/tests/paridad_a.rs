@@ -8,12 +8,12 @@ const OTRA: u64 = 3;
 
 fn suelo(w: &mut PhysicsWorld) {
     let h = w.create_rigid_body(SUELO, glass_physics::BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(h, [30.0, 0.5, 30.0], 0.0, 0.5);
+    w.attach_box_collider(h, [30.0, 0.5, 30.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
 }
 
 fn caja_dinamica(w: &mut PhysicsWorld, entity: u64, pos: [f32; 3]) -> u64 {
     let h = w.create_rigid_body(entity, glass_physics::BodyType::Dynamic, pos, [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(h, [0.5, 0.5, 0.5], 0.5, 0.0);
+    w.attach_box_collider(h, [0.5, 0.5, 0.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.0, bounciness: 0.5, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     h
 }
 

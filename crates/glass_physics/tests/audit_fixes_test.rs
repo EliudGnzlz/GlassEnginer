@@ -9,7 +9,7 @@ const DT: f32 = 1.0 / 60.0;
 
 fn suelo(w: &mut PhysicsWorld) {
     let b = w.create_rigid_body(1, BodyType::Static, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(b, [10.0, 0.5, 10.0], 0.0, 0.5);
+    w.attach_box_collider(b, [10.0, 0.5, 10.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
 }
 
 #[test]
@@ -19,8 +19,8 @@ fn eventos_agregados_por_par_y_exit_al_despawnear() {
     // Cuerpo compuesto: DOS colliders que tocan el suelo a la vez.
     let c = w.create_rigid_body(2, BodyType::Dynamic, [0.0, 1.05, 0.0], [0.0, 0.0, 0.0, 1.0]);
     let cfg = ColliderConfig::default();
-    w.attach_collider_with_config_at(c, ColliderShape::Cuboid { half_extents: [0.5, 0.5, 0.5] }, 0.0, 0.5, cfg, [-0.6, 0.0, 0.0]);
-    w.attach_collider_with_config_at(c, ColliderShape::Cuboid { half_extents: [0.5, 0.5, 0.5] }, 0.0, 0.5, cfg, [0.6, 0.0, 0.0]);
+    w.attach_collider_with_config_at(c, ColliderShape::Cuboid { half_extents: [0.5, 0.5, 0.5] }, &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "", cfg, [-0.6, 0.0, 0.0], "Y");
+    w.attach_collider_with_config_at(c, ColliderShape::Cuboid { half_extents: [0.5, 0.5, 0.5] }, &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "", cfg, [0.6, 0.0, 0.0], "Y");
     for _ in 0..30 {
         w.step(DT);
     }
@@ -63,7 +63,7 @@ fn las_consultas_excluyen_sensores() {
     // Sensor grande entre el origen del rayo y el suelo.
     let s = w.create_rigid_body(3, BodyType::Static, [0.0, 3.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
     let cfg = ColliderConfig { is_trigger: true, ..Default::default() };
-    w.attach_collider_with_config_at(s, ColliderShape::Cuboid { half_extents: [2.0, 2.0, 2.0] }, 0.0, 0.0, cfg, [0.0, 0.0, 0.0]);
+    w.attach_collider_with_config_at(s, ColliderShape::Cuboid { half_extents: [2.0, 2.0, 2.0] }, &glass_core::PhysicsMaterial { dynamic_friction: 0.0, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "", cfg, [0.0, 0.0, 0.0], "Y");
     w.step(DT);
     let hit = w.cast_ray_masked([0.0, 8.0, 0.0], [0.0, -1.0, 0.0], 20.0, u32::MAX, 0);
     let hit = hit.expect("el rayo debe llegar al suelo atravesando el sensor");
@@ -75,9 +75,9 @@ fn sensor_estatico_emite_eventos_frente_a_cinematico() {
     let mut w = PhysicsWorld::new();
     let s = w.create_rigid_body(4, BodyType::Static, [0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
     let cfg = ColliderConfig { is_trigger: true, ..Default::default() };
-    w.attach_collider_with_config_at(s, ColliderShape::Cuboid { half_extents: [1.0, 1.0, 1.0] }, 0.0, 0.0, cfg, [0.0, 0.0, 0.0]);
+    w.attach_collider_with_config_at(s, ColliderShape::Cuboid { half_extents: [1.0, 1.0, 1.0] }, &glass_core::PhysicsMaterial { dynamic_friction: 0.0, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "", cfg, [0.0, 0.0, 0.0], "Y");
     let k = w.create_rigid_body(5, BodyType::Kinematic, [0.0, 5.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(k, [0.5, 0.5, 0.5], 0.0, 0.0);
+    w.attach_box_collider(k, [0.5, 0.5, 0.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.0, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     // El cinemático se teletransporta dentro del sensor.
     w.set_transform(k, [0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
     for _ in 0..5 {
@@ -103,7 +103,7 @@ fn trimesh_en_escala_milimetrica_se_acepta() {
         [0.0, 1.0e-4, 0.0],
     ];
     let idx = [[0u32, 1, 2]];
-    let h = w.attach_trimesh_collider(b, &verts, &idx, 0.0, 0.5, ColliderConfig::default());
+    let h = w.attach_trimesh_collider(b, &verts, &idx, &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig::default());
     assert!(h.is_some(), "una malla diminuta pero válida debe aceptarse");
 }
 
@@ -116,8 +116,8 @@ fn contact_pairs_fusiona_solido_y_sensor() {
     let c = w.create_rigid_body(8, BodyType::Static, [0.0, 0.8, 0.0], [0.0, 0.0, 0.0, 1.0]);
     let solido = ColliderConfig::default();
     let sensor = ColliderConfig { is_trigger: true, ..Default::default() };
-    w.attach_collider_with_config_at(c, ColliderShape::Cuboid { half_extents: [0.5, 0.5, 0.5] }, 0.0, 0.5, solido, [0.0, 0.0, 0.0]);
-    w.attach_collider_with_config_at(c, ColliderShape::Cuboid { half_extents: [0.5, 0.5, 0.5] }, 0.0, 0.5, sensor, [0.0, 0.0, 0.0]);
+    w.attach_collider_with_config_at(c, ColliderShape::Cuboid { half_extents: [0.5, 0.5, 0.5] }, &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "", solido, [0.0, 0.0, 0.0], "Y");
+    w.attach_collider_with_config_at(c, ColliderShape::Cuboid { half_extents: [0.5, 0.5, 0.5] }, &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "", sensor, [0.0, 0.0, 0.0], "Y");
     for _ in 0..10 {
         w.step(DT);
     }

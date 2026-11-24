@@ -9,13 +9,13 @@ const SUELO: u64 = 2;
 
 fn suelo(w: &mut PhysicsWorld) -> glass_physics::BodyHandle {
     let h = w.create_rigid_body(SUELO, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(h, [10.0, 0.5, 10.0], 0.0, 0.5);
+    w.attach_box_collider(h, [10.0, 0.5, 10.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     h
 }
 
 fn caja(w: &mut PhysicsWorld, y: f32) -> glass_physics::BodyHandle {
     let h = w.create_rigid_body(CAJA, BodyType::Dynamic, [0.0, y, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(h, [0.5, 0.5, 0.5], 0.0, 0.5);
+    w.attach_box_collider(h, [0.5, 0.5, 0.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     h
 }
 
@@ -54,7 +54,7 @@ fn el_trigger_no_trae_contacto() {
     let mut w = PhysicsWorld::new();
     let s = w.create_rigid_body(SUELO, BodyType::Static, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
     let sensor = glass_physics::types::ColliderConfig { is_trigger: true, ..Default::default() };
-    w.attach_box_collider_with_config(s, [2.0, 0.5, 2.0], 0.0, 0.5, sensor);
+    w.attach_box_collider_with_config(s, [2.0, 0.5, 2.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "", sensor);
     caja(&mut w, 3.0);
 
     let ev = primer(&mut w, 240, |e| matches!(e.kind, ContactKind::Enter))
@@ -84,9 +84,9 @@ fn la_normal_no_depende_del_orden_de_creacion() {
     // caja (par b del evento) debe seguir siendo +Y tras el espejo.
     let mut w = PhysicsWorld::new();
     let caja = w.create_rigid_body(2, BodyType::Dynamic, [0.0, 3.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(caja, [0.5, 0.5, 0.5], 0.0, 0.5);
+    w.attach_box_collider(caja, [0.5, 0.5, 0.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     let suelo = w.create_rigid_body(1, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(suelo, [10.0, 0.5, 10.0], 0.0, 0.5);
+    w.attach_box_collider(suelo, [10.0, 0.5, 10.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     let mut contacto = None;
     for _ in 0..240 {
         w.step(DT);

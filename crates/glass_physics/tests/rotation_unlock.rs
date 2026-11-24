@@ -12,9 +12,9 @@ const DT: f32 = 1.0 / 60.0;
 fn mundo(freeze_rotation: bool) -> (PhysicsWorld, u64) {
     let mut w = PhysicsWorld::new();
     let pedestal = w.create_rigid_body(1, BodyType::Static, [0.0, 0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(pedestal, [0.15, 0.5, 0.15], 0.0, 0.5);
+    w.attach_box_collider(pedestal, [0.15, 0.5, 0.15], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     let tabla = w.create_rigid_body(2, BodyType::Dynamic, [0.25, 1.09, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(tabla, [1.2, 0.08, 0.2], 0.0, 0.5);
+    w.attach_box_collider(tabla, [1.2, 0.08, 0.2], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     if freeze_rotation {
         assert!(w.set_locked_axes(tabla, 56));
         assert_eq!(w.get_locked_axes(tabla), Some(56));

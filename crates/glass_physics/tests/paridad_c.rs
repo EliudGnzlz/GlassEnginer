@@ -18,9 +18,9 @@ fn cfg(step: f32, slope: f32) -> CharacterConfig {
 fn mundo_con_muro() -> PhysicsWorld {
     let mut w = PhysicsWorld::new();
     let suelo = w.create_rigid_body(1, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(suelo, [30.0, 0.5, 10.0], 0.0, 0.5);
+    w.attach_box_collider(suelo, [30.0, 0.5, 10.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     let muro = w.create_rigid_body(2, BodyType::Static, [6.45, 1.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(muro, [0.45, 1.5, 1.5], 0.0, 0.5);
+    w.attach_box_collider(muro, [0.45, 1.5, 1.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     w
 }
 
@@ -28,19 +28,13 @@ fn mundo_con_muro() -> PhysicsWorld {
 fn mundo_con_muro_capa2() -> PhysicsWorld {
     let mut w = PhysicsWorld::new();
     let suelo = w.create_rigid_body(1, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(suelo, [30.0, 0.5, 10.0], 0.0, 0.5);
+    w.attach_box_collider(suelo, [30.0, 0.5, 10.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     let muro = w.create_rigid_body(2, BodyType::Static, [6.45, 1.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider_with_config(
-        muro,
-        [0.45, 1.5, 1.5],
-        0.0,
-        0.5,
-        ColliderConfig {
+    w.attach_box_collider_with_config(muro, [0.45, 1.5, 1.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig {
             layer: 2,
             mask: u32::MAX,
             is_trigger: false,
-        },
-    );
+        }, );
     w
 }
 
@@ -100,9 +94,9 @@ fn step_offset_mutable_surte_efecto() {
     // Peldaño de 0,35 m (misma geometría que character_steps).
     let mut w = PhysicsWorld::new();
     let suelo = w.create_rigid_body(1, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(suelo, [30.0, 0.5, 10.0], 0.0, 0.5);
+    w.attach_box_collider(suelo, [30.0, 0.5, 10.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     let paso = w.create_rigid_body(2, BodyType::Static, [6.45, 0.175, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(paso, [0.45, 0.175, 1.5], 0.0, 0.5);
+    w.attach_box_collider(paso, [0.45, 0.175, 1.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     assert!(w.create_character(15, [5.0, 0.91, 0.0], cfg(0.05, 45.0)));
     let pos = avanza(&mut w, 120);
     assert!(pos[0] < 5.8, "con stepOffset 0,05 debe bloquearse; x {}", pos[0]);
@@ -118,11 +112,11 @@ fn slope_limit_mutable_surte_efecto() {
     // Rampa de 30° (misma geometría que character_steps).
     let mut w = PhysicsWorld::new();
     let suelo = w.create_rigid_body(1, BodyType::Static, [0.0, -0.5, -2.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(suelo, [30.0, 0.5, 35.0], 0.0, 0.5);
+    w.attach_box_collider(suelo, [30.0, 0.5, 35.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     let s = (15.0f32).to_radians().sin();
     let c = (15.0f32).to_radians().cos();
     let rampa = w.create_rigid_body(2, BodyType::Static, [0.0, 1.35, -13.5], [s, 0.0, 0.0, c]);
-    w.attach_box_collider(rampa, [2.0, 0.15, 3.5], 0.0, 0.5);
+    w.attach_box_collider(rampa, [2.0, 0.15, 3.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     assert!(w.create_character(15, [0.0, 0.91, -8.6], cfg(0.4, 20.0)));
     let mut pos = [0.0f32, 0.91, -8.6];
     for _ in 0..210 {

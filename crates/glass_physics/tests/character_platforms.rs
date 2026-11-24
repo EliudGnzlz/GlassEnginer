@@ -18,7 +18,7 @@ fn cfg() -> CharacterConfig {
 fn mundo() -> PhysicsWorld {
     let mut w = PhysicsWorld::new();
     let suelo = w.create_rigid_body(1, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(suelo, [30.0, 0.5, 10.0], 0.0, 0.5);
+    w.attach_box_collider(suelo, [30.0, 0.5, 10.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     w
 }
 
@@ -26,7 +26,7 @@ fn mundo() -> PhysicsWorld {
 macro_rules! plataforma {
     ($w:expr, $c:expr) => {{
         let h = $w.create_rigid_body(2, BodyType::Kinematic, $c, [0.0, 0.0, 0.0, 1.0]);
-        $w.attach_box_collider(h, [1.5, 0.25, 1.5], 0.0, 0.5);
+        $w.attach_box_collider(h, [1.5, 0.25, 1.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
         h
     }};
 }

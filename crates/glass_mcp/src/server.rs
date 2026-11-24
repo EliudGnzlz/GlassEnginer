@@ -2425,19 +2425,19 @@ impl McpServer {
                     let mut phys = phys_arc.lock().unwrap();
                     // Suelo estático
                     let fb = phys.create_rigid_body(floor_id, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-                    phys.attach_box_collider(fb, [15.0, 0.5, 15.0], 0.05, 0.7);
+                    phys.attach_box_collider(fb, [15.0, 0.5, 15.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.05, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
 
                     // Escalón 1 (Low platform: y_surface = 1.0)
                     let s1b = phys.create_rigid_body(step1_id, BodyType::Static, [3.0, 0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-                    phys.attach_box_collider(s1b, [1.0, 0.5, 1.0], 0.05, 0.7);
+                    phys.attach_box_collider(s1b, [1.0, 0.5, 1.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.05, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
 
                     // Escalón 2 (High platform: y_surface = 2.0)
                     let s2b = phys.create_rigid_body(step2_id, BodyType::Static, [6.0, 1.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-                    phys.attach_box_collider(s2b, [1.0, 0.5, 1.0], 0.05, 0.7);
+                    phys.attach_box_collider(s2b, [1.0, 0.5, 1.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.05, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
 
                     // Cubo jugador dinámico
                     let pb = phys.create_rigid_body(player_id, BodyType::Dynamic, [0.0, initial_y, 0.0], [0.0, 0.0, 0.0, 1.0]);
-                    phys.attach_box_collider(pb, [0.5, 0.5, 0.5], 0.02, 0.6);
+                    phys.attach_box_collider(pb, [0.5, 0.5, 0.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.6, bounciness: 0.02, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
                     player_handle = pb;
                 }
 

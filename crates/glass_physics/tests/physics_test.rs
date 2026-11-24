@@ -12,7 +12,7 @@ fn test_physics_world_simulation_and_collision() {
         [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0, 1.0],
     );
-    let floor_collider = world.attach_box_collider(floor_body, [10.0, 0.5, 10.0], 0.1, 0.7);
+    let floor_collider = world.attach_box_collider(floor_body, [10.0, 0.5, 10.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.1, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     assert!(floor_collider.is_some(), "Static floor collider must be created");
 
     // 2. Create a dynamic falling cube at y = 5.0
@@ -23,7 +23,7 @@ fn test_physics_world_simulation_and_collision() {
         [0.0, 5.0, 0.0],
         [0.0, 0.0, 0.0, 1.0],
     );
-    let cube_collider = world.attach_box_collider(cube_body, [0.5, 0.5, 0.5], 0.2, 0.5);
+    let cube_collider = world.attach_box_collider(cube_body, [0.5, 0.5, 0.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.2, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     assert!(cube_collider.is_some(), "Dynamic cube collider must be created");
 
     let initial_tf = world.get_transform(cube_body).expect("Initial transform");

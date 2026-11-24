@@ -8,14 +8,14 @@ use glass_physics::{BodyType, CharacterConfig, PhysicsWorld};
 fn mundo_con_peldano(altura_peldano: f32) -> PhysicsWorld {
     let mut w = PhysicsWorld::new();
     let suelo = w.create_rigid_body(1, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(suelo, [30.0, 0.5, 10.0], 0.0, 0.5);
+    w.attach_box_collider(suelo, [30.0, 0.5, 10.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     let paso = w.create_rigid_body(
         2,
         BodyType::Static,
         [6.45, altura_peldano / 2.0, 0.0],
         [0.0, 0.0, 0.0, 1.0],
     );
-    w.attach_box_collider(paso, [0.45, altura_peldano / 2.0, 1.5], 0.0, 0.5);
+    w.attach_box_collider(paso, [0.45, altura_peldano / 2.0, 1.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     w
 }
 
@@ -68,12 +68,12 @@ fn sin_step_offset_se_bloquea() {
 fn mundo_con_rampa(slope_limit_deg: f32) -> (PhysicsWorld, CharacterConfig) {
     let mut w = PhysicsWorld::new();
     let suelo = w.create_rigid_body(1, BodyType::Static, [0.0, -0.5, -2.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(suelo, [30.0, 0.5, 35.0], 0.0, 0.5);
+    w.attach_box_collider(suelo, [30.0, 0.5, 35.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     // Rotación de +30° sobre X (cuaternión [x,y,z,w]).
     let s = (15.0f32).to_radians().sin();
     let c = (15.0f32).to_radians().cos();
     let rampa = w.create_rigid_body(2, BodyType::Static, [0.0, 1.35, -13.5], [s, 0.0, 0.0, c]);
-    w.attach_box_collider(rampa, [2.0, 0.15, 3.5], 0.0, 0.5);
+    w.attach_box_collider(rampa, [2.0, 0.15, 3.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     (
         w,
         CharacterConfig {

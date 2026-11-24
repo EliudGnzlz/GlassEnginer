@@ -18,7 +18,7 @@ fn cuerpo(w: &mut PhysicsWorld, tipo: BodyType, pos: [f32; 3]) -> u64 {
 
 fn caja(w: &mut PhysicsWorld, tipo: BodyType, pos: [f32; 3], half: [f32; 3], friction: f32) -> u64 {
     let h = cuerpo(w, tipo, pos);
-    let _ = w.attach_box_collider(h, half, 0.0, friction);
+    let _ = w.attach_box_collider(h, half, &glass_core::PhysicsMaterial { dynamic_friction: friction, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     h
 }
 
@@ -124,7 +124,7 @@ fn el_ccd_evita_el_tunel() {
 
     let proyectil = |w: &mut PhysicsWorld, z: f32| {
         let h = cuerpo(w, BodyType::Dynamic, [0.0, 0.0, z]);
-        let _ = w.attach_sphere_collider(h, 0.05, 0.0, 0.5);
+        let _ = w.attach_sphere_collider(h, 0.05, &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
         assert!(w.set_gravity_scale(h, 0.0));
         assert!(w.set_linear_velocity(h, [80.0, 0.0, 0.0]));
         h

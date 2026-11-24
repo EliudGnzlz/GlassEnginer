@@ -11,7 +11,7 @@ const MURO2: u64 = 5;
 
 fn caja_dinamica(w: &mut PhysicsWorld, entity: u64, pos: [f32; 3]) -> u64 {
     let h = w.create_rigid_body(entity, glass_physics::BodyType::Dynamic, pos, [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(h, [0.5, 0.5, 0.5], 0.5, 0.0);
+    w.attach_box_collider(h, [0.5, 0.5, 0.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.0, bounciness: 0.5, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     h
 }
 
@@ -103,10 +103,10 @@ fn velocidad_en_un_punto_de_cuerpo_girando() {
 fn move_cinematico_empuja_dinamico() {
     let mut w = PhysicsWorld::new();
     let hs = w.create_rigid_body(SUELO, glass_physics::BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(hs, [30.0, 0.5, 30.0], 0.0, 0.5);
+    w.attach_box_collider(hs, [30.0, 0.5, 30.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     // Empujador cinemático y caja dinámica apoyadas en el suelo.
     let hk = w.create_rigid_body(OTRA, glass_physics::BodyType::Kinematic, [0.0, 0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(hk, [1.0, 1.0, 1.0], 0.5, 0.0);
+    w.attach_box_collider(hk, [1.0, 1.0, 1.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.0, bounciness: 0.5, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     let hd = caja_dinamica(&mut w, CAJA, [2.0, 0.5, 0.0]);
     // Un dinámico no se puede mover con Move: debe dar false.
     assert!(!w.move_kinematic(hd, [3.0, 0.5, 0.0], [0.0, 0.0, 0.0, 1.0]));
@@ -126,7 +126,7 @@ fn move_cinematico_empuja_dinamico() {
 fn move_rotation_cinematico_gira() {
     let mut w = PhysicsWorld::new();
     let hk = w.create_rigid_body(OTRA, glass_physics::BodyType::Kinematic, [0.0, 5.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(hk, [1.0, 1.0, 1.0], 0.5, 0.0);
+    w.attach_box_collider(hk, [1.0, 1.0, 1.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.0, bounciness: 0.5, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     // 90° alrededor de Y: cuaternión (0, sin45, 0, cos45).
     let s = std::f32::consts::FRAC_1_SQRT_2;
     assert!(w.move_kinematic_rotation(hk, [0.0, s, 0.0, s]));
@@ -158,9 +158,9 @@ fn sweep_detecta_la_pared_y_ordena() {
     let mut w = PhysicsWorld::new();
     let h = caja_dinamica(&mut w, CAJA, [0.0, 0.5, 0.0]);
     let m1 = w.create_rigid_body(MURO1, glass_physics::BodyType::Static, [5.0, 1.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(m1, [0.5, 3.0, 3.0], 0.0, 0.5);
+    w.attach_box_collider(m1, [0.5, 3.0, 3.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     let m2 = w.create_rigid_body(MURO2, glass_physics::BodyType::Static, [8.0, 1.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(m2, [0.5, 3.0, 3.0], 0.0, 0.5);
+    w.attach_box_collider(m2, [0.5, 3.0, 3.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     // La caja barre +X: su cara está en 0.5 (half-extents), el muro1 en 4.5.
     let hit = w.sweep_body(h, [1.0, 0.0, 0.0], 10.0).expect("debe haber impacto");
     assert_eq!(hit.entity_id, MURO1, "el primer impacto es el muro1");

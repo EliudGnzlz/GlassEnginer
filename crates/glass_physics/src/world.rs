@@ -3,6 +3,9 @@ use rapier3d::parry::query::ShapeCastOptions;
 use rapier3d::pipeline::ChannelEventCollector;
 use rapier3d::prelude::*;
 use glass_core::TransformFfi;
+use crate::material::{apply_material, capsule_rotation, MaterialId, MaterialTable};
+use glass_core::physics_material::PhysicsMaterial;
+use rapier3d::na::UnitQuaternion;
 use crate::types::{ContactInfo, 
     BodyHandle, BodyType, ColliderConfig, ColliderHandle, ColliderShape, ContactEvent,
     ContactKind,
@@ -46,6 +49,8 @@ pub struct PhysicsWorld {
     /// Máscara base de cada collider (su cfg.mask), clave = índice raw del
     /// ColliderHandle. Filter efectivo = base & include & !exclude del cuerpo.
     layer_base_masks: std::collections::HashMap<u64, u32>,
+    material_table: MaterialTable,
+    collider_material_ids: std::collections::HashMap<ColliderHandle, MaterialId>,
     /// solverIterations TOTALES guardadas por cuerpo. Sin entrada = 4.
     solver_iterations: std::collections::HashMap<u64, i32>,
     /// solverVelocityIterations TOTALES guardadas por cuerpo. Sin entrada = 4.
@@ -202,6 +207,8 @@ impl PhysicsWorld {
             rb_include_layers: HashMap::new(),
             rb_exclude_layers: HashMap::new(),
             layer_base_masks: HashMap::new(),
+            material_table: MaterialTable::default(),
+            collider_material_ids: HashMap::new(),
             solver_iterations: HashMap::new(),
             solver_velocity_iterations: HashMap::new(),
             automatic_center_of_mass: HashMap::new(),
@@ -680,19 +687,52 @@ impl PhysicsWorld {
     }
 
     /// Attaches an axis-aligned box collider to a rigid body.
+    /// Registra un collider recién insertado en la tabla de materiales
+    /// (internando su referencia) y aplica el filtro de capas vigente.
+    /// Devuelve el handle del mundo (u64) del collider.
+    fn register_attached_collider(
+        &mut self,
+        rapier_handle: rapier3d::prelude::ColliderHandle,
+        material: &PhysicsMaterial,
+        material_ref: &str,
+    ) -> ColliderHandle {
+        let material_id = self.material_table.registrar(material_ref, material);
+        let key = self.register_collider_layers(rapier_handle);
+        self.collider_material_ids.insert(key, material_id);
+        key
+    }
+
+    /// Diagnóstico/tests: el MaterialId del collider (None si el collider
+    /// no se registró por esta vía).
+    pub fn collider_material_id(&self, handle: ColliderHandle) -> Option<MaterialId> {
+        self.collider_material_ids.get(&handle).copied()
+    }
+
+    /// Diagnóstico/tests: la rotación local del collider Rapier.
+    pub fn collider_rotation(
+        &self,
+        handle: ColliderHandle,
+    ) -> Option<UnitQuaternion<f32>> {
+        self.collider_set
+            .iter()
+            .find(|(ch, _)| ch.into_raw_parts().0 as u64 == handle)
+            .map(|(_, c)| c.position().rotation)
+    }
+
     pub fn attach_box_collider_with_config(
         &mut self,
         body_handle: BodyHandle,
         half_extents: [f32; 3],
-        restitution: f32,
-        friction: f32,
+        material: &PhysicsMaterial,
+        material_ref: &str,
         cfg: ColliderConfig,
     ) -> Option<ColliderHandle> {
         let &(rapier_handle, _) = self.body_map.get(&body_handle)?;
 
-        let builder = ColliderBuilder::cuboid(half_extents[0], half_extents[1], half_extents[2])
-            .restitution(restitution)
-            .friction(friction);
+        let builder = apply_material(
+            ColliderBuilder::cuboid(half_extents[0], half_extents[1], half_extents[2]),
+            material,
+        );
         let collider = apply_config(builder, cfg).build();
 
         let collider_handle = self.collider_set.insert_with_parent(
@@ -701,7 +741,7 @@ impl PhysicsWorld {
             &mut self.rigid_body_set,
         );
 
-        Some(self.register_collider_layers(collider_handle))
+        Some(self.register_attached_collider(collider_handle, material, material_ref))
     }
 
     /// Sin configuración (capa 0, máscara completa, no trigger): la firma
@@ -710,10 +750,10 @@ impl PhysicsWorld {
         &mut self,
         body_handle: BodyHandle,
         half_extents: [f32; 3],
-        restitution: f32,
-        friction: f32,
+        material: &PhysicsMaterial,
+        material_ref: &str,
     ) -> Option<ColliderHandle> {
-        self.attach_box_collider_with_config(body_handle, half_extents, restitution, friction, ColliderConfig::default())
+        self.attach_box_collider_with_config(body_handle, half_extents, material, material_ref, ColliderConfig::default())
     }
 
     /// Attaches a sphere collider to a rigid body.
@@ -721,15 +761,13 @@ impl PhysicsWorld {
         &mut self,
         body_handle: BodyHandle,
         radius: f32,
-        restitution: f32,
-        friction: f32,
+        material: &PhysicsMaterial,
+        material_ref: &str,
         cfg: ColliderConfig,
     ) -> Option<ColliderHandle> {
         let &(rapier_handle, _) = self.body_map.get(&body_handle)?;
 
-        let builder = ColliderBuilder::ball(radius)
-            .restitution(restitution)
-            .friction(friction);
+        let builder = apply_material(ColliderBuilder::ball(radius), material);
         let collider = apply_config(builder, cfg).build();
 
         let collider_handle = self.collider_set.insert_with_parent(
@@ -738,7 +776,7 @@ impl PhysicsWorld {
             &mut self.rigid_body_set,
         );
 
-        Some(self.register_collider_layers(collider_handle))
+        Some(self.register_attached_collider(collider_handle, material, material_ref))
     }
 
     /// Sin configuración (capa 0, máscara completa, no trigger): la firma
@@ -747,10 +785,10 @@ impl PhysicsWorld {
         &mut self,
         body_handle: BodyHandle,
         radius: f32,
-        restitution: f32,
-        friction: f32,
+        material: &PhysicsMaterial,
+        material_ref: &str,
     ) -> Option<ColliderHandle> {
-        self.attach_sphere_collider_with_config(body_handle, radius, restitution, friction, ColliderConfig::default())
+        self.attach_sphere_collider_with_config(body_handle, radius, material, material_ref, ColliderConfig::default())
     }
 
     /// Attaches a capsule collider to a rigid body. `half_height` es
@@ -760,15 +798,13 @@ impl PhysicsWorld {
         body_handle: BodyHandle,
         half_height: f32,
         radius: f32,
-        restitution: f32,
-        friction: f32,
+        material: &PhysicsMaterial,
+        material_ref: &str,
         cfg: ColliderConfig,
     ) -> Option<ColliderHandle> {
         let &(rapier_handle, _) = self.body_map.get(&body_handle)?;
 
-        let builder = ColliderBuilder::capsule_y(half_height, radius)
-            .restitution(restitution)
-            .friction(friction);
+        let builder = apply_material(ColliderBuilder::capsule_y(half_height, radius), material);
         let collider = apply_config(builder, cfg).build();
 
         let collider_handle = self.collider_set.insert_with_parent(
@@ -777,7 +813,7 @@ impl PhysicsWorld {
             &mut self.rigid_body_set,
         );
 
-        Some(self.register_collider_layers(collider_handle))
+        Some(self.register_attached_collider(collider_handle, material, material_ref))
     }
 
     /// Sin configuración (capa 0, máscara completa, no trigger): la firma
@@ -787,10 +823,10 @@ impl PhysicsWorld {
         body_handle: BodyHandle,
         half_height: f32,
         radius: f32,
-        restitution: f32,
-        friction: f32,
+        material: &PhysicsMaterial,
+        material_ref: &str,
     ) -> Option<ColliderHandle> {
-        self.attach_capsule_collider_with_config(body_handle, half_height, radius, restitution, friction, ColliderConfig::default())
+        self.attach_capsule_collider_with_config(body_handle, half_height, radius, material, material_ref, ColliderConfig::default())
     }
 
     /// Attaches a cylinder collider to a rigid body. `half_height` es
@@ -800,15 +836,13 @@ impl PhysicsWorld {
         body_handle: BodyHandle,
         half_height: f32,
         radius: f32,
-        restitution: f32,
-        friction: f32,
+        material: &PhysicsMaterial,
+        material_ref: &str,
         cfg: ColliderConfig,
     ) -> Option<ColliderHandle> {
         let &(rapier_handle, _) = self.body_map.get(&body_handle)?;
 
-        let builder = ColliderBuilder::cylinder(half_height, radius)
-            .restitution(restitution)
-            .friction(friction);
+        let builder = apply_material(ColliderBuilder::cylinder(half_height, radius), material);
         let collider = apply_config(builder, cfg).build();
 
         let collider_handle = self.collider_set.insert_with_parent(
@@ -817,7 +851,7 @@ impl PhysicsWorld {
             &mut self.rigid_body_set,
         );
 
-        Some(self.register_collider_layers(collider_handle))
+        Some(self.register_attached_collider(collider_handle, material, material_ref))
     }
 
     /// Sin configuración (capa 0, máscara completa, no trigger): la firma
@@ -827,10 +861,10 @@ impl PhysicsWorld {
         body_handle: BodyHandle,
         half_height: f32,
         radius: f32,
-        restitution: f32,
-        friction: f32,
+        material: &PhysicsMaterial,
+        material_ref: &str,
     ) -> Option<ColliderHandle> {
-        self.attach_cylinder_collider_with_config(body_handle, half_height, radius, restitution, friction, ColliderConfig::default())
+        self.attach_cylinder_collider_with_config(body_handle, half_height, radius, material, material_ref, ColliderConfig::default())
     }
 
     /// Adjunta el collider descrito por un `ColliderShape` (la vía
@@ -842,21 +876,21 @@ impl PhysicsWorld {
         &mut self,
         body_handle: BodyHandle,
         shape: ColliderShape,
-        restitution: f32,
-        friction: f32,
+        material: &PhysicsMaterial,
+        material_ref: &str,
     ) -> Option<ColliderHandle> {
         match shape {
             ColliderShape::Cuboid { half_extents } => {
-                self.attach_box_collider(body_handle, half_extents, restitution, friction)
+                self.attach_box_collider(body_handle, half_extents, material, material_ref)
             }
             ColliderShape::Ball { radius } => {
-                self.attach_sphere_collider(body_handle, radius, restitution, friction)
+                self.attach_sphere_collider(body_handle, radius, material, material_ref)
             }
             ColliderShape::Capsule { half_height, radius } => {
-                self.attach_capsule_collider(body_handle, half_height, radius, restitution, friction)
+                self.attach_capsule_collider(body_handle, half_height, radius, material, material_ref)
             }
             ColliderShape::Cylinder { half_height, radius } => {
-                self.attach_cylinder_collider(body_handle, half_height, radius, restitution, friction)
+                self.attach_cylinder_collider(body_handle, half_height, radius, material, material_ref)
             }
         }
     }
@@ -867,21 +901,19 @@ impl PhysicsWorld {
         &mut self,
         body_handle: BodyHandle,
         shape: ColliderShape,
-        restitution: f32,
-        friction: f32,
+        material: &PhysicsMaterial,
+        material_ref: &str,
         cfg: ColliderConfig,
     ) -> Option<ColliderHandle> {
         match shape {
-            ColliderShape::Cuboid { half_extents } => self.attach_box_collider_with_config(
-                body_handle, half_extents, restitution, friction, cfg,
-            ),
+            ColliderShape::Cuboid { half_extents } => self.attach_box_collider_with_config(body_handle, half_extents, material, material_ref, cfg, ),
             ColliderShape::Ball { radius } => {
-                self.attach_sphere_collider_with_config(body_handle, radius, restitution, friction, cfg)
+                self.attach_sphere_collider_with_config(body_handle, radius, material, material_ref, cfg)
             }
             ColliderShape::Capsule { half_height, radius } => self
-                .attach_capsule_collider_with_config(body_handle, half_height, radius, restitution, friction, cfg),
+                .attach_capsule_collider_with_config(body_handle, half_height, radius, material, material_ref, cfg),
             ColliderShape::Cylinder { half_height, radius } => self
-                .attach_cylinder_collider_with_config(body_handle, half_height, radius, restitution, friction, cfg),
+                .attach_cylinder_collider_with_config(body_handle, half_height, radius, material, material_ref, cfg),
         }
     }
 
@@ -893,8 +925,8 @@ impl PhysicsWorld {
         &mut self,
         body_handle: BodyHandle,
         points: &[[f32; 3]],
-        restitution: f32,
-        friction: f32,
+        material: &PhysicsMaterial,
+        material_ref: &str,
         cfg: ColliderConfig,
     ) -> Option<ColliderHandle> {
         let &(rapier_handle, _) = self.body_map.get(&body_handle)?;
@@ -918,27 +950,32 @@ impl PhysicsWorld {
                 return None;
             }
         };
-        let builder = hull.restitution(restitution).friction(friction);
+        let builder = apply_material(hull, material);
         let collider = apply_config(builder, cfg).build();
         let collider_handle = self.collider_set.insert_with_parent(
             collider,
             rapier_handle,
             &mut self.rigid_body_set,
         );
-        Some(self.register_collider_layers(collider_handle))
+        Some(self.register_attached_collider(collider_handle, material, material_ref))
     }
 
     /// Igual que `attach_collider_with_config`, pero con un desplazamiento local
     /// `offset` respecto al origen del cuerpo (el collider se inserta con parent,
     /// de modo que Rapier interpreta la `translation` como relativa al cuerpo).
+    // 8 argumentos (7 + self): la arity la fija el contrato de C3
+    // (forma, material, ref, config, offset y dirección); no se puede
+    // agrupar sin romper a los llamadores.
+    #[allow(clippy::too_many_arguments)]
     pub fn attach_collider_with_config_at(
         &mut self,
         body_handle: BodyHandle,
         shape: ColliderShape,
-        restitution: f32,
-        friction: f32,
+        material: &PhysicsMaterial,
+        material_ref: &str,
         cfg: ColliderConfig,
         offset: [f32; 3],
+        direction: &str,
     ) -> Option<ColliderHandle> {
         // El cuerpo debe existir; si no, no hay nada que hacer.
         let &(rapier_handle, _) = self.body_map.get(&body_handle)?;
@@ -952,22 +989,22 @@ impl PhysicsWorld {
             ColliderShape::Capsule {
                 half_height,
                 radius,
-            } => ColliderBuilder::capsule_y(half_height, radius),
+            } => ColliderBuilder::capsule_y(half_height, radius)
+                .rotation(capsule_rotation(direction)),
             ColliderShape::Cylinder {
                 half_height,
                 radius,
             } => ColliderBuilder::cylinder(half_height, radius),
-        }
-        .restitution(restitution)
-        .friction(friction)
-        // Offset relativo al cuerpo padre (se respeta al usar insert_with_parent).
-        .translation(vector![offset[0], offset[1], offset[2]]);
+        };
+        let builder = apply_material(builder, material)
+            // Offset relativo al cuerpo padre (se respeta al usar insert_with_parent).
+            .translation(vector![offset[0], offset[1], offset[2]]);
 
         let collider = apply_config(builder, cfg).build();
         let collider_handle =
             self.collider_set
                 .insert_with_parent(collider, rapier_handle, &mut self.rigid_body_set);
-        Some(self.register_collider_layers(collider_handle))
+        Some(self.register_attached_collider(collider_handle, material, material_ref))
     }
 
     /// Añade un collider de malla triangular (trimesh) al cuerpo indicado.
@@ -978,8 +1015,8 @@ impl PhysicsWorld {
         body_handle: BodyHandle,
         vertices: &[[f32; 3]],
         indices: &[[u32; 3]],
-        restitution: f32,
-        friction: f32,
+        material: &PhysicsMaterial,
+        material_ref: &str,
         cfg: ColliderConfig,
     ) -> Option<ColliderHandle> {
         // El cuerpo debe existir.
@@ -1044,16 +1081,13 @@ impl PhysicsWorld {
 
         // `trimesh` devuelve Result; este método devuelve Option -> .ok()?
         // (malla degenerada, índices fuera de rango, etc. -> None, sin pánico).
-        let builder = ColliderBuilder::trimesh(puntos, triangulos)
-            .ok()?
-            .restitution(restitution)
-            .friction(friction);
-
+        let builder = ColliderBuilder::trimesh(puntos, triangulos).ok()?;
+        let builder = apply_material(builder, material);
         let collider = apply_config(builder, cfg).build();
         let collider_handle =
             self.collider_set
                 .insert_with_parent(collider, rapier_handle, &mut self.rigid_body_set);
-        Some(self.register_collider_layers(collider_handle))
+        Some(self.register_attached_collider(collider_handle, material, material_ref))
     }
 
     /// Gets the current transform of a rigid body.
@@ -3351,6 +3385,149 @@ pub struct RayHit {
 mod tests {
     use super::*;
     use crate::types::collider_shape_for_builtin;
+    use glass_core::physics_material::MaterialCombine;
+
+    /// Helper local (C3): material ad hoc para los tests de materiales.
+    fn material(dynamic_friction: f32, bounciness: f32) -> PhysicsMaterial {
+        PhysicsMaterial {
+            dynamic_friction,
+            bounciness,
+            ..PhysicsMaterial::PROJECT_DEFAULT
+        }
+    }
+
+    #[test]
+    fn materiales_distintos_conservan_valores_por_collider() {
+        let mut world = PhysicsWorld::new();
+        let body = crear_cuerpo(&mut world, 9001, true, [0.0, 0.0, 0.0]);
+
+        world
+            .attach_box_collider(body, [0.5, 0.5, 0.5], &material(0.2, 0.8), "")
+            .unwrap();
+        world
+            .attach_sphere_collider(body, 0.5, &material(0.9, 0.1), "")
+            .unwrap();
+
+        assert_eq!(
+            world.collider_friction_restitution(body),
+            vec![(0.2, 0.8), (0.9, 0.1)]
+        );
+    }
+
+    #[test]
+    fn cuerpo_estatico_recibe_material_recto() {
+        let mut world = PhysicsWorld::new();
+        let body = crear_cuerpo(&mut world, 9001, false, [0.0, 0.0, 0.0]);
+
+        world
+            .attach_box_collider(body, [0.5, 0.5, 0.5], &material(0.9, 0.1), "static-material")
+            .unwrap();
+
+        assert_eq!(world.collider_friction_restitution(body), vec![(0.9, 0.1)]);
+    }
+
+    #[test]
+    fn capsula_x_usa_rotacion_menos_noventa_sobre_z() {
+        let mut world = PhysicsWorld::new();
+        let body = crear_cuerpo(&mut world, 9001, true, [0.0, 0.0, 0.0]);
+
+        let handle = world
+            .attach_collider_with_config_at(
+                body,
+                ColliderShape::Capsule {
+                    half_height: 0.5,
+                    radius: 0.25,
+                },
+                &PhysicsMaterial::PROJECT_DEFAULT,
+                "",
+                ColliderConfig::default(),
+                [0.0, 0.0, 0.0],
+                "X",
+            )
+            .unwrap();
+
+        let actual = world.collider_rotation(handle).unwrap();
+        let expected = UnitQuaternion::from_axis_angle(
+            &Vector::z_axis(),
+            -std::f32::consts::FRAC_PI_2,
+        );
+        assert!(actual.angle_to(&expected) < 1.0e-5);
+    }
+
+    #[test]
+    fn capsula_z_usa_rotacion_noventa_sobre_x() {
+        let mut world = PhysicsWorld::new();
+        let body = crear_cuerpo(&mut world, 9001, true, [0.0, 0.0, 0.0]);
+
+        let handle = world
+            .attach_collider_with_config_at(
+                body,
+                ColliderShape::Capsule {
+                    half_height: 0.5,
+                    radius: 0.25,
+                },
+                &PhysicsMaterial::PROJECT_DEFAULT,
+                "",
+                ColliderConfig::default(),
+                [0.0, 0.0, 0.0],
+                "Z",
+            )
+            .unwrap();
+
+        let actual = world.collider_rotation(handle).unwrap();
+        let expected = UnitQuaternion::from_axis_angle(
+            &Vector::x_axis(),
+            std::f32::consts::FRAC_PI_2,
+        );
+        assert!(actual.angle_to(&expected) < 1.0e-5);
+    }
+
+    #[test]
+    fn misma_referencia_comparte_material_id() {
+        let mut world = PhysicsWorld::new();
+        let body = crear_cuerpo(&mut world, 9001, true, [0.0, 0.0, 0.0]);
+
+        let first = world
+            .attach_box_collider(body, [0.5, 0.5, 0.5], &PhysicsMaterial::PROJECT_DEFAULT, "materials/shared")
+            .unwrap();
+        let second = world
+            .attach_sphere_collider(body, 0.5, &PhysicsMaterial::PROJECT_DEFAULT, "materials/shared")
+            .unwrap();
+        let third = world
+            .attach_sphere_collider(body, 0.5, &PhysicsMaterial::PROJECT_DEFAULT, "materials/other")
+            .unwrap();
+
+        let first_id = world.collider_material_id(first).unwrap();
+        assert_eq!(world.collider_material_id(second), Some(first_id));
+        assert_ne!(world.collider_material_id(third), Some(first_id));
+        assert_ne!(first_id, MaterialId(0));
+    }
+
+    #[test]
+    fn apply_material_mapea_los_cuatro_combines() {
+        let cases = [
+            (MaterialCombine::Average, CoefficientCombineRule::Average),
+            (MaterialCombine::Minimum, CoefficientCombineRule::Min),
+            (MaterialCombine::Multiply, CoefficientCombineRule::Multiply),
+            (MaterialCombine::Maximum, CoefficientCombineRule::Max),
+        ];
+
+        for (combine, expected) in cases {
+            let collider = apply_material(
+                ColliderBuilder::ball(0.5),
+                &PhysicsMaterial {
+                    friction_combine: combine,
+                    bounce_combine: combine,
+                    ..PhysicsMaterial::PROJECT_DEFAULT
+                },
+            )
+            .build();
+
+            assert_eq!(collider.friction_combine_rule(), expected);
+            assert_eq!(collider.restitution_combine_rule(), expected);
+        }
+    }
+
 
     /// DORADO (bloque Physics Material, C0): la ruta FFI/mundo recibe
     /// (restitution, friction) en el orden de su firma y Rapier recibe
@@ -3359,7 +3536,7 @@ mod tests {
     fn dorado_ffi_recto() {
         let mut world = PhysicsWorld::new();
         let body = world.create_rigid_body(42, BodyType::Dynamic, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-        world.attach_box_collider(body, [0.5, 0.5, 0.5], 0.8, 0.3);
+        world.attach_box_collider(body, [0.5, 0.5, 0.5], &PhysicsMaterial { dynamic_friction: 0.3, bounciness: 0.8, ..PhysicsMaterial::PROJECT_DEFAULT }, "");
         let materiales = world.collider_friction_restitution(body);
         assert_eq!(materiales.len(), 1);
         assert!((materiales[0].0 - 0.3).abs() <= 1e-6, "friction recta: {}", materiales[0].0);
@@ -3441,10 +3618,10 @@ mod tests {
         let frenado = world.create_rigid_body(30, BodyType::Dynamic, [0.0, 8.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
         let libre = world.create_rigid_body(31, BodyType::Dynamic, [5.0, 8.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
         world
-            .attach_box_collider(frenado, [1.0, 1.0, 1.0], 0.0, 0.0)
+            .attach_box_collider(frenado, [1.0, 1.0, 1.0], &PhysicsMaterial { dynamic_friction: 0.0, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "")
             .expect("collider frenado");
         world
-            .attach_box_collider(libre, [1.0, 1.0, 1.0], 0.0, 0.0)
+            .attach_box_collider(libre, [1.0, 1.0, 1.0], &PhysicsMaterial { dynamic_friction: 0.0, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "")
             .expect("collider libre");
 
         assert!(world.set_angular_damping(frenado, 5.0));
@@ -3467,7 +3644,7 @@ mod tests {
     fn cuerpo_dinamico_box(world: &mut PhysicsWorld, id: u64) -> u64 {
         let h = world.create_rigid_body(id, BodyType::Dynamic, [0.0, 5.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
         world
-            .attach_box_collider(h, [0.5, 0.5, 0.5], 0.0, 0.0)
+            .attach_box_collider(h, [0.5, 0.5, 0.5], &PhysicsMaterial { dynamic_friction: 0.0, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "")
             .expect("collider box");
         h
     }
@@ -3535,12 +3712,12 @@ mod tests {
         let limitada =
             world.create_rigid_body(100, BodyType::Dynamic, [-3.0, 0.2, 0.0], [0.0, 0.0, 0.0, 1.0]);
         world
-            .attach_box_collider(limitada, [0.5; 3], 0.0, 0.5)
+            .attach_box_collider(limitada, [0.5; 3], &PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "")
             .expect("collider limitada");
         let libre =
             world.create_rigid_body(101, BodyType::Dynamic, [3.0, 0.2, 0.0], [0.0, 0.0, 0.0, 1.0]);
         world
-            .attach_box_collider(libre, [0.5; 3], 0.0, 0.5)
+            .attach_box_collider(libre, [0.5; 3], &PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "")
             .expect("collider libre");
         assert!(world.set_max_depenetration_velocity(limitada, 0.2));
 
@@ -3558,7 +3735,7 @@ mod tests {
     fn max_depenetration_velocity_no_frena_caida_libre() {
         let (mut world, _suelo) = mundo_con_suelo();
         let h = world.create_rigid_body(102, BodyType::Dynamic, [0.0, 5.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-        world.attach_box_collider(h, [0.5; 3], 0.0, 0.5).expect("collider");
+        world.attach_box_collider(h, [0.5; 3], &PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "").expect("collider");
         assert!(world.set_max_depenetration_velocity(h, 0.2));
 
         for _ in 0..30 {
@@ -3593,7 +3770,7 @@ mod tests {
     /// Añade una caja al cuerpo y pone su membership en `capa` (filter intacto).
     fn caja_en_capa_rb3(world: &mut PhysicsWorld, h: BodyHandle, capa: u32) {
         world
-            .attach_box_collider(h, [0.5, 0.5, 0.5], 0.0, 0.5)
+            .attach_box_collider(h, [0.5, 0.5, 0.5], &PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "")
             .expect("collider");
         let (rapier, _) = world.get_rapier_handle(h).expect("cuerpo");
         let ch = world.rigid_body_set[rapier].colliders()[0];
@@ -3651,7 +3828,7 @@ mod tests {
         assert!(!colisionan_rb3(&world, a, b));
         // Un collider añadido después nace ya filtrado.
         world
-            .attach_box_collider(a, [0.25, 0.25, 0.25], 0.0, 0.5)
+            .attach_box_collider(a, [0.25, 0.25, 0.25], &PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "")
             .expect("collider");
         assert_eq!(grupos_rb3(&world, a, 1).filter.bits(), !(1u32 << 2));
         assert!(world.set_exclude_layers(a, 0));
@@ -3708,7 +3885,7 @@ mod tests {
     fn suelo_en_capa_ccx(world: &mut PhysicsWorld, capa: u32) {
         let suelo = world.create_rigid_body(9201, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
         world
-            .attach_box_collider(suelo, [30.0, 0.5, 10.0], 0.0, 0.5)
+            .attach_box_collider(suelo, [30.0, 0.5, 10.0], &PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "")
             .expect("collider ccx");
         let (rapier, _) = world.get_rapier_handle(suelo).expect("handle ccx");
         let ch = world.rigid_body_set[rapier].colliders()[0];
@@ -3826,7 +4003,7 @@ mod tests {
     fn rb4_cuerpo_caja(world: &mut PhysicsWorld, id: u64) -> BodyHandle {
         let h = world.create_rigid_body(id, BodyType::Dynamic, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
         world
-            .attach_box_collider(h, [0.5, 0.5, 0.5], 0.0, 0.5)
+            .attach_box_collider(h, [0.5, 0.5, 0.5], &PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "")
             .expect("collider rb4");
         h
     }
@@ -3948,7 +4125,7 @@ mod tests {
         let mut world = PhysicsWorld::new();
         let suelo = world.create_rigid_body(10, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
         world
-            .attach_box_collider(suelo, [10.0, 0.5, 10.0], 0.0, 0.9)
+            .attach_box_collider(suelo, [10.0, 0.5, 10.0], &PhysicsMaterial { dynamic_friction: 0.9, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "")
             .expect("collider suelo");
         (world, suelo)
     }
@@ -3969,7 +4146,7 @@ mod tests {
         let shape = collider_shape_for_builtin("sphere", [2.0, 2.0, 2.0], [0.5, 0.5, 0.5]);
         assert_eq!(shape, ColliderShape::Ball { radius: 1.0 });
         let bola = world.create_rigid_body(20, BodyType::Dynamic, [0.0, 3.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-        world.attach_collider(bola, shape, 0.0, 0.9).expect("collider bola");
+        world.attach_collider(bola, shape, &PhysicsMaterial { dynamic_friction: 0.9, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "").expect("collider bola");
         asentar(&mut world, 180);
         let t = world.get_transform(bola).expect("transform bola");
         assert!(
@@ -3986,7 +4163,7 @@ mod tests {
         let (mut world, _suelo) = mundo_con_suelo();
         let shape = collider_shape_for_builtin("capsule", [1.0, 2.0, 1.0], [0.5, 0.5, 0.5]);
         let capsula = world.create_rigid_body(30, BodyType::Dynamic, [0.0, 4.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-        world.attach_collider(capsula, shape, 0.0, 0.9).expect("collider cápsula");
+        world.attach_collider(capsula, shape, &PhysicsMaterial { dynamic_friction: 0.9, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "").expect("collider cápsula");
         asentar(&mut world, 240);
         let t = world.get_transform(capsula).expect("transform cápsula");
         assert!(
@@ -4006,7 +4183,7 @@ mod tests {
         let (mut world, _suelo) = mundo_con_suelo();
         let shape = collider_shape_for_builtin("cylinder", [1.0, 1.0, 1.0], [0.5, 0.5, 0.5]);
         let cilindro = world.create_rigid_body(40, BodyType::Dynamic, [2.0, 3.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-        world.attach_collider(cilindro, shape, 0.0, 0.9).expect("collider cilindro");
+        world.attach_collider(cilindro, shape, &PhysicsMaterial { dynamic_friction: 0.9, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "").expect("collider cilindro");
         asentar(&mut world, 240);
         let t = world.get_transform(cilindro).expect("transform cilindro");
         assert!(
@@ -4021,21 +4198,15 @@ fn capas_cruzadas_no_colisionan_entre_si() {
 
     // Suelo estático (entidad 1, capa 0 por defecto).
     let ground = world.create_rigid_body(1, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_box_collider(ground, [10.0, 0.5, 10.0], 0.0, 0.7);
+    world.attach_box_collider(ground, [10.0, 0.5, 10.0], &PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "");
 
     // Dos esferas dinámicas en la MISMA posición, en capas que se ignoran mutuamente.
     // Ambas ven la capa 0 (suelo) porque el bit 0 sigue puesto.
     let bh2 = world.create_rigid_body(2, BodyType::Dynamic, [0.0, 3.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_sphere_collider_with_config(
-        bh2, 0.5, 0.0, 0.7,
-        ColliderConfig { layer: 1, mask: !(1u32 << 2), is_trigger: false },
-    );
+    world.attach_sphere_collider_with_config(bh2, 0.5, &PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig { layer: 1, mask: !(1u32 << 2), is_trigger: false }, );
 
     let bh3 = world.create_rigid_body(3, BodyType::Dynamic, [0.0, 3.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_sphere_collider_with_config(
-        bh3, 0.5, 0.0, 0.7,
-        ColliderConfig { layer: 2, mask: !(1u32 << 1), is_trigger: false },
-    );
+    world.attach_sphere_collider_with_config(bh3, 0.5, &PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig { layer: 2, mask: !(1u32 << 1), is_trigger: false }, );
 
     // Dejar caer ambas hasta que reposen.
     for _ in 0..240 {
@@ -4063,18 +4234,15 @@ fn trigger_no_bloquea_y_genera_eventos() {
 
     // Suelo estático (entidad 1).
     let ground = world.create_rigid_body(1, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_box_collider(ground, [10.0, 0.5, 10.0], 0.0, 0.7);
+    world.attach_box_collider(ground, [10.0, 0.5, 10.0], &PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "");
 
     // Caja sensor estática (entidad 4): no debe bloquear.
     let sensor = world.create_rigid_body(4, BodyType::Static, [0.0, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_box_collider_with_config(
-        sensor, [1.0, 1.0, 1.0], 0.0, 0.7,
-        ColliderConfig { layer: 0, mask: u32::MAX, is_trigger: true },
-    );
+    world.attach_box_collider_with_config(sensor, [1.0, 1.0, 1.0], &PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig { layer: 0, mask: u32::MAX, is_trigger: true }, );
 
     // Esfera dinámica que atraviesa el sensor (entidad 5).
     let sphere = world.create_rigid_body(5, BodyType::Dynamic, [0.0, 5.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_sphere_collider(sphere, 0.5, 0.0, 0.7);
+    world.attach_sphere_collider(sphere, 0.5, &PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "");
 
     for _ in 0..300 {
         world.step(1.0 / 60.0);
@@ -4106,10 +4274,10 @@ fn colision_normal_genera_enter_y_par_activo() {
     let mut world = PhysicsWorld::new();
     // Suelo estático (entidad 1): superficie en y=0
     let suelo = world.create_rigid_body(1, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_box_collider(suelo, [10.0, 0.5, 10.0], 0.0, 0.7);
+    world.attach_box_collider(suelo, [10.0, 0.5, 10.0], &PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "");
     // Esfera dinámica (entidad 2) que caerá sobre el suelo
     let esfera = world.create_rigid_body(2, BodyType::Dynamic, [0.0, 3.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_sphere_collider(esfera, 0.5, 0.0, 0.7);
+    world.attach_sphere_collider(esfera, 0.5, &PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "");
 
     // Simular la caída drenando eventos en cada step para capturar el Enter
     let mut hubo_enter = false;
@@ -4135,10 +4303,10 @@ fn exit_al_teletransportar() {
     let mut world = PhysicsWorld::new();
     // Suelo estático (entidad 1)
     let suelo = world.create_rigid_body(1, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_box_collider(suelo, [10.0, 0.5, 10.0], 0.0, 0.7);
+    world.attach_box_collider(suelo, [10.0, 0.5, 10.0], &PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "");
     // Esfera dinámica (entidad 2) que cae y reposa
     let esfera = world.create_rigid_body(2, BodyType::Dynamic, [0.0, 3.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_sphere_collider(esfera, 0.5, 0.0, 0.7);
+    world.attach_sphere_collider(esfera, 0.5, &PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "");
 
     // Dejar caer hasta reposar y limpiar los eventos de la caída
     for _ in 0..300 {
@@ -4175,7 +4343,7 @@ fn cast_sphere_acierta_suelo_con_normal_arriba() {
     let mut world = PhysicsWorld::new();
     // Suelo estático (entidad 1): superficie en y=0
     let suelo = world.create_rigid_body(1, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_box_collider(suelo, [10.0, 0.5, 10.0], 0.0, 0.7);
+    world.attach_box_collider(suelo, [10.0, 0.5, 10.0], &PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "");
     // Un step para que se actualice el pipeline de consultas
     world.step(1.0 / 60.0);
 
@@ -4204,22 +4372,10 @@ fn cast_ray_masked_respeta_mascara() {
     let mut world = PhysicsWorld::new();
 
     let bh_capa0 = world.create_rigid_body(1, BodyType::Static, [0.0, 0.0, 5.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_sphere_collider_with_config(
-        bh_capa0,
-        0.5,
-        0.0,
-        0.5,
-        ColliderConfig { layer: 0, mask: u32::MAX, is_trigger: false },
-    );
+    world.attach_sphere_collider_with_config(bh_capa0, 0.5, &PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig { layer: 0, mask: u32::MAX, is_trigger: false }, );
 
     let bh_capa1 = world.create_rigid_body(2, BodyType::Static, [0.0, 0.0, 10.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_sphere_collider_with_config(
-        bh_capa1,
-        0.5,
-        0.0,
-        0.5,
-        ColliderConfig { layer: 1, mask: u32::MAX, is_trigger: false },
-    );
+    world.attach_sphere_collider_with_config(bh_capa1, 0.5, &PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig { layer: 1, mask: u32::MAX, is_trigger: false }, );
 
     // Máscara que solo incluye la capa 1 (bit 1): debe impactar la esfera lejana,
     // ignorando la cercana que está en capa 0.
@@ -4237,13 +4393,13 @@ fn overlap_sphere_lista_solo_lo_de_dentro() {
     let mut world = PhysicsWorld::new();
 
     let bh_dentro1 = world.create_rigid_body(1, BodyType::Static, [1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_sphere_collider(bh_dentro1, 0.3, 0.0, 0.5);
+    world.attach_sphere_collider(bh_dentro1, 0.3, &PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "");
 
     let bh_dentro2 = world.create_rigid_body(2, BodyType::Static, [-1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_sphere_collider(bh_dentro2, 0.3, 0.0, 0.5);
+    world.attach_sphere_collider(bh_dentro2, 0.3, &PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "");
 
     let bh_fuera = world.create_rigid_body(3, BodyType::Static, [50.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_sphere_collider(bh_fuera, 0.3, 0.0, 0.5);
+    world.attach_sphere_collider(bh_fuera, 0.3, &PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "");
 
     let resultado = world.overlap_sphere([0.0, 0.0, 0.0], 5.0, u32::MAX, 0);
 
@@ -4271,17 +4427,11 @@ fn convex_hull_sostiene_como_caja() {
     ];
 
     let bh_suelo = world.create_rigid_body(1, BodyType::Static, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    let collider = world.attach_convex_collider(
-        bh_suelo,
-        &puntos_caja,
-        0.0,
-        0.5,
-        ColliderConfig { layer: 0, mask: u32::MAX, is_trigger: false },
-    );
+    let collider = world.attach_convex_collider(bh_suelo, &puntos_caja, &PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig { layer: 0, mask: u32::MAX, is_trigger: false }, );
     assert!(collider.is_some());
 
     let bh_esfera = world.create_rigid_body(2, BodyType::Dynamic, [0.0, 5.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    world.attach_sphere_collider(bh_esfera, 0.5, 0.0, 0.5);
+    world.attach_sphere_collider(bh_esfera, 0.5, &PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "");
 
     // Suficientes substeps para que la esfera caiga y se asiente sobre el casco convexo.
     for _ in 0..200 {
@@ -4397,38 +4547,18 @@ fn convex_hull_sostiene_como_caja() {
         // Suelo estático: caja half [10, 0.5, 10] en y = -0.5 (superficie en y = 0).
         let suelo = crear_cuerpo(&mut world, 1, false, [0.0, -0.5, 0.0]);
         world
-            .attach_collider_with_config(
-                suelo,
-                ColliderShape::Cuboid {
+            .attach_collider_with_config(suelo, ColliderShape::Cuboid {
                     half_extents: [10.0, 0.5, 10.0],
-                },
-                0.0,
-                0.8,
-                ColliderConfig::default(),
-            )
+                }, &PhysicsMaterial { dynamic_friction: 0.8, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig::default(), )
             .expect("collider del suelo");
 
         // Cuerpo dinámico con DOS esferas desplazadas en x.
         let esfera = crear_cuerpo(&mut world, 2, true, [0.0, 3.0, 0.0]);
         world
-            .attach_collider_with_config_at(
-                esfera,
-                ColliderShape::Ball { radius: 0.5 },
-                0.0,
-                0.8,
-                ColliderConfig::default(),
-                [-1.2, 0.0, 0.0],
-            )
+            .attach_collider_with_config_at(esfera, ColliderShape::Ball { radius: 0.5 }, &PhysicsMaterial { dynamic_friction: 0.8, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig::default(), [-1.2, 0.0, 0.0], "Y")
             .expect("esfera izquierda");
         world
-            .attach_collider_with_config_at(
-                esfera,
-                ColliderShape::Ball { radius: 0.5 },
-                0.0,
-                0.8,
-                ColliderConfig::default(),
-                [1.2, 0.0, 0.0],
-            )
+            .attach_collider_with_config_at(esfera, ColliderShape::Ball { radius: 0.5 }, &PhysicsMaterial { dynamic_friction: 0.8, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig::default(), [1.2, 0.0, 0.0], "Y")
             .expect("esfera derecha");
 
         for _ in 0..300 {
@@ -4457,26 +4587,13 @@ fn convex_hull_sostiene_como_caja() {
         let mut world = PhysicsWorld::new();
         let suelo = crear_cuerpo(&mut world, 1, false, [0.0, -0.5, 0.0]);
         world
-            .attach_collider_with_config(
-                suelo,
-                ColliderShape::Cuboid { half_extents: [10.0, 0.5, 10.0] },
-                0.0,
-                0.8,
-                ColliderConfig::default(),
-            )
+            .attach_collider_with_config(suelo, ColliderShape::Cuboid { half_extents: [10.0, 0.5, 10.0] }, &PhysicsMaterial { dynamic_friction: 0.8, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig::default(), )
             .expect("collider del suelo");
 
         let casa = crear_cuerpo(&mut world, 2, false, [0.0, 0.0, 0.0]);
         for x in [-2.0, 2.0] {
             world
-                .attach_collider_with_config_at(
-                    casa,
-                    ColliderShape::Cuboid { half_extents: [0.5, 1.0, 0.5] },
-                    0.0,
-                    0.8,
-                    ColliderConfig::default(),
-                    [x, 1.0, 0.0],
-                )
+                .attach_collider_with_config_at(casa, ColliderShape::Cuboid { half_extents: [0.5, 1.0, 0.5] }, &PhysicsMaterial { dynamic_friction: 0.8, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig::default(), [x, 1.0, 0.0], "Y")
                 .expect("caja de la casa");
         }
 
@@ -4484,24 +4601,12 @@ fn convex_hull_sostiene_como_caja() {
         // (radio 0,5) descansa con el centro a ≈ 2,5.
         let bola_d = crear_cuerpo(&mut world, 3, true, [2.0, 4.0, 0.0]);
         world
-            .attach_collider_with_config(
-                bola_d,
-                ColliderShape::Ball { radius: 0.5 },
-                0.0,
-                0.8,
-                ColliderConfig::default(),
-            )
+            .attach_collider_with_config(bola_d, ColliderShape::Ball { radius: 0.5 }, &PhysicsMaterial { dynamic_friction: 0.8, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig::default(), )
             .expect("bola derecha");
         // Bola en el hueco central: cae al suelo (centro a ≈ 0,5).
         let bola_c = crear_cuerpo(&mut world, 4, true, [0.0, 4.0, 0.0]);
         world
-            .attach_collider_with_config(
-                bola_c,
-                ColliderShape::Ball { radius: 0.5 },
-                0.0,
-                0.8,
-                ColliderConfig::default(),
-            )
+            .attach_collider_with_config(bola_c, ColliderShape::Ball { radius: 0.5 }, &PhysicsMaterial { dynamic_friction: 0.8, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig::default(), )
             .expect("bola central");
 
         for _ in 0..300 {
@@ -4522,19 +4627,13 @@ fn convex_hull_sostiene_como_caja() {
         // Canal estático (UN solo cuerpo con el trimesh completo).
         let canal = crear_cuerpo(&mut world, 1, false, [0.0, 0.0, 0.0]);
         world
-            .attach_trimesh_collider(canal, &verts, &idx, 0.0, 0.8, ColliderConfig::default())
+            .attach_trimesh_collider(canal, &verts, &idx, &PhysicsMaterial { dynamic_friction: 0.8, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig::default())
             .expect("trimesh del canal");
 
         // Esfera dinámica que debe caer DENTRO del canal.
         let esfera = crear_cuerpo(&mut world, 2, true, [0.0, 3.0, 0.0]);
         world
-            .attach_collider_with_config(
-                esfera,
-                ColliderShape::Ball { radius: 0.4 },
-                0.0,
-                0.8,
-                ColliderConfig::default(),
-            )
+            .attach_collider_with_config(esfera, ColliderShape::Ball { radius: 0.4 }, &PhysicsMaterial { dynamic_friction: 0.8, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig::default(), )
             .expect("esfera");
 
         for _ in 0..300 {
@@ -4555,18 +4654,12 @@ fn convex_hull_sostiene_como_caja() {
         // Mismo canal, pero como nube de puntos convexa: el hull cierra la boca a y = 1.
         let canal = crear_cuerpo(&mut world, 1, false, [0.0, 0.0, 0.0]);
         world
-            .attach_convex_collider(canal, &verts, 0.0, 0.8, ColliderConfig::default())
+            .attach_convex_collider(canal, &verts, &PhysicsMaterial { dynamic_friction: 0.8, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig::default())
             .expect("hull del canal");
 
         let esfera = crear_cuerpo(&mut world, 2, true, [0.0, 3.0, 0.0]);
         world
-            .attach_collider_with_config(
-                esfera,
-                ColliderShape::Ball { radius: 0.4 },
-                0.0,
-                0.8,
-                ColliderConfig::default(),
-            )
+            .attach_collider_with_config(esfera, ColliderShape::Ball { radius: 0.4 }, &PhysicsMaterial { dynamic_friction: 0.8, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig::default(), )
             .expect("esfera");
 
         for _ in 0..300 {
@@ -4597,7 +4690,7 @@ fn convex_hull_sostiene_como_caja() {
         let idx = vec![[0u32, 1u32, 7u32]];
 
         let resultado =
-            world.attach_trimesh_collider(cuerpo, &verts, &idx, 0.0, 0.8, ColliderConfig::default());
+            world.attach_trimesh_collider(cuerpo, &verts, &idx, &PhysicsMaterial { dynamic_friction: 0.8, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig::default());
         assert!(resultado.is_none(), "un trimesh inválido debe devolver None");
 
         // Caso adicional: todos los vértices idénticos (malla degenerada).
@@ -4607,14 +4700,7 @@ fn convex_hull_sostiene_como_caja() {
             [0.0, 0.0, 0.0],
         ];
         let idx_rep = vec![[0u32, 1u32, 2u32]];
-        let resultado_rep = world.attach_trimesh_collider(
-            cuerpo,
-            &verts_rep,
-            &idx_rep,
-            0.0,
-            0.8,
-            ColliderConfig::default(),
-        );
+        let resultado_rep = world.attach_trimesh_collider(cuerpo, &verts_rep, &idx_rep, &PhysicsMaterial { dynamic_friction: 0.8, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", ColliderConfig::default(), );
         assert!(resultado_rep.is_none(), "una malla degenerada debe devolver None");
     }
 
@@ -4642,7 +4728,7 @@ fn convex_hull_sostiene_como_caja() {
                             [0.0, 0.0, 0.0, 1.0],
                         );
                         world
-                            .attach_box_collider(b, [0.5, 0.5, 0.5], 0.0, 0.9)
+                            .attach_box_collider(b, [0.5, 0.5, 0.5], &PhysicsMaterial { dynamic_friction: 0.9, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "")
                             .expect("collider caja");
                         cuerpos.push(b);
                     }
@@ -4651,7 +4737,7 @@ fn convex_hull_sostiene_como_caja() {
             id += 1;
             let bola = world.create_rigid_body(id, BodyType::Dynamic, [0.0, 6.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
             world
-                .attach_collider(bola, ColliderShape::Ball { radius: 0.5 }, 0.0, 0.9)
+                .attach_collider(bola, ColliderShape::Ball { radius: 0.5 }, &PhysicsMaterial { dynamic_friction: 0.9, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "")
                 .expect("collider bola");
             cuerpos.push(bola);
             asentar(&mut world, 600);
@@ -4690,14 +4776,7 @@ fn convex_hull_sostiene_como_caja() {
                 let b = world.create_rigid_body(n, BodyType::Dynamic, [x, 2.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
                 for dx in [-0.6f32, 0.6] {
                     world
-                        .attach_collider_with_config_at(
-                            b,
-                            ColliderShape::Cuboid { half_extents: [0.5, 0.5, 0.5] },
-                            0.0,
-                            0.9,
-                            cfg,
-                            [dx, 0.0, 0.0],
-                        )
+                        .attach_collider_with_config_at(b, ColliderShape::Cuboid { half_extents: [0.5, 0.5, 0.5] }, &PhysicsMaterial { dynamic_friction: 0.9, bounciness: 0.0, ..PhysicsMaterial::PROJECT_DEFAULT }, "", cfg, [dx, 0.0, 0.0], "Y")
                         .expect("collider offset");
                 }
                 cuerpos.push(b);

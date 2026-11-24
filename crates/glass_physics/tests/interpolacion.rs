@@ -9,7 +9,7 @@ const DT: f32 = 1.0 / 60.0;
 
 fn cuerpo_en_movimiento(w: &mut PhysicsWorld, id: u64) {
     let h = w.create_rigid_body(id, BodyType::Dynamic, [0.0, 5.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
-    w.attach_box_collider(h, [0.5, 0.5, 0.5], 0.0, 0.0);
+    w.attach_box_collider(h, [0.5, 0.5, 0.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.0, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     assert!(w.set_gravity_scale(h, 0.0));
     assert!(w.set_linear_damping(h, 0.0));
     assert!(w.set_linear_velocity(h, [3.0, 0.0, 0.0]));

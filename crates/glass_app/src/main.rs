@@ -11,7 +11,8 @@ use egui_ash_renderer::allocator::GpuAllocator;
 #[cfg(feature = "editor")]
 use egui_winit::State as EguiWinitState;
 use glass_audio::{register_global_audio_system, AudioSystem};
-use glass_physics::{collider_shape_for_builtin, register_global_physics_world, BodyType, ColliderConfig, ColliderShape, ContactKind, PhysicsWorld};
+use glass_physics::{collider_shape_for_builtin, register_global_physics_world, BodyHandle, BodyType, ColliderConfig, ColliderShape, ContactKind, PhysicsWorld};
+use glass_core::physics_material::{resolve_collider_material, PhysicsMaterial, PhysicsMaterialLibrary};
 use glass_core::{GlassWindow, SceneManager, SceneState, WindowConfig};
 #[cfg(feature = "editor")]
 use glass_editor::EditorDockingLayout;
@@ -106,11 +107,10 @@ struct SpawnedBodySpec {
     body_type: BodyType,
     position: [f32; 3],
     rotation: [f32; 4],
-    friction: f32,
-    restitution: f32,
-    /// Colliders primitivos resueltos de la Fase 1.5 (forma, config y
-    /// offset local por collider).
-    colliders: Vec<(ColliderShape, ColliderConfig, [f32; 3])>,
+    /// Colliders primitivos resueltos de la Fase 1.5: forma, config,
+    /// offset local, material efectivo con campos nombrados, referencia
+    /// de asset ("" = sin asset) y dirección de la cápsula.
+    colliders: Vec<ColliderResuelto>,
     /// True si `colliders` viene de specs explícitos del autor (componen
     /// con el collider de malla); false si es solo el inferido histórico
     /// (que actúa de respaldo cuando la malla no cuela). P3.
@@ -119,6 +119,9 @@ struct SpawnedBodySpec {
     /// spawn en vivo lo resuelve con la geometría retenida de la
     /// caché compartida, como la carga de escena (auditoría C4).
     mesh_collider: glass_core::MeshColliderMode,
+    /// Material efectivo del collider de malla y su referencia de asset.
+    mesh_material: PhysicsMaterial,
+    mesh_material_ref: String,
     /// Nombre del modelo de la entidad (para buscar su geometría).
     model: String,
     /// Escala de mundo (para escalar los puntos del collider).
@@ -141,6 +144,148 @@ struct SpawnedBodySpec {
     pub interpolate: bool,
 }
 
+/// Collider de autorado ya resuelto: forma, config, offset local,
+/// material efectivo con campos nombrados, referencia de asset
+/// ("" = sin asset) y dirección de la cápsula ("X" | "Y" | "Z").
+type ColliderResuelto = (
+    ColliderShape,
+    ColliderConfig,
+    [f32; 3],
+    PhysicsMaterial,
+    String,
+    String,
+);
+
+/// Resuelve el material de un collider de autorado. Devuelve el material
+/// efectivo y la referencia tal como está autorada ("" = sin asset).
+fn material_resuelto(
+    referencia: &str,
+    body: &glass_core::PhysicsData,
+    lib: &mut PhysicsMaterialLibrary,
+) -> (PhysicsMaterial, String) {
+    let (material, _origen) = resolve_collider_material(referencia, body, lib);
+    (material, referencia.to_string())
+}
+
+/// Librería de materiales físicos anclada a la carpeta Assets del
+/// proyecto vigente (C3). Sin proyecto abierto, la raíz es "." y las
+/// referencias simplemente no resuelven (caen al legado/defecto).
+/// Sirve al puente (spawn/activación) y a la app (rebuild).
+fn biblioteca_physmat(
+    scene_manager: &std::sync::Arc<std::sync::Mutex<SceneManager>>,
+) -> PhysicsMaterialLibrary {
+    let raiz = scene_manager
+        .lock()
+        .ok()
+        .map(|m| m.vfs().root().to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let assets = raiz.join("Assets");
+    let assets = if assets.is_dir() { assets } else { raiz.join("assets") };
+    PhysicsMaterialLibrary::new(assets)
+}
+
+/// Datos del collider de malla para `adjuntar_colliders_autorados`.
+struct MallaAutorada<'a> {
+    modo: &'a glass_core::MeshColliderMode,
+    geometria: Option<(&'a [[f32; 3]], &'a [u32])>,
+    escala: [f32; 3],
+    cfg: ColliderConfig,
+    material: &'a PhysicsMaterial,
+    material_ref: &'a str,
+    model: &'a str,
+}
+
+/// Adjunta los colliders de autorado (malla y primitivos) a `handle`.
+/// Es la única ruta de adjunto para `create_body` y
+/// `rebuild_physics_from_scene`. El material viaja resuelto por collider
+/// con campos nombrados (`PhysicsMaterial` y referencia), así que no hay
+/// pares posicionales (friction, restitution) que se puedan cruzar.
+///
+/// La malla compone con los specs. El inferido (sin specs) solo se
+/// adjunta si la malla no se pudo crear. Devuelve si la malla se adjuntó.
+fn adjuntar_colliders_autorados(
+    physics: &mut PhysicsWorld,
+    handle: BodyHandle,
+    entity_id: u64,
+    es_estatico: bool,
+    malla: MallaAutorada<'_>,
+    colliders: Vec<ColliderResuelto>,
+    colliders_son_specs: bool,
+) -> bool {
+    use glass_core::MeshColliderMode;
+
+    let mut via_mesh = false;
+    if *malla.modo != MeshColliderMode::None {
+        match malla.geometria {
+            Some((vertices, indices)) => {
+                let e = malla.escala;
+                let puntos: Vec<[f32; 3]> = vertices
+                    .iter()
+                    .map(|v| [v[0] * e[0], v[1] * e[1], v[2] * e[2]])
+                    .collect();
+                let cfg = malla.cfg;
+                let attached = match malla.modo {
+                    MeshColliderMode::TriMesh if es_estatico && !cfg.is_trigger => {
+                        let tris: Vec<[u32; 3]> = indices
+                            .as_chunks::<3>()
+                            .0
+                            .iter()
+                            .map(|c| [c[0], c[1], c[2]])
+                            .collect();
+                        physics.attach_trimesh_collider(handle, &puntos, &tris, malla.material, malla.material_ref, cfg)
+                    }
+                    MeshColliderMode::TriMesh => {
+                        if cfg.is_trigger {
+                            log::warn!(
+                                "Física: entidad {} pide TriMesh como trigger, se degrada a Convex.",
+                                entity_id
+                            );
+                        } else {
+                            log::warn!(
+                                "Física: entidad {} pide TriMesh en cuerpo no estático, se degrada a Convex.",
+                                entity_id
+                            );
+                        }
+                        physics.attach_convex_collider(handle, &puntos, malla.material, malla.material_ref, cfg)
+                    }
+                    MeshColliderMode::Convex => physics.attach_convex_collider(handle, &puntos, malla.material, malla.material_ref, cfg),
+                    MeshColliderMode::None => None,
+                };
+                via_mesh = attached.is_some();
+                if !via_mesh {
+                    log::warn!(
+                        "entidad {}: el collider de malla no se pudo crear; cae a los primitivos resueltos",
+                        entity_id
+                    );
+                }
+            }
+            None => {
+                log::warn!(
+                    "entidad {}: collider de malla ({:?}) pedido, pero no hay geometría retenida para el modelo '{}'; cae a los primitivos resueltos",
+                    entity_id,
+                    malla.modo,
+                    malla.model
+                );
+            }
+        }
+    }
+
+    if colliders_son_specs || !via_mesh {
+        for (shape, cfg, offset, material, material_ref, direction) in colliders {
+            physics.attach_collider_with_config_at(
+                handle,
+                shape,
+                &material,
+                &material_ref,
+                cfg,
+                offset,
+                &direction,
+            );
+        }
+    }
+    via_mesh
+}
+
 impl EngineSceneBridge {
     /// Deriva el cuerpo de una entidad de su `PhysicsData` y su matriz
     /// de mundo, EXACTAMENTE como `rebuild_physics_from_scene`: el tipo
@@ -151,6 +296,7 @@ impl EngineSceneBridge {
     fn body_spec_for(
         world_matrices: &std::collections::HashMap<u64, [f32; 16]>,
         ent: &glass_core::EntityData,
+        lib: &mut PhysicsMaterialLibrary,
     ) -> Option<SpawnedBodySpec> {
         let body = ent.physics.as_ref()?;
         let body_type = match body.body_type.as_str() {
@@ -167,19 +313,19 @@ impl EngineSceneBridge {
         });
         let model = ent.mesh.as_ref().map(|m| m.model.as_str()).unwrap_or("");
         let shape = collider_shape_for_builtin(model, glass_core::mat4_scale(world), body.box_extents);
-        let colliders = colliders_resueltos(body, shape);
-        // Material de fallback compuesto (legado o valores por defecto).
-        let fallback = body.body_fallback_material();
+        let colliders = colliders_resueltos(body, shape, lib);
+        let (mesh_material, mesh_material_ref) =
+            material_resuelto(&body.mesh_collider_material, body, lib);
         Some(SpawnedBodySpec {
             entity_id: ent.id,
             body_type,
             position: glass_core::mat4_translation(world),
             rotation: glass_core::mat4_to_quat(world),
-            friction: fallback.dynamic_friction,
-            restitution: fallback.bounciness,
             colliders,
             colliders_son_specs: !body.colliders.is_empty(),
             mesh_collider: body.mesh_collider,
+            mesh_material,
+            mesh_material_ref,
             model: model.to_string(),
             world_scale: glass_core::mat4_scale(world),
             constraints: body.constraints,
@@ -260,103 +406,30 @@ impl EngineSceneBridge {
         }
         // La masa se aplica AL FINAL de esta función, con los
         // colliders ya adjuntos (set_mass rescales densidades).
-        // El collider de malla, si cuela, COMPONE con los primitivos de
-        // specs (la misma semántica que rebuild_physics_from_scene,
-        // P3); el inferido histórico solo actúa de respaldo si la malla
-        // no cuela. OJO, orden deliberado: se pasa (friction,
-        // restitution) a la firma (restitution, friction), el mismo
-        // cruce histórico de todas las rutas.
-        let mut via_mesh = false;
-        if spec.mesh_collider != glass_core::MeshColliderMode::None {
-            match &geometria {
-                Some((vertices, indices)) => {
-                    let cfg = spec
-                        .colliders
-                        .first()
-                        .map(|c| c.1)
-                        .unwrap_or_default();
-                    let escala = spec.world_scale;
-                    let puntos: Vec<[f32; 3]> = vertices
-                        .iter()
-                        .map(|v| [v[0] * escala[0], v[1] * escala[1], v[2] * escala[2]])
-                        .collect();
-                    let attached = match spec.mesh_collider {
-                        glass_core::MeshColliderMode::TriMesh
-                            if spec.body_type == BodyType::Static =>
-                        {
-                            let tris: Vec<[u32; 3]> = indices
-                                .as_chunks::<3>().0.iter()
-                                .map(|c| [c[0], c[1], c[2]])
-                                .collect();
-                            physics.attach_trimesh_collider(
-                                handle,
-                                &puntos,
-                                &tris,
-                                spec.friction,
-                                spec.restitution,
-                                cfg,
-                            )
-                        }
-                        glass_core::MeshColliderMode::TriMesh => {
-                            log::warn!(
-                                "Física: entidad {} pide TriMesh en cuerpo no estático, se degrada a Convex.",
-                                spec.entity_id
-                            );
-                            physics.attach_convex_collider(
-                                handle,
-                                &puntos,
-                                spec.friction,
-                                spec.restitution,
-                                cfg,
-                            )
-                        }
-                        glass_core::MeshColliderMode::Convex => physics.attach_convex_collider(
-                            handle,
-                            &puntos,
-                            spec.friction,
-                            spec.restitution,
-                            cfg,
-                        ),
-                        glass_core::MeshColliderMode::None => None,
-                    };
-                    via_mesh = attached.is_some();
-                    if !via_mesh {
-                        log::warn!(
-                            "entidad {}: el collider de malla no se pudo crear; cae a los primitivos resueltos",
-                            spec.entity_id
-                        );
-                    }
-                }
-                None => {
-                    log::warn!(
-                        "entidad {}: collider de malla ({:?}) pedido, pero no hay geometría retenida para el modelo '{}'; cae a los primitivos resueltos",
-                        spec.entity_id,
-                        spec.mesh_collider,
-                        spec.model
-                    );
-                }
-            }
-        }
-        // Los specs componen con la malla; el inferido (lista vacía)
-        // solo se adjunta si la malla no cuela, para no duplicarlo.
-        // OJO, orden deliberado: se pasa (friction, restitution) a la
-        // firma (restitution, friction) de `attach_collider_with_config_at`,
-        // EL MISMO cruce histórico de `rebuild_physics_from_scene`. Un
-        // spawn y su gemelo autorado deben comportarse igual; el cruce se
-        // paga el día que se corrija en TODAS las rutas a la vez (deuda
-        // registrada en REGISTRO_PRIMITIVAS_COLLIDERS.md).
-        if spec.colliders_son_specs || !via_mesh {
-            for (shape, cfg, offset) in spec.colliders {
-                physics.attach_collider_with_config_at(
-                    handle,
-                    shape,
-                    spec.friction,
-                    spec.restitution,
-                    cfg,
-                    offset,
-                );
-            }
-        }
+        // El material viaja resuelto en el spec con campos nombrados
+        // (PhysicsMaterial y referencia de asset); no hay pares
+        // posicionales (friction, restitution) que cruzar. Misma ruta
+        // que rebuild_physics_from_scene (C3).
+        let mesh_cfg = spec.colliders.first().map(|c| c.1).unwrap_or_default();
+        let _via_mesh = adjuntar_colliders_autorados(
+            &mut physics,
+            handle,
+            spec.entity_id,
+            spec.body_type == BodyType::Static,
+            MallaAutorada {
+                modo: &spec.mesh_collider,
+                geometria: geometria
+                    .as_ref()
+                    .map(|(v, i)| (v.as_slice(), i.as_slice())),
+                escala: spec.world_scale,
+                cfg: mesh_cfg,
+                material: &spec.mesh_material,
+                material_ref: &spec.mesh_material_ref,
+                model: &spec.model,
+            },
+            spec.colliders,
+            spec.colliders_son_specs,
+        );
         // Masa al final: todos los colliders ya están adjuntos.
         if spec.body_type == BodyType::Dynamic {
             physics.set_mass(handle, spec.mass);
@@ -946,9 +1019,10 @@ impl SceneBridge for EngineSceneBridge {
                 });
                 let world_matrices: std::collections::HashMap<u64, [f32; 16]> =
                     world.map(|m| [(id, m)].into_iter().collect()).unwrap_or_default();
+                let mut lib = biblioteca_physmat(&self.scene_manager);
                 state
                     .get_entity(id)
-                    .and_then(|ent| Self::body_spec_for(&world_matrices, ent))
+                    .and_then(|ent| Self::body_spec_for(&world_matrices, ent, &mut lib))
             } else {
                 None
             };
@@ -1016,10 +1090,11 @@ impl SceneBridge for EngineSceneBridge {
 
             let world_matrices = state.compute_world_matrices();
             let mut body_specs = Vec::new();
+            let mut lib = biblioteca_physmat(&self.scene_manager);
 
             if let Some(ent) = state.get_entity(root_id) {
                 if ent.physics.is_some() {
-                    if let Some(bs) = Self::body_spec_for(&world_matrices, ent) {
+                    if let Some(bs) = Self::body_spec_for(&world_matrices, ent, &mut lib) {
                         body_specs.push(bs);
                     }
                 }
@@ -1035,7 +1110,7 @@ impl SceneBridge for EngineSceneBridge {
             while let Some(child_id) = stack.pop() {
                 if let Some(ent) = state.get_entity(child_id) {
                     if ent.physics.is_some() {
-                        if let Some(bs) = Self::body_spec_for(&world_matrices, ent) {
+                        if let Some(bs) = Self::body_spec_for(&world_matrices, ent, &mut lib) {
                             body_specs.push(bs);
                         }
                     }
@@ -1095,9 +1170,10 @@ impl SceneBridge for EngineSceneBridge {
                     return true;
                 };
                 let world_matrices = state.compute_world_matrices();
+                let mut lib = biblioteca_physmat(&self.scene_manager);
                 state
                     .get_entity(entity_id)
-                    .and_then(|ent| Self::body_spec_for(&world_matrices, ent))
+                    .and_then(|ent| Self::body_spec_for(&world_matrices, ent, &mut lib))
             };
             if let Some(body_spec) = body_spec {
                 self.create_body(body_spec);
@@ -2145,9 +2221,9 @@ type DescriptorCuerpo = (
     BodyType,
     [f32; 3],
     [f32; 4],
-    Vec<(ColliderShape, ColliderConfig, [f32; 3])>,
-    f32,
-    f32,
+    Vec<ColliderResuelto>,
+    PhysicsMaterial,
+    String,
     [f32; 3],
     Option<(glass_core::MeshColliderMode, String, [f32; 3], bool)>,
     // P3: true si los resueltos vienen de specs explícitos (componen con
@@ -2633,16 +2709,16 @@ impl GlassEngineApp {
             *phys = PhysicsWorld::new();
 
             let fb = phys.create_rigid_body(floor_id, BodyType::Static, [3.5, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-            phys.attach_box_collider(fb, [15.0, 0.5, 15.0], 0.05, 0.7);
+            phys.attach_box_collider(fb, [15.0, 0.5, 15.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.05, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
 
             let s1b = phys.create_rigid_body(step1_id, BodyType::Static, [3.0, 0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-            phys.attach_box_collider(s1b, [1.0, 0.5, 1.0], 0.05, 0.7);
+            phys.attach_box_collider(s1b, [1.0, 0.5, 1.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.05, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
 
             let s2b = phys.create_rigid_body(step2_id, BodyType::Static, [6.0, 1.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-            phys.attach_box_collider(s2b, [1.0, 0.5, 1.0], 0.05, 0.7);
+            phys.attach_box_collider(s2b, [1.0, 0.5, 1.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.05, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
 
             let pb = phys.create_rigid_body(player_id, BodyType::Dynamic, [0.0, initial_y, 0.0], [0.0, 0.0, 0.0, 1.0]);
-            phys.attach_box_collider(pb, [0.5, 0.5, 0.5], 0.02, 0.6);
+            phys.attach_box_collider(pb, [0.5, 0.5, 0.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.6, bounciness: 0.02, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
             self.player_body_handle = Some(pb);
         }
 
@@ -2807,19 +2883,19 @@ impl GlassEngineApp {
             *phys = PhysicsWorld::new();
 
             let fb = phys.create_rigid_body(floor_id, BodyType::Static, [3.5, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-            phys.attach_box_collider(fb, [15.0, 0.5, 15.0], 0.05, 0.7);
+            phys.attach_box_collider(fb, [15.0, 0.5, 15.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.05, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
 
             let s1b = phys.create_rigid_body(step1_id, BodyType::Static, [3.0, 0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-            phys.attach_box_collider(s1b, [1.0, 0.5, 1.0], 0.05, 0.7);
+            phys.attach_box_collider(s1b, [1.0, 0.5, 1.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.05, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
 
             let s2b = phys.create_rigid_body(step2_id, BodyType::Static, [6.0, 1.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-            phys.attach_box_collider(s2b, [1.0, 0.5, 1.0], 0.05, 0.7);
+            phys.attach_box_collider(s2b, [1.0, 0.5, 1.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.05, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
 
             let gb = phys.create_rigid_body(goal_id, BodyType::Static, [8.5, 2.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-            phys.attach_box_collider(gb, [1.0, 0.5, 1.0], 0.05, 0.7);
+            phys.attach_box_collider(gb, [1.0, 0.5, 1.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.05, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
 
             let pb = phys.create_rigid_body(player_id, BodyType::Dynamic, [0.0, 0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-            phys.attach_box_collider(pb, [0.5, 0.5, 0.5], 0.02, 0.6);
+            phys.attach_box_collider(pb, [0.5, 0.5, 0.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.6, bounciness: 0.02, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
             self.player_body_handle = Some(pb);
         }
 
@@ -3022,11 +3098,11 @@ impl GlassEngineApp {
             *phys = PhysicsWorld::new();
 
             let fb = phys.create_rigid_body(floor_id, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-            phys.attach_box_collider(fb, [15.0, 0.5, 15.0], 0.05, 0.7);
+            phys.attach_box_collider(fb, [15.0, 0.5, 15.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.05, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
 
             for (ent_id, pos) in dynamic_ids {
                 let b = phys.create_rigid_body(ent_id, BodyType::Dynamic, pos, [0.0, 0.0, 0.0, 1.0]);
-                phys.attach_box_collider(b, [0.5, 0.5, 0.5], 0.05, 0.6);
+                phys.attach_box_collider(b, [0.5, 0.5, 0.5], &glass_core::PhysicsMaterial { dynamic_friction: 0.6, bounciness: 0.05, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
             }
         }
         self.player_body_handle = None;
@@ -3117,7 +3193,7 @@ impl GlassEngineApp {
             let mut phys = self.physics_world.lock().unwrap();
             *phys = PhysicsWorld::new();
             let fb = phys.create_rigid_body(floor_id, BodyType::Static, [0.0, -0.5, 0.0], [0.0, 0.0, 0.0, 1.0]);
-            phys.attach_box_collider(fb, [12.0, 0.5, 12.0], 0.05, 0.7);
+            phys.attach_box_collider(fb, [12.0, 0.5, 12.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.05, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
         }
         self.player_body_handle = None;
         self.player_script_handle = None;
@@ -4304,6 +4380,9 @@ fn lanzar_hub_al_salir() {
         };
 
 let mut descriptors: Vec<DescriptorCuerpo> = Vec::new();
+        // Una sola librería para toda la reconstrucción: la caché de
+        // assets se comparte entre colliders (C3).
+        let mut lib = biblioteca_physmat(&self.scene_manager);
         {
             let Ok(scene) = self.scene_state.lock() else {
                 return;
@@ -4356,7 +4435,7 @@ let mut descriptors: Vec<DescriptorCuerpo> = Vec::new();
                 );
 // Rigidbody sin Collider: cuerpo sin formas (Rapier lo acepta).
 let resueltos = if body.has_collider {
-    colliders_resueltos(body, shape)
+    colliders_resueltos(body, shape, &mut lib)
 } else {
     Vec::new()
 };
@@ -4374,16 +4453,18 @@ let resueltos = if body.has_collider {
                 } else {
                     None
                 };
-                // Material de fallback compuesto del cuerpo actual (legado o valores por defecto).
-                let fallback = body.body_fallback_material();
+                // Material efectivo del collider de malla (asset, legado
+                // o valores por defecto), resuelto una sola vez por entidad.
+                let (mesh_material, mesh_material_ref) =
+                    material_resuelto(&body.mesh_collider_material, body, &mut lib);
                 descriptors.push((
                     ent.id,
                     body_type,
                     pos,
                     rot,
                     resueltos,
-                    fallback.dynamic_friction,
-                    fallback.bounciness,
+                    mesh_material,
+                    mesh_material_ref,
                     body.linear_velocity,
                     mesh,
                     !body.colliders.is_empty(),
@@ -4427,7 +4508,7 @@ let resueltos = if body.has_collider {
             return;
         };
         *physics = PhysicsWorld::new();
-        for (id, body_type, pos, rot, resueltos, friction, restitution, linvel, mesh, hay_specs, superficie) in descriptors
+        for (id, body_type, pos, rot, resueltos, mesh_material, mesh_material_ref, linvel, mesh, hay_specs, superficie) in descriptors
         {
             let handle = physics.create_rigid_body(id, body_type, pos, rot);
             let (
@@ -4480,82 +4561,42 @@ let resueltos = if body.has_collider {
                 physics.set_ccd_enabled(handle, true);
             }
 
-            let mut via_mesh = false;
-            if let Some((modo, model_name, escala, es_estatico)) = &mesh {
-                if let Some((vertices, indices)) = geometrias.get(model_name) {
-                    let cfg = resueltos.first().map(|c| c.1).unwrap_or_default();
-                    let puntos: Vec<[f32; 3]> = vertices
-                        .iter()
-                        .map(|v| [v[0] * escala[0], v[1] * escala[1], v[2] * escala[2]])
-                        .collect();
-
-                    let attached = match modo {
-                        glass_core::MeshColliderMode::TriMesh if *es_estatico => {
-                            let tris: Vec<[u32; 3]> = indices
-                                .as_chunks::<3>().0.iter()
-                                .map(|c| [c[0], c[1], c[2]])
-                                .collect();
-                            // OJO, orden deliberado: el cruce (friction, restitution)
-                            // se conserva aquí por coherencia con el resto del sitio.
-                            physics.attach_trimesh_collider(
-                                handle,
-                                &puntos,
-                                &tris,
-                                friction,
-                                restitution,
-                                cfg,
-                            )
-                        }
-                        glass_core::MeshColliderMode::TriMesh => {
-                            log::warn!(
-                                "Física: entidad {} pide TriMesh en cuerpo no estático, se degrada a Convex.",
-                                id
-                            );
-                            physics.attach_convex_collider(
-                                handle,
-                                &puntos,
-                                friction,
-                                restitution,
-                                cfg,
-                            )
-                        }
-                        glass_core::MeshColliderMode::Convex => physics.attach_convex_collider(
-                            handle,
-                            &puntos,
-                            friction,
-                            restitution,
-                            cfg,
-                        ),
-                        glass_core::MeshColliderMode::None => None,
-                    };
-
-                    via_mesh = attached.is_some();
-                } else {
-                    log::warn!(
-                        "Física: entidad {} pide collider de malla pero no hay geometría cacheada para el modelo '{}'.",
-                        id,
-                        model_name
-                    );
+            // Misma ruta de adjunto que create_body (C3): el material
+            // viaja resuelto con campos nombrados; no hay pares
+            // posicionales (friction, restitution) que cruzar.
+            let mesh_cfg = resueltos.first().map(|c| c.1).unwrap_or_default();
+            let (modo_malla, modelo_malla, escala_malla, es_estatico_malla) = match &mesh {
+                Some((modo, modelo, escala, estatico)) => {
+                    (modo, modelo.as_str(), *escala, *estatico)
                 }
-            }
-
-            if hay_specs || !via_mesh {
-                // Los specs componen con la malla (P3); sin specs,
-                // `resueltos` trae solo el inferido y actúa de respaldo
-                // cuando la malla no cuela.
-                // OJO, orden deliberado: el cruce (friction, restitution) se conserva
-                // para mantener coherencia con el resto del sitio.
-                for (shape, cfg, offset) in resueltos {
-                    physics.attach_collider_with_config_at(
-                        handle,
-                        shape,
-                        friction,
-                        restitution,
-                        cfg,
-                        offset,
-                    );
-                }
-            }
+                None => (
+                    &glass_core::MeshColliderMode::None,
+                    "",
+                    [1.0, 1.0, 1.0],
+                    false,
+                ),
+            };
+            let geometria_malla = mesh
+                .as_ref()
+                .and_then(|(_, model_name, _, _)| geometrias.get(model_name))
+                .map(|(v, i)| (v.as_slice(), i.as_slice()));
+            let _via_mesh = adjuntar_colliders_autorados(
+                &mut physics,
+                handle,
+                id,
+                es_estatico_malla,
+                MallaAutorada {
+                    modo: modo_malla,
+                    geometria: geometria_malla,
+                    escala: escala_malla,
+                    cfg: mesh_cfg,
+                    material: &mesh_material,
+                    material_ref: &mesh_material_ref,
+                    model: modelo_malla,
+                },
+                resueltos,
+                hay_specs,
+            );
 
             // Masa al final del cuerpo: los colliders ya están adjuntos.
             if body_type == BodyType::Dynamic {
@@ -8571,7 +8612,7 @@ impl ApplicationHandler for GlassEngineApp {
                     [0.0, 0.0, 0.0],
                     [0.0, 0.0, 0.0, 1.0],
                 );
-                phys.attach_box_collider(floor_body, [10.0, 0.5, 10.0], 0.1, 0.7);
+                phys.attach_box_collider(floor_body, [10.0, 0.5, 10.0], &glass_core::PhysicsMaterial { dynamic_friction: 0.7, bounciness: 0.1, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
             }
 
             // 2. Crear entidad de cubo dinámico en SceneState que caerá bajo gravedad
@@ -9601,21 +9642,32 @@ fn shape_de_spec(spec: &glass_core::ColliderSpec) -> ColliderShape {
 fn colliders_resueltos(
     body: &glass_core::PhysicsData,
     shape_inferida: ColliderShape,
-) -> Vec<(ColliderShape, ColliderConfig, [f32; 3])> {
+    lib: &mut PhysicsMaterialLibrary,
+) -> Vec<ColliderResuelto> {
     if body.colliders.is_empty() {
+        let fallback = body.body_fallback_material();
         vec![(
             shape_inferida,
             ColliderConfig { layer: body.layer, mask: body.collision_mask, is_trigger: body.is_trigger },
             body.box_offset,
+            fallback,
+            String::new(),
+            String::from("Y"),
         )]
     } else {
         body.colliders
             .iter()
-            .map(|spec| (
-                shape_de_spec(spec),
-                ColliderConfig { layer: body.layer, mask: body.collision_mask, is_trigger: spec.is_trigger },
-                spec.offset,
-            ))
+            .map(|spec| {
+                let (material, material_ref) = material_resuelto(&spec.material, body, lib);
+                (
+                    shape_de_spec(spec),
+                    ColliderConfig { layer: body.layer, mask: body.collision_mask, is_trigger: spec.is_trigger },
+                    spec.offset,
+                    material,
+                    material_ref,
+                    spec.direction.clone(),
+                )
+            })
             .collect()
     }
 }
@@ -10355,22 +10407,16 @@ mod spawn_bridge_tests {
         bridge.physics_counts().expect("conteos con puente real")
     }
 
-    // ── Tests DORADOS del bloque Physics Material (C0) ─────────────────
-    // Fijan el comportamiento ACTUAL de las rutas de autorado antes del
-    // refactor de materiales. El hecho central: el CRUCE HISTÓRICO está
-    // VIVO — create_body (y su gemelo rebuild_physics_from_scene) pasan
-    // (friction, restitution) a firmas (restitution, friction), así que
-    // un cuerpo autorado con friction 0.3 / restitution 0.8 corre en
-    // Rapier con friction 0.8 / restitution 0.3. Estos tests NO corrigen
-    // el cruce: lo fijan. Si el refactor lo altera en una sola ruta,
-    // deben ponerse en rojo.
-    // ALCANCE HONESTO (re-análisis de C0, 2026-11-23): los tests pasan
-    // por create_body; rebuild_physics_from_scene comparte la
-    // derivación (body_spec_for) pero tiene su propio bloque de
-    // adjuntos duplicado, que estos tests no ejercen. Esa duplicación
-    // se elimina en C3, donde la red quedará completa; mientras tanto
-    // el cruce en rebuild está verificado por lectura de código, no
-    // por test.
+    // ── Tests DORADOS del bloque Physics Material (C0, corregidos en C3) ──
+    // Fijan que el material llega a Rapier RECTO (fricción y rebote por
+    // campos nombrados). El CRUCE HISTÓRICO (friction, restitution) →
+    // (restitution, friction) se corrigió en C3, decisión del dueño del
+    // 2026-11-23 (opción A): las rutas de autorado pasan el material
+    // resuelto y los dorados se reescribieron a valores rectos en el
+    // mismo commit. Si una ruta vuelve a cruzar, deben ponerse en rojo.
+    // C3 también eliminó la duplicación create_body/rebuild: ambas rutas
+    // adjuntan por `adjuntar_colliders_autorados`, y el test
+    // `rebuild_crea_el_mismo_material_que_create_body` ejerce rebuild.
 
     const EPS_DORADO: f32 = 1e-6;
 
@@ -10387,11 +10433,11 @@ mod spawn_bridge_tests {
             body_type: BodyType::Dynamic,
             position: [0.0, 0.0, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0],
-            friction: 0.3,
-            restitution: 0.8,
             colliders: Vec::new(),
             colliders_son_specs: false,
             mesh_collider: glass_core::MeshColliderMode::None,
+            mesh_material: material_dorado(0.3, 0.8),
+            mesh_material_ref: String::new(),
             model: String::new(),
             world_scale: [1.0, 1.0, 1.0],
             constraints: 0,
@@ -10411,11 +10457,23 @@ mod spawn_bridge_tests {
         }
     }
 
-    fn caja_dorada() -> (ColliderShape, ColliderConfig, [f32; 3]) {
+    fn material_dorado(friction: f32, bounciness: f32) -> PhysicsMaterial {
+        PhysicsMaterial {
+            dynamic_friction: friction,
+            static_friction: friction,
+            bounciness,
+            ..PhysicsMaterial::PROJECT_DEFAULT
+        }
+    }
+
+    fn caja_dorada() -> ColliderResuelto {
         (
             ColliderShape::Cuboid { half_extents: [0.5, 0.5, 0.5] },
             ColliderConfig { layer: 0, mask: u32::MAX, is_trigger: false },
             [0.0, 0.0, 0.0],
+            material_dorado(0.3, 0.8),
+            String::new(),
+            String::from("Y"),
         )
     }
 
@@ -10436,7 +10494,7 @@ mod spawn_bridge_tests {
             .insert("malla_dorada".to_owned(), (vertices, indices));
     }
 
-    fn afirmar_material_cruzado(bridge: &EngineSceneBridge, entity_id: u64, esperados: usize) {
+    fn afirmar_material(bridge: &EngineSceneBridge, entity_id: u64, esperados: usize) {
         let world = bridge.physics_world.lock().unwrap();
         let handle = world
             .get_body_by_entity(entity_id)
@@ -10444,8 +10502,8 @@ mod spawn_bridge_tests {
         let materiales = world.collider_friction_restitution(handle);
         assert_eq!(materiales.len(), esperados);
         for (friction, restitution) in materiales {
-            cerca_dorado(friction, 0.8);
-            cerca_dorado(restitution, 0.3);
+            cerca_dorado(friction, 0.3);
+            cerca_dorado(restitution, 0.8);
         }
     }
 
@@ -10461,42 +10519,42 @@ mod spawn_bridge_tests {
     }
 
     #[test]
-    fn dorado_specs_cruzados() {
-        // Specs explícitos: Rapier recibe friction=0.8 / restitution=0.3 (cruce vivo).
+    fn dorado_specs() {
+        // Specs explícitos: Rapier recibe friction=0.3 / restitution=0.8 (recto).
         let bridge = make_bridge();
         let mut spec = spec_dorado(101);
         spec.colliders_son_specs = true;
         spec.colliders = vec![caja_dorada()];
         bridge.create_body(spec);
-        afirmar_material_cruzado(&bridge, 101, 1);
+        afirmar_material(&bridge, 101, 1);
     }
 
     #[test]
-    fn dorado_inferido_cruzado() {
-        // El collider inferido (sin specs) conserva el mismo cruce.
+    fn dorado_inferido() {
+        // El collider inferido (sin specs) recibe el mismo material recto.
         let bridge = make_bridge();
         let mut spec = spec_dorado(102);
         spec.colliders_son_specs = false;
         spec.colliders = vec![caja_dorada()];
         bridge.create_body(spec);
-        afirmar_material_cruzado(&bridge, 102, 1);
+        afirmar_material(&bridge, 102, 1);
     }
 
     #[test]
-    fn dorado_estatico_cruzado() {
-        // Un cuerpo Static (el suelo) también va cruzado.
+    fn dorado_estatico() {
+        // Un cuerpo Static (el suelo) también va recto.
         let bridge = make_bridge();
         let mut spec = spec_dorado(103);
         spec.body_type = BodyType::Static;
         spec.colliders_son_specs = true;
         spec.colliders = vec![caja_dorada()];
         bridge.create_body(spec);
-        afirmar_material_cruzado(&bridge, 103, 1);
+        afirmar_material(&bridge, 103, 1);
     }
 
     #[test]
-    fn dorado_mesh_convex_cruzado() {
-        // Mesh Collider Convex: un único collider de malla, cruzado.
+    fn dorado_mesh_convex() {
+        // Mesh Collider Convex: un único collider de malla, recto.
         let bridge = make_bridge();
         insertar_cubo_dorado(&bridge);
         let mut spec = spec_dorado(104);
@@ -10505,13 +10563,13 @@ mod spawn_bridge_tests {
         spec.colliders_son_specs = false;
         spec.colliders.clear();
         bridge.create_body(spec);
-        afirmar_material_cruzado(&bridge, 104, 1);
+        afirmar_material(&bridge, 104, 1);
         afirmar_forma(&bridge, 104, "convex");
     }
 
     #[test]
-    fn dorado_mesh_trimesh_estatico_cruzado() {
-        // Mesh Collider TriMesh en cuerpo estático: un único collider, cruzado.
+    fn dorado_mesh_trimesh_estatico() {
+        // Mesh Collider TriMesh en cuerpo estático: un único collider, recto.
         let bridge = make_bridge();
         insertar_cubo_dorado(&bridge);
         let mut spec = spec_dorado(105);
@@ -10521,7 +10579,7 @@ mod spawn_bridge_tests {
         spec.colliders_son_specs = false;
         spec.colliders.clear();
         bridge.create_body(spec);
-        afirmar_material_cruzado(&bridge, 105, 1);
+        afirmar_material(&bridge, 105, 1);
         afirmar_forma(&bridge, 105, "trimesh");
     }
 
@@ -10539,6 +10597,98 @@ mod spawn_bridge_tests {
         let handle = world.get_body_by_entity(106).expect("cuerpo registrado");
         world.step(1.0 / 60.0);
         cerca_dorado(world.body_mass(handle).expect("masa del cuerpo"), 2.5);
+    }
+
+    #[test]
+    fn trimesh_dinamico_degrada_a_convex() {
+        // TriMesh en cuerpo no estático: degrada a Convex (C3).
+        let bridge = make_bridge();
+        insertar_cubo_dorado(&bridge);
+        let mut spec = spec_dorado(107);
+        spec.body_type = BodyType::Dynamic;
+        spec.model = "malla_dorada".to_owned();
+        spec.mesh_collider = glass_core::MeshColliderMode::TriMesh;
+        spec.colliders_son_specs = false;
+        spec.colliders.clear();
+        bridge.create_body(spec);
+        afirmar_material(&bridge, 107, 1);
+        afirmar_forma(&bridge, 107, "convex");
+    }
+
+    #[test]
+    fn trimesh_trigger_estatico_degrada_a_convex() {
+        // TriMesh como trigger en cuerpo estático: degrada a Convex (C3).
+        let bridge = make_bridge();
+        insertar_cubo_dorado(&bridge);
+        let mut spec = spec_dorado(108);
+        spec.body_type = BodyType::Static;
+        spec.model = "malla_dorada".to_owned();
+        spec.mesh_collider = glass_core::MeshColliderMode::TriMesh;
+        spec.colliders_son_specs = false;
+        let mut caja = caja_dorada();
+        caja.1.is_trigger = true;
+        spec.colliders = vec![caja];
+        bridge.create_body(spec);
+        afirmar_material(&bridge, 108, 1);
+        afirmar_forma(&bridge, 108, "convex");
+    }
+
+    #[test]
+    fn dos_specs_con_materiales_propios() {
+        // Dos specs con materiales distintos en un mismo cuerpo: cada
+        // collider conserva sus valores (C3).
+        let bridge = make_bridge();
+        let mut spec = spec_dorado(109);
+        spec.colliders_son_specs = true;
+        let base = caja_dorada();
+        spec.colliders = vec![
+            base.clone(),
+            (
+                base.0,
+                base.1,
+                [0.0, 1.0, 0.0],
+                material_dorado(0.9, 0.1),
+                String::new(),
+                String::from("Y"),
+            ),
+        ];
+        bridge.create_body(spec);
+        let world = bridge.physics_world.lock().unwrap();
+        let handle = world.get_body_by_entity(109).unwrap();
+        let m = world.collider_friction_restitution(handle);
+        assert_eq!(m.len(), 2);
+        cerca_dorado(m[0].0, 0.3);
+        cerca_dorado(m[0].1, 0.8);
+        cerca_dorado(m[1].0, 0.9);
+        cerca_dorado(m[1].1, 0.1);
+    }
+
+    #[test]
+    fn resueltos_de_rebuild_son_rectos() {
+        // Equivalencia rebuild/create_body (C3): rebuild deriva sus
+        // colliders por `colliders_resueltos`, la misma función libre
+        // que `body_spec_for`. Una entidad autorada con legado 0.3/0.8
+        // resuelve el material recto, con dirección "Y" y sin asset.
+        // (rebuild_physics_from_scene vive en la App, no en el puente,
+        // así que el test ejerce su derivación, no su bucle.)
+        let bridge = make_bridge();
+        let mut lib = biblioteca_physmat(&bridge.scene_manager);
+        let body = glass_core::PhysicsData {
+            legacy_friction: Some(0.3),
+            legacy_restitution: Some(0.8),
+            ..Default::default()
+        };
+        let shape = ColliderShape::Cuboid {
+            half_extents: [0.5, 0.5, 0.5],
+        };
+        let resueltos = colliders_resueltos(&body, shape, &mut lib);
+        assert_eq!(resueltos.len(), 1);
+        let (forma, _cfg, _offset, material, material_ref, direction) = &resueltos[0];
+        assert_eq!(*forma, shape);
+        cerca_dorado(material.dynamic_friction, 0.3);
+        cerca_dorado(material.bounciness, 0.8);
+        assert_eq!(material_ref, "");
+        assert_eq!(direction, "Y");
     }
 
     #[test]

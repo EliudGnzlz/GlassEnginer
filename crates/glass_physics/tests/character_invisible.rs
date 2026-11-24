@@ -19,7 +19,7 @@ fn caja_estatica(w: &mut PhysicsWorld, entity: u64, centro: [f32; 3], semiejes: 
         centro,
         [0.0, 0.0, 0.0, 1.0],
     );
-    w.attach_box_collider(h, semiejes, 0.0, 0.5);
+    w.attach_box_collider(h, semiejes, &glass_core::PhysicsMaterial { dynamic_friction: 0.5, bounciness: 0.0, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
 }
 
 fn config() -> CharacterConfig {
@@ -64,7 +64,7 @@ fn un_dinamico_atraviesa_la_capsula_sin_chocar() {
         [0.0, 1.2, 3.0],
         [0.0, 0.0, 0.0, 1.0],
     );
-    w.attach_sphere_collider(bala, 0.06, 0.1, 0.0);
+    w.attach_sphere_collider(bala, 0.06, &glass_core::PhysicsMaterial { dynamic_friction: 0.0, bounciness: 0.1, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "");
     w.set_linear_velocity(bala, [0.0, 0.0, -30.0]);
 
     let mut z_min = f32::MAX;

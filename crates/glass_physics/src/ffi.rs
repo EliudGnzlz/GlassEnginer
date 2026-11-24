@@ -81,7 +81,8 @@ pub extern "C" fn glass_physics_attach_box_collider(
                 }
             }
             return world
-                .attach_box_collider(body_handle, [half_x, half_y, half_z], restitution, friction)
+                .attach_box_collider(body_handle, [half_x, half_y, half_z],
+            &glass_core::PhysicsMaterial { dynamic_friction: friction, bounciness: restitution, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "")
                 .unwrap_or(0);
         }
     }
@@ -102,7 +103,8 @@ pub extern "C" fn glass_physics_attach_sphere_collider(
     if let Some(sys) = get_global_physics_world() {
         if let Ok(mut world) = sys.lock() {
             return world
-                .attach_sphere_collider(body_handle, radius, restitution, friction)
+                .attach_sphere_collider(body_handle, radius,
+            &glass_core::PhysicsMaterial { dynamic_friction: friction, bounciness: restitution, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "")
                 .unwrap_or(0);
         }
     }
@@ -130,7 +132,8 @@ pub unsafe extern "C" fn glass_physics_attach_capsule_collider(
     }
     let world = unsafe { &mut *world };
     world
-        .attach_capsule_collider(body_handle, half_height, radius, restitution, friction)
+        .attach_capsule_collider(body_handle, half_height, radius,
+            &glass_core::PhysicsMaterial { dynamic_friction: friction, bounciness: restitution, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "")
         .unwrap_or_default()
 }
 
@@ -154,7 +157,8 @@ pub unsafe extern "C" fn glass_physics_attach_cylinder_collider(
     }
     let world = unsafe { &mut *world };
     world
-        .attach_cylinder_collider(body_handle, half_height, radius, restitution, friction)
+        .attach_cylinder_collider(body_handle, half_height, radius,
+            &glass_core::PhysicsMaterial { dynamic_friction: friction, bounciness: restitution, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "")
         .unwrap_or_default()
 }
 
