@@ -98,6 +98,10 @@ struct EngineSceneBridge {
     /// que la app la drena cada frame justo antes de `update_all`, en
     /// `reconcile_spawned_scripts`.
     pending_script_spawns: Arc<Mutex<Vec<(u64, String)>>>,
+    /// Instancia única de la biblioteca de materiales físicos,
+    /// compartida con la aplicación (E2): las resoluciones del puente
+    /// y de la app leen la misma caché.
+    physmat_lib: Arc<Mutex<PhysicsMaterialLibrary>>,
 }
 
 /// Todo lo que hace falta para crear el cuerpo Rapier de una entidad,
@@ -1019,7 +1023,7 @@ impl SceneBridge for EngineSceneBridge {
                 });
                 let world_matrices: std::collections::HashMap<u64, [f32; 16]> =
                     world.map(|m| [(id, m)].into_iter().collect()).unwrap_or_default();
-                let mut lib = biblioteca_physmat(&self.scene_manager);
+                let mut lib = self.physmat_lib.lock().unwrap_or_else(|e| e.into_inner());
                 state
                     .get_entity(id)
                     .and_then(|ent| Self::body_spec_for(&world_matrices, ent, &mut lib))
@@ -1090,7 +1094,7 @@ impl SceneBridge for EngineSceneBridge {
 
             let world_matrices = state.compute_world_matrices();
             let mut body_specs = Vec::new();
-            let mut lib = biblioteca_physmat(&self.scene_manager);
+            let mut lib = self.physmat_lib.lock().unwrap_or_else(|e| e.into_inner());
 
             if let Some(ent) = state.get_entity(root_id) {
                 if ent.physics.is_some() {
@@ -1170,7 +1174,7 @@ impl SceneBridge for EngineSceneBridge {
                     return true;
                 };
                 let world_matrices = state.compute_world_matrices();
-                let mut lib = biblioteca_physmat(&self.scene_manager);
+                let mut lib = self.physmat_lib.lock().unwrap_or_else(|e| e.into_inner());
                 state
                     .get_entity(entity_id)
                     .and_then(|ent| Self::body_spec_for(&world_matrices, ent, &mut lib))
@@ -1981,6 +1985,9 @@ struct GlassEngineApp {
     pub ui_font_failed: std::collections::HashSet<String>,
     /// Gestor de escenas: dueño de las rutas reales y de la carga diferida.
     pub scene_manager: Arc<Mutex<SceneManager>>,
+    /// Biblioteca de materiales físicos única, compartida con el
+    /// puente de escena (E2).
+    physmat_lib: Arc<Mutex<PhysicsMaterialLibrary>>,
     #[cfg(feature = "editor")]
     pub mcp_server: Arc<McpServer>,
     /// Hilo stdio del MCP en vivo (modo editor): sirve `mcp_server` sobre
@@ -2470,6 +2477,7 @@ impl GlassEngineApp {
             materiales_failed: std::collections::HashSet::new(),
             material_textures: std::collections::HashSet::new(),
             ui_font_failed: std::collections::HashSet::new(),
+            physmat_lib: Arc::new(Mutex::new(biblioteca_physmat(&scene_manager))),
             scene_manager,
             #[cfg(feature = "editor")]
             mcp_server,
@@ -3495,6 +3503,7 @@ fn lanzar_hub_al_salir() {
         }
         self.vigilar_assets(&raiz_assets);
         self.editor_layout.project.set_assets_root(raiz_assets);
+        self.refrescar_physmat_lib();
         // Registrar el proyecto abierto para que aparezca en el Hub,
         // con el nombre de su project.glass (no el de la carpeta).
         let nombre = glass_launcher::archivos::nombre_proyecto(path);
@@ -4154,6 +4163,48 @@ fn lanzar_hub_al_salir() {
         }
     }
 
+    /// Consume el refresco en caliente de un .physmat.json editado en
+    /// el Inspector (E2): invalida la caché de la biblioteca única
+    /// (el archivo ya lo escribió el editor) y aplica el valor nuevo
+    /// EN SITIO sobre los colliders vivos que lo referencian. Los dos
+    /// candados se toman por separado, nunca a la vez.
+    #[cfg(feature = "editor")]
+    fn apply_pending_physmat_refresh(&mut self) {
+        let Some((referencia, material)) = self
+            .editor_layout
+            .inspector
+            .pending_physmat_refresh
+            .take()
+        else {
+            return;
+        };
+
+        {
+            let mut lib = self.physmat_lib.lock().unwrap_or_else(|e| e.into_inner());
+            lib.invalidate(&referencia);
+        }
+
+        let actualizados = {
+            let mut world = self.physics_world.lock().unwrap_or_else(|e| e.into_inner());
+            world.refresh_asset(&referencia, &material)
+        };
+        if actualizados > 0 {
+            log::info!(
+                "PhysicsMaterial: {actualizados} colliders actualizados en caliente para '{referencia}'."
+            );
+        }
+    }
+
+    /// Sustituye la biblioteca compartida por una anclada a la raíz
+    /// del proyecto vigente (al abrir proyecto: la caché anterior es
+    /// de otra raíz y no debe sobrevivir).
+    #[cfg(feature = "editor")]
+    fn refrescar_physmat_lib(&self) {
+        let nueva = biblioteca_physmat(&self.scene_manager);
+        let mut lib = self.physmat_lib.lock().unwrap_or_else(|e| e.into_inner());
+        *lib = nueva;
+    }
+
     /// Aplica la carga de escena pendiente, si la hay, al final del frame.
     /// Aplica la carga de escena pendiente, si la hay, al final del frame.
     ///
@@ -4400,7 +4451,7 @@ fn lanzar_hub_al_salir() {
 let mut descriptors: Vec<DescriptorCuerpo> = Vec::new();
         // Una sola librería para toda la reconstrucción: la caché de
         // assets se comparte entre colliders (C3).
-        let mut lib = biblioteca_physmat(&self.scene_manager);
+        let mut lib = self.physmat_lib.lock().unwrap_or_else(|e| e.into_inner());
         {
             let Ok(scene) = self.scene_state.lock() else {
                 return;
@@ -7555,6 +7606,8 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
             // presentado, nadie recorriendo las entidades.
             #[cfg(feature = "editor")]
             self.handle_play_transitions();
+            #[cfg(feature = "editor")]
+            self.apply_pending_physmat_refresh();
             self.apply_pending_scene_load();
 
             return Ok(());
@@ -8099,6 +8152,8 @@ self.salir_del_proceso = true;
         // ventana temporal que usa Unity para aplicar `SceneManager.LoadScene`.
         #[cfg(feature = "editor")]
         self.handle_play_transitions();
+        #[cfg(feature = "editor")]
+        self.apply_pending_physmat_refresh();
         self.apply_pending_scene_load();
 
         if request_build {
@@ -8279,6 +8334,7 @@ impl ApplicationHandler for GlassEngineApp {
             physics_world: self.physics_world.clone(),
             asset_cache: self.asset_cache.clone(),
             pending_script_spawns: self.pending_script_spawns.clone(),
+            physmat_lib: self.physmat_lib.clone(),
         }));
 
         let managed_dir = self
@@ -10403,6 +10459,9 @@ mod spawn_bridge_tests {
             physics_world: Arc::new(Mutex::new(PhysicsWorld::new())),
             asset_cache: glass_renderer::AssetCache::new(),
             pending_script_spawns: Arc::new(Mutex::new(Vec::new())),
+            physmat_lib: Arc::new(Mutex::new(PhysicsMaterialLibrary::new(
+                std::path::PathBuf::from("."),
+            ))),
         }
     }
 

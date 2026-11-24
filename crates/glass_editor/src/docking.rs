@@ -119,6 +119,13 @@ pub struct EditorDockingLayout {
     /// Espejo de `ruta_escena_actual` de la app (se sincroniza cada frame).
     /// El guardado la prefiere si la escena activa sigue siendo esa.
     pub ruta_escena_actual: Option<std::path::PathBuf>,
+    /// Última entidad seleccionada vista por el Inspector (E2).
+    pub inspector_prev_entidad: Option<u64>,
+    /// Última selección del panel Proyecto vista por el Inspector (E2).
+    pub inspector_prev_asset: Option<std::path::PathBuf>,
+    /// true si la última selección que cambió fue un .physmat.json:
+    /// el Inspector muestra el editor del asset en vez del de la entidad.
+    pub inspector_muestra_asset: bool,
     /// Espejo de `nombre_escena_con_ruta` de la app: nombre activo cuando
     /// se fijó la ruta.
     pub nombre_escena_con_ruta: String,
@@ -229,6 +236,9 @@ impl EditorDockingLayout {
             request_launcher: false,
             hub_disponible: false,
             ruta_escena_actual: None,
+            inspector_prev_entidad: None,
+            inspector_prev_asset: None,
+            inspector_muestra_asset: false,
             nombre_escena_con_ruta: String::new(),
             request_abrir_contenedora_escena: false,
             request_copiar_ruta_escena: false,
@@ -1463,6 +1473,9 @@ impl EditorDockingLayout {
             game_texture_id,
             selected_entity_id: &mut selected_id,
             scene_state,
+            inspector_prev_entidad: &mut self.inspector_prev_entidad,
+            inspector_prev_asset: &mut self.inspector_prev_asset,
+            inspector_muestra_asset: &mut self.inspector_muestra_asset,
         };
 
         if espacio == EspacioTrabajo::Herramientas {
@@ -1980,6 +1993,9 @@ struct EditorTabViewer<'a> {
     game_texture_id: Option<egui::TextureId>,
     selected_entity_id: &'a mut Option<u64>,
     scene_state: &'a Arc<Mutex<SceneState>>,
+    inspector_prev_entidad: &'a mut Option<u64>,
+    inspector_prev_asset: &'a mut Option<std::path::PathBuf>,
+    inspector_muestra_asset: &'a mut bool,
 }
 
 impl<'a> TabViewer for EditorTabViewer<'a> {
@@ -2028,8 +2044,37 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 self.viewport.render_game_tab(ui, self.game_texture_id, self.scene_state);
             }
             EditorTab::Inspector => {
-                let mesh_bounds = &self.viewport.mesh_bounds;
-                self.inspector.render(ui, *self.selected_entity_id, self.scene_state, mesh_bounds);
+                // Modo del Inspector (E2): manda la última selección que
+                // cambió — si fue un .physmat.json en el panel Proyecto,
+                // se edita el asset; si fue una entidad, su Inspector.
+                let entidad_actual = *self.selected_entity_id;
+                if entidad_actual != *self.inspector_prev_entidad {
+                    *self.inspector_prev_entidad = entidad_actual;
+                    *self.inspector_muestra_asset = false;
+                }
+                if self.project.seleccion != *self.inspector_prev_asset {
+                    let seleccion = self.project.seleccion.clone();
+                    *self.inspector_muestra_asset = seleccion
+                        .as_deref()
+                        .is_some_and(|p| p.is_file() && es_ruta_physmat(p));
+                    *self.inspector_prev_asset = seleccion;
+                }
+
+                let ruta_physmat = if *self.inspector_muestra_asset {
+                    self.project.seleccion.clone().filter(|p| es_ruta_physmat(p))
+                } else {
+                    None
+                };
+
+                if let Some(ruta) = ruta_physmat {
+                    let assets_root = self.project.assets_root.clone();
+                    self.inspector
+                        .render_physmat(ui, &ruta, &assets_root, self.scene_state);
+                } else {
+                    let mesh_bounds = &self.viewport.mesh_bounds;
+                    self.inspector
+                        .render(ui, *self.selected_entity_id, self.scene_state, mesh_bounds);
+                }
             }
             EditorTab::Console => {
                 self.console.render_console_only(ui);
@@ -2238,4 +2283,12 @@ mod tests_supr {
         assert_eq!(destino_supr(ToqueSupr::Ninguno, true, true), SuprDestino::Nada);
         assert_eq!(destino_supr(ToqueSupr::Ninguno, false, false), SuprDestino::Nada);
     }
+}
+
+/// true si la ruta es un archivo `.physmat.json` (sin distinguir
+/// mayúsculas en el sufijo).
+fn es_ruta_physmat(ruta: &std::path::Path) -> bool {
+    ruta.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(glass_core::physics_material::es_physmat)
 }

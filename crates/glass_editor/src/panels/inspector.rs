@@ -1,4 +1,5 @@
 use egui::{Color32, DragValue, RichText, Slider, Ui};
+use glass_core::physics_material::{MaterialCombine, PhysicsMaterial};
 use glass_core::{
     AudioSourceData, CameraData, CanvasData, CharacterData, EntityData, LightData, MeshData,
     PhysicsData,
@@ -6,6 +7,7 @@ use glass_core::{
     UIImageData,
     UIDragData,
 };
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// Busca los modelos que una entidad puede usar: los nombres (sin
@@ -346,6 +348,126 @@ struct ScriptFoto {
 }
 
 /// JSON del componente `tipo` de la entidad, o None si no lo tiene.
+/// Un control consolida al soltar el arrastre, al hacer clic sin
+/// arrastrar (pista del slider) o al perder el foco (Enter, teclado).
+fn control_consolidado(r: &egui::Response) -> bool {
+    r.drag_stopped() || r.clicked() || r.lost_focus()
+}
+
+/// Nombre visible de una regla de combinación (el mismo que
+/// serializa serde en el archivo).
+fn etiqueta_combine(regla: MaterialCombine) -> &'static str {
+    match regla {
+        MaterialCombine::Average => "Average",
+        MaterialCombine::Minimum => "Minimum",
+        MaterialCombine::Multiply => "Multiply",
+        MaterialCombine::Maximum => "Maximum",
+    }
+}
+
+/// Desplegable de MaterialCombine. Devuelve true si el usuario eligió
+/// una opción (la consolidación de un combo es la propia elección).
+fn combo_regla(ui: &mut Ui, etiqueta: &str, regla: &mut MaterialCombine) -> bool {
+    let mut elegido = false;
+    egui::ComboBox::from_label(etiqueta)
+        .selected_text(etiqueta_combine(*regla))
+        .show_ui(ui, |ui| {
+            for opcion in [
+                MaterialCombine::Average,
+                MaterialCombine::Minimum,
+                MaterialCombine::Multiply,
+                MaterialCombine::Maximum,
+            ] {
+                if ui
+                    .selectable_label(*regla == opcion, etiqueta_combine(opcion))
+                    .clicked()
+                {
+                    *regla = opcion;
+                    elegido = true;
+                }
+            }
+        });
+    elegido
+}
+
+/// Ruta relativa a Assets con separadores '/'. Fuera de Assets, la
+/// ruta completa con '/'.
+fn referencia_physmat(ruta: &Path, assets_root: &Path) -> String {
+    if let Ok(rel) = ruta.strip_prefix(assets_root) {
+        let partes: Vec<String> = rel
+            .components()
+            .filter_map(|c| match c {
+                Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect();
+        if !partes.is_empty() {
+            return partes.join("/");
+        }
+    }
+    ruta.to_string_lossy().replace('\\', "/")
+}
+
+/// Nombre del archivo sin la extensión ".physmat.json".
+fn nombre_physmat(ruta: &Path) -> String {
+    const SUFIJO: &str = ".physmat.json";
+    let nombre = ruta
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if nombre.len() > SUFIJO.len() && nombre.to_ascii_lowercase().ends_with(SUFIJO) {
+        nombre[..nombre.len() - SUFIJO.len()].to_string()
+    } else {
+        nombre
+    }
+}
+
+/// Devuelve, en orden de escena y sin duplicar por entidad+origen,
+/// los pares (nombre de entidad, origen) que referencian el asset
+/// `referencia`: la etiqueta del `shape` de cada collider que
+/// coincide, más "Mesh Collider" si `mesh_collider_material`
+/// coincide. Con `referencia` vacía devuelve vacío.
+pub fn referencias_a_physmat(scene: &SceneState, referencia: &str) -> Vec<(String, String)> {
+    let mut resultado: Vec<(String, String)> = Vec::new();
+
+    if referencia.is_empty() {
+        return resultado;
+    }
+
+    for entidad in &scene.entities {
+        let Some(physics) = &entidad.physics else {
+            continue;
+        };
+
+        let mut origenes: Vec<&'static str> = Vec::new();
+        for spec in &physics.colliders {
+            if spec.material != referencia {
+                continue;
+            }
+            let etiqueta: &'static str = match spec.shape.as_str() {
+                "Box" => "Box Collider",
+                "Sphere" => "Sphere Collider",
+                "Capsule" => "Capsule Collider",
+                "Cylinder" => "Cylinder Collider",
+                _ => "Collider",
+            };
+            if !origenes.contains(&etiqueta) {
+                origenes.push(etiqueta);
+            }
+        }
+
+        if physics.mesh_collider_material == referencia {
+            origenes.push("Mesh Collider");
+        }
+
+        for origen in origenes {
+            resultado.push((entidad.name.clone(), origen.to_string()));
+        }
+    }
+
+    resultado
+}
+
 pub fn extraer_componente(ent: &EntityData, tipo: TipoComponente) -> Option<String> {
     match tipo {
         TipoComponente::Transform => a_json(&ent.transform),
@@ -667,6 +789,19 @@ pub struct InspectorPanel {
     /// contorno del collider solo en edición (decisión del usuario,
     /// 2026-11-20). Se reinicia al principio de cada render.
     pub collider_seccion_abierta: bool,
+    /// Asset .physmat.json cargado en el editor del Inspector (E2).
+    physmat_ruta: Option<PathBuf>,
+    /// Copia editable del material físico.
+    physmat_valor: Option<PhysicsMaterial>,
+    /// Error de carga del archivo actual (JSON inválido o lectura fallida).
+    physmat_error: Option<String>,
+    /// Último valor que coincide con el contenido del archivo.
+    physmat_guardado: Option<PhysicsMaterial>,
+    /// Error de la última escritura del archivo.
+    physmat_error_guardado: Option<String>,
+    /// (referencia relativa a Assets con '/', valor nuevo) pendiente de
+    /// refresco en caliente; lo consume la app.
+    pub pending_physmat_refresh: Option<(String, PhysicsMaterial)>,
 }
 
 impl InspectorPanel {
@@ -679,6 +814,12 @@ impl InspectorPanel {
             model_names_dirty: true,
             rescan_for_model: None,
             collider_seccion_abierta: false,
+            physmat_ruta: None,
+            physmat_valor: None,
+            physmat_error: None,
+            physmat_guardado: None,
+            physmat_error_guardado: None,
+            pending_physmat_refresh: None,
             portapapeles: None,
             escala_bloqueada: false,
             escala_bloqueada_para: None,
@@ -718,6 +859,154 @@ impl InspectorPanel {
                     let (tipo_pp, json) = (pp.tipo, pp.json.clone());
                     instalar_componente(entity, tipo_pp, &json);
                 }
+            }
+        }
+    }
+
+    /// Editor del asset .physmat.json seleccionado en el panel
+    /// Proyecto (E2, §6.2 del diseño de colliders).
+    pub fn render_physmat(
+        &mut self,
+        ui: &mut Ui,
+        ruta: &Path,
+        assets_root: &Path,
+        scene_state: &Arc<Mutex<SceneState>>,
+    ) {
+        if self.physmat_ruta.as_deref() != Some(ruta) {
+            self.cargar_physmat(ruta);
+        }
+
+        let referencia = referencia_physmat(ruta, assets_root);
+        let ruta_visible = match ruta.strip_prefix(assets_root) {
+            Ok(_) => format!("Assets/{referencia}"),
+            Err(_) => ruta.display().to_string(),
+        };
+
+        ui.heading("🔍 Inspector");
+        ui.separator();
+        ui.label(
+            RichText::new(format!("🧲 {} (Physics Material)", nombre_physmat(ruta)))
+                .strong()
+                .size(15.0),
+        );
+        ui.weak(format!("Ruta: {ruta_visible}"));
+        ui.separator();
+
+        if let Some(error) = self.physmat_error.clone() {
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                format!("No se puede editar el material: {error}"),
+            );
+            if ui.button("Reintentar").clicked() {
+                // Fuerza la relectura del archivo en el siguiente frame.
+                self.physmat_ruta = None;
+                ui.ctx().request_repaint();
+            }
+        } else {
+            let mut consolidar = false;
+            if let Some(valor) = self.physmat_valor.as_mut() {
+                let r = ui.add(
+                    egui::Slider::new(&mut valor.dynamic_friction, 0.0..=1.0)
+                        .text("Dynamic Friction"),
+                );
+                consolidar |= control_consolidado(&r);
+
+                let r = ui.add(
+                    egui::Slider::new(&mut valor.static_friction, 0.0..=1.0)
+                        .text("Static Friction"),
+                );
+                consolidar |= control_consolidado(&r);
+
+                let r = ui.add(
+                    egui::Slider::new(&mut valor.bounciness, 0.0..=1.0).text("Bounciness"),
+                );
+                consolidar |= control_consolidado(&r);
+
+                consolidar |= combo_regla(ui, "Friction Combine", &mut valor.friction_combine);
+                consolidar |= combo_regla(ui, "Bounce Combine", &mut valor.bounce_combine);
+
+                ui.weak(
+                    "Nota: Static Friction se guarda en el asset, pero el motor físico usa \
+                     un solo coeficiente de fricción en esta versión.",
+                );
+            }
+            if consolidar {
+                self.guardar_physmat_si_cambio(ruta, &referencia);
+            }
+            if let Some(error) = &self.physmat_error_guardado {
+                ui.colored_label(ui.visuals().error_fg_color, error.clone());
+            }
+        }
+
+        ui.separator();
+        ui.strong("Referenciado por");
+        let referencias = scene_state
+            .lock()
+            .map(|scene| referencias_a_physmat(&scene, &referencia))
+            .unwrap_or_default();
+        if referencias.is_empty() {
+            ui.weak("(ninguna entidad lo referencia todavía)");
+        } else {
+            for (nombre, origen) in &referencias {
+                ui.label(format!("{nombre} — {origen}"));
+            }
+        }
+    }
+
+    fn cargar_physmat(&mut self, ruta: &Path) {
+        let resultado = std::fs::read_to_string(ruta)
+            .map_err(|e| format!("no se pudo leer el archivo: {e}"))
+            .and_then(|texto| {
+                PhysicsMaterial::from_json(&texto).map_err(|e| format!("JSON inválido: {e}"))
+            });
+        match resultado {
+            Ok(material) => {
+                self.physmat_valor = Some(material);
+                self.physmat_guardado = Some(material);
+                self.physmat_error = None;
+            }
+            Err(error) => {
+                self.physmat_valor = None;
+                self.physmat_guardado = None;
+                self.physmat_error = Some(error);
+            }
+        }
+        self.physmat_error_guardado = None;
+        self.physmat_ruta = Some(ruta.to_path_buf());
+    }
+
+    /// Escribe el archivo solo si el valor editado difiere del último
+    /// guardado, y deja el pendiente de refresco en caliente.
+    fn guardar_physmat_si_cambio(&mut self, ruta: &Path, referencia: &str) {
+        let Some(valor) = self.physmat_valor.as_ref() else {
+            return;
+        };
+        let json = match serde_json::to_string_pretty(valor) {
+            Ok(json) => json,
+            Err(e) => {
+                self.physmat_error_guardado =
+                    Some(format!("No se pudo serializar el material: {e}"));
+                return;
+            }
+        };
+        let sin_cambios = self
+            .physmat_guardado
+            .as_ref()
+            .and_then(|g| serde_json::to_string_pretty(g).ok())
+            .is_some_and(|guardado| guardado == json);
+        if sin_cambios {
+            return;
+        }
+        match std::fs::write(ruta, &json) {
+            Ok(()) => {
+                let nuevo = *valor;
+                self.physmat_guardado = Some(nuevo);
+                self.physmat_error_guardado = None;
+                self.pending_physmat_refresh = Some((referencia.to_string(), nuevo));
+            }
+            Err(e) => {
+                self.physmat_error_guardado =
+                    Some(format!("No se pudo guardar {}: {e}", ruta.display()));
             }
         }
     }
@@ -2377,9 +2666,10 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
 mod tests {
     use super::{
         aplicar_datos, escala_proporcional, extraer_componente, instalar_componente,
-        scan_model_names_in, TipoComponente,
+        referencias_a_physmat, scan_model_names_in, TipoComponente,
     };
-    use glass_core::{CameraData, ColliderSpec, EntityData, PhysicsData};
+    use glass_core::physics_material::PhysicsMaterial;
+    use glass_core::{CameraData, ColliderSpec, EntityData, PhysicsData, SceneState};
     use std::path::{Path, PathBuf};
 
     /// Crea un directorio temporal único para un test. Si ya existe (resto de
@@ -2562,4 +2852,157 @@ mod tests {
     fn p6_escala_eje_fuera_de_rango_no_toca() {
         assert_eq!(escala_proporcional([1.0, 2.0, 4.0], 3, 8.0), [1.0, 2.0, 4.0]);
     }
+    fn spec_physmat(shape: &str, material: &str) -> glass_core::ColliderSpec {
+        let mut s = glass_core::spec_por_defecto(shape);
+        s.material = material.to_string();
+        s
+    }
+
+    fn entidad_physmat(
+        id: u64,
+        nombre: &str,
+        physics: Option<PhysicsData>,
+    ) -> EntityData {
+        let mut e = EntityData::new(id, nombre.to_string(), Vec::new());
+        e.physics = physics;
+        e
+    }
+
+    #[test]
+    fn referencias_lista_entidades_y_origenes() {
+        const REF: &str = "materials/hielo.physmat.json";
+        const OTRA: &str = "materials/roca.physmat.json";
+        let pa = PhysicsData {
+            colliders: vec![spec_physmat("Box", REF)],
+            mesh_collider_material: OTRA.to_string(),
+            ..Default::default()
+        };
+        let pb = PhysicsData {
+            colliders: vec![spec_physmat("Sphere", OTRA)],
+            mesh_collider_material: REF.to_string(),
+            ..Default::default()
+        };
+        let mut scene = SceneState::default();
+        scene.entities = vec![
+                entidad_physmat(1, "A", Some(pa)),
+                entidad_physmat(2, "B", Some(pb)),
+                entidad_physmat(3, "C", None),
+            ];
+
+        assert_eq!(
+            referencias_a_physmat(&scene, REF),
+            vec![
+                ("A".to_string(), "Box Collider".to_string()),
+                ("B".to_string(), "Mesh Collider".to_string()),
+            ],
+            "debe listar A con Box Collider y B con Mesh Collider, en orden de escena"
+        );
+    }
+
+    #[test]
+    fn referencias_vacias_si_nadie_o_ref_vacia() {
+        const REF: &str = "materials/hielo.physmat.json";
+        const OTRA: &str = "materials/roca.physmat.json";
+        let pa = PhysicsData {
+            colliders: vec![spec_physmat("Box", OTRA)],
+            mesh_collider_material: OTRA.to_string(),
+            ..Default::default()
+        };
+        let mut scene = SceneState::default();
+        scene.entities = vec![entidad_physmat(1, "A", Some(pa))];
+        assert!(
+            referencias_a_physmat(&scene, REF).is_empty(),
+            "sin coincidencias debe devolver vacío"
+        );
+
+        let pb = PhysicsData {
+            colliders: vec![spec_physmat("Box", "")],
+            ..Default::default()
+        };
+        let mut scene_vacia = SceneState::default();
+        scene_vacia.entities = vec![entidad_physmat(2, "B", Some(pb))];
+        assert!(
+            referencias_a_physmat(&scene_vacia, "").is_empty(),
+            "con referencia vacía debe devolver vacío aunque haya specs con material vacío"
+        );
+    }
+
+    #[test]
+    fn referencias_no_duplica_el_mismo_origen() {
+        const REF: &str = "materials/hielo.physmat.json";
+        let pa = PhysicsData {
+            colliders: vec![spec_physmat("Box", REF), spec_physmat("Box", REF)],
+            ..Default::default()
+        };
+        let mut scene = SceneState::default();
+        scene.entities = vec![entidad_physmat(1, "A", Some(pa))];
+        assert_eq!(
+            referencias_a_physmat(&scene, REF),
+            vec![("A".to_string(), "Box Collider".to_string())],
+            "dos specs Box con la misma referencia deben aparecer una sola vez"
+        );
+    }
+
+    fn dir_temporal_inspector(nombre: &str) -> PathBuf {
+        let raiz = std::env::temp_dir().join(format!(
+            "glass_editor_inspector_{}_{}",
+            nombre,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&raiz);
+        std::fs::create_dir_all(&raiz).unwrap();
+        raiz
+    }
+
+    #[test]
+    fn guardar_physmat_escribe_el_archivo_y_deja_pendiente() {
+        let dir = dir_temporal_inspector("guardar_physmat");
+        let ruta = dir.join("Hielo.physmat.json");
+        let plantilla = serde_json::to_string_pretty(&PhysicsMaterial::NEW_ASSET).unwrap();
+        std::fs::write(&ruta, &plantilla).unwrap();
+
+        let mut panel = super::InspectorPanel::new();
+        panel.cargar_physmat(&ruta);
+        assert!(panel.physmat_error.is_none());
+        panel.physmat_valor.as_mut().unwrap().dynamic_friction = 0.15;
+        panel.guardar_physmat_si_cambio(&ruta, "Hielo.physmat.json");
+
+        let escrito: PhysicsMaterial =
+            serde_json::from_str(&std::fs::read_to_string(&ruta).unwrap()).unwrap();
+        assert_eq!(escrito.dynamic_friction, 0.15, "el archivo debe tener la fricción nueva");
+        let (referencia, valor) = panel
+            .pending_physmat_refresh
+            .take()
+            .expect("debe quedar el pendiente de refresco en caliente");
+        assert_eq!(referencia, "Hielo.physmat.json");
+        assert_eq!(valor.dynamic_friction, 0.15);
+
+        // Sin cambios nuevos, guardar no vuelve a dejar pendiente.
+        panel.guardar_physmat_si_cambio(&ruta, "Hielo.physmat.json");
+        assert!(
+            panel.pending_physmat_refresh.is_none(),
+            "sin cambios no debe generarse otro pendiente"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cargar_physmat_invalido_da_error_y_no_toca_el_archivo() {
+        let dir = dir_temporal_inspector("physmat_invalido");
+        let ruta = dir.join("Roto.physmat.json");
+        std::fs::write(&ruta, "{esto no es json").unwrap();
+
+        let mut panel = super::InspectorPanel::new();
+        panel.cargar_physmat(&ruta);
+
+        assert!(panel.physmat_error.is_some(), "el JSON inválido debe dar error de carga");
+        assert!(panel.physmat_valor.is_none(), "sin valor editable si el archivo no parsea");
+        assert_eq!(
+            std::fs::read_to_string(&ruta).unwrap(),
+            "{esto no es json",
+            "el archivo inválido no se toca"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

@@ -158,6 +158,14 @@ impl PhysicsMaterialLibrary {
         }
     }
 
+    /// Retira de la caché la entrada asociada a `reference`. Si la
+    /// referencia no está cacheada, no hace nada. Tras esta llamada, la
+    /// próxima `get` vuelve a leer el archivo desde disco (y vuelve a
+    /// cachear el resultado, incluido el fallo).
+    pub fn invalidate(&mut self, reference: &str) {
+        self.cache.remove(reference);
+    }
+
     /// Devuelve el asset saneado, cacheando también los errores de carga.
     pub fn get(&mut self, reference: &str) -> Option<PhysicsMaterial> {
         if let Some(cacheado) = self.cache.get(reference) {
@@ -517,6 +525,46 @@ mod tests {
         assert!(!matches!(origen_legado, MaterialOrigin::Asset));
 
         let _ = std::fs::remove_dir_all(directorio);
+    }
+
+    #[test]
+    fn invalidate_fuerza_relectura_del_archivo() {
+        let raiz = directorio_temporal_physmat("invalidate_relectura");
+        std::fs::create_dir_all(raiz.join("materials")).unwrap();
+        let archivo = raiz.join("materials").join("hielo.physmat.json");
+        let referencia = "materials/hielo.physmat.json";
+        let json = |f: f32| {
+            format!(
+                "{{\"dynamic_friction\":{f},\"static_friction\":0.2,\"bounciness\":0.0,\"friction_combine\":\"Average\",\"bounce_combine\":\"Average\"}}"
+            )
+        };
+
+        std::fs::write(&archivo, json(0.1)).unwrap();
+        let mut lib = PhysicsMaterialLibrary::new(raiz.clone());
+        assert_eq!(lib.get(referencia).unwrap().dynamic_friction, 0.1);
+
+        std::fs::write(&archivo, json(0.9)).unwrap();
+        assert_eq!(
+            lib.get(referencia).unwrap().dynamic_friction,
+            0.1,
+            "sin invalidar, get debe devolver el valor cacheado"
+        );
+
+        lib.invalidate(referencia);
+        assert_eq!(
+            lib.get(referencia).unwrap().dynamic_friction,
+            0.9,
+            "tras invalidar, get debe releer el archivo"
+        );
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn invalidate_de_referencia_ausente_no_falla() {
+        let raiz = directorio_temporal_physmat("invalidate_ausente");
+        let mut lib = PhysicsMaterialLibrary::new(raiz.clone());
+        lib.invalidate("materials/nunca_pedido.physmat.json");
+        let _ = std::fs::remove_dir_all(&raiz);
     }
 
 }
