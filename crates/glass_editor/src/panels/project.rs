@@ -349,6 +349,33 @@ pub fn crear_material(assets_root: &Path, nombre: &str) -> Result<PathBuf, Strin
     Ok(destino)
 }
 
+/// Crea `<dir>/<Nombre>.physmat.json` con la plantilla de asset nuevo
+/// de Physics Material (0.6/0.6/0.0, §2 del diseño de colliders).
+pub fn crear_physics_material_en(dir: &Path, nombre: &str) -> Result<PathBuf, String> {
+    let base = nombre_sin_sufijo(nombre.trim(), &[".physmat.json", ".json"]);
+    validar_nombre(&base)?;
+
+    std::fs::create_dir_all(dir)
+        .map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+
+    let destino = dir.join(format!("{base}.physmat.json"));
+    if destino.exists() {
+        return Err(format!("Ya existe {}", destino.display()));
+    }
+    let json = serde_json::to_string_pretty(&glass_core::PhysicsMaterial::NEW_ASSET)
+        .map_err(|e| format!("No se pudo serializar el material físico: {e}"))?;
+    std::fs::write(&destino, json)
+        .map_err(|e| format!("No se pudo escribir {}: {e}", destino.display()))?;
+    Ok(destino)
+}
+
+/// Crea `<assets>/materials/<Nombre>.physmat.json` (o `Materials/` si el
+/// proyecto usa mayúsculas): la carpeta tipo Materiales, como el material
+/// visual.
+pub fn crear_physics_material(assets_root: &Path, nombre: &str) -> Result<PathBuf, String> {
+    crear_physics_material_en(&subcarpeta(assets_root, "materials", "Materials"), nombre)
+}
+
 /// Crea `<assets>/prefabs/<Nombre>.prefab.json` (o `Prefabs/` si el
 /// proyecto usa mayúsculas) con un prefab vacío: una sola entidad raíz
 /// con Transform y el nombre dado.
@@ -448,7 +475,13 @@ pub fn mover_elemento(
 
 /// Separa tallo y extensión respetando extensiones compuestas de asset.
 fn dividir_nombre(nombre: &str) -> (String, String) {
-    for comp in [".scene.json", ".prefab.json", ".graph.json"] {
+    for comp in [
+        ".scene.json",
+        ".prefab.json",
+        ".graph.json",
+        ".physmat.json",
+        ".material.json",
+    ] {
         if let Some(base) = nombre.strip_suffix(comp) {
             return (base.to_string(), comp.trim_start_matches('.').to_string());
         }
@@ -647,6 +680,76 @@ pub fn mover_a_papelera(assets_root: &Path, ruta: &Path) -> Result<PathBuf, Stri
 /// Productos de conversión que acompañan a una fuente convertible
 /// (`.blend`/`.fbx`): su `.glb` gemelo y el sidecar de ese `.glb`,
 /// SOLO si existen en disco. Para cualquier otra extensión, vacío.
+/// Duplica un archivo o carpeta en su misma carpeta usando la
+/// convención ` (2)`, ` (3)`... de `ruta_libre_en`. Devuelve la ruta
+/// de la copia. Cada archivo se duplica por su cuenta: duplicar una
+/// fuente .blend/.fbx NO arrastra su .glb convertido (el vigilante
+/// convertirá la copia).
+pub fn duplicar_elemento(ruta: &Path) -> Result<PathBuf, String> {
+    if !ruta.exists() {
+        return Err(format!(
+            "No se pudo duplicar {}: la ruta no existe",
+            ruta.display()
+        ));
+    }
+    let dir_padre = ruta.parent().ok_or_else(|| {
+        format!(
+            "No se pudo duplicar {}: no tiene carpeta padre",
+            ruta.display()
+        )
+    })?;
+    let nombre = ruta.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
+        format!(
+            "No se pudo duplicar {}: nombre de archivo no válido",
+            ruta.display()
+        )
+    })?;
+
+    let destino = ruta_libre_en(dir_padre, nombre)?;
+
+    if ruta.is_dir() {
+        if let Err(e) = copiar_dir_recursivo(ruta, &destino) {
+            // El destino no existía antes (ruta_libre_en lo garantiza):
+            // se limpia la copia parcial.
+            let _ = std::fs::remove_dir_all(&destino);
+            return Err(e);
+        }
+    } else {
+        std::fs::copy(ruta, &destino)
+            .map_err(|e| format!("No se pudo copiar {}: {e}", ruta.display()))?;
+    }
+
+    Ok(destino)
+}
+
+/// Crea `destino` y copia en él todo el contenido de `origen`,
+/// recursivamente.
+fn copiar_dir_recursivo(origen: &Path, destino: &Path) -> Result<(), String> {
+    std::fs::create_dir(destino)
+        .map_err(|e| format!("No se pudo crear la carpeta {}: {e}", destino.display()))?;
+
+    let entradas = std::fs::read_dir(origen)
+        .map_err(|e| format!("No se pudo leer la carpeta {}: {e}", origen.display()))?;
+
+    for entrada in entradas {
+        let entrada =
+            entrada.map_err(|e| format!("No se pudo leer una entrada de {}: {e}", origen.display()))?;
+        let ruta_origen = entrada.path();
+        let ruta_destino = destino.join(entrada.file_name());
+        let tipo = entrada
+            .file_type()
+            .map_err(|e| format!("No se pudo obtener el tipo de {}: {e}", ruta_origen.display()))?;
+
+        if tipo.is_dir() {
+            copiar_dir_recursivo(&ruta_origen, &ruta_destino)?;
+        } else {
+            std::fs::copy(&ruta_origen, &ruta_destino)
+                .map_err(|e| format!("No se pudo copiar {}: {e}", ruta_origen.display()))?;
+        }
+    }
+    Ok(())
+}
+
 pub fn gemelos_convertidos(ruta: &Path) -> Vec<PathBuf> {
     let convertible = ruta
         .extension()
@@ -852,6 +955,9 @@ pub fn icono_para(nombre: &str, es_dir: bool) -> &'static str {
     if nombre.ends_with(".material.json") {
         return "🖌";
     }
+    if glass_core::physics_material::es_physmat(nombre) {
+        return "🧲";
+    }
     let ext = nombre
         .rsplit('.')
         .next()
@@ -948,6 +1054,7 @@ enum TipoCreacion {
     Grafo,
     Escena,
     Material,
+    PhysicsMaterial,
     Prefab,
 }
 
@@ -961,6 +1068,7 @@ impl TipoCreacion {
             TipoCreacion::Grafo => "NuevoGrafo",
             TipoCreacion::Escena => "NuevaEscena",
             TipoCreacion::Material => "NuevoMaterial",
+            TipoCreacion::PhysicsMaterial => "Nuevo Physics Material",
             TipoCreacion::Prefab => "NuevoPrefab",
         }
     }
@@ -975,6 +1083,7 @@ fn submenu_crear(ui: &mut egui::Ui) -> Option<TipoCreacion> {
             (TipoCreacion::Carpeta, "📁 Carpeta"),
             (TipoCreacion::Escena, "🎬 Escena"),
             (TipoCreacion::Material, "🖌 Material"),
+            (TipoCreacion::PhysicsMaterial, "🧲 Physics Material"),
             (TipoCreacion::Prefab, "🧩 Prefab"),
             (TipoCreacion::Grafo, "🎨 Grafo de shaders"),
             (TipoCreacion::Script, "📜 Script C#"),
@@ -1359,6 +1468,14 @@ impl ProjectPanel {
     }
 
     fn eliminar(&mut self, ruta: PathBuf) {
+        // Antes de mover a la papelera (después la ruta ya no existe): si
+        // es un Physics Material, el aviso de éxito advierte de las
+        // referencias rotas (§6.1). El panel no tiene diálogo de
+        // confirmación: el borrado va a la papelera, recuperable.
+        let era_physmat = ruta
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(glass_core::physics_material::es_physmat);
         if rutas_iguales(&ruta, &self.assets_root) {
             self.set_error("No se puede eliminar la raíz de assets/");
             return;
@@ -1380,7 +1497,14 @@ impl ProjectPanel {
                 self.refrescar();
 
                 if fallos.is_empty() {
-                    self.set_info(format!("Movido a la papelera: {}", destino.display()));
+                    let mut mensaje = format!("Movido a la papelera: {}", destino.display());
+                    if era_physmat {
+                        mensaje.push_str(
+                            ". Los colliders que referencien este asset conservarán \
+                             una referencia rota y usarán el material de reserva",
+                        );
+                    }
+                    self.set_info(mensaje);
                 } else {
                     self.set_error(format!(
                         "Movido a la papelera: {}. El elemento principal se movió, pero algún archivo generado quedó sin mover: {}",
@@ -1388,6 +1512,22 @@ impl ProjectPanel {
                         fallos.join("; ")
                     ));
                 }
+            }
+            Err(e) => self.set_error(e),
+        }
+    }
+
+    fn duplicar(&mut self, ruta: PathBuf) {
+        if rutas_iguales(&ruta, &self.assets_root) {
+            self.set_error("No se puede duplicar la raíz de assets/");
+            return;
+        }
+
+        match duplicar_elemento(&ruta) {
+            Ok(ruta_nueva) => {
+                self.seleccion = Some(ruta_nueva.clone());
+                self.refrescar();
+                self.set_info(format!("Duplicado: {}", ruta_nueva.display()));
             }
             Err(e) => self.set_error(e),
         }
@@ -1435,6 +1575,10 @@ impl ProjectPanel {
                 None => crear_escena(&self.assets_root, &nombre),
             },
             TipoCreacion::Material => crear_material(&self.assets_root, &nombre),
+            TipoCreacion::PhysicsMaterial => match destino {
+                Some(dir) => crear_physics_material_en(&dir, &nombre),
+                None => crear_physics_material(&self.assets_root, &nombre),
+            },
             TipoCreacion::Prefab => match destino {
                 Some(dir) => crear_prefab_en(&dir, &nombre),
                 None => crear_prefab(&self.assets_root, &nombre),
@@ -1444,6 +1588,13 @@ impl ProjectPanel {
             Ok(ruta) => {
                 self.seleccion = Some(ruta.clone());
                 self.refrescar();
+                // El Physics Material nace con el renombrado inline activo
+                // (§6.1 del diseño de colliders); los demás tipos no cambian.
+                // Tras refrescar, para que la recarga del listado no anule
+                // el estado de renombrado.
+                if tipo == TipoCreacion::PhysicsMaterial {
+                    self.iniciar_renombrado(ruta.clone());
+                }
                 self.set_info(format!("Creado: {}", ruta.display()));
                 true
             }
@@ -1706,6 +1857,7 @@ impl ProjectPanel {
                 let mut info: Option<String> = None;
                 let mut empezar_renombrado: Option<PathBuf> = None;
                 let mut eliminar: Option<PathBuf> = None;
+                let mut duplicar: Option<PathBuf> = None;
                 let mut crear_contextual: Option<(TipoCreacion, PathBuf)> = None;
                 let mut accion_mover: Option<(PathBuf, PathBuf)> = None;
                 let mut abrir_explorador: Option<PathBuf> = None;
@@ -1828,6 +1980,10 @@ impl ProjectPanel {
                             empezar_renombrado = Some(ruta.clone());
                             ui.close();
                         }
+                        if ui.button("📄 Duplicar").clicked() {
+                            duplicar = Some(ruta.clone());
+                            ui.close();
+                        }
 
                         ui.menu_button("📦 Mover a…", |ui| {
                             // La lista se calcula al desplegar el submenú.
@@ -1910,6 +2066,9 @@ impl ProjectPanel {
                 if let Some((tipo, destino)) = crear_contextual {
                     let nombre = self.nombre_para_creacion(tipo);
                     self.ejecutar_creacion_con(tipo, nombre, Some(destino));
+                }
+                if let Some(r) = duplicar {
+                    self.duplicar(r);
                 }
                 if let Some(r) = eliminar {
                     self.eliminar(r);
@@ -2274,6 +2433,7 @@ impl ProjectPanel {
         let mut info: Option<String> = None;
         let mut empezar_renombrado: Option<PathBuf> = None;
         let mut a_eliminar: Option<PathBuf> = None;
+        let mut a_duplicar: Option<PathBuf> = None;
         let mut abrir_explorador: Option<PathBuf> = None;
         let mut nuevo_arrastre: Option<PathBuf> = None;
         let mut confirmar: bool = false;
@@ -2365,6 +2525,10 @@ impl ProjectPanel {
                                 empezar_renombrado = Some(ruta.clone());
                                 ui.close();
                             }
+                            if ui.button("📄 Duplicar").clicked() {
+                                a_duplicar = Some(ruta.clone());
+                                ui.close();
+                            }
                             if ui.button("📂 Abrir en el explorador").clicked() {
                                 abrir_explorador = Some(ruta.clone());
                                 ui.close();
@@ -2409,6 +2573,9 @@ impl ProjectPanel {
         if let Some(ruta) = empezar_renombrado {
             self.iniciar_renombrado(ruta);
         }
+        if let Some(ruta) = a_duplicar {
+            self.duplicar(ruta);
+        }
         if let Some(ruta) = a_eliminar {
             self.eliminar(ruta);
         }
@@ -2445,6 +2612,7 @@ impl ProjectPanel {
         let mut info: Option<String> = None;
         let mut empezar_renombrado: Option<PathBuf> = None;
         let mut a_eliminar: Option<PathBuf> = None;
+        let mut a_duplicar: Option<PathBuf> = None;
         let mut abrir_explorador: Option<PathBuf> = None;
         let mut nuevo_arrastre: Option<PathBuf> = None;
         let mut crear_contextual: Option<(TipoCreacion, PathBuf)> = None;
@@ -2683,6 +2851,10 @@ impl ProjectPanel {
                                 empezar_renombrado = Some(ruta.clone());
                                 ui.close();
                             }
+                            if ui.button("📄 Duplicar").clicked() {
+                                a_duplicar = Some(ruta.clone());
+                                ui.close();
+                            }
 
                             ui.menu_button("📦 Mover a…", |ui| {
                                 let destinos = listar_carpetas(&self.assets_root);
@@ -2771,6 +2943,9 @@ impl ProjectPanel {
         }
         if let Some(ruta) = empezar_renombrado {
             self.iniciar_renombrado(ruta);
+        }
+        if let Some(ruta) = a_duplicar {
+            self.duplicar(ruta);
         }
         if let Some(ruta) = a_eliminar {
             self.eliminar(ruta);
@@ -3756,4 +3931,213 @@ fn gemelos_convertidos_no_incluye_sidecar_sin_glb() {
 
         let _ = std::fs::remove_dir_all(&raiz);
     }
+    #[test]
+    fn crear_physics_material_escribe_la_plantilla() {
+        let root = temp_dir_unico("physics_material_plantilla");
+        let destino = crear_physics_material(&root, "Hielo").unwrap();
+
+        assert!(destino.ends_with(std::path::Path::new("materials").join("Hielo.physmat.json")));
+        assert!(destino.exists());
+
+        let json = std::fs::read_to_string(&destino).unwrap();
+        let material: glass_core::PhysicsMaterial = serde_json::from_str(&json).unwrap();
+        assert_eq!(material.dynamic_friction, 0.6);
+        assert_eq!(material.static_friction, 0.6);
+        assert_eq!(material.bounciness, 0.0);
+    }
+
+    #[test]
+    fn crear_physics_material_rechaza_duplicado_y_sufijo() {
+        let root = temp_dir_unico("physics_material_duplicado");
+        let destino = crear_physics_material(&root, "Hielo.physmat.json").unwrap();
+
+        assert_eq!(destino, root.join("materials").join("Hielo.physmat.json"));
+        assert!(crear_physics_material(&root, "Hielo.physmat.json").is_err());
+    }
+
+    #[test]
+    fn physmat_se_clasifica_con_su_icono_y_no_es_instanciable() {
+        assert_eq!(
+            icono_para("Hielo.physmat.json", false),
+            "🧲",
+            "un .physmat.json debe usar el icono de material físico"
+        );
+        assert_eq!(
+            icono_para("HIELO.PHYSMAT.JSON", false),
+            "🧲",
+            "el sufijo .physmat.json debe reconocerse sin distinguir mayúsculas"
+        );
+        assert_ne!(
+            icono_para("Hielo.physmat.json", false),
+            "📄",
+            "un physmat no debe caer en el icono genérico de archivo"
+        );
+        assert_eq!(
+            icono_para("datos.json", false),
+            "📄",
+            "un .json desconocido sí debe usar el icono genérico"
+        );
+        assert!(
+            !es_instanciable("Hielo.physmat.json", false),
+            "un physmat no debe arrastrarse a la escena como entidad instanciable"
+        );
+    }
+
+    #[test]
+    fn physmat_se_lista_como_asset_normal() {
+        let dir = temp_dir_unico("physmat_listado");
+        std::fs::write(dir.join("Hielo.physmat.json"), "{}")
+            .expect("debe poder escribirse el physmat de prueba");
+        std::fs::write(dir.join("oculto.meta.json"), "{}")
+            .expect("debe poder escribirse el sidecar de prueba");
+
+        let entradas = listar_directorio(&dir).expect("listar_directorio debe funcionar");
+        let physmat = entradas
+            .iter()
+            .find(|e| e.nombre == "Hielo.physmat.json")
+            .expect("el physmat no debe ocultarse como si fuera un sidecar");
+
+        assert!(!physmat.es_dir, "el physmat debe listarse como archivo");
+        assert!(
+            entradas.iter().all(|e| e.nombre != "oculto.meta.json"),
+            "los .meta.json deben seguir ocultos en el listado"
+        );
+    }
+
+    #[test]
+    fn physmat_no_tiene_gemelo_convertido() {
+        let ruta = std::path::Path::new("assets/Hielo.physmat.json");
+        let gemelos = gemelos_convertidos(ruta);
+        assert!(
+            gemelos.is_empty(),
+            "borrar o mover un physmat no debe arrastrar ningún .glb gemelo"
+        );
+    }
+
+    #[test]
+    fn duplicar_archivo_crea_copia_con_sufijo() {
+        let dir = temp_dir_unico("duplicar_archivo");
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("Hielo.physmat.json");
+        std::fs::write(&original, "{}").unwrap();
+
+        let copia = duplicar_elemento(&original).unwrap();
+        assert_eq!(copia, dir.join("Hielo (2).physmat.json"));
+        assert_eq!(std::fs::read_to_string(&copia).unwrap(), "{}");
+        assert_eq!(std::fs::read_to_string(&original).unwrap(), "{}");
+
+        let copia2 = duplicar_elemento(&original).unwrap();
+        assert_eq!(copia2, dir.join("Hielo (3).physmat.json"));
+        assert_eq!(std::fs::read_to_string(&copia2).unwrap(), "{}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn duplicar_carpeta_copia_el_contenido() {
+        let dir = temp_dir_unico("duplicar_carpeta");
+        std::fs::create_dir_all(&dir).unwrap();
+        let materiales = dir.join("Materiales");
+        std::fs::create_dir_all(materiales.join("Sub")).unwrap();
+        std::fs::write(materiales.join("Hielo.physmat.json"), "{\"friccion\":0.1}").unwrap();
+        std::fs::write(materiales.join("Sub").join("Roca.material.json"), "{\"color\":1}").unwrap();
+
+        let copia = duplicar_elemento(&materiales).unwrap();
+        assert_eq!(copia, dir.join("Materiales (2)"));
+        assert!(copia.is_dir());
+        assert_eq!(
+            std::fs::read_to_string(copia.join("Hielo.physmat.json")).unwrap(),
+            "{\"friccion\":0.1}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(copia.join("Sub").join("Roca.material.json")).unwrap(),
+            "{\"color\":1}"
+        );
+        assert!(materiales.join("Hielo.physmat.json").is_file());
+        assert!(materiales.join("Sub").join("Roca.material.json").is_file());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn duplicar_ruta_inexistente_devuelve_error() {
+        let dir = temp_dir_unico("duplicar_inexistente");
+        std::fs::create_dir_all(&dir).unwrap();
+        let ruta = dir.join("NoExiste.physmat.json");
+
+        let res = duplicar_elemento(&ruta);
+        assert!(res.is_err());
+        assert!(!dir.join("NoExiste (2).physmat.json").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn duplicar_modelo_no_arrastra_su_glb_gemelo() {
+        let dir = temp_dir_unico("duplicar_modelo_glb");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let blend = dir.join("Caja.blend");
+        let glb = dir.join("Caja.glb");
+        std::fs::write(&blend, b"blend").unwrap();
+        std::fs::write(&glb, b"glb").unwrap();
+
+        let copia = duplicar_elemento(&blend).expect("duplicar Caja.blend debe funcionar");
+
+        assert_eq!(
+            copia.file_name().and_then(|n| n.to_str()),
+            Some("Caja (2).blend"),
+            "la copia debe llamarse 'Caja (2).blend'"
+        );
+        assert!(copia.exists(), "la copia 'Caja (2).blend' debe existir");
+
+        let gemelo = dir.join("Caja (2).glb");
+        assert!(
+            !gemelo.exists(),
+            "no debe crearse 'Caja (2).glb': cada archivo se duplica por su cuenta"
+        );
+    }
+
+    #[test]
+    fn duplicar_respeta_el_contenido_binario() {
+        let dir = temp_dir_unico("duplicar_binario");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let original = dir.join("tex.png");
+        let bytes: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF, 0x10];
+        std::fs::write(&original, &bytes).unwrap();
+
+        let copia = duplicar_elemento(&original).expect("duplicar tex.png debe funcionar");
+
+        let original_leido: Vec<u8> = std::fs::read(&original).unwrap();
+        let copia_leida: Vec<u8> = std::fs::read(&copia).unwrap();
+        assert_eq!(
+            original_leido, copia_leida,
+            "la copia debe tener exactamente los mismos bytes que el original"
+        );
+    }
+
+    #[test]
+    fn duplicar_escena_conserva_sufijo_compuesto() {
+        let dir = temp_dir_unico("duplicar_escena");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let escena = dir.join("Nivel.scene.json");
+        std::fs::write(&escena, b"{}").unwrap();
+
+        let copia = duplicar_elemento(&escena).expect("duplicar Nivel.scene.json debe funcionar");
+
+        assert_eq!(
+            copia.file_name().and_then(|n| n.to_str()),
+            Some("Nivel (2).scene.json"),
+            "la copia debe conservar el sufijo compuesto: 'Nivel (2).scene.json'"
+        );
+
+        let mal = dir.join("Nivel.scene (2).json");
+        assert!(
+            !mal.exists(),
+            "no debe generarse 'Nivel.scene (2).json'"
+        );
+    }
+
 }
