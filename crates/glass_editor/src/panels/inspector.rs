@@ -122,6 +122,8 @@ fn anadir_collider_componente(
             size: tamano_convertido_modulo("Box", forma, phys.box_extents),
             offset: phys.box_offset,
             is_trigger: phys.is_trigger,
+            material: String::new(),
+            direction: "Y".to_string(),
         };
         phys.colliders.push(spec);
     }
@@ -327,8 +329,11 @@ fn copiar_parte_collider(dst: &mut PhysicsData, src: &PhysicsData) {
     dst.box_extents = src.box_extents;
     dst.box_offset = src.box_offset;
     dst.is_trigger = src.is_trigger;
-    dst.friction = src.friction;
-    dst.restitution = src.restitution;
+    // Copia del legado de fricción/rebote (Option) y de los campos nuevos del Mesh Collider.
+    dst.legacy_friction = src.legacy_friction;
+    dst.legacy_restitution = src.legacy_restitution;
+    dst.mesh_collider_material = src.mesh_collider_material.clone();
+    dst.mesh_collider_is_trigger = src.mesh_collider_is_trigger;
     dst.has_collider = true;
 }
 
@@ -1294,8 +1299,15 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                             }
 
                             // En Unity fricción y elasticidad son del material del collider.
-                            ui.add(Slider::new(&mut phys.friction, 0.0..=1.0).text("Fricción"));
-                            ui.add(Slider::new(&mut phys.restitution, 0.0..=1.0).text("Elasticidad (Bounciness)"));
+                            let material_efectivo = phys.body_fallback_material();
+                            let mut friccion_mostrada = material_efectivo.dynamic_friction;
+                            if ui.add(Slider::new(&mut friccion_mostrada, 0.0..=1.0).text("Fricción")).changed() {
+                                phys.legacy_friction = Some(friccion_mostrada);
+                            }
+                            let mut bounciness_mostrado = material_efectivo.bounciness;
+                            if ui.add(Slider::new(&mut bounciness_mostrado, 0.0..=1.0).text("Elasticidad (Bounciness)")).changed() {
+                                phys.legacy_restitution = Some(bounciness_mostrado);
+                            }
 
                             let modelo: String = modelo_entidad.clone();
                             let inferido: &str = match modelo.as_str() {
@@ -1341,6 +1353,8 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                                     size,
                                                     offset: phys.box_offset,
                                                     is_trigger,
+                                                    material: String::new(),
+                                                    direction: "Y".to_string(),
                                                 });
                                             }
                                         } else {
@@ -1496,6 +1510,8 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                             size,
                                             offset: center,
                                             is_trigger,
+                                            material: String::new(),
+                                            direction: "Y".to_string(),
                                         });
                                     }
                                 }
@@ -1516,8 +1532,15 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         // en Unity. Fricción y elasticidad son del cuerpo
                         // (compartidos) y van una sola vez, arriba.
                         seccion_componente(ui, "colliders", "🧊 Colliders", TipoComponente::Collider, true, self.portapapeles.as_ref(), &mut accion_cols, |ui| {
-                            ui.add(Slider::new(&mut phys.friction, 0.0..=1.0).text("Fricción"));
-                            ui.add(Slider::new(&mut phys.restitution, 0.0..=1.0).text("Elasticidad (Bounciness)"));
+                            let material_efectivo = phys.body_fallback_material();
+                            let mut friccion_mostrada = material_efectivo.dynamic_friction;
+                            if ui.add(Slider::new(&mut friccion_mostrada, 0.0..=1.0).text("Fricción")).changed() {
+                                phys.legacy_friction = Some(friccion_mostrada);
+                            }
+                            let mut bounciness_mostrado = material_efectivo.bounciness;
+                            if ui.add(Slider::new(&mut bounciness_mostrado, 0.0..=1.0).text("Elasticidad (Bounciness)")).changed() {
+                                phys.legacy_restitution = Some(bounciness_mostrado);
+                            }
                             ui.label(
                                 RichText::new("Fricción y elasticidad son del cuerpo: las comparten sus colliders.")
                                     .weak(),
@@ -2442,6 +2465,8 @@ mod tests {
             size: [0.5, 0.5, 0.5],
             offset: [0.0, 0.0, 0.0],
             is_trigger: false,
+            material: String::new(),
+            direction: "Y".to_string(),
         });
         a.physics = Some(p);
         let json = extraer_componente(&a, TipoComponente::Rigidbody).unwrap();

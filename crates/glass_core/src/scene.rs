@@ -147,6 +147,14 @@ pub struct ColliderSpec {
     /// true = este collider es sensor (los demás pueden ser sólidos).
     #[serde(default)]
     pub is_trigger: bool,
+    /// Ruta del `.physmat.json` relativa a Assets; "" = sin material (el
+    /// collider usa `PhysicsData::body_fallback_material`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub material: String,
+    /// "X" | "Y" | "Z": eje de la cápsula. Solo aplica a Capsule; "Y" es el
+    /// valor histórico y no se serializa.
+    #[serde(default = "default_direction_y", skip_serializing_if = "es_y")]
+    pub direction: String,
 }
 
 /// Spec de collider con los valores por defecto de su forma, como el que
@@ -164,6 +172,8 @@ pub fn spec_por_defecto(shape: &str) -> ColliderSpec {
         size,
         offset: [0.0, 0.0, 0.0],
         is_trigger: false,
+        material: String::new(),
+        direction: default_direction_y(),
     }
 }
 
@@ -273,8 +283,14 @@ pub struct PhysicsData {
     #[serde(default = "default_true")]
     pub has_collider: bool,
     pub mass: f32,
-    pub friction: f32,
-    pub restitution: f32,
+    /// Fricción heredada de escenas anteriores al Physics Material. La
+    /// clave JSON sigue siendo "friction": la escena vieja carga `Some(..)`
+    /// y la reescribe igual al guardar. `None` = sin legado (objeto nuevo).
+    #[serde(rename = "friction", default, skip_serializing_if = "Option::is_none")]
+    pub legacy_friction: Option<f32>,
+    /// Restitución heredada; clave JSON "restitution". Ver `legacy_friction`.
+    #[serde(rename = "restitution", default, skip_serializing_if = "Option::is_none")]
+    pub legacy_restitution: Option<f32>,
     pub box_extents: [f32; 3],
     /// Centro (local) del collider en el camino histórico de lista vacía
     /// (`colliders` sin specs). Espejo de `ColliderSpec::offset`.
@@ -303,6 +319,13 @@ pub struct PhysicsData {
     /// Collider de malla sobre la geometría del modelo (Fase 1.5).
     #[serde(default)]
     pub mesh_collider: MeshColliderMode,
+    /// Ruta del `.physmat.json` del Mesh Collider, relativa a Assets;
+    /// "" = sin material (usa `body_fallback_material`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mesh_collider_material: String,
+    /// true = el Mesh Collider es sensor.
+    #[serde(default)]
+    pub mesh_collider_is_trigger: bool,
     /// Amortiguación lineal (freno de velocidad). Defecto histórico 1.5.
     #[serde(default = "default_linear_damping")]
     pub linear_damping: f32,
@@ -371,6 +394,18 @@ fn default_true() -> bool {
     true
 }
 
+/// Eje histórico de las cápsulas: Y.
+fn default_direction_y() -> String {
+    "Y".to_string()
+}
+
+/// `skip_serializing_if` de `ColliderSpec::direction`: no se escribe el eje
+/// histórico, así las escenas existentes no cambian al guardarse.
+#[allow(clippy::ptr_arg)]
+fn es_y(s: &String) -> bool {
+    s == "Y"
+}
+
 impl Default for PhysicsData {
     fn default() -> Self {
         Self {
@@ -384,8 +419,10 @@ impl Default for PhysicsData {
             has_collider: true,
             interpolate: false,
             mass: 1.0,
-            friction: 0.7,
-            restitution: 0.05,
+            // La creación no lleva legado: fricción 0.7 y rebote 0.05 salen
+            // de PhysicsMaterial::PROJECT_DEFAULT vía body_fallback_material.
+            legacy_friction: None,
+            legacy_restitution: None,
             box_extents: [0.5, 0.5, 0.5],
             box_offset: [0.0, 0.0, 0.0],
             linear_velocity: [0.0, 0.0, 0.0],
@@ -400,6 +437,8 @@ impl Default for PhysicsData {
             automatic_center_of_mass: true,
             automatic_inertia_tensor: true,
             mesh_collider: MeshColliderMode::None,
+            mesh_collider_material: String::new(),
+            mesh_collider_is_trigger: false,
             linear_damping: 1.5,
             angular_damping: 0.0,
             solver_iterations: 4,
@@ -411,6 +450,24 @@ impl Default for PhysicsData {
 }
 
 impl PhysicsData {
+    /// Material que se aplica a un collider de este cuerpo sin `.physmat.json`
+    /// asignado. Compone el legado sobre PROJECT_DEFAULT:
+    /// - dynamic_friction = legacy_friction o el del proyecto;
+    /// - static_friction = siempre el del proyecto (el legado no la guarda);
+    /// - bounciness = legacy_restitution o el del proyecto;
+    /// - combines = los del proyecto (Average).
+    pub fn body_fallback_material(&self) -> crate::physics_material::PhysicsMaterial {
+        use crate::physics_material::PhysicsMaterial;
+        let base = PhysicsMaterial::PROJECT_DEFAULT;
+        PhysicsMaterial {
+            dynamic_friction: self.legacy_friction.unwrap_or(base.dynamic_friction),
+            static_friction: base.static_friction,
+            bounciness: self.legacy_restitution.unwrap_or(base.bounciness),
+            friction_combine: base.friction_combine,
+            bounce_combine: base.bounce_combine,
+        }
+    }
+
     /// Añade un collider primitivo a la lista y marca el componente
     /// Collider como presente (P3: cada spec es un componente).
     pub fn anadir_collider(&mut self, spec: ColliderSpec) {
@@ -1546,8 +1603,10 @@ impl EntityData {
                 has_rigidbody: true,
                 has_collider: true,
                 mass: 1.0,
-                friction: 0.7,
-                restitution: 0.05,
+                // Sin legado: el comportamiento (0.7 / 0.05) sale de
+                // PROJECT_DEFAULT vía body_fallback_material.
+                legacy_friction: None,
+                legacy_restitution: None,
                 box_extents: [0.5, 0.5, 0.5],
                 box_offset: [0.0, 0.0, 0.0],
                 linear_velocity: [0.0, 0.0, 0.0],
@@ -1569,6 +1628,8 @@ impl EntityData {
                 interpolate: false,
                 colliders: Vec::new(),
                 mesh_collider: MeshColliderMode::None,
+                mesh_collider_material: String::new(),
+                mesh_collider_is_trigger: false,
             })
         } else {
             None
@@ -2355,6 +2416,25 @@ impl SceneState {
 
         new_root_id
     }
+}
+
+/// Todas las referencias no vacías a `.physmat.json` de la escena: el
+/// `material` de cada ColliderSpec y el `mesh_collider_material` de cada
+/// entidad con física. Sin duplicados y ordenadas. Las instancias de prefab
+/// son entidades de la escena con su PhysicsData, así que entran por aquí.
+pub fn physmat_refs(scene: &SceneState) -> Vec<String> {
+    let mut refs = std::collections::BTreeSet::new();
+    for physics in scene.entities.iter().filter_map(|e| e.physics.as_ref()) {
+        for spec in &physics.colliders {
+            if !spec.material.is_empty() {
+                refs.insert(spec.material.clone());
+            }
+        }
+        if !physics.mesh_collider_material.is_empty() {
+            refs.insert(physics.mesh_collider_material.clone());
+        }
+    }
+    refs.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -3304,6 +3384,144 @@ mod tests_material {
 #[cfg(test)]
 mod scene_index_tests {
     use super::*;
+
+    use crate::physics_material::PhysicsMaterial;
+
+    // --- C2-A: Physics Material en el modelo de escena ---
+
+    /// PhysicsData serializado como JSON, partiendo del default para no
+    /// depender de qué campos son obligatorios en la carga.
+    fn physics_json_con(extra: &[(&str, serde_json::Value)]) -> serde_json::Value {
+        let mut v = serde_json::to_value(PhysicsData::default()).unwrap();
+        let obj = v.as_object_mut().unwrap();
+        for (k, val) in extra {
+            obj.insert((*k).to_string(), val.clone());
+        }
+        v
+    }
+
+    #[test]
+    fn escena_vieja_conserva_friction_y_restitution() {
+        let json = physics_json_con(&[
+            ("friction", serde_json::json!(0.3)),
+            ("restitution", serde_json::json!(0.8)),
+        ]);
+        let cargado: PhysicsData = serde_json::from_value(json).unwrap();
+        assert_eq!(cargado.legacy_friction, Some(0.3));
+        assert_eq!(cargado.legacy_restitution, Some(0.8));
+
+        // Equivalencia: el guardado reescribe las mismas claves y valores
+        // (la serialización de f32 puede expandir el decimal: se compara
+        // con tolerancia; la igualdad exacta la prueba la recarga).
+        let guardado = serde_json::to_value(&cargado).unwrap();
+        assert!((guardado["friction"].as_f64().unwrap() - 0.3).abs() < 1e-6);
+        assert!((guardado["restitution"].as_f64().unwrap() - 0.8).abs() < 1e-6);
+        let recargado: PhysicsData = serde_json::from_value(guardado).unwrap();
+        assert_eq!(recargado.legacy_friction, Some(0.3));
+        assert_eq!(recargado.legacy_restitution, Some(0.8));
+    }
+
+    #[test]
+    fn objeto_nuevo_sin_legado_y_fallback_project_default() {
+        let p = PhysicsData::default();
+        let v = serde_json::to_value(&p).unwrap();
+        let obj = v.as_object().unwrap();
+        assert!(!obj.contains_key("friction"));
+        assert!(!obj.contains_key("restitution"));
+        assert!(!obj.contains_key("mesh_collider_material"));
+        assert_eq!(p.mesh_collider_material, "");
+        assert!(!p.mesh_collider_is_trigger);
+        assert_eq!(p.body_fallback_material(), PhysicsMaterial::PROJECT_DEFAULT);
+    }
+
+    #[test]
+    fn fallback_compone_por_campos() {
+        let solo_friccion = PhysicsData {
+            legacy_friction: Some(0.3),
+            ..PhysicsData::default()
+        };
+        let m = solo_friccion.body_fallback_material();
+        assert_eq!(m.dynamic_friction, 0.3);
+        assert_eq!(m.bounciness, 0.05);
+        assert_eq!(m.static_friction, PhysicsMaterial::PROJECT_DEFAULT.static_friction);
+        assert_eq!(m.friction_combine, PhysicsMaterial::PROJECT_DEFAULT.friction_combine);
+        assert_eq!(m.bounce_combine, PhysicsMaterial::PROJECT_DEFAULT.bounce_combine);
+
+        let solo_rebote = PhysicsData {
+            legacy_restitution: Some(0.8),
+            ..PhysicsData::default()
+        };
+        let m = solo_rebote.body_fallback_material();
+        assert_eq!(m.dynamic_friction, 0.7);
+        assert_eq!(m.bounciness, 0.8);
+        assert_eq!(m.static_friction, PhysicsMaterial::PROJECT_DEFAULT.static_friction);
+    }
+
+    #[test]
+    fn spec_sin_claves_nuevas_carga_defaults() {
+        let spec: ColliderSpec =
+            serde_json::from_str(r#"{"shape":"Capsule","size":[0.5,0.5,0.0]}"#).unwrap();
+        assert_eq!(spec.material, "");
+        assert_eq!(spec.direction, "Y");
+
+        for forma in ["Box", "Sphere", "Capsule", "Cylinder", "Desconocida"] {
+            let d = spec_por_defecto(forma);
+            assert_eq!(d.material, "");
+            assert_eq!(d.direction, "Y");
+        }
+
+        // El default no escribe las claves nuevas.
+        let v = serde_json::to_value(spec_por_defecto("Capsule")).unwrap();
+        let obj = v.as_object().unwrap();
+        assert!(!obj.contains_key("material"));
+        assert!(!obj.contains_key("direction"));
+
+        // Un material asignado se conserva al serializar.
+        let mut con_material = spec_por_defecto("Box");
+        con_material.material = "Materials/Hielo.physmat.json".into();
+        let v = serde_json::to_value(&con_material).unwrap();
+        assert_eq!(v["material"].as_str(), Some("Materials/Hielo.physmat.json"));
+        let recargado: ColliderSpec = serde_json::from_value(v).unwrap();
+        assert_eq!(recargado.material, "Materials/Hielo.physmat.json");
+    }
+
+    fn entidad_con_physics(id: u64, physics: Option<PhysicsData>) -> EntityData {
+        let mut e = EntityData::new(id, format!("E{id}"), vec![]);
+        e.physics = physics;
+        e
+    }
+
+    #[test]
+    fn physmat_refs_unicas_y_ordenadas() {
+        let hielo = "Materials/Hielo.physmat.json";
+        let goma = "Materials/Goma.physmat.json";
+
+        let mut spec_a = spec_por_defecto("Box");
+        spec_a.material = hielo.into();
+        let mut a = PhysicsData::default();
+        a.anadir_collider(spec_a);
+        a.mesh_collider_material = goma.into();
+
+        // Entidad con física pero sin referencias.
+        let b = PhysicsData::default();
+
+        // Tercera entidad que repite la misma referencia.
+        let mut spec_c = spec_por_defecto("Sphere");
+        spec_c.material = hielo.into();
+        let mut c = PhysicsData::default();
+        c.anadir_collider(spec_c);
+
+        let scene = SceneState {
+            entities: vec![
+                entidad_con_physics(1, Some(a)),
+                entidad_con_physics(2, Some(b)),
+                entidad_con_physics(3, None),
+                entidad_con_physics(4, Some(c)),
+            ],
+            ..SceneState::default()
+        };
+        assert_eq!(physmat_refs(&scene), vec![goma.to_string(), hielo.to_string()]);
+    }
 
     fn fresh_scene() -> SceneState {
         let mut s = SceneState::new();

@@ -168,13 +168,15 @@ impl EngineSceneBridge {
         let model = ent.mesh.as_ref().map(|m| m.model.as_str()).unwrap_or("");
         let shape = collider_shape_for_builtin(model, glass_core::mat4_scale(world), body.box_extents);
         let colliders = colliders_resueltos(body, shape);
+        // Material de fallback compuesto (legado o valores por defecto).
+        let fallback = body.body_fallback_material();
         Some(SpawnedBodySpec {
             entity_id: ent.id,
             body_type,
             position: glass_core::mat4_translation(world),
             rotation: glass_core::mat4_to_quat(world),
-            friction: body.friction,
-            restitution: body.restitution,
+            friction: fallback.dynamic_friction,
+            restitution: fallback.bounciness,
             colliders,
             colliders_son_specs: !body.colliders.is_empty(),
             mesh_collider: body.mesh_collider,
@@ -4372,14 +4374,16 @@ let resueltos = if body.has_collider {
                 } else {
                     None
                 };
+                // Material de fallback compuesto del cuerpo actual (legado o valores por defecto).
+                let fallback = body.body_fallback_material();
                 descriptors.push((
                     ent.id,
                     body_type,
                     pos,
                     rot,
                     resueltos,
-                    body.friction,
-                    body.restitution,
+                    fallback.dynamic_friction,
+                    fallback.bounciness,
                     body.linear_velocity,
                     mesh,
                     !body.colliders.is_empty(),

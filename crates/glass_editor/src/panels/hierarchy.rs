@@ -873,6 +873,8 @@ impl HierarchyPanel {
                             size: [5.0, 0.5, 5.0],
                             offset: [0.0, -0.5, 0.0],
                             is_trigger: false,
+                            material: String::new(),
+                            direction: "Y".to_string(),
                         }],
                         ..Default::default()
                     });
