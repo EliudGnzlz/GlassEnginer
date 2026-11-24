@@ -16,6 +16,7 @@ pub mod portal;
 pub mod proceso;
 pub mod scene;
 pub mod particle_stats;
+pub mod physics_material;
 pub mod transform_stats;
 pub mod transforms;
 pub mod shader_graph;
@@ -31,6 +32,7 @@ pub use math::{
     quat_rotate_vec3, quat_to_euler_deg, quat_to_mat3,
 };
 pub use prefab::Prefab;
+pub use physics_material::PhysicsMaterial;
 pub use project::ProjectSettings;
 pub use scene::{
     canvas_scale_factor, layout_group_rects, resolve_scene_ui_rects, resolve_ui_rect,
