@@ -577,13 +577,23 @@ impl<'v> Importador<'v> {
         let plan = &self.plan;
         let clases = &self.clases;
         let fisicos = &self.plan_fisicos;
+        let metas = &self.metas;
         let rutas = |g: &str| plan.get(g).cloned();
         let clase = |g: &str| clases.get(g).cloned();
         let physmat = |g: &str| fisicos.get(g).cloned();
+        let objeto = |g: &str, fid: i64| {
+            metas.get(g).and_then(|m| {
+                m.sub_objetos
+                    .iter()
+                    .find(|s| s.file_id == fid)
+                    .map(|s| s.nombre.clone())
+            })
+        };
         let ctx = ContextoEscena {
             rutas: &rutas,
             clase_de_script: &clase,
             physmat_de_guid: &physmat,
+            objeto_de_submalla: &objeto,
         };
 
         for guid in orden {
@@ -635,13 +645,23 @@ impl<'v> Importador<'v> {
         let plan = &self.plan;
         let clases = &self.clases;
         let fisicos = &self.plan_fisicos;
+        let metas = &self.metas;
         let rutas = |g: &str| plan.get(g).cloned();
         let clase = |g: &str| clases.get(g).cloned();
         let physmat = |g: &str| fisicos.get(g).cloned();
+        let objeto = |g: &str, fid: i64| {
+            metas.get(g).and_then(|m| {
+                m.sub_objetos
+                    .iter()
+                    .find(|s| s.file_id == fid)
+                    .map(|s| s.nombre.clone())
+            })
+        };
         let ctx = ContextoEscena {
             rutas: &rutas,
             clase_de_script: &clase,
             physmat_de_guid: &physmat,
+            objeto_de_submalla: &objeto,
         };
 
         for i in self.indices(Tipo::Escena) {

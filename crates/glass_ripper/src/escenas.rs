@@ -32,6 +32,11 @@ pub struct ContextoEscena<'a> {
     /// GUID de un material físico 134 → ruta del .physmat.json
     /// importado, relativa a Assets (p. ej. "Materiales/H.physmat.json").
     pub physmat_de_guid: &'a dyn Fn(&str) -> Option<String>,
+    /// (GUID del modelo, fileID de la submalla) → nombre del sub-objeto
+    /// en la tabla del `.meta` (el nodo del FBX/GLB al que se enlaza la
+    /// entidad). El nombre de la entidad en Unity no siempre coincide
+    /// con el nodo (p. ej. «Prop_InfoLaptop» ↔ «DemoFacility_Prop_Laptop»).
+    pub objeto_de_submalla: &'a dyn Fn(&str, i64) -> Option<String>,
 }
 
 /// Prefab convertido, listo para expandirse en escenas u otros prefabs.
@@ -411,6 +416,7 @@ impl<'c, 'a> Estado<'c, 'a> {
             filtro
         };
         let model = self.modelo_de(ref_malla);
+        let object = self.objeto_de(ref_malla);
         let material = self.material_de(campo(rv, "m_Materials"));
         if campo(rv, "m_Enabled").is_some() && !booleano(rv, "m_Enabled") {
             self.avisos
@@ -418,9 +424,24 @@ impl<'c, 'a> Estado<'c, 'a> {
         }
         MeshData {
             model,
+            object,
             material,
             ..Default::default()
         }
+    }
+
+    /// Nombre del sub-objeto (nodo del GLB) al que apunta la referencia
+    /// de malla, desde la tabla de sub-objetos del `.meta` del modelo.
+    /// Vacío si la referencia no trae GUID o la tabla no lo cubre: el
+    /// motor cae entonces al enlace por nombre de entidad.
+    fn objeto_de(&mut self, ref_malla: Option<&Value>) -> String {
+        let Some((guid, fid)) = ref_malla.and_then(referencia).and_then(|r| {
+            let fid = r.file_id;
+            r.guid.map(|g| (g, fid))
+        }) else {
+            return String::new();
+        };
+        (self.ctx.objeto_de_submalla)(&guid, fid).unwrap_or_default()
     }
 
     fn modelo_de(&mut self, ref_malla: Option<&Value>) -> String {
@@ -966,11 +987,16 @@ mod tests {
         None
     }
 
+    fn sin_objeto(_: &str, _: i64) -> Option<String> {
+        None
+    }
+
     fn ctx() -> ContextoEscena<'static> {
         ContextoEscena {
             rutas: &rutas,
             clase_de_script: &clases,
             physmat_de_guid: &sin_physmat,
+            objeto_de_submalla: &sin_objeto,
         }
     }
 

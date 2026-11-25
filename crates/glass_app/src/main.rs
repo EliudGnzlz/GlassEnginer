@@ -6439,6 +6439,59 @@ for name in wanted {
                             model_key,
                             Some("cube" | "plane" | "sphere" | "capsule" | "cylinder")
                         );
+                        // Enlace entidad→objeto: si el nombre de la entidad
+                        // coincide con un objeto del modelo (la convención
+                        // de las escenas importadas: una entidad por nodo
+                        // del archivo, con sufijo « (n)» en duplicados), la
+                        // entidad dibuja SOLO los rangos de ese objeto. Sin
+                        // coincidencia manda el comportamiento histórico
+                        // (el modelo entero: escenas autoradas a mano, una
+                        // entidad por archivo). Sin este enlace, cada
+                        // entidad de una escena importada dibujaba el modelo
+                        // completo con SU material y las copias se pisaban:
+                        // en NeoFPS los marcadores dibujaban la instalación
+                        // entera con su material blanco emisor y el suelo
+                        // salía blanco aunque su material y su textura
+                        // (la paleta) eran correctos.
+                        let rangos_objeto: Option<Vec<usize>> = if using_model {
+                            model_key.and_then(|k| {
+                                let objs = cache.objects.get(k)?;
+                                let nombre_base: &str = match ent.name.rfind(" (") {
+                                    Some(i)
+                                        if ent.name.ends_with(')')
+                                            && i + 2 < ent.name.len() - 1
+                                            && ent.name[i + 2..ent.name.len() - 1]
+                                                .chars()
+                                                .all(|c| c.is_ascii_digit()) =>
+                                    {
+                                        &ent.name[..i]
+                                    }
+                                    _ => ent.name.as_str(),
+                                };
+                                // El enlace explícito de la malla
+                                // (`mesh.object`, lo escribe el importador
+                                // desde la tabla de sub-objetos) manda; sin
+                                // él, el nombre de la entidad.
+                                let explicito = ent
+                                    .mesh
+                                    .as_ref()
+                                    .map(|m| m.object.as_str())
+                                    .unwrap_or("");
+                                let obj = if explicito.is_empty() {
+                                    objs.iter()
+                                        .find(|o| o.name == ent.name || o.name == nombre_base)?
+                                } else {
+                                    objs.iter().find(|o| o.name == explicito)?
+                                };
+                                if obj.ranges.is_empty() {
+                                    None
+                                } else {
+                                    Some(obj.ranges.clone())
+                                }
+                            })
+                        } else {
+                            None
+                        };
                         if let Some(mat) = material_entidad {
                             let tex_set = if mat.texture.is_empty() {
                                 cache
@@ -6456,19 +6509,53 @@ for name in wanted {
                                     .set_for_image(Some(mat.texture.as_str()), Some(0))
                                     .unwrap_or(vk::DescriptorSet::null())
                             };
-                            draw_items.push((
-                                mat.albedo,
-                                [mat.metallic, mat.roughness, 1.0, has_light],
-                                tex_set,
-                                (0, ent_mesh.index_count),
-                                [
-                                    mat.emissive[0],
-                                    mat.emissive[1],
-                                    mat.emissive[2],
-                                    mat.emissive_intensity,
-                                ],
-                                [mat.tiling[0], mat.tiling[1], mat.offset[0], mat.offset[1]],
-                            ));
+                            // Con enlace a objeto, un lote por rango del
+                            // objeto; sin enlace, el lote histórico de la
+                            // malla entera.
+                            let rangos_mat: Vec<(u32, u32)> = match (&rangos_objeto, model_key) {
+                                (Some(idxs), Some(k)) => idxs
+                                    .iter()
+                                    .filter_map(|&ri| {
+                                        cache
+                                            .primitive_ranges
+                                            .get(k)
+                                            .and_then(|prs| prs.get(ri))
+                                            .map(|r| (r.first_index, r.index_count))
+                                    })
+                                    .collect(),
+                                _ => Vec::new(),
+                            };
+                            if rangos_mat.is_empty() {
+                                draw_items.push((
+                                    mat.albedo,
+                                    [mat.metallic, mat.roughness, 1.0, has_light],
+                                    tex_set,
+                                    (0, ent_mesh.index_count),
+                                    [
+                                        mat.emissive[0],
+                                        mat.emissive[1],
+                                        mat.emissive[2],
+                                        mat.emissive_intensity,
+                                    ],
+                                    [mat.tiling[0], mat.tiling[1], mat.offset[0], mat.offset[1]],
+                                ));
+                            } else {
+                                for r in rangos_mat {
+                                    draw_items.push((
+                                        mat.albedo,
+                                        [mat.metallic, mat.roughness, 1.0, has_light],
+                                        tex_set,
+                                        r,
+                                        [
+                                            mat.emissive[0],
+                                            mat.emissive[1],
+                                            mat.emissive[2],
+                                            mat.emissive_intensity,
+                                        ],
+                                        [mat.tiling[0], mat.tiling[1], mat.offset[0], mat.offset[1]],
+                                    ));
+                                }
+                            }
                         } else if es_primitiva && using_model {
                             draw_items.push((
                                 obj_col,
@@ -6525,6 +6612,13 @@ for name in wanted {
                                 }
                             }
                             for (range_idx, range) in ranges.iter().enumerate() {
+                                // Enlace entidad→objeto: fuera de su objeto,
+                                // la entidad no dibuja nada del modelo.
+                                if let Some(idxs) = &rangos_objeto {
+                                    if !idxs.contains(&range_idx) {
+                                        continue;
+                                    }
+                                }
                                 if let Some((base, nivel)) = lod_de_rango.get(&range_idx) {
                                     if lod_activo.get(base) != Some(nivel) {
                                         continue;
@@ -6563,7 +6657,28 @@ for name in wanted {
                             let tex_set = cache
                                 .set_for_image(if using_model { model_key } else { None }, primary_image)
                                 .unwrap_or(vk::DescriptorSet::null());
-                            draw_items.push((c, mp, tex_set, (0, ent_mesh.index_count), [0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0]));
+                            // Enlace entidad→objeto también aquí: sin él la
+                            // entidad dibujaría el modelo entero.
+                            let rangos_fb: Vec<(u32, u32)> = match (&rangos_objeto, model_key) {
+                                (Some(idxs), Some(k)) => idxs
+                                    .iter()
+                                    .filter_map(|&ri| {
+                                        cache
+                                            .primitive_ranges
+                                            .get(k)
+                                            .and_then(|prs| prs.get(ri))
+                                            .map(|r| (r.first_index, r.index_count))
+                                    })
+                                    .collect(),
+                                _ => Vec::new(),
+                            };
+                            if rangos_fb.is_empty() {
+                                draw_items.push((c, mp, tex_set, (0, ent_mesh.index_count), [0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0]));
+                            } else {
+                                for r in rangos_fb {
+                                    draw_items.push((c, mp, tex_set, r, [0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 0.0]));
+                                }
+                            }
                         }
 
                         // Material de grafo: MeshData.shader = "graph:<nombre>".

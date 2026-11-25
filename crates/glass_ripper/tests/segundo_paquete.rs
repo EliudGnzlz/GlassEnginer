@@ -79,6 +79,7 @@ fn segundo_paquete_invariantes_y_conversores() {
         rutas: &|guid: &str| plan.get(guid).cloned(),
         clase_de_script: &|_| None,
         physmat_de_guid: &|_| None,
+        objeto_de_submalla: &|_, _| None,
     };
     let resolver_mat = |guid: &str| plan.get(guid).cloned();
 

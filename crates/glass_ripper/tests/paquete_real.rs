@@ -217,6 +217,7 @@ fn escenas_y_prefabs_u3_contra_el_paquete_real() {
         rutas: &|guid: &str| rutas.get(guid).cloned(),
         clase_de_script: &|_| None,
         physmat_de_guid: &|_| None,
+        objeto_de_submalla: &|_, _| None,
     };
 
     let texto_de = |e: &glass_ripper::EntradaPaquete| -> String {

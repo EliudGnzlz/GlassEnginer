@@ -100,6 +100,13 @@ pub struct MeshData {
     /// TODAS las entidades y los modelos importados nunca llegaban a pantalla.
     #[serde(default)]
     pub model: String,
+    /// Objeto (nodo) del modelo al que se enlaza la entidad cuando el
+    /// archivo trae varios: la entidad dibuja solo los rangos de ese
+    /// objeto. Vacío = el modelo entero. Lo rellena el importador de
+    /// Unity desde la tabla de sub-objetos del `.meta` (el nombre de
+    /// entidad de Unity no siempre coincide con el nodo del FBX).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub object: String,
 /// Nombre del activo de material en `assets/materials/`
     /// (sin extensión; "" = sin material asignado: mandan el
     /// color de la entidad y los valores históricos).
@@ -118,6 +125,7 @@ impl Default for MeshData {
             color: [0.0, 0.8, 0.9],
             wireframe: false,
             model: String::new(),
+            object: String::new(),
             shader: "triangle.vert.spv".into(),
             material: String::new(),
             shader_properties: Default::default(),
@@ -2356,6 +2364,7 @@ impl SceneState {
                     wireframe: wireframe.unwrap_or(false),
                     shader: "triangle.vert.spv".into(),
                     model: String::new(),
+                    object: String::new(),
                     material: String::new(),
                     shader_properties: Default::default(),
                 });
