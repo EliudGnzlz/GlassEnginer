@@ -849,16 +849,28 @@ fn convertir_escena_interno(
     (n.entidades, avisos)
 }
 
+/// Cabecera de un prefab legado (anterior a 2018.3): documento
+/// `!u!1001` «Prefab» con `m_RootGameObject` y `m_IsPrefabParent`.
+fn es_cabecera_legada(d: &DocumentoUnity) -> bool {
+    d.clase == 1001 && d.nombre == "Prefab" && !d.stripped
+}
+
 fn convertir_prefab_interno(
     guid: &str,
     texto: &str,
     ctx: &ContextoEscena,
     prefabs: &HashMap<String, PrefabConvertido>,
 ) -> Result<(PrefabConvertido, Vec<String>), String> {
-    let docs = partir_documentos(texto);
-    if docs.iter().any(|d| d.nombre == "Prefab") {
-        return Err("prefab legado (anterior a 2018.3): no soportado en v1".to_string());
-    }
+    // La cabecera legada se aparta antes del núcleo: dentro del propio
+    // prefab no es una instancia (el aviso de instancia legada queda
+    // para las escenas) y solo aporta la raíz señalada.
+    let (cabeceras, docs): (Vec<_>, Vec<_>) = partir_documentos(texto)
+        .into_iter()
+        .partition(es_cabecera_legada);
+    let raiz_legada = cabeceras
+        .first()
+        .map(|c| id_ref(&c.valor, "m_RootGameObject"))
+        .filter(|&f| f != 0);
     let mut n = ejecutar_nucleo(&docs, ctx, prefabs);
     let raices: Vec<usize> = n.entidades[..n.planas]
         .iter()
@@ -866,12 +878,20 @@ fn convertir_prefab_interno(
         .filter(|(_, e)| e.parent.is_none())
         .map(|(i, _)| i)
         .collect();
-    let Some(&iraiz) = raices.first() else {
+    let senalada = raiz_legada
+        .and_then(|f| n.por_fileid.get(&f))
+        .and_then(|&id| raices.iter().copied().find(|&i| n.entidades[i].id == id));
+    let Some(iraiz) = senalada.or_else(|| raices.first().copied()) else {
         return Err("prefab sin GameObject raíz".to_string());
     };
     if raices.len() > 1 {
+        let criterio = if senalada.is_some() {
+            "la señalada por m_RootGameObject"
+        } else {
+            "la primera"
+        };
         n.avisos.sumar(format!(
-            "el prefab tiene {} raíces: se usa la primera",
+            "el prefab tiene {} raíces: se usa {criterio}",
             raices.len()
         ));
     }
@@ -960,6 +980,187 @@ pub fn convertir_escena(
     let detalle = format!("escena: {} entidades", entidades.len());
     volcar_informe(informe, guid, ruta, &detalle, &avisos);
     Ok(entidades)
+}
+
+#[cfg(test)]
+mod tests_prefab_legado {
+    use super::*;
+
+    const GUID_MODELO: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+    const GUID_MATERIAL: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
+
+    /// Prefab legado mínimo: la cabecera señala «RaizLegada», pero antes
+    /// aparece «Suelto», otra entidad sin padre. «Hijo» lleva malla y
+    /// material.
+    const PREFAB_LEGADO: &str = r#"%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &100100000
+Prefab:
+  m_ObjectHideFlags: 1
+  serializedVersion: 2
+  m_Modification:
+    m_TransformParent: {fileID: 0}
+    m_Modifications: []
+    m_RemovedComponents: []
+  m_ParentPrefab: {fileID: 0}
+  m_RootGameObject: {fileID: 1000011}
+  m_IsPrefabParent: 1
+--- !u!1 &1000010
+GameObject:
+  m_ObjectHideFlags: 0
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  serializedVersion: 5
+  m_Component:
+  - component: {fileID: 4000010}
+  m_Layer: 0
+  m_Name: Suelto
+  m_TagString: Untagged
+  m_IsActive: 1
+--- !u!4 &4000010
+Transform:
+  m_ObjectHideFlags: 1
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  m_GameObject: {fileID: 1000010}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_RootOrder: 0
+--- !u!1 &1000011
+GameObject:
+  m_ObjectHideFlags: 0
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  serializedVersion: 5
+  m_Component:
+  - component: {fileID: 4000011}
+  m_Layer: 0
+  m_Name: RaizLegada
+  m_TagString: Untagged
+  m_IsActive: 1
+--- !u!4 &4000011
+Transform:
+  m_ObjectHideFlags: 1
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  m_GameObject: {fileID: 1000011}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children:
+  - {fileID: 4000012}
+  m_Father: {fileID: 0}
+  m_RootOrder: 1
+--- !u!1 &1000012
+GameObject:
+  m_ObjectHideFlags: 0
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  serializedVersion: 5
+  m_Component:
+  - component: {fileID: 4000012}
+  - component: {fileID: 33000012}
+  - component: {fileID: 23000012}
+  m_Layer: 0
+  m_Name: Hijo
+  m_TagString: Untagged
+  m_IsActive: 1
+--- !u!4 &4000012
+Transform:
+  m_ObjectHideFlags: 1
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  m_GameObject: {fileID: 1000012}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 4000011}
+  m_RootOrder: 0
+--- !u!33 &33000012
+MeshFilter:
+  m_ObjectHideFlags: 1
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  m_GameObject: {fileID: 1000012}
+  m_Mesh: {fileID: 4300000, guid: a1b2c3d4e5f60718293a4b5c6d7e8f90, type: 3}
+--- !u!23 &23000012
+MeshRenderer:
+  m_ObjectHideFlags: 1
+  m_PrefabParentObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 100100000}
+  m_GameObject: {fileID: 1000012}
+  m_Enabled: 1
+  m_CastShadows: 1
+  m_ReceiveShadows: 1
+  m_Materials:
+  - {fileID: 2100000, guid: 0f1e2d3c4b5a69788796a5b4c3d2e1f0, type: 2}
+"#;
+
+    fn convertir(texto: &str) -> Result<(PrefabConvertido, Vec<String>), String> {
+        let rutas = |g: &str| match g {
+            GUID_MODELO => Some("Assets/Models/ModeloPlano.glb".to_string()),
+            GUID_MATERIAL => Some("Assets/Materiales/MatOscuro.material.json".to_string()),
+            _ => None,
+        };
+        let sin_script = |_: &str| -> Option<String> { None };
+        let sin_physmat = |_: &str| -> Option<String> { None };
+        let submalla = |_: &str, _: i64| Some("NodoPlano".to_string());
+        let ctx = ContextoEscena {
+            rutas: &rutas,
+            clase_de_script: &sin_script,
+            physmat_de_guid: &sin_physmat,
+            objeto_de_submalla: &submalla,
+        };
+        convertir_prefab_interno("guid-prefab-legado", texto, &ctx, &HashMap::new())
+    }
+
+    #[test]
+    fn legado_usa_la_raiz_de_la_cabecera() {
+        let (conv, avisos) = convertir(PREFAB_LEGADO).expect("el prefab legado debe convertirse");
+        let prefab = &conv.prefab;
+        assert_eq!(prefab.name, "RaizLegada");
+        assert_eq!(prefab.root_entity.name, "RaizLegada");
+        assert_eq!(
+            conv.entidad_por_fileid.get(&1000011),
+            Some(&prefab.root_entity.id)
+        );
+        let hijo = prefab
+            .descendant_entities
+            .iter()
+            .find(|e| e.name == "Hijo")
+            .expect("falta la entidad Hijo");
+        assert_eq!(hijo.parent, Some(prefab.root_entity.id));
+        let detalle = format!("{hijo:?}");
+        assert!(detalle.contains("ModeloPlano"), "Hijo sin malla: {detalle}");
+        assert!(detalle.contains("MatOscuro"), "Hijo sin material: {detalle}");
+        assert!(
+            !avisos.iter().any(|a| a.contains("prefab legado")),
+            "aviso de instancia legada en el propio prefab: {avisos:?}"
+        );
+        assert!(
+            avisos.iter().any(|a| a.contains("2 raíces: se usa la señalada")),
+            "{avisos:?}"
+        );
+    }
+
+    #[test]
+    fn legado_sin_raiz_resoluble_usa_la_primera() {
+        let texto = PREFAB_LEGADO.replace(
+            "m_RootGameObject: {fileID: 1000011}",
+            "m_RootGameObject: {fileID: 999}",
+        );
+        let (conv, avisos) = convertir(&texto).expect("el prefab legado debe convertirse");
+        assert_eq!(conv.prefab.root_entity.name, "Suelto");
+        assert!(
+            avisos.iter().any(|a| a.contains("2 raíces: se usa la primera")),
+            "{avisos:?}"
+        );
+        assert!(!avisos.iter().any(|a| a.contains("prefab legado")), "{avisos:?}");
+    }
 }
 
 #[cfg(test)]
