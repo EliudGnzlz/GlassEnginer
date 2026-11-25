@@ -7,11 +7,16 @@
 //!
 //! Diseño: `~/workspace/glass-engine/diseno_importacion_unity.md`.
 
+pub mod ejes;
 pub mod escritor;
+pub mod fisico;
 pub mod informe;
+pub mod materiales;
 pub mod meta;
+pub mod modelos;
 pub mod paquete;
 pub mod registro;
+pub mod texturas;
 
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +34,8 @@ pub enum RipperError {
     },
     #[error("El .meta del asset {guid} no se pudo parsear: {motivo}")]
     Meta { guid: String, motivo: String },
+    #[error("No se pudo convertir '{ruta}': {motivo}")]
+    Conversion { ruta: String, motivo: String },
 }
 
 /// Una carpeta GUID del `.unitypackage`, ya leída del tar.
@@ -115,6 +122,14 @@ pub struct LineaInforme {
     pub ruta: Option<String>,
     pub estado: EstadoInforme,
     pub detalle: String,
+}
+
+/// ¿El motor reproduce este formato de audio tal cual? Verificado
+/// contra el código el 2026-11-25: `glass_audio` compila kira solo
+/// con la feature `wav` y su gestor carga bytes WAV, así que en v1
+/// solo `.wav` se copia directo; mp3/ogg/flac van al informe.
+pub fn audio_es_copia_directa(extension: &str) -> bool {
+    extension.eq_ignore_ascii_case("wav")
 }
 
 #[cfg(test)]

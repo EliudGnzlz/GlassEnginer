@@ -6,6 +6,9 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+glass_core.workspace = true
+glass_fbx.workspace = true
+image = { workspace = true, features = ["jpeg", "tga", "bmp", "gif"] }
 thiserror.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
