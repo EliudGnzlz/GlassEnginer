@@ -1005,6 +1005,12 @@ fn default_ui_font() -> String {
     "default".into()
 }
 
+/// `raycast_target` por defecto de un Graphic (fase UI/Canvas): los
+/// elementos dibujables reciben puntero salvo que se desactive.
+fn default_raycast_target() -> bool {
+    true
+}
+
 /// Alineación por defecto de un texto de UI.
 fn default_ui_align() -> String {
     "Left".into()
@@ -1023,6 +1029,15 @@ pub struct UITextData {
     /// "Left" | "Center" | "Right".
     #[serde(default = "default_ui_align")]
     pub align: String,
+    /// Estilo CSS extra del elemento (fase UI/Canvas): declaraciones y
+    /// bloques de pseudo-clase que la cascada aplica sobre los campos
+    /// del componente. Vacío = sin extra. Aditivo: las escenas antiguas
+    /// no lo traen.
+    #[serde(default)]
+    pub style_extra: String,
+    /// Si el elemento participa en el hit-test de puntero.
+    #[serde(default = "default_raycast_target")]
+    pub raycast_target: bool,
 }
 
 impl Default for UITextData {
@@ -1033,6 +1048,8 @@ impl Default for UITextData {
             color: [1.0, 1.0, 1.0, 1.0],
             font: "default".into(),
             align: "Left".into(),
+            style_extra: String::new(),
+            raycast_target: true,
         }
     }
 }
@@ -1042,6 +1059,10 @@ pub struct UIButtonData {
     pub interactable: bool,
     pub target_graphic_color: [f32; 4],
     pub on_click_action: String,
+    /// Estilo CSS extra del elemento (fase UI/Canvas), como en
+    /// `UITextData::style_extra`.
+    #[serde(default)]
+    pub style_extra: String,
 }
 
 impl Default for UIButtonData {
@@ -1050,6 +1071,7 @@ impl Default for UIButtonData {
             interactable: true,
             target_graphic_color: [0.25, 0.55, 0.85, 1.0],
             on_click_action: "".into(),
+            style_extra: String::new(),
         }
     }
 }
@@ -1065,6 +1087,13 @@ pub struct UIImageData {
     /// true = encajar la imagen conservando su proporción dentro
     /// del rect (letterbox); false = estirar al rect completo.
     pub preserve_aspect: bool,
+    /// Estilo CSS extra del elemento (fase UI/Canvas), como en
+    /// `UITextData::style_extra`.
+    #[serde(default)]
+    pub style_extra: String,
+    /// Si el elemento participa en el hit-test de puntero.
+    #[serde(default = "default_raycast_target")]
+    pub raycast_target: bool,
 }
 
 impl Default for UIImageData {
@@ -1073,6 +1102,8 @@ impl Default for UIImageData {
             sprite: String::new(),
             color: [1.0, 1.0, 1.0, 1.0],
             preserve_aspect: false,
+            style_extra: String::new(),
+            raycast_target: true,
         }
     }
 }
@@ -1737,6 +1768,12 @@ impl EntityData {
 pub struct SceneState {
     pub entities: Vec<EntityData>,
     pub next_entity_id: u64,
+    /// Versión del esquema de UI de la escena (fase UI/Canvas):
+    /// 0 = formato anterior a la fase (raíz JSON = array de entidades);
+    /// 1 = raíz objeto con `ui_schema_version`. La migración vive en
+    /// el crate `glass_ui`; aquí solo se conserva el número al
+    /// cargar/guardar.
+    pub ui_schema_version: u32,
     pub viewport_snapshot_png: Option<Vec<u8>>,
     pub shaders_reloaded_flag: bool,
     /// Caché SoA de transforms (Fase 7): la resolución de mundos
@@ -1760,6 +1797,7 @@ impl Default for SceneState {
                 EntityData::new(4, "Player Entity".into(), vec!["Transform".into(), "Script".into()]),
             ],
             next_entity_id: 5,
+            ui_schema_version: UI_SCHEMA_VERSION_ACTUAL,
             viewport_snapshot_png: None,
             shaders_reloaded_flag: false,
             transform_store: std::cell::RefCell::new(crate::transforms::TransformStore::new()),
@@ -1811,6 +1849,45 @@ fn snapshot_previous_version(path: &str) {
             let _ = std::fs::remove_file(vieja);
         }
     }
+}
+
+/// Versión actual del esquema de UI al guardar una escena nueva
+/// (fase UI/Canvas). La versión 0 es el formato anterior a la fase:
+/// la raíz del JSON es directamente el array de entidades.
+pub const UI_SCHEMA_VERSION_ACTUAL: u32 = 1;
+
+/// Parsea el JSON de una escena aceptando las dos formas de raíz:
+/// el array desnudo de entidades (versión 0) y el objeto
+/// `{"ui_schema_version": N, "entities": [...]}` (versión N).
+/// Devuelve la versión declarada y las entidades. Es el único punto
+/// de parseo de escenas: lo usan `SceneState::load_from_json` y el
+/// `SceneManager`.
+pub fn parsear_escena(json: &str) -> Result<(u32, Vec<EntityData>), String> {
+    let valor: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if valor.is_array() {
+        let entities: Vec<EntityData> =
+            serde_json::from_value(valor).map_err(|e| e.to_string())?;
+        return Ok((0, entities));
+    }
+    let version = valor
+        .get("ui_schema_version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+    let entities: Vec<EntityData> = match valor.get("entities") {
+        Some(e) => serde_json::from_value(e.clone()).map_err(|e| e.to_string())?,
+        None => return Err("escena sin campo 'entities'".into()),
+    };
+    Ok((version, entities))
+}
+
+/// Serializa una escena en la forma objeto actual (con versión).
+pub fn serializar_escena(version: u32, entities: &[EntityData]) -> Result<String, String> {
+    let valor = serde_json::json!({
+        "ui_schema_version": version,
+        "entities": entities,
+    });
+    serde_json::to_string_pretty(&valor).map_err(|e| e.to_string())
 }
 
 impl SceneState {
@@ -2322,7 +2399,7 @@ impl SceneState {
     /// `<escena>.snapshots/<nombre>-<millis>.json`, conservando las
     /// 10 instantáneas más recientes por escena.
     pub fn save_to_json(&self, path: &str) -> std::io::Result<()> {
-        let json = serde_json::to_string_pretty(&self.entities)
+        let json = serializar_escena(self.ui_schema_version, &self.entities)
             .map_err(std::io::Error::other)?;
         if let Some(parent) = std::path::Path::new(path).parent() {
             std::fs::create_dir_all(parent)?;
@@ -2352,8 +2429,9 @@ impl SceneState {
     /// Carga entidades desde un archivo JSON reemplazando la escena actual
     pub fn load_from_json(&mut self, path: &str) -> std::io::Result<()> {
         let json = std::fs::read_to_string(path)?;
-        let entities: Vec<EntityData> = serde_json::from_str(&json)
-            .map_err(std::io::Error::other)?;
+        let (version, entities) =
+            parsear_escena(&json).map_err(std::io::Error::other)?;
+        self.ui_schema_version = version;
         self.replace_entities(entities);
         Ok(())
     }

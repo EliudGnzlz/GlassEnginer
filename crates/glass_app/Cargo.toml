@@ -17,6 +17,7 @@ editor = [
 
 [dependencies]
 glass_core.workspace = true
+glass_ui.workspace = true
 glass_renderer.workspace = true
 glass_scripting.workspace = true
 glass_audio.workspace = true

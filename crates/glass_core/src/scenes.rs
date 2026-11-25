@@ -206,11 +206,13 @@ impl SceneManager {
             source: e,
         })?;
 
-        let entities: Vec<crate::scene::EntityData> =
-            serde_json::from_str(&json).map_err(|e| SceneError::Parse {
+        let (version, entities) = crate::scene::parsear_escena(&json).map_err(|e| {
+            SceneError::Parse {
                 path: path.clone(),
-                message: e.to_string(),
-            })?;
+                message: e,
+            }
+        })?;
+        scene.ui_schema_version = version;
 
         // A partir de aquí nada puede fallar: la escena se sustituye de golpe.
         // El parseo se hizo sobre `entities` (no releyendo el archivo dentro de

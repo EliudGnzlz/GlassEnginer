@@ -218,26 +218,64 @@ impl AssetVfs {
         Ok(entries)
     }
 
-    /// Lista los nombres de escena disponibles (`assets/scenes/*.scene.json` y
-    /// `Assets/Scenes/*.scene.json`), sin la extensión doble, ordenados alfabéticamente.
-    pub fn list_scenes(&self) -> Vec<String> {
-        let mut names: Vec<String> = Vec::new();
-        for dir in [SCENES_DIR, "Assets/Scenes"] {
-            let Ok(entries) = self.list(dir) else {
+    /// Recorre recursivamente las raíces de assets (`assets` y `Assets`)
+    /// y devuelve las claves de asset de todos los `.scene.json`, ordenadas.
+    ///
+    /// Los proyectos importados de Unity guardan sus escenas en subcarpetas
+    /// profundas de `Assets`, no en una carpeta plana de escenas: sin este
+    /// recorrido el gestor no ve ninguna escena de un proyecto importado.
+    /// Se saltan los directorios ocultos (`.glass` y similares).
+    fn recolectar_escenas(&self) -> Vec<String> {
+        let mut claves: Vec<String> = Vec::new();
+        for raiz in ["assets", "Assets"] {
+            let dir_raiz = self.root.join(raiz);
+            if !dir_raiz.is_dir() {
                 continue;
-            };
-            for entry in entries {
-                if entry.is_dir {
+            }
+            let mut pila = vec![dir_raiz];
+            while let Some(dir) = pila.pop() {
+                let Ok(lectura) = std::fs::read_dir(&dir) else {
                     continue;
-                }
-                if let Some(stem) = entry.name.strip_suffix(".scene.json") {
-                    if !names.iter().any(|name| name.as_str() == stem) {
-                        names.push(stem.to_string());
+                };
+                for entrada in lectura.flatten() {
+                    let nombre = entrada.file_name().to_string_lossy().to_string();
+                    if nombre.starts_with('.') {
+                        continue;
+                    }
+                    let ruta = entrada.path();
+                    if ruta.is_dir() {
+                        pila.push(ruta);
+                    } else if nombre.ends_with(".scene.json") {
+                        if let Some(clave) = to_asset_key(&self.root, &ruta) {
+                            claves.push(clave);
+                        }
                     }
                 }
             }
         }
+        claves.sort();
+        claves.dedup();
+        claves
+    }
+
+    /// Lista los nombres de escena disponibles: los de cualquier
+    /// `.scene.json` bajo las raíces de assets (a cualquier profundidad),
+    /// sin la extensión doble, ordenados alfabéticamente y sin duplicados
+    /// (dos escenas con el mismo nombre en carpetas distintas cuentan una).
+    pub fn list_scenes(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .recolectar_escenas()
+            .iter()
+            .filter_map(|clave| {
+                clave
+                    .rsplit('/')
+                    .next()
+                    .and_then(|f| f.strip_suffix(".scene.json"))
+                    .map(str::to_string)
+            })
+            .collect();
         names.sort();
+        names.dedup();
         names
     }
 
@@ -281,7 +319,18 @@ impl AssetVfs {
         }
 
         let bare_upper = format!("Assets/Scenes/{requested}");
-        self.exists(&bare_upper).then_some(bare_upper)
+        if self.exists(&bare_upper) {
+            return Some(bare_upper);
+        }
+
+        // 5. Búsqueda recursiva en las raíces de assets: las escenas de un
+        // proyecto importado viven en subcarpetas profundas. Si varias
+        // comparten nombre, gana la primera clave en orden alfabético
+        // (determinista); la ruta explícita de la regla 2 no tiene ambigüedad.
+        let buscado = format!("{requested}.scene.json");
+        self.recolectar_escenas()
+            .into_iter()
+            .find(|clave| clave.rsplit('/').next() == Some(buscado.as_str()))
     }
 }
 
@@ -378,6 +427,37 @@ mod tests {
             Some("assets/scenes/Zeta.scene.json")
         );
         assert_eq!(vfs.resolve_scene("NoExiste"), None);
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn escenas_en_subcarpetas_profundas_se_descubren_y_resuelven() {
+        // Proyecto tipo Unity importado: las escenas viven bajo
+        // Assets/<paquete>/... a varios niveles, no en una carpeta plana.
+        let base = std::env::temp_dir().join(format!("glass_vfs_deep_{}", std::process::id()));
+        let profunda = base.join("Assets/NeoFPS/Samples/Scenes/FiringRange");
+        std::fs::create_dir_all(&profunda).unwrap();
+        std::fs::write(profunda.join("FeatureDemo_FiringRange.scene.json"), "[]").unwrap();
+        std::fs::write(profunda.join("notas.txt"), "x").unwrap();
+        let otra = base.join("Assets/Otro");
+        std::fs::create_dir_all(&otra).unwrap();
+        std::fs::write(otra.join("FeatureDemo_FiringRange.scene.json"), "[]").unwrap();
+
+        let vfs = AssetVfs::new(&base);
+        // El nombre aparece una sola vez aunque haya dos archivos.
+        assert_eq!(vfs.list_scenes(), vec!["FeatureDemo_FiringRange".to_string()]);
+        // La resolución por nombre corto encuentra la profunda; con dos
+        // candidatas gana la primera clave en orden alfabético.
+        assert_eq!(
+            vfs.resolve_scene("FeatureDemo_FiringRange").as_deref(),
+            Some("Assets/NeoFPS/Samples/Scenes/FiringRange/FeatureDemo_FiringRange.scene.json")
+        );
+        // La ruta explícita sigue resolviendo tal cual.
+        assert_eq!(
+            vfs.resolve_scene("Assets/Otro/FeatureDemo_FiringRange.scene.json").as_deref(),
+            Some("Assets/Otro/FeatureDemo_FiringRange.scene.json")
+        );
 
         std::fs::remove_dir_all(&base).ok();
     }
