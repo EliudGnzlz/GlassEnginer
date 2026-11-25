@@ -35,3 +35,11 @@ dist/
 
 # Lock de proyecto abierto en el editor (P1)
 .glass_editor.lock
+
+# Papeles de trabajo y análisis (orden de D3m3tr10, 2026-11-25): los .md de la
+# raíz del repo son documentos locales (diseños, expedientes, auditorías,
+# planes, registros, informes) y NO se publican. Solo el README público se
+# versiona en la raíz; la documentación de producto vive en docs/, assets/
+# y plugins/ y no se ve afectada por esta regla.
+/*.md
+!/README.md
