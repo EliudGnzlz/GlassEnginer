@@ -1,0 +1,14 @@
+[package]
+name = "glass_ripper"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+serde_yaml.workspace = true
+tar.workspace = true
+flate2.workspace = true
