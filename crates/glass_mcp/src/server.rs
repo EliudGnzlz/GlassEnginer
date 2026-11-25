@@ -394,6 +394,18 @@ impl McpServer {
                             }
                         },
                         {
+                            "name": "glass_import_unitypackage",
+                            "description": "Importa un .unitypackage de Unity al proyecto abierto (Ripper): convierte texturas a PNG, materiales a assets/materials, modelos FBX a GLB, prefabs y escenas al formato del motor y scripts C# contra la fachada, y devuelve el resumen con el informe completo. 'path' puede ser absoluto o relativo a la raíz del proyecto. No sobrescribe assets existentes salvo que 'overwrite' sea true.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "path": { "type": "string" },
+                                    "overwrite": { "type": "boolean" }
+                                },
+                                "required": ["path"]
+                            }
+                        },
+                        {
                             "name": "glass_destroy_entity",
                             "description": "Destruye una entidad de la escena por su id (Fase 8). Es mutante: pasa por la Command Queue como las demás tools de escritura.",
                             "inputSchema": {
@@ -2986,6 +2998,62 @@ impl McpServer {
                 }
             }
 
+            "glass_import_unitypackage" => {
+                let Some(path) = args.get("path").and_then(|v| v.as_str()) else {
+                    return McpResponse::invalid_params(id, "Field 'path' is required");
+                };
+                let sobrescribir = args
+                    .get("overwrite")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let paquete = {
+                    let p = std::path::PathBuf::from(path);
+                    if p.is_absolute() {
+                        p
+                    } else {
+                        raiz_proyecto().join(p)
+                    }
+                };
+                if !paquete.is_file() {
+                    return McpResponse::error(
+                        id,
+                        -32005,
+                        format!("No existe el paquete: {}", paquete.display()),
+                    );
+                }
+                let raiz = raiz_proyecto();
+                let assets = ["assets", "Assets"]
+                    .iter()
+                    .map(|n| raiz.join(n))
+                    .find(|p| p.is_dir())
+                    .unwrap_or_else(|| raiz.join("assets"));
+                let verificador = glass_ripper::entorno::crear_verificador();
+                match glass_ripper::importador::importar_paquete(
+                    &paquete,
+                    &assets,
+                    sobrescribir,
+                    verificador.as_deref(),
+                ) {
+                    Ok(informe) => {
+                        let resumen = glass_ripper::entorno::resumen_importacion(&informe);
+                        McpResponse::success(
+                            id,
+                            json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": format!(
+                                        "Importación de {}: {}\n\n{}",
+                                        paquete.display(),
+                                        resumen,
+                                        informe.a_texto()
+                                    )
+                                }]
+                            }),
+                        )
+                    }
+                    Err(e) => McpResponse::error(id, -32005, e.to_string()),
+                }
+            }
             "glass_destroy_entity" => {
                 let Some(entity_id) = args.get("entity_id").and_then(|n| n.as_u64()) else {
                     return McpResponse::invalid_params(id, "Field 'entity_id' is required");

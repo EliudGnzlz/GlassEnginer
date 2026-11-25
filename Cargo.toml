@@ -52,6 +52,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"
 glass_core = { path = "crates/glass_core" }
 glass_fbx = { path = "crates/glass_fbx" }
+glass_ripper = { path = "crates/glass_ripper" }
 glass_renderer = { path = "crates/glass_renderer" }
 glass_editor = { path = "crates/glass_editor" }
 glass_scripting = { path = "crates/glass_scripting" }

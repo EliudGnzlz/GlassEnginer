@@ -526,6 +526,30 @@ pub fn ruta_libre_en(dir: &Path, nombre: &str) -> Result<PathBuf, String> {
     }
 }
 
+/// Importa un `.unitypackage` de Unity al proyecto abierto con el
+/// driver del Ripper (U5): convierte texturas, materiales, modelos,
+/// prefabs, escenas y scripts a `assets_root` sin sobrescribir lo
+/// existente. El informe completo queda en
+/// `.glass/informe_importacion.txt` y se devuelve el resumen de una
+/// línea para la barra de estado.
+pub fn importar_paquete_unity(origen: &Path, assets_root: &Path) -> Result<String, String> {
+    let verificador = glass_ripper::entorno::crear_verificador();
+    let informe = glass_ripper::importador::importar_paquete(
+        origen,
+        assets_root,
+        false,
+        verificador.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
+    let dir = assets_root.join(".glass");
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join("informe_importacion.txt"), informe.a_texto());
+    Ok(format!(
+        "Paquete importado: {}",
+        glass_ripper::entorno::resumen_importacion(&informe)
+    ))
+}
+
 /// Copia un archivo soltado desde el SO a `dir_destino`, con
 /// nombre libre si hay colisión (vía `ruta_libre_en`). Devuelve la
 /// ruta creada. Los directorios se rechazan.
@@ -1840,6 +1864,22 @@ impl ProjectPanel {
                                     self.seleccion = Some(destino.clone());
                                     self.refrescar();
                                     self.set_info(format!("Importado: {}", destino.display()));
+                                }
+                                Err(e) => self.set_error(e),
+                            }
+                        }
+                    }
+                    if ui.button("📦 Importar paquete Unity…").clicked() {
+                        ui.close();
+                        if let Some(origen) = rfd::FileDialog::new()
+                            .set_title("Importar paquete de Unity (.unitypackage)")
+                            .add_filter("Paquete Unity", &["unitypackage"])
+                            .pick_file()
+                        {
+                            match importar_paquete_unity(&origen, &self.assets_root.clone()) {
+                                Ok(resumen) => {
+                                    self.refrescar();
+                                    self.set_info(resumen);
                                 }
                                 Err(e) => self.set_error(e),
                             }
