@@ -496,6 +496,9 @@ mod tests {
             portal: None,
             parent,
             children,
+            prefab_source: None,
+            prefab_hash: None,
+            prefab_local_id: None,
         }
     }
 

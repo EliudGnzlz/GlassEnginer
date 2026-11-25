@@ -54,6 +54,7 @@ use glass_scripting::{
 use glass_scripting::host::FalloDotnet;
 mod bake;
 mod canvas_ui;
+mod prefabs_vivos;
 mod luces_objeto;
 mod ibl;
 mod mouse_input;
@@ -1170,7 +1171,9 @@ impl SceneBridge for EngineSceneBridge {
         // todas las entidades con física, antes de soltar el candado.
         let (root_id, body_specs) = {
             let mut state = self.scene_state.lock().ok()?;
-            let root_id = state.instantiate_prefab(&prefab, None, Some(position));
+            // Prefabs vivos (Fase A): la instancia queda vinculada a su asset.
+            let fuente = glass_core::prefab::ruta_fuente_prefab(std::path::Path::new(&resolved_path));
+            let root_id = state.instantiate_prefab(&prefab, None, Some(position), Some(&fuente));
 
             let world_matrices = state.compute_world_matrices();
             let mut body_specs = Vec::new();
@@ -3380,6 +3383,10 @@ impl GlassEngineApp {
             Ok(mut sc) => match sc.load_from_json(scene_path) {
                 Ok(()) => {
                     crate::canvas_ui::migrar_ui_escena_cargada(&mut sc, Some(scene_path));
+                    crate::prefabs_vivos::refrescar_prefabs_escena_cargada(
+                        &mut sc,
+                        self.raiz_proyecto_actual.as_deref(),
+                    );
                     true
                 }
                 Err(e) => {
@@ -4395,6 +4402,14 @@ for stem in &referenciados {
                 // sustituida (sin ruta: esta vía no escribe copia).
                 if let Ok(mut sc) = self.scene_state.lock() {
                     crate::canvas_ui::migrar_ui_escena_cargada(&mut sc, None);
+                    // `raiz_proyecto_actual` solo existe en la build con
+                    // editor: sin él, el refresco es no-op (mismo patrón
+                    // que en la recarga bajo demanda y en materiales).
+                    #[cfg(feature = "editor")]
+                    let raiz_proyecto = self.raiz_proyecto_actual.as_deref();
+                    #[cfg(not(feature = "editor"))]
+                    let raiz_proyecto: Option<&std::path::Path> = None;
+                    crate::prefabs_vivos::refrescar_prefabs_escena_cargada(&mut sc, raiz_proyecto);
                 }
 
                 // Silencia el audio de la escena anterior al activarse la nueva.
@@ -8693,6 +8708,11 @@ impl ApplicationHandler for GlassEngineApp {
                                 &mut sc,
                                 Some(scene_file.as_str()),
                             );
+                            let raiz = crate::prefabs_vivos::raiz_desde_ruta_escena(scene_file);
+                            crate::prefabs_vivos::refrescar_prefabs_escena_cargada(
+                                &mut sc,
+                                raiz.as_deref(),
+                            );
                             true
                         }
                         Err(e) => {
@@ -8720,6 +8740,12 @@ impl ApplicationHandler for GlassEngineApp {
                                 crate::canvas_ui::migrar_ui_escena_cargada(
                                     &mut sc,
                                     Some(default_sc.as_str()),
+                                );
+                                let raiz =
+                                    crate::prefabs_vivos::raiz_desde_ruta_escena(&default_sc);
+                                crate::prefabs_vivos::refrescar_prefabs_escena_cargada(
+                                    &mut sc,
+                                    raiz.as_deref(),
                                 );
                                 true
                             }

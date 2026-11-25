@@ -1600,6 +1600,16 @@ pub struct EntityData {
     pub portal: Option<crate::portal::PortalData>,
     pub parent: Option<u64>,
     pub children: Vec<u64>,
+    /// Prefab vivo (Fase A): ruta del `.prefab.json`, relativa al proyecto.
+    /// Solo en la raíz de una instancia.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefab_source: Option<String>,
+    /// Prefab vivo: huella de la instancia al instanciar/actualizar. Solo en la raíz.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefab_hash: Option<String>,
+    /// Prefab vivo: id de esta entidad dentro del prefab. En todo el subárbol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefab_local_id: Option<u64>,
 }
 
 impl EntityData {
@@ -1768,6 +1778,9 @@ impl EntityData {
             animator,
             parent: None,
             children: Vec::new(),
+            prefab_source: None,
+            prefab_hash: None,
+            prefab_local_id: None,
         }
     }
 }
@@ -2451,6 +2464,7 @@ impl SceneState {
         prefab: &crate::prefab::Prefab,
         parent_id: Option<u64>,
         world_pos: Option<[f32; 3]>,
+        fuente: Option<&str>,
     ) -> u64 {
         use std::collections::HashMap;
         let mut id_map: HashMap<u64, u64> = HashMap::new();
@@ -2476,6 +2490,11 @@ impl SceneState {
             .iter()
             .filter_map(|cid| id_map.get(cid).copied())
             .collect();
+        // Vínculo vivo: la raíz guarda fuente y huella; todos los clones, su id en el prefab.
+        let vinculo = fuente.is_some();
+        root_clone.prefab_source = fuente.map(str::to_owned);
+        root_clone.prefab_hash = fuente.map(|_| prefab.huella());
+        root_clone.prefab_local_id = vinculo.then_some(prefab.root_entity.id);
 
         // Si se emparentó a un padre existente, añadir el nuevo id a sus hijos
         if let Some(pid) = parent_id {
@@ -2493,6 +2512,9 @@ impl SceneState {
             let new_id = id_map[&desc.id];
             desc_clone.id = new_id;
             desc_clone.parent = desc.parent.and_then(|old_pid| id_map.get(&old_pid).copied());
+            desc_clone.prefab_source = None;
+            desc_clone.prefab_hash = None;
+            desc_clone.prefab_local_id = vinculo.then_some(desc.id);
             desc_clone.children = desc_clone
                 .children
                 .iter()
@@ -2502,6 +2524,145 @@ impl SceneState {
         }
 
         new_root_id
+    }
+
+    /// Prefabs vivos (Fase A): sincroniza cada instancia vinculada con su asset.
+    ///
+    /// Por cada raíz con `prefab_source`: si el asset no se resuelve, o si la
+    /// instancia se editó en la escena (su huella difiere de `prefab_hash`), no
+    /// se toca y se devuelve un aviso. Si la instancia está intacta y el asset
+    /// cambió, se re-expande conservando los ids de escena y, en la raíz, el
+    /// transform y el padre externo.
+    pub fn refrescar_instancias_prefab(
+        &mut self,
+        resolver: &dyn Fn(&str) -> Option<crate::prefab::Prefab>,
+    ) -> Vec<String> {
+        let raices: Vec<(u64, String, Option<String>)> = self
+            .entities
+            .iter()
+            .filter_map(|e| {
+                e.prefab_source
+                    .as_ref()
+                    .map(|s| (e.id, s.clone(), e.prefab_hash.clone()))
+            })
+            .collect();
+
+        let mut avisos = Vec::new();
+        for (raiz_id, fuente, guardada) in raices {
+            let Some(prefab) = resolver(&fuente) else {
+                avisos.push(format!("#{raiz_id} ({fuente}): vínculo roto"));
+                continue;
+            };
+            let huella_escena = crate::prefab::huella_subarbol(&self.entities, raiz_id, |e| {
+                e.prefab_local_id.unwrap_or(u64::MAX)
+            });
+            if guardada.as_deref() != Some(huella_escena.as_str()) {
+                avisos.push(format!(
+                    "#{raiz_id} ({fuente}): instancia modificada: no actualizada"
+                ));
+                continue;
+            }
+            let huella_asset = prefab.huella();
+            if huella_asset == huella_escena {
+                continue;
+            }
+            self.reexpandir_instancia(raiz_id, &prefab);
+            if let Some(raiz) = self.get_entity_mut(raiz_id) {
+                raiz.prefab_hash = Some(huella_asset);
+            }
+        }
+        avisos
+    }
+
+    /// Sustituye el subárbol de la instancia `raiz_id` por el contenido de
+    /// `prefab`, emparejando entidades por `prefab_local_id`. Conserva el id
+    /// de escena de las que siguen en el asset, crea las nuevas y elimina las
+    /// que ya no están. La raíz conserva transform, padre externo y vínculo.
+    fn reexpandir_instancia(&mut self, raiz_id: u64, prefab: &crate::prefab::Prefab) {
+        use crate::prefab::recorrer_subarbol;
+        use std::collections::{HashMap, HashSet};
+
+        let (transform, parent_externo, fuente, huella) = match self.get_entity(raiz_id) {
+            Some(r) => (
+                r.transform.clone(),
+                r.parent,
+                r.prefab_source.clone(),
+                r.prefab_hash.clone(),
+            ),
+            None => return,
+        };
+
+        // Entidades actuales de la instancia: (id de escena, local_id).
+        let actuales: Vec<(u64, Option<u64>)> = recorrer_subarbol(&self.entities, raiz_id)
+            .iter()
+            .map(|n| (n.e.id, n.e.prefab_local_id))
+            .collect();
+        let mut escena_por_local: HashMap<u64, u64> = actuales
+            .iter()
+            .filter(|(id, _)| *id != raiz_id)
+            .filter_map(|(id, local)| local.map(|l| (l, *id)))
+            .collect();
+        // La raíz sigue siendo la raíz aunque su id en el asset haya cambiado.
+        escena_por_local.insert(prefab.root_entity.id, raiz_id);
+
+        let nodos = recorrer_subarbol(
+            std::iter::once(&prefab.root_entity).chain(&prefab.descendant_entities),
+            prefab.root_entity.id,
+        );
+        let mut asset_a_escena: HashMap<u64, u64> = HashMap::new();
+        for n in &nodos {
+            let id = match escena_por_local.get(&n.e.id) {
+                Some(&id) => id,
+                None => {
+                    let id = self.next_entity_id;
+                    self.next_entity_id += 1;
+                    id
+                }
+            };
+            asset_a_escena.insert(n.e.id, id);
+        }
+
+        let mut nuevas: Vec<EntityData> = Vec::with_capacity(nodos.len());
+        for n in &nodos {
+            let mut e = n.e.clone();
+            e.id = asset_a_escena[&n.e.id];
+            e.prefab_local_id = Some(n.e.id);
+            e.prefab_source = None;
+            e.prefab_hash = None;
+            e.children = n
+                .e
+                .children
+                .iter()
+                .filter_map(|c| asset_a_escena.get(c).copied())
+                .collect();
+            match n.padre {
+                Some(p) => e.parent = Some(asset_a_escena[&p.id]),
+                None => {
+                    e.transform = transform.clone();
+                    e.parent = parent_externo;
+                    e.prefab_source = fuente.clone();
+                    e.prefab_hash = huella.clone();
+                }
+            }
+            nuevas.push(e);
+        }
+
+        let conservadas: HashSet<u64> = nuevas.iter().map(|e| e.id).collect();
+        let eliminadas: HashSet<u64> = actuales
+            .iter()
+            .map(|(id, _)| *id)
+            .filter(|id| !conservadas.contains(id))
+            .collect();
+        self.entities.retain(|e| !eliminadas.contains(&e.id));
+        for e in &mut self.entities {
+            e.children.retain(|c| !eliminadas.contains(c));
+        }
+        for nueva in nuevas {
+            match self.entities.iter().position(|e| e.id == nueva.id) {
+                Some(i) => self.entities[i] = nueva,
+                None => self.entities.push(nueva),
+            }
+        }
     }
 }
 

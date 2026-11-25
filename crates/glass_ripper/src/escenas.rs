@@ -225,6 +225,9 @@ fn entidad_vacia(id: u64) -> EntityData {
         portal: None,
         parent: None,
         children: Vec::new(),
+        prefab_source: None,
+        prefab_hash: None,
+        prefab_local_id: None,
     }
 }
 

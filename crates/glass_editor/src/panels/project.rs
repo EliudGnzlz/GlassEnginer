@@ -921,7 +921,9 @@ pub fn instanciar_asset(
 
     if es_prefab(nombre) {
         let prefab = glass_core::Prefab::load_from_file(ruta).map_err(|e| e.to_string())?;
-        return Ok(state.instantiate_prefab(&prefab, None, Some(posicion)));
+        // Prefabs vivos (Fase A): la instancia queda vinculada a su asset.
+        let fuente = glass_core::prefab::ruta_fuente_prefab(ruta);
+        return Ok(state.instantiate_prefab(&prefab, None, Some(posicion), Some(&fuente)));
     }
 
     if es_modelo(nombre) {

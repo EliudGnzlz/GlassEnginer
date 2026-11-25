@@ -1036,7 +1036,7 @@ impl EditorDockingLayout {
                                     // Fase UI/Canvas (V1): migración en memoria del prefab.
                                     glass_ui::migracion::migrar_prefab(&mut prefab);
                                     if let Ok(mut sc) = scene_state.lock() {
-                                        let new_id = sc.instantiate_prefab(&prefab, None, Some([0.0, 1.0, 0.0]));
+                                        let new_id = sc.instantiate_prefab(&prefab, None, Some([0.0, 1.0, 0.0]), None);
                                         self.hierarchy.selected_entity = Some(new_id);
                                     }
                                     self.status_message = Some((format!("Prefab {} instanciado", file_name), std::time::Instant::now()));
@@ -1578,7 +1578,7 @@ impl EditorDockingLayout {
                     Ok(mut state) => {
                         // Fase UI/Canvas (V1): migración en memoria del prefab.
                         glass_ui::migracion::migrar_prefab(&mut prefab);
-                        let id = state.instantiate_prefab(&prefab, None, Some([0.0, 1.0, 0.0]));
+                        let id = state.instantiate_prefab(&prefab, None, Some([0.0, 1.0, 0.0]), None);
                         self.hierarchy.selected_entity = Some(id);
                         format!("Prefab instanciado: {} (entidad {id})", ruta.display())
                     }
