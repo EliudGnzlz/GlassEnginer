@@ -187,3 +187,137 @@ fn conversores_u2_contra_el_paquete_real() {
     assert!(mats_otro_error.is_empty(), "ningún .mat real debe fallar por otra causa");
     assert_eq!(fbx_probados, 3);
 }
+
+/// U3 contra el paquete real: convierte TODOS los prefabs en orden
+/// topológico y las 4 escenas con un contexto construido desde el
+/// propio paquete (rutas simuladas como las dejará el importador:
+/// FBX→.glb, .mat→.material.json), y verifica que las escenas
+/// resultantes serializan y deserializan como `Vec<EntityData>`
+/// (el formato real de las escenas del motor).
+#[test]
+fn escenas_y_prefabs_u3_contra_el_paquete_real() {
+    let Ok(ruta) = std::env::var("GLASS_RIPPER_PAQUETE_REAL") else {
+        return;
+    };
+    let lectura = leer_paquete(Path::new(&ruta)).expect("el paquete real debe leerse");
+
+    // Ruta importada simulada por guid.
+    let mut rutas: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for e in &lectura.entradas {
+        let Some(r) = &e.ruta else { continue };
+        let ext = r.rsplit('.').next().unwrap_or("").to_lowercase();
+        let importada = match ext.as_str() {
+            "fbx" => format!("{}.glb", &r[..r.len() - 4]),
+            "mat" => format!("{}.material.json", &r[..r.len() - 4]),
+            _ => r.clone(),
+        };
+        rutas.insert(e.guid.clone(), importada);
+    }
+    let ctx = glass_ripper::escenas::ContextoEscena {
+        rutas: &|guid: &str| rutas.get(guid).cloned(),
+        clase_de_script: &|_| None,
+        physmat_de_guid: &|_| None,
+    };
+
+    let texto_de = |e: &glass_ripper::EntradaPaquete| -> String {
+        String::from_utf8_lossy(e.asset.as_deref().unwrap_or(&[])).into_owned()
+    };
+
+    // Prefabs en orden topológico por m_SourcePrefab.
+    let prefabs_crudos: Vec<(String, String, String)> = lectura
+        .entradas
+        .iter()
+        .filter(|e| e.ruta.as_deref().is_some_and(|r| r.to_lowercase().ends_with(".prefab")))
+        .map(|e| (e.guid.clone(), e.ruta.clone().unwrap(), texto_de(e)))
+        .collect();
+    let deps: Vec<(String, Vec<String>)> = prefabs_crudos
+        .iter()
+        .map(|(g, _, t)| (g.clone(), glass_ripper::instancias::dependencias_prefab(t)))
+        .collect();
+    let orden = glass_ripper::instancias::ordenar_prefabs(&deps).expect("sin ciclos entre prefabs");
+    let por_guid: std::collections::HashMap<&str, &(String, String, String)> =
+        prefabs_crudos.iter().map(|p| (p.0.as_str(), p)).collect();
+
+    let mut informe = glass_ripper::informe::InformeImportacion::default();
+    let mut convertidos: std::collections::HashMap<String, glass_ripper::escenas::PrefabConvertido> =
+        std::collections::HashMap::new();
+    let mut prefabs_fallo: Vec<String> = Vec::new();
+    for guid in &orden {
+        let (_, ruta_p, texto) = por_guid[guid.as_str()];
+        match glass_ripper::escenas::convertir_prefab(
+            guid,
+            ruta_p,
+            texto,
+            &ctx,
+            &convertidos,
+            &mut informe,
+        ) {
+            Ok(pc) => {
+                convertidos.insert(guid.clone(), pc);
+            }
+            Err(e) => prefabs_fallo.push(format!("{ruta_p}: {e}")),
+        }
+    }
+
+    // Escenas.
+    let mut escenas_ok = 0usize;
+    let mut total_entidades = 0usize;
+    let mut con_malla = 0usize;
+    let mut con_modelo = 0usize;
+    let mut con_padre = 0usize;
+    for e in &lectura.entradas {
+        let Some(r) = &e.ruta else { continue };
+        if !r.to_lowercase().ends_with(".unity") {
+            continue;
+        }
+        let entidades = glass_ripper::escenas::convertir_escena(
+            &e.guid,
+            r,
+            &texto_de(e),
+            &ctx,
+            &convertidos,
+            &mut informe,
+        )
+        .unwrap_or_else(|err| panic!("la escena real debe convertir ({r}): {err}"));
+        assert!(!entidades.is_empty(), "la escena {r} no debe salir vacía");
+        // Ida y vuelta por el formato real de escena del motor.
+        let json = serde_json::to_string(&entidades).expect("la escena serializa");
+        let vuelta: Vec<glass_core::EntityData> =
+            serde_json::from_str(&json).expect("la escena deserializa");
+        assert_eq!(vuelta.len(), entidades.len(), "ida y vuelta sin pérdidas en {r}");
+        escenas_ok += 1;
+        total_entidades += entidades.len();
+        con_malla += entidades.iter().filter(|x| x.mesh.is_some()).count();
+        con_modelo += entidades
+            .iter()
+            .filter(|x| x.mesh.as_ref().is_some_and(|m| !m.model.is_empty()))
+            .count();
+        con_padre += entidades.iter().filter(|x| x.parent.is_some()).count();
+        eprintln!("ESCENA {r}: {} entidades", entidades.len());
+    }
+
+    eprintln!("== U3 CONTRA EL PAQUETE REAL ==");
+    eprintln!(
+        "prefabs: {} de {} convertidos · fallos {}",
+        convertidos.len(),
+        prefabs_crudos.len(),
+        prefabs_fallo.len()
+    );
+    for f in &prefabs_fallo {
+        eprintln!("  PREFAB FALLO: {f}");
+    }
+    eprintln!("escenas convertidas: {escenas_ok}");
+    eprintln!("entidades de escena: {total_entidades} · con malla {con_malla} · con modelo {con_modelo} · con padre {con_padre}");
+    eprintln!("líneas de informe U3: {}", informe.lineas.len());
+    let mut por_detalle: BTreeMap<String, usize> = BTreeMap::new();
+    for linea in &informe.lineas {
+        let clave: String = linea.detalle.chars().take(60).collect();
+        *por_detalle.entry(clave).or_default() += 1;
+    }
+    for (detalle, veces) in &por_detalle {
+        eprintln!("  INFORME ×{veces}: {detalle}");
+    }
+    assert!(prefabs_fallo.is_empty(), "ningún prefab real debe fallar");
+    assert_eq!(escenas_ok, 4, "las 4 escenas del paquete convierten");
+    assert!(total_entidades > 100, "las escenas reales traen cientos de entidades");
+}

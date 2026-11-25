@@ -435,7 +435,7 @@ pub(crate) fn documento_raiz(
 /// un mismo mapa en bloque (la segunda `m_Texture:` y su sub-bloque),
 /// conservando la primera. Devuelve el texto y cuántas se quitaron.
 /// Los mapas en flujo (`{...}`) no se tocan.
-fn deduplicar_claves(texto: &str) -> (String, usize) {
+pub(crate) fn deduplicar_claves(texto: &str) -> (String, usize) {
     use std::collections::HashSet;
     // Marcos de mapas en bloque abiertos: (indentación de la clave,
     // claves ya vistas en ese mapa).
@@ -538,7 +538,7 @@ fn trocear_documentos(texto: &str) -> Vec<String> {
 
 /// Entrecomilla los valores `guid: <hex>` para que YAML no lea como
 /// número un GUID de solo dígitos (perdería ceros y precisión).
-fn entrecomillar_guids(texto: &str) -> String {
+pub(crate) fn entrecomillar_guids(texto: &str) -> String {
     const CLAVE: &str = "guid: ";
     let mut salida = String::with_capacity(texto.len() + 32);
     let mut resto = texto;

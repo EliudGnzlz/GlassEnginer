@@ -9,10 +9,14 @@
 
 pub mod compilacion;
 pub mod convertidor;
+pub mod documentos;
 pub mod ejes;
+pub mod escena_fisica;
+pub mod escenas;
 pub mod escritor;
 pub mod fisico;
 pub mod informe;
+pub mod instancias;
 pub mod materiales;
 pub mod meta;
 pub mod modelos;
