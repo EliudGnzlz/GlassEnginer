@@ -1,0 +1,816 @@
+//! Convertidor de scripts C# de Unity a la fachada del motor (v1).
+//!
+//! Por cada script hay tres salidas posibles por elemento:
+//! - traducción directa: la fachada tiene el mismo nombre y el código no se toca;
+//! - reescritura segura: en v1 solo la del preprocesador (ramas resueltas);
+//! - marca: lo que el motor no tiene. Una marca bloqueante manda el script
+//!   a cuarentena (`codigo: None`).
+//!
+//! La detección se hace sobre el texto con comentarios y cadenas
+//! enmascarados, de modo que nada dentro de ellos cuenta como uso.
+
+/// Marca del informe asociada a un script.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarcaScript {
+    /// Línea en el texto ORIGINAL (1-based); 0 = sin línea.
+    pub linea: usize,
+    /// Elemento detectado, p. ej. `"StartCoroutine"`.
+    pub elemento: String,
+    /// Explicación para el informe.
+    pub motivo: String,
+    /// `true` = el script va a cuarentena.
+    pub bloqueante: bool,
+}
+
+/// Resultado de convertir un script.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResultadoScript {
+    /// `None` = no entra como `.cs`.
+    pub codigo: Option<String>,
+    /// Marcas (avisos y bloqueantes), ordenadas por línea.
+    pub marcas: Vec<MarcaScript>,
+    /// `true` si es un script de editor (no se convierte).
+    pub es_editor: bool,
+}
+
+const MOTIVO_CORRUTINA_START: &str = "corrutinas: el motor no tiene StartCoroutine en v1";
+const MOTIVO_YIELD: &str = "corrutinas (yield): sin equivalente en v1";
+const MOTIVO_BUSQUEDA: &str = "búsqueda por tipo en la escena: sin equivalente en v1";
+const MOTIVO_2D: &str = "2D: el motor no tiene modo ni física 2D";
+const MOTIVO_GET_FORMA: &str =
+    "no hay clase por forma; el motor usa el Collider genérico y los Attach del cuerpo";
+const MOTIVO_ADD_FORMA: &str =
+    "no hay clase por forma; el equivalente manual es el Attach… del cuerpo rígido";
+
+/// Identificadores que bloquean por sí solos (elemento, motivo).
+const DIRECTOS: &[(&str, &str)] = &[
+    ("StartCoroutine", MOTIVO_CORRUTINA_START),
+    ("IEnumerator", "corrutinas (IEnumerator): sin equivalente en v1"),
+    ("WaitForSeconds", "corrutinas (WaitForSeconds): sin equivalente en v1"),
+    ("WaitForEndOfFrame", "corrutinas (WaitForEndOfFrame): sin equivalente en v1"),
+    (
+        "WaitForSecondsRealtime",
+        "corrutinas (WaitForSecondsRealtime): sin equivalente en v1",
+    ),
+    (
+        "CustomYieldInstruction",
+        "corrutinas (CustomYieldInstruction): sin equivalente en v1",
+    ),
+    ("FindObjectOfType", MOTIVO_BUSQUEDA),
+    ("FindObjectsOfType", MOTIVO_BUSQUEDA),
+    ("FindFirstObjectByType", MOTIVO_BUSQUEDA),
+    ("FindAnyObjectByType", MOTIVO_BUSQUEDA),
+    // Misma familia, tampoco existe en la fachada.
+    ("FindObjectsByType", MOTIVO_BUSQUEDA),
+    ("Rigidbody2D", MOTIVO_2D),
+    ("Collider2D", MOTIVO_2D),
+    ("BoxCollider2D", MOTIVO_2D),
+    ("CircleCollider2D", MOTIVO_2D),
+    ("CapsuleCollider2D", MOTIVO_2D),
+    ("PolygonCollider2D", MOTIVO_2D),
+    ("Physics2D", MOTIVO_2D),
+];
+
+/// Clases de collider por forma que la fachada no tiene.
+const FORMAS: &[&str] = &["SphereCollider", "CapsuleCollider", "MeshCollider"];
+
+/// Métodos genéricos de obtención de componentes (motivo «Get»).
+const OBTENER: &[&str] = &[
+    "GetComponent",
+    "GetComponents",
+    "GetComponentInChildren",
+    "GetComponentsInChildren",
+    "GetComponentInParent",
+    "GetComponentsInParent",
+    "TryGetComponent",
+];
+
+/// Convierte un script C# de Unity según el contrato U4.
+///
+/// Un `using UnityEditor` en una rama ACTIVA tras el preprocesador
+/// clasifica el script como de editor; si solo aparece dentro de una
+/// rama `#if UNITY_EDITOR` eliminada, el script es de runtime y se
+/// convierte sin esa rama.
+pub fn convertir_script(ruta_relativa: &str, texto: &str) -> ResultadoScript {
+    if ruta_relativa.split(['/', '\\']).any(|s| s == "Editor") {
+        return resultado_editor(
+            0,
+            "Editor",
+            "script de editor (carpeta Editor): no se convierte al motor",
+        );
+    }
+
+    let (lineas, salto_final) = partir_lineas(texto);
+
+    let pre = match preprocesar(&lineas) {
+        Ok(p) => p,
+        Err(m) => {
+            return ResultadoScript {
+                codigo: None,
+                marcas: vec![m],
+                es_editor: false,
+            }
+        }
+    };
+
+    // Ajuste al integrar (Rayo): el `using UnityEditor` se busca en
+    // las líneas EFECTIVAS tras el preprocesador, no en el texto
+    // crudo: el patrón habitual de Unity (`#if UNITY_EDITOR` +
+    // `using UnityEditor;` dentro) no convierte en «de editor» un
+    // script de runtime con una sección solo-editor.
+    if let Some(num) = buscar_using_editor(&pre.lineas) {
+        return resultado_editor(
+            num,
+            "using UnityEditor",
+            "script de editor (using UnityEditor): no se convierte al motor",
+        );
+    }
+
+    let mut marcas = pre.avisos;
+    let mut enmascarador = Enmascarador::default();
+    for (num, linea) in &pre.lineas {
+        let enmascarada = enmascarador.enmascarar(linea);
+        detectar_linea(*num, &enmascarada, &mut marcas);
+    }
+    marcas.sort_by_key(|m| m.linea);
+
+    let codigo = if marcas.iter().any(|m| m.bloqueante) {
+        None
+    } else {
+        let mut c = pre
+            .lineas
+            .iter()
+            .map(|(_, l)| *l)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if salto_final {
+            c.push('\n');
+        }
+        Some(c)
+    };
+
+    ResultadoScript {
+        codigo,
+        marcas,
+        es_editor: false,
+    }
+}
+
+fn marca(linea: usize, elemento: &str, motivo: &str, bloqueante: bool) -> MarcaScript {
+    MarcaScript {
+        linea,
+        elemento: elemento.to_string(),
+        motivo: motivo.to_string(),
+        bloqueante,
+    }
+}
+
+fn resultado_editor(linea: usize, elemento: &str, motivo: &str) -> ResultadoScript {
+    ResultadoScript {
+        codigo: None,
+        marcas: vec![marca(linea, elemento, motivo, false)],
+        es_editor: true,
+    }
+}
+
+/// Parte el texto por `\n` conservando cada línea tal cual (incluido un
+/// posible `\r`). Devuelve también si el texto acababa en salto de línea,
+/// para que un script sin directivas salga idéntico.
+fn partir_lineas(texto: &str) -> (Vec<&str>, bool) {
+    let salto_final = texto.ends_with('\n');
+    let cuerpo = texto.strip_suffix('\n').unwrap_or(texto);
+    (cuerpo.split('\n').collect(), salto_final)
+}
+
+// ---------------------------------------------------------------------------
+// Preprocesador
+// ---------------------------------------------------------------------------
+
+/// Líneas efectivas (número original, contenido) y avisos no bloqueantes.
+struct Preprocesado<'a> {
+    lineas: Vec<(usize, &'a str)>,
+    avisos: Vec<MarcaScript>,
+}
+
+/// Bloque `#if` abierto.
+struct Marco {
+    /// La rama actual de este bloque está activa (sin contar los padres).
+    activa: bool,
+    /// Alguna rama del bloque ya se eligió.
+    tomada: bool,
+    /// Ya apareció `#else`.
+    visto_else: bool,
+    /// Línea del `#if` que abrió el bloque.
+    linea_if: usize,
+}
+
+/// Si la línea es una directiva, devuelve (nombre, resto sin comentario `//`).
+fn directiva(linea: &str) -> Option<(&str, &str)> {
+    let t = linea.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    let resto = t.strip_prefix('#')?.trim_start();
+    let fin = resto
+        .find(|c: char| !c.is_ascii_alphabetic())
+        .unwrap_or(resto.len());
+    let (nombre, cond) = resto.split_at(fin);
+    let cond = cond.split_once("//").map_or(cond, |(a, _)| a);
+    Some((nombre, cond.trim()))
+}
+
+fn no_resoluble(linea: usize, elemento: &str, cond: &str) -> MarcaScript {
+    marca(
+        linea,
+        elemento,
+        &format!("símbolo de preprocesador no resoluble: {cond}"),
+        true,
+    )
+}
+
+fn desbalanceada(linea: usize, elemento: &str, detalle: &str) -> MarcaScript {
+    marca(
+        linea,
+        elemento,
+        &format!("directiva de preprocesador desbalanceada: {detalle}"),
+        true,
+    )
+}
+
+/// Resuelve `#if`/`#elif`/`#else`/`#endif`, elimina las ramas no elegidas y
+/// las directivas, y conserva el número de línea original de cada línea.
+/// Las condiciones solo se evalúan cuando hace falta para elegir rama.
+fn preprocesar<'a>(lineas: &[&'a str]) -> Result<Preprocesado<'a>, MarcaScript> {
+    let mut pila: Vec<Marco> = Vec::new();
+    let mut efectivas = Vec::new();
+    let mut avisos = Vec::new();
+
+    for (indice, &linea) in lineas.iter().enumerate() {
+        let num = indice + 1;
+        let activo = pila.iter().all(|m| m.activa);
+        match directiva(linea) {
+            Some(("if", cond)) => {
+                let activa = if activo {
+                    evaluar(cond).ok_or_else(|| no_resoluble(num, "#if", cond))?
+                } else {
+                    false
+                };
+                pila.push(Marco {
+                    activa,
+                    tomada: activa,
+                    visto_else: false,
+                    linea_if: num,
+                });
+            }
+            Some(("elif", cond)) => {
+                let Some((cima, resto)) = pila.split_last_mut() else {
+                    return Err(desbalanceada(num, "#elif", "#elif sin #if"));
+                };
+                if cima.visto_else {
+                    return Err(desbalanceada(num, "#elif", "#elif después de #else"));
+                }
+                let padre = resto.iter().all(|m| m.activa);
+                if padre && !cima.tomada {
+                    let valor =
+                        evaluar(cond).ok_or_else(|| no_resoluble(num, "#elif", cond))?;
+                    cima.activa = valor;
+                    cima.tomada = valor;
+                } else {
+                    cima.activa = false;
+                }
+            }
+            Some(("else", _)) => {
+                let Some((cima, resto)) = pila.split_last_mut() else {
+                    return Err(desbalanceada(num, "#else", "#else sin #if"));
+                };
+                if cima.visto_else {
+                    return Err(desbalanceada(num, "#else", "#else repetido"));
+                }
+                let padre = resto.iter().all(|m| m.activa);
+                cima.visto_else = true;
+                cima.activa = padre && !cima.tomada;
+                cima.tomada = true;
+            }
+            Some(("endif", _)) => {
+                if pila.pop().is_none() {
+                    return Err(desbalanceada(num, "#endif", "#endif sin #if"));
+                }
+            }
+            Some((nombre @ ("define" | "undef"), _)) => {
+                if activo {
+                    efectivas.push((num, linea));
+                    avisos.push(marca(
+                        num,
+                        &format!("#{nombre}"),
+                        &format!("#{nombre} local: se conserva tal cual"),
+                        false,
+                    ));
+                }
+            }
+            // Resto de líneas (incluidas #region, #pragma, #nullable…).
+            _ => {
+                if activo {
+                    efectivas.push((num, linea));
+                }
+            }
+        }
+    }
+
+    if let Some(m) = pila.last() {
+        return Err(desbalanceada(m.linea_if, "#if", "#if sin #endif"));
+    }
+
+    Ok(Preprocesado {
+        lineas: efectivas,
+        avisos,
+    })
+}
+
+/// Evalúa una condición de `&&`/`||` sin paréntesis. `None` = no resoluble.
+/// Se evalúan todos los términos para no adivinar nunca un símbolo.
+fn evaluar(cond: &str) -> Option<bool> {
+    if cond.contains(['(', ')']) || cond.contains("==") || cond.contains("!=") {
+        return None;
+    }
+    let mut resultado = false;
+    for disyuncion in cond.split("||") {
+        let mut conjuncion = true;
+        for termino in disyuncion.split("&&") {
+            conjuncion &= evaluar_termino(termino.trim())?;
+        }
+        resultado |= conjuncion;
+    }
+    Some(resultado)
+}
+
+fn evaluar_termino(termino: &str) -> Option<bool> {
+    if let Some(resto) = termino.strip_prefix('!') {
+        return evaluar_termino(resto.trim_start()).map(|v| !v);
+    }
+    match termino {
+        "true" => Some(true),
+        "false" | "UNITY_EDITOR" => Some(false),
+        _ => version_unity(termino),
+    }
+}
+
+/// `UNITY_<aaaa>_OR_NEWER` y `UNITY_<aaaa>_<m>_OR_NEWER`: cierto si la
+/// versión principal es ≤ 2023. También acepta los símbolos antiguos de
+/// versión principal corta (p. ej. `UNITY_5_3_OR_NEWER`, cierto).
+fn version_unity(simbolo: &str) -> Option<bool> {
+    let medio = simbolo.strip_prefix("UNITY_")?.strip_suffix("_OR_NEWER")?;
+    let (principal, menor) = match medio.split_once('_') {
+        Some((p, m)) => (p, Some(m)),
+        None => (medio, None),
+    };
+    let solo_digitos = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !solo_digitos(principal) || menor.is_some_and(|m| !solo_digitos(m)) {
+        return None;
+    }
+    let principal: u32 = principal.parse().ok()?;
+    Some(principal <= 2023)
+}
+
+// ---------------------------------------------------------------------------
+// Enmascarador (mini-lexer C#)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Estado {
+    #[default]
+    Codigo,
+    /// `/* ... */`, puede cruzar líneas.
+    ComentarioBloque,
+    /// `@"..."`, `$@"..."`, `@$"..."`, puede cruzar líneas.
+    Verbatim,
+    /// `"..."` o `$"..."`, termina en la línea.
+    Cadena,
+    /// `'x'`, termina en la línea.
+    Caracter,
+}
+
+/// Sustituye comentarios y cadenas por espacios, línea a línea, con estado
+/// entre líneas para los comentarios de bloque y las cadenas verbatim.
+#[derive(Debug, Default)]
+struct Enmascarador {
+    estado: Estado,
+}
+
+impl Enmascarador {
+    fn enmascarar(&mut self, linea: &str) -> String {
+        let cs: Vec<char> = linea.chars().collect();
+        let mut out = String::with_capacity(linea.len());
+        let mut i = 0;
+        while i < cs.len() {
+            match self.estado {
+                Estado::ComentarioBloque => {
+                    if cs[i] == '*' && cs.get(i + 1) == Some(&'/') {
+                        out.push_str("  ");
+                        i += 2;
+                        self.estado = Estado::Codigo;
+                    } else {
+                        out.push(' ');
+                        i += 1;
+                    }
+                }
+                Estado::Verbatim => {
+                    if cs[i] == '"' {
+                        if cs.get(i + 1) == Some(&'"') {
+                            out.push_str("  ");
+                            i += 2;
+                        } else {
+                            out.push(' ');
+                            i += 1;
+                            self.estado = Estado::Codigo;
+                        }
+                    } else {
+                        out.push(' ');
+                        i += 1;
+                    }
+                }
+                Estado::Cadena | Estado::Caracter => {
+                    let cierre = if self.estado == Estado::Cadena { '"' } else { '\'' };
+                    if cs[i] == '\\' {
+                        out.push(' ');
+                        i += 1;
+                        if i < cs.len() {
+                            out.push(' ');
+                            i += 1;
+                        }
+                    } else {
+                        if cs[i] == cierre {
+                            self.estado = Estado::Codigo;
+                        }
+                        out.push(' ');
+                        i += 1;
+                    }
+                }
+                Estado::Codigo => {
+                    let c = cs[i];
+                    let sig = cs.get(i + 1).copied();
+                    let tras = cs.get(i + 2).copied();
+                    if c == '/' && sig == Some('/') {
+                        out.push_str(&" ".repeat(cs.len() - i));
+                        i = cs.len();
+                    } else if c == '/' && sig == Some('*') {
+                        out.push_str("  ");
+                        i += 2;
+                        self.estado = Estado::ComentarioBloque;
+                    } else if c == '@' && sig == Some('"') {
+                        out.push_str("  ");
+                        i += 2;
+                        self.estado = Estado::Verbatim;
+                    } else if matches!((c, sig), ('@', Some('$')) | ('$', Some('@')))
+                        && tras == Some('"')
+                    {
+                        out.push_str("   ");
+                        i += 3;
+                        self.estado = Estado::Verbatim;
+                    } else if c == '$' && sig == Some('"') {
+                        out.push_str("  ");
+                        i += 2;
+                        self.estado = Estado::Cadena;
+                    } else if c == '"' {
+                        out.push(' ');
+                        i += 1;
+                        self.estado = Estado::Cadena;
+                    } else if c == '\'' {
+                        out.push(' ');
+                        i += 1;
+                        self.estado = Estado::Caracter;
+                    } else {
+                        out.push(c);
+                        i += 1;
+                    }
+                }
+            }
+        }
+        // Las cadenas normales y los caracteres no cruzan líneas.
+        if matches!(self.estado, Estado::Cadena | Estado::Caracter) {
+            self.estado = Estado::Codigo;
+        }
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Detección
+// ---------------------------------------------------------------------------
+
+fn es_ident(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Identificadores de la línea: (texto, inicio, fin) en posiciones de char.
+fn identificadores(cs: &[char]) -> Vec<(String, usize, usize)> {
+    let mut v = Vec::new();
+    let mut i = 0;
+    while i < cs.len() {
+        if es_ident(cs[i]) {
+            let ini = i;
+            while i < cs.len() && es_ident(cs[i]) {
+                i += 1;
+            }
+            v.push((cs[ini..i].iter().collect(), ini, i));
+        } else {
+            i += 1;
+        }
+    }
+    v
+}
+
+/// `true` si entre `desde` y `hasta` solo hay espacios.
+fn solo_espacios(cs: &[char], desde: usize, hasta: usize) -> bool {
+    cs.get(desde..hasta)
+        .is_some_and(|s| s.iter().all(|c| c.is_whitespace()))
+}
+
+/// Lee `<Tipo>` tras `desde` (con cualquier espaciado y nombre cualificado)
+/// y devuelve el último segmento del tipo.
+fn argumento_generico(cs: &[char], desde: usize) -> Option<String> {
+    let mut i = desde;
+    while i < cs.len() && cs[i].is_whitespace() {
+        i += 1;
+    }
+    if cs.get(i) != Some(&'<') {
+        return None;
+    }
+    let mut arg = String::new();
+    for &c in cs.get(i + 1..)? {
+        if c == '>' {
+            return arg.rsplit('.').next().map(|s| s.trim().to_string());
+        }
+        if es_ident(c) || c == '.' || c.is_whitespace() {
+            arg.push(c);
+        } else {
+            return None;
+        }
+    }
+    None
+}
+
+/// Línea original del primer `using UnityEditor` fuera de comentarios
+/// y cadenas (admite `using static UnityEditor…`), buscado sobre las
+/// líneas efectivas que deja el preprocesador.
+fn buscar_using_editor(lineas: &[(usize, &str)]) -> Option<usize> {
+    let mut enmascarador = Enmascarador::default();
+    for (num, linea) in lineas.iter() {
+        let cs: Vec<char> = enmascarador.enmascarar(linea).chars().collect();
+        let ids = identificadores(&cs);
+        for (k, (palabra, ini, _)) in ids.iter().enumerate() {
+            if palabra.as_str() != "UnityEditor" || k == 0 {
+                continue;
+            }
+            let previo = &ids[k - 1];
+            let pegado = solo_espacios(&cs, previo.2, *ini);
+            let es_using = previo.0.as_str() == "using"
+                || (previo.0.as_str() == "static"
+                    && k >= 2
+                    && ids[k - 2].0.as_str() == "using"
+                    && solo_espacios(&cs, ids[k - 2].2, previo.1));
+            if pegado && es_using {
+                return Some(*num);
+            }
+        }
+    }
+    None
+}
+
+/// Busca los patrones bloqueantes en una línea ya enmascarada.
+fn detectar_linea(num: usize, linea: &str, marcas: &mut Vec<MarcaScript>) {
+    let cs: Vec<char> = linea.chars().collect();
+    let ids = identificadores(&cs);
+    for (k, (palabra, _, fin)) in ids.iter().enumerate() {
+        let palabra = palabra.as_str();
+        match palabra {
+            "yield" => {
+                let siguiente = ids.get(k + 1).filter(|(s, ini, _)| {
+                    matches!(s.as_str(), "return" | "break") && solo_espacios(&cs, *fin, *ini)
+                });
+                if let Some((s, _, _)) = siguiente {
+                    marcas.push(marca(num, &format!("yield {s}"), MOTIVO_YIELD, true));
+                }
+            }
+            "AddComponent" => {
+                if let Some(forma) =
+                    argumento_generico(&cs, *fin).filter(|f| FORMAS.contains(&f.as_str()))
+                {
+                    marcas.push(marca(
+                        num,
+                        &format!("{palabra}<{forma}>"),
+                        MOTIVO_ADD_FORMA,
+                        true,
+                    ));
+                }
+            }
+            _ if OBTENER.contains(&palabra) => {
+                if let Some(forma) =
+                    argumento_generico(&cs, *fin).filter(|f| FORMAS.contains(&f.as_str()))
+                {
+                    marcas.push(marca(
+                        num,
+                        &format!("{palabra}<{forma}>"),
+                        MOTIVO_GET_FORMA,
+                        true,
+                    ));
+                }
+            }
+            _ => {
+                if let Some(&(nombre, motivo)) = DIRECTOS.iter().find(|e| e.0 == palabra) {
+                    marcas.push(marca(num, nombre, motivo, true));
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bloqueantes(r: &ResultadoScript) -> Vec<&MarcaScript> {
+        r.marcas.iter().filter(|m| m.bloqueante).collect()
+    }
+
+    #[test]
+    fn script_directo_minimo_queda_identico() {
+        let texto = "using UnityEngine;\n\npublic class Mover : MonoBehaviour\n{\n    void Start()\n    {\n        Debug.Log(\"hola\");\n    }\n\n    void Update()\n    {\n        transform.Translate(Vector3.forward * Time.deltaTime);\n    }\n}\n";
+        let r = convertir_script("Assets/Scripts/Mover.cs", texto);
+        assert!(!r.es_editor);
+        assert!(r.marcas.is_empty());
+        assert_eq!(r.codigo.as_deref(), Some(texto));
+
+        let crlf = "using UnityEngine;\r\npublic class A : MonoBehaviour { }\r\n";
+        let r = convertir_script("Assets/A.cs", crlf);
+        assert_eq!(r.codigo.as_deref(), Some(crlf));
+    }
+
+    #[test]
+    fn start_coroutine_bloquea_con_su_linea() {
+        let texto = "using UnityEngine;\npublic class A : MonoBehaviour\n{\n    void Start()\n    {\n        StartCoroutine(Bucle());\n    }\n}\n";
+        let r = convertir_script("Assets/A.cs", texto);
+        assert!(r.codigo.is_none());
+        let b = bloqueantes(&r);
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].elemento, "StartCoroutine");
+        assert_eq!(b[0].linea, 6);
+        assert_eq!(b[0].motivo, MOTIVO_CORRUTINA_START);
+    }
+
+    #[test]
+    fn comentarios_y_cadenas_no_cuentan() {
+        let texto = "public class A : MonoBehaviour\n{\n    // StartCoroutine(x);\n    /* StartCoroutine\n       StartCoroutine */\n    string s = \"StartCoroutine\";\n    string v = @\"línea \"\"\nStartCoroutine\";\n    string i = $\"{n} StartCoroutine\";\n    char c = '\\'';\n    void F() { Debug.Log(\"\\\"StartCoroutine\\\"\"); }\n}\n";
+        let r = convertir_script("Assets/A.cs", texto);
+        assert!(bloqueantes(&r).is_empty(), "{:?}", r.marcas);
+        assert_eq!(r.codigo.as_deref(), Some(texto));
+
+        // Tras un comentario de bloque cerrado y un carácter, el código vuelve a contar.
+        let texto = "/* x */ char c = '\"'; StartCoroutine(y);\n";
+        let r = convertir_script("Assets/B.cs", texto);
+        assert_eq!(bloqueantes(&r).len(), 1);
+    }
+
+    #[test]
+    fn rama_de_editor_desaparece() {
+        let texto = "public class A : MonoBehaviour\n{\n#if UNITY_EDITOR\n    IEnumerator Co() { yield return null; }\n#else\n    void Start() { }\n#endif\n}\n";
+        let r = convertir_script("Assets/A.cs", texto);
+        assert!(bloqueantes(&r).is_empty(), "{:?}", r.marcas);
+        assert_eq!(
+            r.codigo.as_deref(),
+            Some("public class A : MonoBehaviour\n{\n    void Start() { }\n}\n")
+        );
+
+        // Las marcas conservan la línea original tras eliminar ramas.
+        let texto = "public class A : MonoBehaviour\n{\n#if UNITY_EDITOR\n    void Start() { }\n#else\n    object w = new WaitForSeconds(1f);\n#endif\n}\n";
+        let r = convertir_script("Assets/A.cs", texto);
+        let b = bloqueantes(&r);
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].elemento, "WaitForSeconds");
+        assert_eq!(b[0].linea, 6);
+        assert!(r.codigo.is_none());
+    }
+
+    #[test]
+    fn simbolos_de_version_y_desconocidos() {
+        let texto = "#if UNITY_2022_OR_NEWER\nint a;\n#endif\n#if UNITY_2026_OR_NEWER\nint b;\n#endif\n#if !UNITY_EDITOR && UNITY_2021_3_OR_NEWER\nint c;\n#elif ALGO\nint d;\n#endif\n";
+        let r = convertir_script("Assets/A.cs", texto);
+        assert!(r.marcas.is_empty(), "{:?}", r.marcas);
+        assert_eq!(r.codigo.as_deref(), Some("int a;\nint c;\n"));
+
+        let r = convertir_script("Assets/A.cs", "#if ALGO_DESCONOCIDO\nint a;\n#endif\n");
+        assert!(r.codigo.is_none());
+        let b = bloqueantes(&r);
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].linea, 1);
+        assert_eq!(
+            b[0].motivo,
+            "símbolo de preprocesador no resoluble: ALGO_DESCONOCIDO"
+        );
+
+        let r = convertir_script("Assets/A.cs", "#if (UNITY_EDITOR)\n#endif\n");
+        assert!(r.codigo.is_none());
+        assert_eq!(bloqueantes(&r).len(), 1);
+    }
+
+    #[test]
+    fn define_se_conserva_con_aviso() {
+        let texto = "#define DEPURAR\nusing UnityEngine;\n";
+        let r = convertir_script("Assets/A.cs", texto);
+        assert_eq!(r.codigo.as_deref(), Some(texto));
+        assert_eq!(r.marcas.len(), 1);
+        assert!(!r.marcas[0].bloqueante);
+        assert_eq!(r.marcas[0].linea, 1);
+        assert_eq!(r.marcas[0].motivo, "#define local: se conserva tal cual");
+    }
+
+    #[test]
+    fn scripts_de_editor() {
+        let r = convertir_script("Assets/X/Editor/Tool.cs", "public class T { }\n");
+        assert!(r.es_editor);
+        assert!(r.codigo.is_none());
+        assert_eq!(r.marcas.len(), 1);
+        assert!(!r.marcas[0].bloqueante);
+
+        let r = convertir_script("Assets\\Editor\\T.cs", "class T { }");
+        assert!(r.es_editor);
+
+        let r = convertir_script(
+            "Assets/X/Tool.cs",
+            "using UnityEngine;\nusing UnityEditor;\npublic class T { }\n",
+        );
+        assert!(r.es_editor);
+        assert!(r.codigo.is_none());
+        assert_eq!(r.marcas[0].linea, 2);
+        assert!(!r.marcas[0].bloqueante);
+
+        let r = convertir_script(
+            "Assets/EditorTools/T.cs",
+            "// using UnityEditor;\nstring s = \"using UnityEditor\";\n",
+        );
+        assert!(!r.es_editor);
+        assert!(r.codigo.is_some());
+    }
+
+    #[test]
+    fn using_editor_solo_en_rama_editor_no_clasifica() {
+        let texto = "#if UNITY_EDITOR\nusing UnityEditor;\n#endif\nusing UnityEngine;\npublic class A : MonoBehaviour { }\n";
+        let r = convertir_script("Assets/A.cs", texto);
+        assert!(!r.es_editor);
+        assert!(r.codigo.is_some());
+    }
+
+    #[test]
+    fn colliders_por_forma() {
+        let texto = "public class A : MonoBehaviour\n{\n    void Start() {\n        var e = GetComponent<SphereCollider>();\n        var c = gameObject.AddComponent< CapsuleCollider >();\n        var r = GetComponent<Rigidbody>();\n    }\n}\n";
+        let r = convertir_script("Assets/A.cs", texto);
+        assert!(r.codigo.is_none());
+        let b = bloqueantes(&r);
+        assert_eq!(b.len(), 2, "{:?}", r.marcas);
+        assert_eq!(b[0].linea, 4);
+        assert_eq!(b[0].elemento, "GetComponent<SphereCollider>");
+        assert_eq!(b[0].motivo, MOTIVO_GET_FORMA);
+        assert_eq!(b[1].linea, 5);
+        assert_eq!(b[1].elemento, "AddComponent<CapsuleCollider>");
+        assert_eq!(b[1].motivo, MOTIVO_ADD_FORMA);
+
+        let r = convertir_script("Assets/A.cs", "var r = GetComponent<Rigidbody>();\n");
+        assert!(r.marcas.is_empty());
+        assert!(r.codigo.is_some());
+    }
+
+    #[test]
+    fn busqueda_por_tipo_y_2d() {
+        let texto = "public class A : MonoBehaviour\n{\n    Rigidbody2D cuerpo;\n    void Start() { var e = FindObjectOfType<Enemigo>(); }\n}\n";
+        let r = convertir_script("Assets/A.cs", texto);
+        assert!(r.codigo.is_none());
+        let b = bloqueantes(&r);
+        assert_eq!(b.len(), 2, "{:?}", r.marcas);
+        assert_eq!(b[0].elemento, "Rigidbody2D");
+        assert_eq!(b[0].linea, 3);
+        assert_eq!(b[0].motivo, MOTIVO_2D);
+        assert_eq!(b[1].elemento, "FindObjectOfType");
+        assert_eq!(b[1].linea, 4);
+        assert_eq!(b[1].motivo, MOTIVO_BUSQUEDA);
+    }
+
+    #[test]
+    fn directivas_desbalanceadas() {
+        let r = convertir_script("Assets/A.cs", "#endif\nint a;\n");
+        assert!(r.codigo.is_none());
+        let b = bloqueantes(&r);
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].elemento, "#endif");
+        assert_eq!(b[0].linea, 1);
+
+        let r = convertir_script("Assets/A.cs", "int a;\n#if UNITY_2020_OR_NEWER\nint b;\n");
+        assert!(r.codigo.is_none());
+        let b = bloqueantes(&r);
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].linea, 2);
+
+        let r = convertir_script("Assets/A.cs", "#if UNITY_EDITOR\n#else\n#else\n#endif\n");
+        assert!(r.codigo.is_none());
+        assert_eq!(bloqueantes(&r)[0].linea, 3);
+    }
+}

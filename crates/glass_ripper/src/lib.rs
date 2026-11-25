@@ -7,6 +7,8 @@
 //!
 //! Diseño: `~/workspace/glass-engine/diseno_importacion_unity.md`.
 
+pub mod compilacion;
+pub mod convertidor;
 pub mod ejes;
 pub mod escritor;
 pub mod fisico;
@@ -16,6 +18,7 @@ pub mod meta;
 pub mod modelos;
 pub mod paquete;
 pub mod registro;
+pub mod scripts;
 pub mod texturas;
 
 use serde::{Deserialize, Serialize};
