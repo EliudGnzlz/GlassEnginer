@@ -12,9 +12,12 @@ Versión actual: **0.1.0**.
 
 El Launcher es la puerta de entrada al motor: estilo Hub antiguo de Unity (tema claro), con los proyectos en cuadrícula de tarjetas. Funciona **siempre offline**; internet solo se usa para descargar el motor y sus actualizaciones, y para la comunidad.
 
-- **Último paquete (alpha):** [GlassEnginer Launcher v0.1.0-alpha](https://github.com/EliudGnzlz/GlassEnginer/releases/tag/v0.1.0-alpha) — [descarga directa para Linux x64](https://github.com/EliudGnzlz/GlassEnginer/releases/download/v0.1.0-alpha/GlassEnginer-Launcher-0.1.0-alpha-linux-x64.zip) (zip de ~11 MB).
-- Junto al paquete se publica `checksums.txt` con su **SHA-256**: el propio Launcher comprueba las versiones nuevas contra estos Releases y **solo instala si el hash coincide**.
-- Contenido del paquete: el binario `glass_app` (Launcher + editor) y un LEEME con los requisitos (driver Vulkan 1.3 y runtime de .NET 8 para los scripts C#).
+- **Última versión:** [GlassEnginer v0.10.25.1-beta](https://github.com/EliudGnzlz/GlassEnginer/releases/tag/v0.10.25.1-beta) (beta; Hub 0.2.7), marcada como Latest en GitHub, donde se conservan solo la última release y la anterior.
+- **Windows x64:** el instalador `.exe` de la release — instala el Hub y siembra el motor incluido.
+- **Linux x64:** la AppImage portable del Hub, o el paquete `GlassEnginer-Launcher-0.10.25.1-beta-linux-x64.zip` (ese zip es el que usa la actualización desde el propio Hub).
+- **El motor por separado:** los paquetes `GlassEnginer-Engine-0.10.25.1-beta-windows-x64.zip` y `GlassEnginer-Engine-0.10.25.1-beta-linux-x64.zip` son el motor gestionado (el editor `glass_app`, los scripts C# y los assets): los descarga e instala el Hub al actualizar el motor; bajarlos a mano solo hace falta para una instalación manual.
+- Junto a los paquetes se publica `checksums.txt` con sus **SHA-256**: el propio Hub comprueba las versiones nuevas contra estos Releases y **solo instala si el hash coincide**.
+- Requisitos: un driver con Vulkan 1.3; el runtime de .NET 8 que necesitan los scripts C# lo comprueba el propio Hub y avisa si falta.
 
 ## Qué es
 
