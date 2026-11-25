@@ -25,7 +25,9 @@ use crate::modelos::convertir_modelo;
 use crate::paquete::leer_paquete;
 use crate::{EntradaPaquete, LecturaPaquete};
 use crate::registro::RegistroGuids;
-use crate::scripts::{procesar_script, ruta_cuarentena, DestinoScript, VerificadorCompilacion};
+use crate::scripts::{
+    menciona_clase, procesar_script, ruta_cuarentena, DestinoScript, VerificadorCompilacion,
+};
 use crate::texturas::convertir_textura;
 use crate::{EstadoInforme, RipperError};
 
@@ -435,9 +437,12 @@ impl<'v> Importador<'v> {
         let _ = fs::remove_dir_all(&scratch);
     }
 
+// el import pasa a incluir menciona_clase
     /// Fase f: scripts C#. Anota la clase de cada script convertido.
     fn fase_scripts(&mut self) {
         let indices = self.indices(Tipo::Script);
+        let mut convertidos: Vec<(String, String)> = Vec::new();
+        let mut incompatibles: Vec<(String, String, String)> = Vec::new();
         for &i in &indices {
             let e = &self.lectura.entradas[i];
             let (Some(ruta), Some(destino)) = (e.ruta.as_deref(), self.plan.get(&e.guid)) else {
@@ -469,6 +474,7 @@ impl<'v> Importador<'v> {
                         .escribir(&e.guid, ruta, destino, codigo.as_bytes(), None, &avisos);
                     // Regla de Unity: la clase se llama como el archivo.
                     self.clases.insert(e.guid.clone(), stem(ruta).to_string());
+                    convertidos.push((destino.clone(), codigo.to_string()));
                 }
                 DestinoScript::Cuarentena => {
                     let destino_q = ruta_cuarentena(destino);
@@ -480,7 +486,8 @@ impl<'v> Importador<'v> {
                         }
                         Err(err) => self.salida.error_escritura(&e.guid, ruta, &destino_q, &err),
                     }
-                    let detalle = format!("en cuarentena: {} marcas", p.marcas.len());
+                    let detalle =
+                        format!("en la carpeta Incompatibles: {} marcas", p.marcas.len());
                     self.salida
                         .linea(&e.guid, Some(ruta), EstadoInforme::NoConvertido, &detalle);
                     for m in &p.marcas {
@@ -488,6 +495,8 @@ impl<'v> Importador<'v> {
                         self.salida
                             .linea(&e.guid, Some(ruta), EstadoInforme::NoConvertido, &detalle);
                     }
+                    let clase = stem(destino).to_string();
+                    incompatibles.push((e.guid.clone(), ruta.to_string(), clase));
                 }
             }
         }
@@ -497,6 +506,35 @@ impl<'v> Importador<'v> {
                 Some(&self.ruta_paquete),
                 EstadoInforme::ConvertidoConAvisos,
                 "scripts convertidos SIN la garantía de compilación (no se pasó verificador)",
+            );
+        }
+        let mut sin_referencias = 0usize;
+        for (guid, ruta, clase) in &incompatibles {
+            let referentes: Vec<&str> = convertidos
+                .iter()
+                .filter(|(_, codigo)| menciona_clase(codigo, clase))
+                .map(|(destino, _)| destino.as_str())
+                .collect();
+            if referentes.is_empty() {
+                sin_referencias += 1;
+            } else {
+                let lista = referentes.join(", ");
+                self.salida.linea(
+                    guid,
+                    Some(ruta),
+                    EstadoInforme::NoConvertido,
+                    &format!("referenciado por scripts convertidos: {lista}"),
+                );
+            }
+        }
+        if sin_referencias > 0 {
+            self.salida.linea(
+                "",
+                Some(&self.ruta_paquete),
+                EstadoInforme::ConvertidoConAvisos,
+                &format!(
+                    "{sin_referencias} scripts en Incompatibles sin referencias de scripts convertidos"
+                ),
             );
         }
     }
@@ -1013,7 +1051,8 @@ mod tests {
         assert_eq!(v["texture"].as_str(), Some("Synty/Tex/Roca.png"));
 
         assert!(raiz.join("Synty/Scripts/Mover.cs").is_file());
-        assert!(raiz.join("Synty/Scripts/Espera.cs.unity").is_file());
+        assert!(raiz.join("Incompatibles/Synty/Scripts/Espera.cs.unity").is_file());
+        assert!(!raiz.join("Synty/Scripts/Espera.cs.unity").exists());
         assert!(!raiz.join("Synty/Scripts/Espera.cs").exists());
 
         assert_eq!(fs::read(raiz.join("Synty/Datos/blob.bin")).unwrap(), BIN);
@@ -1030,6 +1069,43 @@ mod tests {
         assert!(informe.faltantes(&lectura).is_empty());
 
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn cuarentena_en_carpeta_e_informe_marca_referencias() {
+        let d = dir_temporal("cuarentena_referencias");
+        let paquete = d.join("p.unitypackage");
+        let raiz = d.join("assets");
+
+        let mut b = nuevo_tar();
+        let usa_cs = "using UnityEngine;\n\npublic class Usa : MonoBehaviour\n{\n    public Espera espera;\n}\n";
+        entrada(
+            &mut b,
+            G_DIRECTO,
+            "Assets/Synty/Scripts/Usa.cs",
+            "MonoImporter",
+            Some(usa_cs.as_bytes()),
+        );
+        entrada(
+            &mut b,
+            G_CORRUTINA,
+            "Assets/Synty/Scripts/Espera.cs",
+            "MonoImporter",
+            Some(SCRIPT_CORRUTINA.as_bytes()),
+        );
+        cerrar_tar(b, &paquete);
+
+        let informe = importar_paquete(&paquete, &raiz, false, None).unwrap();
+
+        assert!(raiz.join("Incompatibles/Synty/Scripts/Espera.cs.unity").is_file());
+        assert!(raiz.join("Synty/Scripts/Usa.cs").is_file());
+
+        assert!(hay_linea(
+            &informe.a_texto(),
+            G_CORRUTINA,
+            "Assets/Synty/Scripts/Espera.cs",
+            "referenciado por scripts convertidos: Synty/Scripts/Usa.cs",
+        ));
     }
 
     #[test]

@@ -323,23 +323,154 @@ fn preprocesar<'a>(lineas: &[&'a str]) -> Result<Preprocesado<'a>, MarcaScript> 
     })
 }
 
-/// Evalúa una condición de `&&`/`||` sin paréntesis. `None` = no resoluble.
-/// Se evalúan todos los términos para no adivinar nunca un símbolo.
+/// Evalúa una condición de `#if` con `&&`, `||`, `!` y paréntesis.
+/// `None` = no resoluble. Se evalúa la expresión entera: si cualquier
+/// término no se resuelve, o hay un error de sintaxis (paréntesis
+/// desbalanceados, operador colgando, condición vacía, comparaciones
+/// `==`/`!=`, etc.), el resultado es `None`. Nunca se cortocircuita ni
+/// se adivina un símbolo.
 fn evaluar(cond: &str) -> Option<bool> {
-    if cond.contains(['(', ')']) || cond.contains("==") || cond.contains("!=") {
+    if cond.contains("==") || cond.contains("!=") {
         return None;
     }
-    let mut resultado = false;
-    for disyuncion in cond.split("||") {
-        let mut conjuncion = true;
-        for termino in disyuncion.split("&&") {
-            conjuncion &= evaluar_termino(termino.trim())?;
+    let tokens = tokenizar_condicion(cond)?;
+    let mut pos = 0usize;
+    let resultado = parsear_or(&tokens, &mut pos)?;
+    if pos != tokens.len() {
+        return None;
+    }
+    resultado
+}
+
+/// Token de la gramática de condiciones de `#if`.
+enum TokenCondicion {
+    Y,
+    O,
+    No,
+    ParenAbre,
+    ParenCierra,
+    Termino(String),
+}
+
+/// Divide la condición en tokens. `None` si aparece un carácter ajeno
+/// a la gramática soportada (identificadores, `!`, `&&`, `||`, `(`, `)`).
+fn tokenizar_condicion(cond: &str) -> Option<Vec<TokenCondicion>> {
+    let mut tokens = Vec::new();
+    let caracteres: Vec<char> = cond.chars().collect();
+    let mut i = 0usize;
+    while i < caracteres.len() {
+        let c = caracteres[i];
+        if c.is_whitespace() {
+            i += 1;
+        } else if c == '(' {
+            tokens.push(TokenCondicion::ParenAbre);
+            i += 1;
+        } else if c == ')' {
+            tokens.push(TokenCondicion::ParenCierra);
+            i += 1;
+        } else if c == '!' {
+            tokens.push(TokenCondicion::No);
+            i += 1;
+        } else if c == '&' && caracteres.get(i + 1) == Some(&'&') {
+            tokens.push(TokenCondicion::Y);
+            i += 2;
+        } else if c == '|' && caracteres.get(i + 1) == Some(&'|') {
+            tokens.push(TokenCondicion::O);
+            i += 2;
+        } else if c.is_ascii_alphanumeric() || c == '_' || c == '.' {
+            let inicio = i;
+            while i < caracteres.len()
+                && (caracteres[i].is_ascii_alphanumeric() || caracteres[i] == '_' || caracteres[i] == '.')
+            {
+                i += 1;
+            }
+            let termino: String = caracteres[inicio..i].iter().collect();
+            tokens.push(TokenCondicion::Termino(termino));
+        } else {
+            return None;
         }
-        resultado |= conjuncion;
+    }
+    Some(tokens)
+}
+
+/// `or := and ("||" and)*`
+fn parsear_or(tokens: &[TokenCondicion], pos: &mut usize) -> Option<Option<bool>> {
+    let mut resultado = parsear_and(tokens, pos)?;
+    while matches!(tokens.get(*pos), Some(TokenCondicion::O)) {
+        *pos += 1;
+        let siguiente = parsear_and(tokens, pos)?;
+        resultado = combinar(resultado, siguiente, |a, b| a || b);
     }
     Some(resultado)
 }
 
+/// `and := unary ("&&" unary)*`
+fn parsear_and(tokens: &[TokenCondicion], pos: &mut usize) -> Option<Option<bool>> {
+    let mut resultado = parsear_unary(tokens, pos)?;
+    while matches!(tokens.get(*pos), Some(TokenCondicion::Y)) {
+        *pos += 1;
+        let siguiente = parsear_unary(tokens, pos)?;
+        resultado = combinar(resultado, siguiente, |a, b| a && b);
+    }
+    Some(resultado)
+}
+
+/// `unary := "!" unary | "(" expr ")" | término`
+fn parsear_unary(tokens: &[TokenCondicion], pos: &mut usize) -> Option<Option<bool>> {
+    match tokens.get(*pos) {
+        Some(TokenCondicion::No) => {
+            *pos += 1;
+            let interior = parsear_unary(tokens, pos)?;
+            Some(interior.map(|v| !v))
+        }
+        Some(TokenCondicion::ParenAbre) => {
+            *pos += 1;
+            let interior = parsear_or(tokens, pos)?;
+            if !matches!(tokens.get(*pos), Some(TokenCondicion::ParenCierra)) {
+                return None;
+            }
+            *pos += 1;
+            Some(interior)
+        }
+        Some(TokenCondicion::Termino(t)) => {
+            *pos += 1;
+            Some(evaluar_termino(t))
+        }
+        _ => None,
+    }
+}
+
+/// Combina dos resultados parcialmente resueltos sin cortocircuitar:
+/// si cualquiera de los dos es `None`, el resultado es `None`.
+fn combinar(a: Option<bool>, b: Option<bool>, f: impl Fn(bool, bool) -> bool) -> Option<bool> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(f(a, b)),
+        _ => None,
+    }
+}
+
+/// Resuelve un término individual de una condición `#if`.
+///
+/// El destino de la conversión es el reproductor standalone de Windows del
+/// motor. Por eso `UNITY_STANDALONE` y `UNITY_STANDALONE_WIN` valen `true`,
+/// mientras que las demás plataformas standalone y todas las variantes de
+/// editor por SO valen `false`; `UNITY_EDITOR` también vale `false`.
+///
+/// Los paquetes de Unity se fijan por presencia en el material importado:
+/// `UNITY_POST_PROCESSING_STACK_V2` no está definido porque el paquete Post
+/// Processing no viene en el material, y `ENABLE_LEGACY_INPUT_MANAGER` no
+/// está definido porque no hay evidencia de que el proyecto de origen activara
+/// la entrada legada.
+///
+/// Los defines opcionales del proyecto NeoFPS medidos en la importación no
+/// están definidos en ningún material del paquete (no hay `.asmdef`, `.rsp`
+/// ni ProjectSettings que los activen), así que se consideran apagados:
+/// `NEOFPS_FORCE_QUALITY`, `NEOFPS_FORCE_LIGHTWEIGHT`, `NEOFPS_LIGHTWEIGHT`,
+/// `NEOFPS_PROCEDURAL_INPUT`, `NEOFPS_LOAD_ON_DEMAND`, `VISUALISE_MOVEMENT`,
+/// `SETTINGS_USES_JSON` y `AGGRESIVE_CURSOR_LOCK` valen `false`.
+///
+/// Cualquier otro símbolo desconocido sigue sin resolverse: no se adivina nada
+/// fuera de esta tabla.
 fn evaluar_termino(termino: &str) -> Option<bool> {
     if let Some(resto) = termino.strip_prefix('!') {
         return evaluar_termino(resto.trim_start()).map(|v| !v);
@@ -347,6 +478,28 @@ fn evaluar_termino(termino: &str) -> Option<bool> {
     match termino {
         "true" => Some(true),
         "false" | "UNITY_EDITOR" => Some(false),
+        "UNITY_STANDALONE" | "UNITY_STANDALONE_WIN" => Some(true),
+        "UNITY_ANDROID"
+        | "UNITY_IOS"
+        | "UNITY_TIZEN"
+        | "UNITY_WSA"
+        | "UNITY_WEBGL"
+        | "NETFX_CORE"
+        | "UNITY_STANDALONE_LINUX"
+        | "UNITY_STANDALONE_OSX"
+        | "UNITY_EDITOR_WIN"
+        | "UNITY_EDITOR_LINUX"
+        | "UNITY_EDITOR_OSX"
+        | "UNITY_POST_PROCESSING_STACK_V2"
+        | "ENABLE_LEGACY_INPUT_MANAGER"
+        | "NEOFPS_FORCE_QUALITY"
+        | "NEOFPS_FORCE_LIGHTWEIGHT"
+        | "NEOFPS_LIGHTWEIGHT"
+        | "NEOFPS_PROCEDURAL_INPUT"
+        | "NEOFPS_LOAD_ON_DEMAND"
+        | "VISUALISE_MOVEMENT"
+        | "SETTINGS_USES_JSON"
+        | "AGGRESIVE_CURSOR_LOCK" => Some(false),
         _ => version_unity(termino),
     }
 }
@@ -708,9 +861,74 @@ mod tests {
             "símbolo de preprocesador no resoluble: ALGO_DESCONOCIDO"
         );
 
+        // Con paréntesis, `(UNITY_EDITOR)` se resuelve a `false`: la rama
+        // se descarta y el script convierte sin marcas bloqueantes.
         let r = convertir_script("Assets/A.cs", "#if (UNITY_EDITOR)\n#endif\n");
-        assert!(r.codigo.is_none());
-        assert_eq!(bloqueantes(&r).len(), 1);
+        assert_eq!(r.codigo.as_deref(), Some("\n"));
+        assert_eq!(bloqueantes(&r).len(), 0);
+    }
+
+    #[test]
+fn plataforma_standalone_y_parentesis() {
+    let r = convertir_script("Assets/A.cs", "#if UNITY_STANDALONE\nint a;\n#endif\n");
+    assert_eq!(r.codigo, Some("int a;\n".to_string()));
+    assert_eq!(bloqueantes(&r).len(), 0);
+
+    let r = convertir_script(
+        "Assets/A.cs",
+        "#if (UNITY_ANDROID || UNITY_IOS)\nint a;\n#else\nint b;\n#endif\n",
+    );
+    assert_eq!(r.codigo, Some("int b;\n".to_string()));
+    assert_eq!(bloqueantes(&r).len(), 0);
+
+    let r = convertir_script(
+        "Assets/A.cs",
+        "#if !UNITY_EDITOR && (UNITY_STANDALONE || UNITY_WEBGL)\nint a;\n#endif\n",
+    );
+    assert_eq!(r.codigo, Some("int a;\n".to_string()));
+    assert_eq!(bloqueantes(&r).len(), 0);
+}
+
+
+#[test]
+fn sintaxis_rota_no_resuelve() {
+    assert_eq!(evaluar("(UNITY_STANDALONE"), None);
+    assert_eq!(evaluar("UNITY_STANDALONE &&"), None);
+    assert_eq!(evaluar(""), None);
+    assert_eq!(evaluar("UNITY_STANDALONE == true"), None);
+}
+
+        #[test]
+    fn condicion_real_de_neofps_ya_resuelve() {
+        let texto = "#if !NEOFPS_FORCE_QUALITY && (UNITY_ANDROID || UNITY_IOS || UNITY_TIZEN || (UNITY_WSA && NETFX_CORE) || NEOFPS_FORCE_LIGHTWEIGHT)\nint movil;\n#endif\n";
+        let r = convertir_script("Assets/A.cs", texto);
+        assert_eq!(r.codigo.as_deref(), Some("\n"));
+        assert!(bloqueantes(&r).is_empty());
+    }
+
+    #[test]
+    fn cadena_por_so_cae_en_windows() {
+        let texto = "#if UNITY_STANDALONE_OSX || UNITY_EDITOR_OSX\nint mac;\n#elif UNITY_STANDALONE_LINUX || UNITY_EDITOR_LINUX\nint linux;\n#else\nint windows;\n#endif\n";
+        let r = convertir_script("Assets/A.cs", texto);
+        assert_eq!(r.codigo.as_deref(), Some("int windows;\n"));
+        assert!(bloqueantes(&r).is_empty());
+    }
+
+    #[test]
+    fn legado_de_entrada_apagado() {
+        let r = convertir_script(
+            "Assets/A.cs",
+            "#if ENABLE_LEGACY_INPUT_MANAGER\nint viejo;\n#else\nint nuevo;\n#endif\n",
+        );
+        assert_eq!(r.codigo.as_deref(), Some("int nuevo;\n"));
+        assert!(bloqueantes(&r).is_empty());
+
+        let r = convertir_script(
+            "Assets/A.cs",
+            "#if !ENABLE_LEGACY_INPUT_MANAGER\nint nuevo;\n#endif\n",
+        );
+        assert_eq!(r.codigo.as_deref(), Some("int nuevo;\n"));
+        assert!(bloqueantes(&r).is_empty());
     }
 
     #[test]

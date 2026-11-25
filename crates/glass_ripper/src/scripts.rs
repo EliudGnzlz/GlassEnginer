@@ -29,9 +29,37 @@ pub type VerificadorCompilacion = dyn Fn(&str) -> Result<(), Vec<String>>;
 
 /// Devuelve la ruta de cuarentena para un script.
 ///
-/// Añade siempre el sufijo `.unity` al final de la ruta recibida.
+/// Todos los scripts incompatibles se agrupan bajo la carpeta
+/// `Incompatibles/` en la raíz de la importación: así quedan juntos y
+/// claramente marcados para la revisión del usuario, en lugar de repartidos
+/// entre los scripts buenos. Dentro de esa carpeta se conserva la ruta
+/// relativa original (para reconocer su origen) y se añade el sufijo
+/// `.unity` (para que el script quede inerte y el motor no lo compile).
+/// Nada se borra automáticamente: el usuario decide qué hacer con ellos.
 pub fn ruta_cuarentena(ruta_relativa: &str) -> String {
-    format!("{ruta_relativa}.unity")
+    format!("Incompatibles/{ruta_relativa}.unity")
+}
+
+/// ¿El código menciona la clase como palabra completa?
+///
+/// Verdadero si `clase` aparece en `codigo` delimitada por caracteres que no
+/// sean alfanuméricos ni `_` (o por los bordes del texto). Así se evita que
+/// `Espera` dé positivo dentro de `Esperando`. No usa regex: comprueba los
+/// bordes de cada ocurrencia con los caracteres vecinos.
+pub fn menciona_clase(codigo: &str, clase: &str) -> bool {
+    if clase.is_empty() {
+        return false;
+    }
+    let es_borde = |c: char| !(c.is_alphanumeric() || c == '_');
+    for (i, _) in codigo.match_indices(clase) {
+        let antes_ok = codigo[..i].chars().next_back().map(es_borde).unwrap_or(true);
+        let fin = i + clase.len();
+        let despues_ok = codigo[fin..].chars().next().map(es_borde).unwrap_or(true);
+        if antes_ok && despues_ok {
+            return true;
+        }
+    }
+    false
 }
 
 /// Procesa un script: conversión, detección de bloqueos y verificación opcional.
@@ -109,12 +137,41 @@ mod tests {
         Err(vec!["error CS1002".to_string()])
     }
 
-    #[test]
-    fn ruta_cuarentena_anade_sufijo() {
+#[test]
+    fn ruta_cuarentena_va_a_la_carpeta_de_incompatibles() {
         assert_eq!(
             ruta_cuarentena("Assets/X/Foo.cs"),
-            "Assets/X/Foo.cs.unity"
+            "Incompatibles/Assets/X/Foo.cs.unity"
         );
+    }
+
+    #[test]
+    fn menciona_clase_en_medio_de_codigo() {
+        let codigo = "public class Usa : MonoBehaviour\n{\n    public Espera espera;\n}\n";
+        assert!(menciona_clase(codigo, "Espera"));
+    }
+
+    #[test]
+    fn menciona_clase_no_como_parte_de_otra_palabra() {
+        let codigo = "public class Esperando {}\n";
+        assert!(!menciona_clase(codigo, "Espera"));
+    }
+
+    #[test]
+    fn menciona_clase_al_principio_del_texto() {
+        let codigo = "Espera espera;";
+        assert!(menciona_clase(codigo, "Espera"));
+    }
+
+    #[test]
+    fn menciona_clase_al_final_del_texto() {
+        let codigo = "public class Espera";
+        assert!(menciona_clase(codigo, "Espera"));
+    }
+
+    #[test]
+    fn menciona_clase_vacia_es_falso() {
+        assert!(!menciona_clase("cualquier cosa", ""));
     }
 
     #[test]
