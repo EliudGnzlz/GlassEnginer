@@ -196,6 +196,49 @@ fn biblioteca_physmat(
     PhysicsMaterialLibrary::new(assets)
 }
 
+/// Raíces de assets donde se resuelven los recursos por nombre
+/// (materiales, texturas, modelos), en orden de prioridad: primero
+/// el proyecto abierto, después la raíz del gestor de escenas,
+/// después los assets del motor y por último el directorio de
+/// lanzamiento (compatibilidad). Sin esto, lanzar el editor fuera
+/// del proyecto dejaba los materiales del proyecto sin encontrar.
+fn raices_assets_busqueda(
+    raiz_proyecto_actual: Option<&std::path::Path>,
+    scene_manager: &std::sync::Arc<std::sync::Mutex<SceneManager>>,
+    raiz_motor: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
+    fn assets_de(base: &std::path::Path) -> std::path::PathBuf {
+        let con_mayus = base.join("Assets");
+        if con_mayus.is_dir() {
+            return con_mayus;
+        }
+        let con_minus = base.join("assets");
+        if con_minus.is_dir() {
+            return con_minus;
+        }
+        con_mayus
+    }
+
+    let mut raices: Vec<std::path::PathBuf> = Vec::new();
+    let mut agregar = |ruta: std::path::PathBuf| {
+        if !raices.contains(&ruta) {
+            raices.push(ruta);
+        }
+    };
+
+    if let Some(p) = raiz_proyecto_actual {
+        agregar(assets_de(p));
+    }
+    if let Ok(m) = scene_manager.lock() {
+        let raiz_vfs = m.vfs().root().to_path_buf();
+        agregar(assets_de(&raiz_vfs));
+    }
+    agregar(raiz_motor.join("assets"));
+    agregar(std::path::PathBuf::from("assets"));
+
+    raices
+}
+
 /// Datos del collider de malla para `adjuntar_colliders_autorados`.
 struct MallaAutorada<'a> {
     modo: &'a glass_core::MeshColliderMode,
@@ -1106,7 +1149,7 @@ impl SceneBridge for EngineSceneBridge {
             format!("assets/prefabs/{path}.prefab.json")
         };
 
-        let prefab = match glass_core::Prefab::load_from_file(&resolved_path) {
+        let mut prefab = match glass_core::Prefab::load_from_file(&resolved_path) {
             Ok(p) => p,
             Err(e) => {
                 log::warn!(
@@ -1115,6 +1158,12 @@ impl SceneBridge for EngineSceneBridge {
                 return None;
             }
         };
+        // Fase UI/Canvas (V1): el prefab se migra en memoria antes de
+        // instanciarlo (el archivo no se toca).
+        let informe_prefab = glass_ui::migracion::migrar_prefab(&mut prefab);
+        for aviso in &informe_prefab.avisos {
+            log::warn!("[InstantiatePrefab] Migración UI: {aviso}");
+        }
 
         // Fase 1, candado de escena: instanciar el prefab (raíz y
         // descendientes con ids nuevos) y capturar los body_spec de
@@ -3329,7 +3378,10 @@ impl GlassEngineApp {
     pub fn open_scene_file(&mut self, scene_path: &str) -> bool {
         let cargada = match self.scene_state.lock() {
             Ok(mut sc) => match sc.load_from_json(scene_path) {
-                Ok(()) => true,
+                Ok(()) => {
+                    crate::canvas_ui::migrar_ui_escena_cargada(&mut sc, Some(scene_path));
+                    true
+                }
                 Err(e) => {
                     log::error!("La escena solicitada no cargó ({}): {}", scene_path, e);
                     false
@@ -3539,6 +3591,9 @@ fn lanzar_hub_al_salir() {
         self.vigilar_assets(&raiz_assets);
         self.editor_layout.project.set_assets_root(raiz_assets);
         self.refrescar_physmat_lib();
+        // Los materiales que fallaron contra las raíces del proyecto
+        // anterior merecen un nuevo intento contra las del recién abierto.
+        self.materiales_failed.clear();
         // Registrar el proyecto abierto para que aparezca en el Hub,
         // con el nombre de su project.glass (no el de la carpeta).
         let nombre = glass_launcher::archivos::nombre_proyecto(path);
@@ -3679,6 +3734,66 @@ fn lanzar_hub_al_salir() {
                 }
             }
             glb_paths.sort();
+// Los proyectos importados (p. ej. desde Unity) guardan sus modelos
+        // en subcarpetas arbitrarias de su propio Assets/, no en
+        // assets/models del motor. Sin este recorrido, esos .glb nunca
+        // entraban en la caché y la recarga bajo demanda tampoco los
+        // encontraba, dejando el proyecto sin modelos tras importarlo.
+        #[cfg(feature = "editor")]
+        if let Some(raiz_proyecto) = self.raiz_proyecto_actual.as_ref() {
+            let assets_proyecto = {
+                let con_mayus = raiz_proyecto.join("Assets");
+                if con_mayus.is_dir() {
+                    con_mayus
+                } else {
+                    let con_minus = raiz_proyecto.join("assets");
+                    if con_minus.is_dir() {
+                        con_minus
+                    } else {
+                        con_mayus
+                    }
+                }
+            };
+            if assets_proyecto.is_dir() {
+                let mut stems_existentes: std::collections::HashSet<String> = glb_paths
+                    .iter()
+                    .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+                    .collect();
+                let mut agregados = 0usize;
+                let mut pending = vec![assets_proyecto];
+                while let Some(dir) = pending.pop() {
+                    let entries = match std::fs::read_dir(&dir) {
+                        Ok(e) => e,
+                        Err(_) => continue,
+                    };
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            pending.push(path);
+                        } else if path.extension().and_then(|e| e.to_str()) == Some("glb") {
+                            let stem = path
+                                .file_stem()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .unwrap_or_default();
+                            // El motor manda en colisiones de nombre; el proyecto
+                            // solo rellena los huecos que el motor no cubre.
+                            if !stems_existentes.contains(&stem) {
+                                stems_existentes.insert(stem);
+                                glb_paths.push(path);
+                                agregados += 1;
+                            }
+                        }
+                    }
+                }
+                if agregados > 0 {
+                    log::info!(
+                        "Precarga: {} modelo(s) del proyecto añadidos desde {:?}",
+                        agregados,
+                        raiz_proyecto
+                    );
+                }
+            }
+        }
             for glb_path in &glb_paths {
                 let stem = glb_path
                     .file_stem()
@@ -4028,13 +4143,8 @@ fn lanzar_hub_al_salir() {
                 .collect(),
             Err(_) => Vec::new(),
         };
-        for stem in &referenciados {
+for stem in &referenciados {
             if self.recarga_bajo_demanda.contains(stem) {
-                continue;
-            }
-            // Solo se deshacen expulsiones reales de este proceso: un stem
-            // nunca cargado (arranque sin escaneo) no es asunto de esta vía.
-            if !self.modelos_expulsados.contains(stem) {
                 continue;
             }
             let en_cache = self
@@ -4045,20 +4155,23 @@ fn lanzar_hub_al_salir() {
             if en_cache {
                 continue;
             }
+            // Esta vía no solo deshace expulsiones: también carga stems
+            // nunca cargados (p. ej. modelos de un proyecto abierto tras
+            // la precarga). El marcado en recarga_bajo_demanda de abajo
+            // garantiza un único intento por stem y escena, así que
+            // ampliar la puerta no introduce reintentos por frame.
             #[cfg(feature = "editor")]
-            let assets_proyecto: Option<std::path::PathBuf> =
-                self.raiz_proyecto_actual.as_ref().map(|p| p.join("Assets"));
+            let raiz_proyecto = self.raiz_proyecto_actual.as_deref();
             #[cfg(not(feature = "editor"))]
-            let assets_proyecto: Option<std::path::PathBuf> = None;
+            let raiz_proyecto: Option<&std::path::Path> = None;
+            let mut raices: Vec<std::path::PathBuf> = raices_assets_busqueda(raiz_proyecto, &self.scene_manager, &self.raiz_motor);
             let modelos_motor = self.raiz_motor.join("assets").join("models");
-            let assets_motor = self.raiz_motor.join("assets");
-            let mut raices: Vec<&std::path::Path> = Vec::new();
-            if let Some(p) = assets_proyecto.as_deref() {
-                raices.push(p);
+            if !raices.contains(&modelos_motor) {
+                raices.insert(1.min(raices.len()), modelos_motor);
             }
-            raices.push(&modelos_motor);
-            raices.push(&assets_motor);
-            let ruta = glass_renderer::watcher::resolver_glb_por_stem(&raices, stem);
+            let raices_ref: Vec<&std::path::Path> =
+                raices.iter().map(|p| p.as_path()).collect();
+            let ruta = glass_renderer::watcher::resolver_glb_por_stem(&raices_ref, stem);
             // Marcado antes de cargar: un .glb corrupto no se reintenta cada frame.
             self.recarga_bajo_demanda.insert(stem.clone());
             match ruta {
@@ -4278,6 +4391,12 @@ fn lanzar_hub_al_salir() {
 
         match result {
             Ok(Some(loaded)) => {
+                // Migración UI en memoria de la escena recién
+                // sustituida (sin ruta: esta vía no escribe copia).
+                if let Ok(mut sc) = self.scene_state.lock() {
+                    crate::canvas_ui::migrar_ui_escena_cargada(&mut sc, None);
+                }
+
                 // Silencia el audio de la escena anterior al activarse la nueva.
                 self.audio_system.stop_all();
 
@@ -6007,13 +6126,26 @@ let resueltos = if body.has_collider {
                         }
                         Err(_) => Vec::new(),
                     };
-                    for name in wanted {
+for name in wanted {
                         if self.materiales.contains_key(&name)
                             || self.materiales_failed.contains(&name)
                         {
                             continue;
                         }
-                        let path = format!("assets/materials/{}.material.json", name);
+                        #[cfg(feature = "editor")]
+                        let raiz_proyecto = self.raiz_proyecto_actual.as_deref();
+                        #[cfg(not(feature = "editor"))]
+                        let raiz_proyecto: Option<&std::path::Path> = None;
+                        let raices = raices_assets_busqueda(raiz_proyecto, &self.scene_manager, &self.raiz_motor);
+                        let candidatos: Vec<std::path::PathBuf> = raices
+                            .iter()
+                            .map(|r| r.join(format!("materials/{}.material.json", name)))
+                            .collect();
+                        let path = candidatos
+                            .iter()
+                            .find(|p| p.exists())
+                            .cloned()
+                            .unwrap_or_else(|| candidatos[0].clone());
                         let leido = std::fs::read_to_string(&path)
                             .map_err(|e| e.to_string())
                             .and_then(|text| {
@@ -6025,7 +6157,15 @@ let resueltos = if body.has_collider {
                                 if !mat.texture.is_empty()
                                     && !self.material_textures.contains(&mat.texture)
                                 {
-                                    let tex_path = format!("assets/{}", mat.texture);
+                                    let candidatos_tex: Vec<std::path::PathBuf> = raices
+                                        .iter()
+                                        .map(|r| r.join(&mat.texture))
+                                        .collect();
+                                    let tex_path = candidatos_tex
+                                        .iter()
+                                        .find(|p| p.exists())
+                                        .cloned()
+                                        .unwrap_or_else(|| candidatos_tex[0].clone());
                                     match image::open(&tex_path) {
                                         Ok(img) => {
                                             let rgba = img.to_rgba8();
@@ -6045,21 +6185,22 @@ let resueltos = if body.has_collider {
                                                 cache.insert_texture(
                                                     &renderer.device,
                                                     &mut alloc,
-                                                    TextureUpload { queue: vk_ctx.graphics_queue, command_pool: renderer.command_pool, set_layout: layout },
-                                                    format!("material:{}", mat.texture),
+                                                    glass_renderer::asset_cache::TextureUpload { queue: vk_ctx.graphics_queue, command_pool: renderer.command_pool, set_layout: layout },
+                                                    mat.texture.clone(),
                                                     0,
                                                     &data,
                                                 );
-                                                self.material_textures
-                                                    .insert(mat.texture.clone());
                                             }
+                                            self.material_textures.insert(mat.texture.clone());
                                         }
-                                        Err(e) => log::warn!(
-                                            "Material '{}': no se pudo decodificar su textura '{}': {}",
-                                            name,
-                                            mat.texture,
-                                            e
-                                        ),
+                                        Err(e) => {
+                                            log::warn!(
+                                                "Textura '{}' del material '{}' no cargada: {}",
+                                                mat.texture,
+                                                name,
+                                                e
+                                            );
+                                        }
                                     }
                                 }
                                 self.materiales.insert(name, mat);
@@ -6068,7 +6209,7 @@ let resueltos = if body.has_collider {
                                 log::warn!(
                                     "Material '{}' no cargado ({}): {}",
                                     name,
-                                    path,
+                                    path.display(),
                                     e
                                 );
                                 self.materiales_failed.insert(name);
@@ -6305,10 +6446,14 @@ let resueltos = if body.has_collider {
                                     .unwrap_or(vk::DescriptorSet::null())
                             } else {
                                 cache
-                                    .set_for_image(
-                                        Some(&format!("material:{}", mat.texture)),
-                                        Some(0),
-                                    )
+                                    // La textura del material se registra
+                                    // en la caché con su ruta de asset como
+                                    // clave (la misma convención que usa el
+                                    // camino de grafos); buscarla con otro
+                                    // nombre la dejaba siempre en la textura
+                                    // blanca por defecto y el material
+                                    // salía sin su textura.
+                                    .set_for_image(Some(mat.texture.as_str()), Some(0))
                                     .unwrap_or(vk::DescriptorSet::null())
                             };
                             draw_items.push((
@@ -8428,7 +8573,13 @@ impl ApplicationHandler for GlassEngineApp {
                 log::info!("Cargando escena solicitada desde archivo: {}", scene_file);
                 let cargada = match self.scene_state.lock() {
                     Ok(mut sc) => match sc.load_from_json(scene_file) {
-                        Ok(()) => true,
+                        Ok(()) => {
+                            crate::canvas_ui::migrar_ui_escena_cargada(
+                                &mut sc,
+                                Some(scene_file.as_str()),
+                            );
+                            true
+                        }
                         Err(e) => {
                             log::error!(
                                 "La escena solicitada no cargó ({}): {}",
@@ -8450,7 +8601,13 @@ impl ApplicationHandler for GlassEngineApp {
                     log::info!("Modo Standalone: Cargando escena por defecto desde project.json: {}", default_sc);
                     let cargada = match self.scene_state.lock() {
                         Ok(mut sc) => match sc.load_from_json(&default_sc) {
-                            Ok(()) => true,
+                            Ok(()) => {
+                                crate::canvas_ui::migrar_ui_escena_cargada(
+                                    &mut sc,
+                                    Some(default_sc.as_str()),
+                                );
+                                true
+                            }
                             Err(e) => {
                                 log::error!(
                                     "Modo Standalone: la escena por defecto no cargó: {}",

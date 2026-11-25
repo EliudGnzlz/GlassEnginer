@@ -1032,7 +1032,9 @@ impl EditorDockingLayout {
                         for p in found_prefabs {
                             let file_name = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Prefab");
                             if ui.button(format!("🧩 {}", file_name)).clicked() {
-                                if let Ok(prefab) = glass_core::Prefab::load_from_file(&p) {
+                                if let Ok(mut prefab) = glass_core::Prefab::load_from_file(&p) {
+                                    // Fase UI/Canvas (V1): migración en memoria del prefab.
+                                    glass_ui::migracion::migrar_prefab(&mut prefab);
                                     if let Ok(mut sc) = scene_state.lock() {
                                         let new_id = sc.instantiate_prefab(&prefab, None, Some([0.0, 1.0, 0.0]));
                                         self.hierarchy.selected_entity = Some(new_id);
@@ -1555,10 +1557,16 @@ impl EditorDockingLayout {
                 .unwrap_or(archivo.as_str())
                 .to_string();
             let mensaje = match scene_manager.lock() {
-                Ok(mut m) => match m.request_load(&nombre) {
-                    Ok(key) => format!("Carga encolada: {key} (se aplica al final del frame)"),
-                    Err(e) => format!("No se pudo cargar '{}': {e}", ruta.display()),
-                },
+                Ok(mut m) => {
+                    // La clave de asset (ruta relativa a la raíz) resuelve
+                    // sin ambigüedad las escenas en subcarpetas profundas
+                    // (proyectos importados); el nombre corto es el respaldo.
+                    let clave = glass_core::vfs::to_asset_key(m.vfs().root(), &ruta);
+                    match m.request_load(clave.as_deref().unwrap_or(&nombre)) {
+                        Ok(key) => format!("Carga encolada: {key} (se aplica al final del frame)"),
+                        Err(e) => format!("No se pudo cargar '{}': {e}", ruta.display()),
+                    }
+                }
                 Err(_) => "SceneManager bloqueado por un hilo en pánico".to_string(),
             };
             self.status_message = Some((mensaje, std::time::Instant::now()));
@@ -1566,8 +1574,10 @@ impl EditorDockingLayout {
 
         if let Some(ruta) = self.project.pending_prefab_instantiate.take() {
             let mensaje = match glass_core::Prefab::load_from_file(&ruta) {
-                Ok(prefab) => match scene_state.lock() {
+                Ok(mut prefab) => match scene_state.lock() {
                     Ok(mut state) => {
+                        // Fase UI/Canvas (V1): migración en memoria del prefab.
+                        glass_ui::migracion::migrar_prefab(&mut prefab);
                         let id = state.instantiate_prefab(&prefab, None, Some([0.0, 1.0, 0.0]));
                         self.hierarchy.selected_entity = Some(id);
                         format!("Prefab instanciado: {} (entidad {id})", ruta.display())
