@@ -79,6 +79,9 @@ fn documento(cab: (i32, i64, bool), cuerpo: &str) -> DocumentoUnity {
 /// Parte un archivo UnityYAML en sus documentos, en orden de aparición.
 /// Un documento que no parsea se conserva con `valor: Value::Null`.
 pub fn partir_documentos(texto: &str) -> Vec<DocumentoUnity> {
+    // Sin la marca BOM inicial (exportaciones de Windows), la
+    // primera línea `%YAML` no casaría con el filtro de cabeceras.
+    let texto = texto.trim_start_matches('\u{feff}');
     let mut docs = Vec::new();
     let mut actual: Option<((i32, i64, bool), String)> = None;
     let lineas = texto

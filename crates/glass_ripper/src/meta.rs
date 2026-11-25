@@ -18,6 +18,11 @@ const IMPORTER_DESCONOCIDO: &str = "Desconocido";
 /// `guid` se usa para los mensajes de error y como valor de respaldo si el
 /// propio `.meta` no trae un `guid` válido.
 pub fn parsear_meta(guid: &str, texto: &str) -> Result<MetaAsset, RipperError> {
+    // Las exportaciones hechas en Windows pueden traer la marca
+    // BOM al principio; serde_yaml la rechaza con un error
+    // engañoso («más de un documento»). Se retira antes de parsear,
+    // como ya hace `documento_raiz` en materiales.
+    let texto = texto.trim_start_matches('\u{feff}');
     let valor: Value = serde_yaml::from_str(texto).map_err(|e| RipperError::Meta {
         guid: guid.to_string(),
         motivo: format!("YAML inválido: {e}"),

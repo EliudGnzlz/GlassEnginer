@@ -641,7 +641,17 @@ fn material_de_parte(
     indices_globales: &HashMap<u32, usize>,
 ) -> Option<usize> {
     let cara = primera_cara?;
-    let material_local = *malla.face_material.get(cara as usize)? as usize;
+    // ufbx deja `face_material` sin asignar (puntero nulo y count 0)
+    // cuando la malla no trae capa de material por cara, y
+    // desreferenciar la lista en ese estado aborta el proceso
+    // entero (la comprobación de UB de `from_raw_parts` no admite
+    // puntero nulo ni con longitud 0). Sin esa capa, todas las
+    // caras usan el material de la malla: el índice local es 0.
+    let material_local = if malla.face_material.count == 0 {
+        0
+    } else {
+        *malla.face_material.get(cara as usize)? as usize
+    };
     let material = malla.materials.get(material_local)?;
     indices_globales
         .get(&material.as_ref().element.element_id)
