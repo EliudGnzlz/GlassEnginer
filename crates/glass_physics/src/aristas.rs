@@ -26,15 +26,26 @@ pub fn aristas_casco_convexo(posiciones: &[[f32; 3]]) -> Vec<[[f32; 3]; 2]> {
         // El poliedro triangula las caras poligonales: la diagonal de una
         // cara plana comparte la normal de sus dos caras adyacentes y no
         // es una arista geométrica; solo quedan los cambios de plano.
+        // Ojo: con nubes de puntos degeneradas (duplicados, coplanares),
+        // Parry puede devolver aristas cuyos índices de cara quedan fuera
+        // de `caras` — verificado con la geometría real de NeoFPS
+        // (len 82, índice 99), que tumbaba el editor al dibujar. Una cara
+        // no resoluble no permite probar que la arista sea diagonal, así
+        // que la arista se conserva; y un vértice no resoluble descarta
+        // la arista. Esta función es de dibujo: nunca debe panicar.
         .filter(|e| {
-            let n1 = caras[e.faces.x as usize].normal;
-            let n2 = caras[e.faces.y as usize].normal;
-            n1.dot(&n2) < 1.0 - 1.0e-5
+            let Some(f1) = caras.get(e.faces.x as usize) else {
+                return true;
+            };
+            let Some(f2) = caras.get(e.faces.y as usize) else {
+                return true;
+            };
+            f1.normal.dot(&f2.normal) < 1.0 - 1.0e-5
         })
-        .map(|e| {
-            let a = puntos_casco[e.vertices.x as usize];
-            let b = puntos_casco[e.vertices.y as usize];
-            [[a.x, a.y, a.z], [b.x, b.y, b.z]]
+        .filter_map(|e| {
+            let a = puntos_casco.get(e.vertices.x as usize)?;
+            let b = puntos_casco.get(e.vertices.y as usize)?;
+            Some([[a.x, a.y, a.z], [b.x, b.y, b.z]])
         })
         .collect()
 }
@@ -193,5 +204,41 @@ mod tests {
             [-1.0, -1.0, 1.0],
         ];
         assert_eq!(aristas_casco_convexo(&posiciones).len(), 6);
+    }
+
+    /// Regresión del pánico cazado con la escena DemoFacility de NeoFPS
+    /// (2026-11-25): con nubes degeneradas (vértices duplicados y
+    /// coplanares, como sale la geometría convertida de un FBX), Parry
+    /// puede dar aristas con índices de cara fuera de `faces()` y el
+    /// dibujo del wireframe tumbaba el editor (len 82, índice 99).
+    /// La función es de dibujo: jamás debe panicar.
+    #[test]
+    fn nubes_degeneradas_no_panican() {
+        // Cubo con cada vértice repetido 4 veces y puntos interiores
+        // coplanares en las caras.
+        let (base, _) = cubo();
+        let mut nube: Vec<[f32; 3]> = Vec::new();
+        for _ in 0..4 {
+            nube.extend_from_slice(&base);
+        }
+        nube.push([0.0, 0.0, -0.5]);
+        nube.push([0.0, -0.5, 0.0]);
+        nube.push([0.5, 0.0, 0.0]);
+        nube.push([0.0, 0.0, 0.0]);
+        let aristas = aristas_casco_convexo(&nube);
+        assert!(!aristas.is_empty());
+        // Rejilla coplanar densa (un plano de 10x10 con duplicados):
+        // el casco es plano y no debe panicar.
+        let mut plano: Vec<[f32; 3]> = Vec::new();
+        for i in 0..10 {
+            for j in 0..10 {
+                plano.push([i as f32 * 0.1, 0.0, j as f32 * 0.1]);
+                plano.push([i as f32 * 0.1, 0.0, j as f32 * 0.1]);
+            }
+        }
+        let _ = aristas_casco_convexo(&plano);
+        // Todos los puntos iguales y nube vacía: sin casco, sin pánico.
+        assert!(aristas_casco_convexo(&[[1.0, 2.0, 3.0]; 8]).is_empty());
+        assert!(aristas_casco_convexo(&[]).is_empty());
     }
 }
