@@ -82,6 +82,12 @@ public static class RuntimeBridge
     private static CharacterGetCenterDelegate? _characterGetCenter;
     private static CharacterSetMaterialDelegate? _characterSetMaterial;
     private static CharacterGetMaterialDelegate? _characterGetMaterial;
+    private static MaterialCreateDelegate? _materialCreate;
+    private static MaterialGetDelegate? _materialGet;
+    private static MaterialSetDelegate? _materialSet;
+    private static ColliderGetSharedMaterialDelegate? _colliderGetSharedMaterial;
+    private static ColliderSetSharedMaterialDelegate? _colliderSetSharedMaterial;
+    private static ColliderGetMaterialDelegate? _colliderGetMaterial;
     private static CharacterRaycastDelegate? _characterRaycast;
     private static CharacterClosestPointDelegate? _characterClosestPoint;
     private static CharacterClosestPointOnBoundsDelegate? _characterClosestPointOnBounds;
@@ -464,6 +470,13 @@ public static class RuntimeBridge
         // CCX: excludeLayers del CharacterController, AL FINAL.
         public IntPtr CharacterSetExcludeLayers;
         public IntPtr CharacterGetExcludeLayers;
+
+        public IntPtr MaterialCreate;
+        public IntPtr MaterialGet;
+        public IntPtr MaterialSet;
+        public IntPtr ColliderGetSharedMaterial;
+        public IntPtr ColliderSetSharedMaterial;
+        public IntPtr ColliderGetMaterial;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitPhysicsBridge")]
@@ -566,6 +579,19 @@ public static class RuntimeBridge
             _characterSetMaterial = Marshal.GetDelegateForFunctionPointer<CharacterSetMaterialDelegate>(callbacks->CharacterSetMaterial);
         if (callbacks->CharacterGetMaterial != IntPtr.Zero)
             _characterGetMaterial = Marshal.GetDelegateForFunctionPointer<CharacterGetMaterialDelegate>(callbacks->CharacterGetMaterial);
+
+        if (callbacks->MaterialCreate != IntPtr.Zero)
+            _materialCreate = Marshal.GetDelegateForFunctionPointer<MaterialCreateDelegate>(callbacks->MaterialCreate);
+        if (callbacks->MaterialGet != IntPtr.Zero)
+            _materialGet = Marshal.GetDelegateForFunctionPointer<MaterialGetDelegate>(callbacks->MaterialGet);
+        if (callbacks->MaterialSet != IntPtr.Zero)
+            _materialSet = Marshal.GetDelegateForFunctionPointer<MaterialSetDelegate>(callbacks->MaterialSet);
+        if (callbacks->ColliderGetSharedMaterial != IntPtr.Zero)
+            _colliderGetSharedMaterial = Marshal.GetDelegateForFunctionPointer<ColliderGetSharedMaterialDelegate>(callbacks->ColliderGetSharedMaterial);
+        if (callbacks->ColliderSetSharedMaterial != IntPtr.Zero)
+            _colliderSetSharedMaterial = Marshal.GetDelegateForFunctionPointer<ColliderSetSharedMaterialDelegate>(callbacks->ColliderSetSharedMaterial);
+        if (callbacks->ColliderGetMaterial != IntPtr.Zero)
+            _colliderGetMaterial = Marshal.GetDelegateForFunctionPointer<ColliderGetMaterialDelegate>(callbacks->ColliderGetMaterial);
         if (callbacks->CharacterRaycast != IntPtr.Zero)
             _characterRaycast = Marshal.GetDelegateForFunctionPointer<CharacterRaycastDelegate>(callbacks->CharacterRaycast);
         if (callbacks->CharacterClosestPoint != IntPtr.Zero)
@@ -1935,6 +1961,83 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         center = new Vector3(x, y, z);
         return true;
     }
+
+
+        public static uint MaterialCreate(
+            float dynamicFriction,
+            float staticFriction,
+            float bounciness,
+            int frictionCombine,
+            int bounceCombine)
+        {
+            if (_materialCreate == null) return 0;
+            return _materialCreate(
+                dynamicFriction,
+                staticFriction,
+                bounciness,
+                frictionCombine,
+                bounceCombine);
+        }
+
+        public static bool MaterialGet(
+            uint id,
+            out float dynamicFriction,
+            out float staticFriction,
+            out float bounciness,
+            out int frictionCombine,
+            out int bounceCombine)
+        {
+            dynamicFriction = 0.0f;
+            staticFriction = 0.0f;
+            bounciness = 0.0f;
+            frictionCombine = 0;
+            bounceCombine = 0;
+
+            if (_materialGet == null) return false;
+            return _materialGet(
+                id,
+                out dynamicFriction,
+                out staticFriction,
+                out bounciness,
+                out frictionCombine,
+                out bounceCombine) != 0;
+        }
+
+        public static bool MaterialSet(
+            uint id,
+            float dynamicFriction,
+            float staticFriction,
+            float bounciness,
+            int frictionCombine,
+            int bounceCombine)
+        {
+            if (_materialSet == null) return false;
+            return _materialSet(
+                id,
+                dynamicFriction,
+                staticFriction,
+                bounciness,
+                frictionCombine,
+                bounceCombine) != 0;
+        }
+
+        public static uint ColliderGetSharedMaterial(ulong entityId, uint index)
+        {
+            if (_colliderGetSharedMaterial == null) return 0;
+            return _colliderGetSharedMaterial(entityId, index);
+        }
+
+        public static bool ColliderSetSharedMaterial(ulong entityId, uint index, uint materialId)
+        {
+            if (_colliderSetSharedMaterial == null) return false;
+            return _colliderSetSharedMaterial(entityId, index, materialId) != 0;
+        }
+
+        public static uint ColliderGetMaterial(ulong entityId, uint index)
+        {
+            if (_colliderGetMaterial == null) return 0;
+            return _colliderGetMaterial(entityId, index);
+        }
 
         public static bool CharacterSetMaterial(ulong entityId, float friction, float restitution)
         {

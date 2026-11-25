@@ -1,6 +1,9 @@
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use crate::types::{BodyHandle, BodyType, ColliderHandle};
 use crate::world::PhysicsWorld;
+use std::collections::HashSet;
+use glass_core::physics_material::{MaterialCombine, PhysicsMaterial};
+use crate::material::MaterialId;
 
 static GLOBAL_PHYSICS: OnceLock<RwLock<Option<Arc<Mutex<PhysicsWorld>>>>> = OnceLock::new();
 
@@ -160,6 +163,211 @@ pub unsafe extern "C" fn glass_physics_attach_cylinder_collider(
         .attach_cylinder_collider(body_handle, half_height, radius,
             &glass_core::PhysicsMaterial { dynamic_friction: friction, bounciness: restitution, ..glass_core::PhysicsMaterial::PROJECT_DEFAULT }, "")
         .unwrap_or_default()
+}
+/// Valores de Unity → MaterialCombine. `match` explícito, jamás por discriminante (§8-R3).
+/// Valor desconocido → warn una vez por valor + Average.
+fn combine_desde_unity(valor: i32) -> MaterialCombine {
+    match valor {
+        0 => MaterialCombine::Average,
+        1 => MaterialCombine::Multiply,
+        2 => MaterialCombine::Minimum,
+        3 => MaterialCombine::Maximum,
+        otro => {
+            static AVISADOS: OnceLock<Mutex<HashSet<i32>>> = OnceLock::new();
+            let avisados = AVISADOS.get_or_init(|| Mutex::new(HashSet::new()));
+            if let Ok(mut set) = avisados.lock() {
+                if set.insert(otro) {
+                    log::warn!("PhysicsMaterial: combine desconocido {otro}; se usa Average");
+                }
+            }
+            MaterialCombine::Average
+        }
+    }
+}
+
+/// MaterialCombine → valores de Unity (Average=0, Multiply=1, Minimum=2, Maximum=3).
+fn combine_a_unity(c: &MaterialCombine) -> i32 {
+    match c {
+        MaterialCombine::Average => 0,
+        MaterialCombine::Multiply => 1,
+        MaterialCombine::Minimum => 2,
+        MaterialCombine::Maximum => 3,
+    }
+}
+
+fn material_desde_ffi(df: f32, sf: f32, b: f32, fc: i32, bc: i32) -> Option<PhysicsMaterial> {
+    if !all_finite(&[df, sf, b]) {
+        return None;
+    }
+    Some(PhysicsMaterial {
+        dynamic_friction: df,
+        static_friction: sf,
+        bounciness: b,
+        friction_combine: combine_desde_unity(fc),
+        bounce_combine: combine_desde_unity(bc),
+    })
+}
+
+pub(crate) fn material_create_en(w: &mut PhysicsWorld, df: f32, sf: f32, b: f32, fc: i32, bc: i32) -> u32 {
+    match material_desde_ffi(df, sf, b, fc, bc) {
+        Some(m) => w.crear_material_instancia(m).0,
+        None => 0,
+    }
+}
+
+pub(crate) fn material_get_en(w: &PhysicsWorld, id: u32) -> Option<(f32, f32, f32, i32, i32)> {
+    w.material_por_id(MaterialId(id)).map(|m| {
+        (
+            m.dynamic_friction,
+            m.static_friction,
+            m.bounciness,
+            combine_a_unity(&m.friction_combine),
+            combine_a_unity(&m.bounce_combine),
+        )
+    })
+}
+
+pub(crate) fn material_set_en(w: &mut PhysicsWorld, id: u32, df: f32, sf: f32, b: f32, fc: i32, bc: i32) -> i32 {
+    match material_desde_ffi(df, sf, b, fc, bc) {
+        Some(m) => i32::from(w.actualizar_material_por_id(MaterialId(id), m)),
+        None => 0,
+    }
+}
+
+/// Crea un material instancia (solo en memoria, no toca archivos).
+/// Devuelve su id (>0). 0 si algún float no es finito o no hay mundo.
+///
+/// # Safety
+/// No recibe punteros; cualquier valor es seguro (los no finitos devuelven 0).
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_material_create(
+    dynamic_friction: f32,
+    static_friction: f32,
+    bounciness: f32,
+    friction_combine: i32,
+    bounce_combine: i32,
+) -> u32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return material_create_en(
+                &mut world, dynamic_friction, static_friction, bounciness, friction_combine, bounce_combine,
+            );
+        }
+    }
+    0
+}
+
+/// Lee el material `id`. Combines con valores de Unity.
+/// 1 si existe (escribe los 5 out-params); 0 si no existe (out-params a 0).
+/// Si algún puntero es nulo devuelve 0 sin escribir nada.
+///
+/// # Safety
+/// Cada puntero de salida debe ser null o apuntar a memoria válida y escribible.
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_material_get(
+    id: u32,
+    out_dynamic_friction: *mut f32,
+    out_static_friction: *mut f32,
+    out_bounciness: *mut f32,
+    out_friction_combine: *mut i32,
+    out_bounce_combine: *mut i32,
+) -> i32 {
+    if out_dynamic_friction.is_null()
+        || out_static_friction.is_null()
+        || out_bounciness.is_null()
+        || out_friction_combine.is_null()
+        || out_bounce_combine.is_null()
+    {
+        return 0;
+    }
+    let valores = get_global_physics_world()
+        .and_then(|sys| sys.lock().ok().and_then(|w| material_get_en(&w, id)));
+    let (df, sf, b, fc, bc, ok) = match valores {
+        Some((df, sf, b, fc, bc)) => (df, sf, b, fc, bc, 1),
+        None => (0.0, 0.0, 0.0, 0, 0, 0),
+    };
+    *out_dynamic_friction = df;
+    *out_static_friction = sf;
+    *out_bounciness = b;
+    *out_friction_combine = fc;
+    *out_bounce_combine = bc;
+    ok
+}
+
+/// Actualiza el material `id` y lo aplica en sitio a todos los colliders vivos con ese id
+/// (mismo camino que `refresh_asset`: en sitio + despierta a los padres dormidos).
+/// 1 si el id existe; 0 si no existe, algún float no es finito o no hay mundo.
+///
+/// Divergencia con Unity: en Unity escribir un PhysicMaterial compartido desde un script en el
+/// editor modifica el asset en disco. Aquí la escritura vive solo en la tabla en memoria, que
+/// muere al salir de Play: ningún script puede corromper un asset.
+///
+/// # Safety
+/// No recibe punteros; cualquier valor es seguro (los no finitos devuelven 0).
+#[no_mangle]
+pub unsafe extern "C" fn glass_physics_material_set(
+    id: u32,
+    dynamic_friction: f32,
+    static_friction: f32,
+    bounciness: f32,
+    friction_combine: i32,
+    bounce_combine: i32,
+) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return material_set_en(
+                &mut world, id, dynamic_friction, static_friction, bounciness, friction_combine, bounce_combine,
+            );
+        }
+    }
+    0
+}
+
+/// `MaterialId` compartido del collider `index` (0-based, orden de `colliders`;
+/// `u32::MAX` = Mesh Collider). 0 si resuelve por legado/defecto o si entidad/índice no existe.
+///
+/// # Safety
+/// No recibe punteros; `entity_id` e `index` solo se leen contra el mundo global.
+#[no_mangle]
+pub unsafe extern "C" fn glass_collider_get_shared_material(entity_id: u64, index: u32) -> u32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(world) = sys.lock() {
+            return world.collider_shared_material(entity_id, index).0;
+        }
+    }
+    0
+}
+
+/// Asigna el material compartido `material_id` al collider (en sitio + despierta al padre).
+/// `material_id = 0` limpia a legado/defecto y lo reaplica.
+/// 1 si se aplicó; 0 si entidad/índice no existe o `material_id` (≠0) es desconocido.
+///
+/// # Safety
+/// No recibe punteros; `entity_id` e `index` solo se leen contra el mundo global.
+#[no_mangle]
+pub unsafe extern "C" fn glass_collider_set_shared_material(entity_id: u64, index: u32, material_id: u32) -> i32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return i32::from(world.set_collider_shared_material(entity_id, index, MaterialId(material_id)));
+        }
+    }
+    0
+}
+
+/// Material instancia del collider. La primera llamada clona el material efectivo (asset,
+/// legado o defecto) en un id nuevo y re-apunta el collider a él; las siguientes devuelven
+/// el mismo id. 0 si entidad/índice no existe.
+///
+/// # Safety
+/// No recibe punteros; `entity_id` e `index` solo se leen contra el mundo global.
+#[no_mangle]
+pub unsafe extern "C" fn glass_collider_get_material(entity_id: u64, index: u32) -> u32 {
+    if let Some(sys) = get_global_physics_world() {
+        if let Ok(mut world) = sys.lock() {
+            return world.instanciar_material_collider(entity_id, index).0;
+        }
+    }
+    0
 }
 
 #[no_mangle]
@@ -2309,4 +2517,102 @@ pub unsafe extern "C" fn glass_physics_sweep_body_all(
         }
     }
     0
+}
+
+#[cfg(test)]
+mod tests_material_ffi {
+    use super::*;
+    use crate::world::INDICE_MESH_COLLIDER;
+
+    const ASSET: &str = "assets/hielo.physmat";
+
+    fn mat(df: f32, b: f32) -> PhysicsMaterial {
+        PhysicsMaterial { dynamic_friction: df, static_friction: df, bounciness: b, ..PhysicsMaterial::PROJECT_DEFAULT }
+    }
+
+    #[test]
+    fn create_get_set_roundtrip() {
+        let mut w = PhysicsWorld::new();
+        let id = material_create_en(&mut w, 0.1, 0.2, 0.3, 1, 3);
+        assert!(id > 0);
+        assert_eq!(material_get_en(&w, id), Some((0.1, 0.2, 0.3, 1, 3)));
+        assert_eq!(material_set_en(&mut w, id, 0.4, 0.5, 0.6, 2, 0), 1);
+        assert_eq!(material_get_en(&w, id), Some((0.4, 0.5, 0.6, 2, 0)));
+        assert_eq!(material_get_en(&w, 9999), None);
+        assert_eq!(material_set_en(&mut w, 9999, 0.1, 0.1, 0.1, 0, 0), 0);
+    }
+
+    #[test]
+    fn combines_valores_unity() {
+        assert!(matches!(combine_desde_unity(1), MaterialCombine::Multiply));
+        assert!(matches!(combine_desde_unity(2), MaterialCombine::Minimum));
+        assert!(matches!(combine_desde_unity(7), MaterialCombine::Average));
+    }
+
+    #[test]
+    fn nan_devuelve_fallo_sin_tocar_nada() {
+        let mut w = PhysicsWorld::new();
+        let id = material_create_en(&mut w, 0.1, 0.2, 0.3, 0, 0);
+        assert_eq!(material_create_en(&mut w, f32::NAN, 0.2, 0.3, 0, 0), 0);
+        assert_eq!(material_set_en(&mut w, id, 0.9, f32::NAN, 0.9, 0, 0), 0);
+        assert_eq!(material_get_en(&w, id), Some((0.1, 0.2, 0.3, 0, 0)));
+        let siguiente = material_create_en(&mut w, 0.1, 0.1, 0.1, 0, 0);
+        assert_eq!(siguiente, id + 1);
+    }
+
+    #[test]
+    fn shared_es_cero_en_legado_o_defecto() {
+        let mut w = PhysicsWorld::new();
+        w.test_cuerpo_con_colliders(1, &[MaterialId(0)]);
+        assert_eq!(w.collider_shared_material(1, 0).0, 0);
+        assert_eq!(w.collider_shared_material(1, 5).0, 0);
+        assert_eq!(w.collider_shared_material(2, 0).0, 0);
+        assert_eq!(w.collider_shared_material(1, INDICE_MESH_COLLIDER).0, 0);
+    }
+
+    #[test]
+    fn set_shared_y_limpiar_a_fallback() {
+        let mut w = PhysicsWorld::new();
+        let a = w.test_material_table_mut().registrar(ASSET, &mat(0.05, 0.0));
+        let (_, hs) = w.test_cuerpo_con_colliders(1, &[MaterialId(0)]);
+        assert!(w.set_collider_shared_material(1, 0, a));
+        assert_eq!(w.collider_shared_material(1, 0), a);
+        assert!((w.friccion_de_collider(hs[0]).unwrap() - 0.05).abs() < 1e-6);
+        assert!(w.set_collider_shared_material(1, 0, MaterialId(0)));
+        let df = PhysicsMaterial::PROJECT_DEFAULT.dynamic_friction;
+        assert!((w.friccion_de_collider(hs[0]).unwrap() - df).abs() < 1e-6);
+        assert!(!w.set_collider_shared_material(1, 0, MaterialId(9999)));
+    }
+
+    #[test]
+    fn instancia_no_afecta_al_vecino() {
+        let mut w = PhysicsWorld::new();
+        let a = w.test_material_table_mut().registrar(ASSET, &mat(0.05, 0.0));
+        let (_, hs) = w.test_cuerpo_con_colliders(1, &[a, a]);
+
+        let inst = w.instanciar_material_collider(1, 0);
+        assert!(inst.0 > 0 && inst != a);
+        assert_eq!(w.instanciar_material_collider(1, 0), inst);
+        assert_eq!(material_get_en(&w, inst.0).map(|v| v.0), Some(0.05));
+
+        assert_eq!(material_set_en(&mut w, inst.0, 0.8, 0.8, 0.5, 0, 0), 1);
+        assert!((w.friccion_de_collider(hs[0]).unwrap() - 0.8).abs() < 1e-6);
+        assert!((w.friccion_de_collider(hs[1]).unwrap() - 0.05).abs() < 1e-6);
+
+        let _ = w.refresh_asset(ASSET, &mat(0.3, 0.0));
+        assert!((w.friccion_de_collider(hs[1]).unwrap() - 0.3).abs() < 1e-6);
+        assert!((w.friccion_de_collider(hs[0]).unwrap() - 0.8).abs() < 1e-6);
+        assert_eq!(w.collider_shared_material(1, 0), inst);
+    }
+
+    #[test]
+    fn material_set_despierta_cuerpo_dormido() {
+        let mut w = PhysicsWorld::new();
+        let id = material_create_en(&mut w, 0.1, 0.1, 0.1, 0, 0);
+        let (rb, _) = w.test_cuerpo_con_colliders(1, &[MaterialId(id)]);
+        w.test_rapier().0.get_mut(rb).unwrap().sleep();
+        assert!(w.test_rapier().0[rb].is_sleeping());
+        assert_eq!(material_set_en(&mut w, id, 0.9, 0.9, 0.2, 0, 0), 1);
+        assert!(!w.test_rapier().0[rb].is_sleeping());
+    }
 }

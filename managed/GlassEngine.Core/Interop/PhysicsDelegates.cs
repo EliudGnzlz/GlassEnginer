@@ -286,6 +286,41 @@ public delegate int CharacterSetMaterialDelegate(ulong entityId, float friction,
 public delegate int CharacterGetMaterialDelegate(ulong entityId, out float friction, out float restitution);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate uint MaterialCreateDelegate(
+    float dynamicFriction,
+    float staticFriction,
+    float bounciness,
+    int frictionCombine,
+    int bounceCombine);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int MaterialGetDelegate(
+    uint id,
+    out float dynamicFriction,
+    out float staticFriction,
+    out float bounciness,
+    out int frictionCombine,
+    out int bounceCombine);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int MaterialSetDelegate(
+    uint id,
+    float dynamicFriction,
+    float staticFriction,
+    float bounciness,
+    int frictionCombine,
+    int bounceCombine);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate uint ColliderGetSharedMaterialDelegate(ulong entityId, uint index);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate int ColliderSetSharedMaterialDelegate(ulong entityId, uint index, uint materialId);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate uint ColliderGetMaterialDelegate(ulong entityId, uint index);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate int CharacterRaycastDelegate(ulong entityId, float ox, float oy, float oz, float dx, float dy, float dz, float maxDist, out float dist, [In, Out] float[] point, [In, Out] float[] normal);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]

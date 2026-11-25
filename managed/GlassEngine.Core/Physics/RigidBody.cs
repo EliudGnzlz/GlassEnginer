@@ -297,11 +297,19 @@ public sealed class RigidBody
             : Constraints & ~RigidBodyConstraints.FreezeRotation;
     }
 
-    public ulong AttachBoxCollider(Vector3 halfExtents, float restitution = 0.0f, float friction = 0.5f)
+public ulong AttachBoxCollider(Vector3 halfExtents, float restitution = 0.0f, float friction = 0.5f)
     {
         if (!IsValid) return 0;
         ulong result = RuntimeBridge.AttachBoxCollider(Handle, halfExtents, restitution, friction);
         if (_mass > 0f) RuntimeBridge.SetMass(Handle, _mass);
+        if (result != 0 && !TieneColliderRegistrado(result))
+            _attachedColliders.Add(new AttachedColliderDescriptor
+        {
+            Type = ColliderType.Box,
+            HalfExtents = halfExtents,
+            Radius = 0.0f,
+            Handle = result
+        });
         return result;
     }
 
@@ -310,26 +318,92 @@ public sealed class RigidBody
         if (!IsValid) return 0;
         ulong result = RuntimeBridge.AttachSphereCollider(Handle, radius, restitution, friction);
         if (_mass > 0f) RuntimeBridge.SetMass(Handle, _mass);
+        if (result != 0 && !TieneColliderRegistrado(result))
+            _attachedColliders.Add(new AttachedColliderDescriptor
+        {
+            Type = ColliderType.Sphere,
+            HalfExtents = Vector3.Zero,
+            Radius = radius,
+            Handle = result
+        });
         return result;
     }
 
-    /// <summary>Cápsula sobre el eje Y: halfHeight = mitad del tramo recto
-    /// (sin casquetes); la altura total es 2·(halfHeight + radius).</summary>
     public ulong AttachCapsuleCollider(float halfHeight, float radius, float restitution = 0.0f, float friction = 0.5f)
     {
         if (!IsValid) return 0;
         ulong result = RuntimeBridge.AttachCapsuleCollider(Handle, halfHeight, radius, restitution, friction);
         if (_mass > 0f) RuntimeBridge.SetMass(Handle, _mass);
+        if (result != 0 && !TieneColliderRegistrado(result))
+            _attachedColliders.Add(new AttachedColliderDescriptor
+        {
+            Type = ColliderType.Capsule,
+            HalfExtents = Vector3.Zero,
+            Radius = radius,
+            Handle = result
+        });
         return result;
     }
 
-    /// <summary>Cilindro sobre el eje Y: halfHeight = mitad de la altura total.</summary>
+/// <summary>Cilindro sobre el eje Y: halfHeight = mitad de la altura total.</summary>
     public ulong AttachCylinderCollider(float halfHeight, float radius, float restitution = 0.0f, float friction = 0.5f)
     {
         if (!IsValid) return 0;
         ulong result = RuntimeBridge.AttachCylinderCollider(Handle, halfHeight, radius, restitution, friction);
         if (_mass > 0f) RuntimeBridge.SetMass(Handle, _mass);
+        if (result != 0 && !TieneColliderRegistrado(result))
+            _attachedColliders.Add(new AttachedColliderDescriptor
+        {
+            Type = ColliderType.Cylinder,
+            HalfExtents = Vector3.Zero,
+            Radius = radius,
+            Handle = result
+        });
         return result;
+    }
+
+    private struct AttachedColliderDescriptor
+    {
+        public ColliderType Type;
+        public Vector3 HalfExtents;
+        public float Radius;
+        public ulong Handle;
+    }
+
+    private readonly System.Collections.Generic.List<AttachedColliderDescriptor> _attachedColliders =
+        new System.Collections.Generic.List<AttachedColliderDescriptor>();
+
+    private bool TieneColliderRegistrado(ulong handle)
+    {
+        foreach (var descriptor in _attachedColliders)
+        {
+            if (descriptor.Handle == handle) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Devuelve el collider adjuntado mediante Attach*Collider en el índice indicado,
+    /// o null si el índice está fuera de rango.
+    /// </summary>
+    /// <remarks>
+    /// El Mesh Collider (uint.MaxValue) no es alcanzable desde Rigidbody:
+    /// es exclusivo del autorado en el editor.
+    /// </remarks>
+    public Collider GetCollider(uint index)
+    {
+        if (index >= (uint)_attachedColliders.Count) return null;
+
+        AttachedColliderDescriptor descriptor = _attachedColliders[(int)index];
+        return new Collider
+        {
+            EntityId = EntityId,
+            Index = index,
+            Type = descriptor.Type,
+            HalfExtents = descriptor.HalfExtents,
+            Radius = descriptor.Radius,
+            Handle = descriptor.Handle
+        };
     }
 
     public bool ApplyImpulse(Vector3 impulse, ForceMode mode = ForceMode.Impulse)

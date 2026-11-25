@@ -103,3 +103,80 @@ impl MaterialTable {
             .map(|(_, material)| material)
     }
 }
+
+impl MaterialTable {
+    /// Prefijo de las claves sintéticas de instancia. `#` no aparece en rutas de asset,
+    /// así que una instancia nunca colisiona con `registrar(referencia)`.
+    const PREFIJO_INSTANCIA: &'static str = "#instancia/";
+
+    /// Registra un material instancia (sin archivo). Comparte `next_id` con los assets,
+    /// así que su id nunca coincide con el de un asset. Devuelve `MaterialId(0)` si los ids
+    /// se agotaran (no se hace panic: se llama desde la frontera FFI).
+    pub fn registrar_instancia(&mut self, material: PhysicsMaterial) -> MaterialId {
+        let Some(siguiente) = self.next_id.checked_add(1) else {
+            return MaterialId(0);
+        };
+        let id = MaterialId(self.next_id);
+        self.next_id = siguiente;
+        self.entries
+            .insert(format!("{}{}", Self::PREFIJO_INSTANCIA, id.0), (id, material));
+        id
+    }
+
+    /// Material guardado con ese id (asset o instancia). `MaterialId(0)` = sin referencia → None.
+    /// Búsqueda lineal: la tabla tiene decenas de entradas y se consulta desde scripts, no por paso.
+    pub fn por_id(&self, id: MaterialId) -> Option<PhysicsMaterial> {
+        if id.0 == 0 {
+            return None;
+        }
+        self.entries
+            .values()
+            .find(|(i, _)| *i == id)
+            .map(|(_, m)| *m)
+    }
+
+    /// Sustituye el material guardado con ese id (asset o instancia), conservando el id.
+    pub fn actualizar_por_id(&mut self, id: MaterialId, material: PhysicsMaterial) -> bool {
+        if id.0 == 0 {
+            return false;
+        }
+        match self.entries.values_mut().find(|(i, _)| *i == id) {
+            Some(entrada) => {
+                entrada.1 = material;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_instancias {
+    use super::*;
+    use glass_core::physics_material::PhysicsMaterial;
+
+    #[test]
+    fn instancia_no_colisiona_con_assets_y_se_resuelve_por_id() {
+        let mut t = MaterialTable::default();
+        let a = t.registrar("assets/hielo.physmat", &PhysicsMaterial::PROJECT_DEFAULT);
+        let i = t.registrar_instancia(PhysicsMaterial::PROJECT_DEFAULT);
+        let b = t.registrar("assets/goma.physmat", &PhysicsMaterial::PROJECT_DEFAULT);
+        assert!(a.0 > 0 && i.0 > 0 && b.0 > 0);
+        assert!(a != i && i != b && a != b);
+        assert!(t.por_id(i).is_some());
+        assert!(t.por_id(MaterialId(0)).is_none());
+    }
+
+    #[test]
+    fn actualizar_por_id_solo_toca_esa_entrada() {
+        let mut t = MaterialTable::default();
+        let a = t.registrar("assets/hielo.physmat", &PhysicsMaterial::PROJECT_DEFAULT);
+        let i = t.registrar_instancia(PhysicsMaterial::PROJECT_DEFAULT);
+        let mut m = PhysicsMaterial::PROJECT_DEFAULT;
+        m.bounciness = 0.9;
+        assert!(t.actualizar_por_id(i, m));
+        assert_eq!(t.por_id(i).unwrap().bounciness, 0.9);
+        assert_eq!(t.por_id(a).unwrap().bounciness, PhysicsMaterial::PROJECT_DEFAULT.bounciness);
+        assert!(!t.actualizar_por_id(MaterialId(9999), m));
+    }
+}

@@ -76,7 +76,7 @@ namespace GlassEngine.Core.Physics
             {
                 if (!_materialInstanced)
                 {
-                    _sharedMaterial = _sharedMaterial.Clone();
+                    _sharedMaterial = (PhysicMaterial)_sharedMaterial.Clone();
                     _materialInstanced = true;
                 }
                 return _sharedMaterial;

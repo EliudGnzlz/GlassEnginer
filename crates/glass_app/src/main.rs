@@ -126,6 +126,10 @@ struct SpawnedBodySpec {
     /// Material efectivo del collider de malla y su referencia de asset.
     mesh_material: PhysicsMaterial,
     mesh_material_ref: String,
+    /// Material al que resuelve el cuerpo sin asset (legado o PROJECT_DEFAULT):
+    /// es el fallback de los slots de C6 (al limpiar sharedMaterial a null y
+    /// al instanciar un collider sin asset).
+    fallback_material: PhysicsMaterial,
     /// Config del collider de malla (capa, máscara y trigger), construida
     /// desde los campos del propio cuerpo (`layer`, `collision_mask`,
     /// `mesh_collider_is_trigger`), no heredada del primer spec (E6).
@@ -211,6 +215,7 @@ struct MallaAutorada<'a> {
 ///
 /// La malla compone con los specs. El inferido (sin specs) solo se
 /// adjunta si la malla no se pudo crear. Devuelve si la malla se adjuntó.
+#[allow(clippy::too_many_arguments)]
 fn adjuntar_colliders_autorados(
     physics: &mut PhysicsWorld,
     handle: BodyHandle,
@@ -219,10 +224,12 @@ fn adjuntar_colliders_autorados(
     malla: MallaAutorada<'_>,
     colliders: Vec<ColliderResuelto>,
     colliders_son_specs: bool,
+    fallback: &PhysicsMaterial,
 ) -> bool {
     use glass_core::MeshColliderMode;
 
     let mut via_mesh = false;
+    let mut mesh_slot: Option<glass_physics::ColliderSlot> = None;
     if *malla.modo != MeshColliderMode::None {
         match malla.geometria {
             Some((vertices, indices)) => {
@@ -260,6 +267,10 @@ fn adjuntar_colliders_autorados(
                     MeshColliderMode::None => None,
                 };
                 via_mesh = attached.is_some();
+                mesh_slot = attached.map(|handle| glass_physics::ColliderSlot {
+                    handle,
+                    fallback: *fallback,
+                });
                 if !via_mesh {
                     log::warn!(
                         "entidad {}: el collider de malla no se pudo crear; cae a los primitivos resueltos",
@@ -278,9 +289,10 @@ fn adjuntar_colliders_autorados(
         }
     }
 
+    let mut autorados = Vec::new();
     if colliders_son_specs || !via_mesh {
         for (shape, cfg, offset, material, material_ref, direction) in colliders {
-            physics.attach_collider_with_config_at(
+            if let Some(collider_handle) = physics.attach_collider_with_config_at(
                 handle,
                 shape,
                 &material,
@@ -288,9 +300,15 @@ fn adjuntar_colliders_autorados(
                 cfg,
                 offset,
                 &direction,
-            );
+            ) {
+                autorados.push(glass_physics::ColliderSlot {
+                    handle: collider_handle,
+                    fallback: *fallback,
+                });
+            }
         }
     }
+    physics.registrar_slots_colliders(entity_id, autorados, mesh_slot);
     via_mesh
 }
 
@@ -334,6 +352,7 @@ impl EngineSceneBridge {
             mesh_collider: body.mesh_collider,
             mesh_material,
             mesh_material_ref,
+            fallback_material: body.body_fallback_material(),
             mesh_cfg: ColliderConfig {
                 layer: body.layer,
                 mask: body.collision_mask,
@@ -444,6 +463,7 @@ impl EngineSceneBridge {
             },
             spec.colliders,
             spec.colliders_son_specs,
+            &spec.fallback_material,
         );
         // Masa al final: todos los colliders ya están adjuntos.
         if spec.body_type == BodyType::Dynamic {
@@ -2242,6 +2262,8 @@ type DescriptorCuerpo = (
     Vec<ColliderResuelto>,
     PhysicsMaterial,
     String,
+    // Fallback del cuerpo (legado o PROJECT_DEFAULT) para los slots de C6.
+    PhysicsMaterial,
     [f32; 3],
     // Malla pedida: modo, modelo, escala de mundo, es estático y config
     // del collider de malla construida desde el propio cuerpo (E6).
@@ -4562,6 +4584,7 @@ let resueltos = if body.has_collider {
                     resueltos,
                     mesh_material,
                     mesh_material_ref,
+                    body.body_fallback_material(),
                     body.linear_velocity,
                     mesh,
                     !body.colliders.is_empty(),
@@ -4586,7 +4609,7 @@ let resueltos = if body.has_collider {
 
 // Precargamos las geometrías retenidas que haga falta para armar colliders
         // de malla real (Convex/TriMesh); si nadie las pide, el mapa queda vacío.
-        let necesita_geometria = descriptors.iter().any(|d| d.8.is_some());
+        let necesita_geometria = descriptors.iter().any(|d| d.9.is_some());
         let geometrias: std::collections::HashMap<String, (Vec<[f32; 3]>, Vec<u32>)> =
             if necesita_geometria {
                 match self.asset_cache.read() {
@@ -4605,7 +4628,7 @@ let resueltos = if body.has_collider {
             return;
         };
         *physics = PhysicsWorld::new();
-        for (id, body_type, pos, rot, resueltos, mesh_material, mesh_material_ref, linvel, mesh, hay_specs, superficie) in descriptors
+        for (id, body_type, pos, rot, resueltos, mesh_material, mesh_material_ref, fallback, linvel, mesh, hay_specs, superficie) in descriptors
         {
             let handle = physics.create_rigid_body(id, body_type, pos, rot);
             let (
@@ -4693,6 +4716,7 @@ let resueltos = if body.has_collider {
                 },
                 resueltos,
                 hay_specs,
+                &fallback,
             );
 
             // Masa al final del cuerpo: los colliders ya están adjuntos.
@@ -10543,6 +10567,7 @@ mod spawn_bridge_tests {
             mesh_collider: glass_core::MeshColliderMode::None,
             mesh_material: material_dorado(0.3, 0.8),
             mesh_material_ref: String::new(),
+            fallback_material: material_dorado(0.3, 0.8),
             mesh_cfg: ColliderConfig { layer: 0, mask: u32::MAX, is_trigger: false },
             model: String::new(),
             world_scale: [1.0, 1.0, 1.0],

@@ -183,6 +183,12 @@ struct PhysicsBridgeCallbacks {
     // CCX (excludeLayers del CharacterController), AL FINAL.
     character_set_exclude_layers: *const c_void,
     character_get_exclude_layers: *const c_void,
+    material_create: *const c_void,
+    material_get: *const c_void,
+    material_set: *const c_void,
+    collider_get_shared_material: *const c_void,
+    collider_set_shared_material: *const c_void,
+    collider_get_material: *const c_void,
 }
 
 type InitPhysicsBridgeFn = unsafe extern "system" fn(*const PhysicsBridgeCallbacks);
@@ -624,6 +630,12 @@ impl ScriptHost {
     closest_point_on_bounds: glass_physics::glass_physics_closest_point_on_bounds as *const c_void,
     character_set_exclude_layers: glass_physics::glass_character_set_exclude_layers as *const c_void,
     character_get_exclude_layers: glass_physics::glass_character_get_exclude_layers as *const c_void,
+    material_create: glass_physics::glass_physics_material_create as *const c_void,
+    material_get: glass_physics::glass_physics_material_get as *const c_void,
+    material_set: glass_physics::glass_physics_material_set as *const c_void,
+    collider_get_shared_material: glass_physics::glass_collider_get_shared_material as *const c_void,
+    collider_set_shared_material: glass_physics::glass_collider_set_shared_material as *const c_void,
+    collider_get_material: glass_physics::glass_collider_get_material as *const c_void,
             };
             unsafe {
                 init_physics_fn(&callbacks as *const PhysicsBridgeCallbacks);

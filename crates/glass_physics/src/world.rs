@@ -11,6 +11,27 @@ use crate::types::{ContactInfo,
     ContactKind,
 };
 
+/// Índice reservado para el Mesh Collider en las FFI `glass_collider_*`.
+pub const INDICE_MESH_COLLIDER: u32 = u32::MAX;
+
+/// Collider autorado y el material al que resuelve sin asset (legado del cuerpo o PROJECT_DEFAULT).
+#[derive(Clone)]
+pub struct ColliderSlot {
+    pub handle: ColliderHandle,
+    pub fallback: PhysicsMaterial,
+}
+
+/// Decisión (entity, index) → collider: el mapa se REGISTRA al adjuntar, en vez de
+/// inferirse de `rb.colliders()`. Motivos: `rb.colliders()` mezcla el Mesh Collider y
+/// cualquier collider añadido en runtime, y Rapier quita colliders del cuerpo con
+/// `swap_remove`, así que tras una baja el orden de inserción deja de ser el de `colliders`.
+/// `autorados[i]` es exactamente `colliders[i]` del componente; el Mesh Collider va aparte.
+#[derive(Clone, Default)]
+pub struct SlotsColliders {
+    pub autorados: Vec<ColliderSlot>,
+    pub mesh: Option<ColliderSlot>,
+}
+
 pub struct PhysicsWorld {
     pub gravity: Vector<f32>,
     pub integration_parameters: IntegrationParameters,
@@ -51,6 +72,10 @@ pub struct PhysicsWorld {
     layer_base_masks: std::collections::HashMap<u64, u32>,
     material_table: MaterialTable,
     collider_material_ids: std::collections::HashMap<ColliderHandle, MaterialId>,
+    /// (entity_id) → colliders autorados en orden de `colliders` + Mesh Collider.
+    slots_colliders: HashMap<u64, SlotsColliders>,
+    /// Instancia creada por `collider_get_material` para cada collider (si existe).
+    instancia_de_collider: HashMap<ColliderHandle, MaterialId>,
     /// solverIterations TOTALES guardadas por cuerpo. Sin entrada = 4.
     solver_iterations: std::collections::HashMap<u64, i32>,
     /// solverVelocityIterations TOTALES guardadas por cuerpo. Sin entrada = 4.
@@ -209,6 +234,8 @@ impl PhysicsWorld {
             layer_base_masks: HashMap::new(),
             material_table: MaterialTable::default(),
             collider_material_ids: HashMap::new(),
+            slots_colliders: HashMap::new(),
+            instancia_de_collider: HashMap::new(),
             solver_iterations: HashMap::new(),
             solver_velocity_iterations: HashMap::new(),
             automatic_center_of_mass: HashMap::new(),
@@ -708,6 +735,180 @@ impl PhysicsWorld {
         self.collider_material_ids.get(&handle).copied()
     }
 
+pub fn registrar_slots_colliders(
+        &mut self,
+        entity_id: u64,
+        autorados: Vec<ColliderSlot>,
+        mesh: Option<ColliderSlot>,
+    ) {
+        self.slots_colliders
+            .insert(entity_id, SlotsColliders { autorados, mesh });
+    }
+
+    pub fn olvidar_slots_colliders(&mut self, entity_id: u64) {
+        if let Some(s) = self.slots_colliders.remove(&entity_id) {
+            for slot in s.autorados.iter().chain(s.mesh.iter()) {
+                self.instancia_de_collider.remove(&slot.handle);
+            }
+        }
+    }
+
+    /// Collider vivo en (entity, index); `INDICE_MESH_COLLIDER` = Mesh Collider.
+    fn slot_collider(&self, entity_id: u64, index: u32) -> Option<ColliderSlot> {
+        let s = self.slots_colliders.get(&entity_id)?;
+        let slot = if index == INDICE_MESH_COLLIDER {
+            s.mesh.clone()?
+        } else {
+            s.autorados.get(index as usize)?.clone()
+        };
+        // El collider sigue vivo en Rapier (el handle u64 es el índice
+        // crudo de `into_raw_parts().0`, sin generación).
+        let vivo = self
+            .collider_set
+            .iter()
+            .any(|(ch, _)| ch.into_raw_parts().0 as u64 == slot.handle);
+        if vivo {
+            Some(slot)
+        } else {
+            None
+        }
+    }
+
+    /// Material efectivo: asset/instancia si el id resuelve; si no, legado/defecto del slot.
+    fn material_efectivo(&self, slot: &ColliderSlot) -> PhysicsMaterial {
+        let id = self.collider_material_id(slot.handle).unwrap_or(MaterialId(0));
+        self.material_table
+            .por_id(id)
+            .unwrap_or(slot.fallback)
+    }
+
+    pub fn crear_material_instancia(&mut self, material: PhysicsMaterial) -> MaterialId {
+        self.material_table.registrar_instancia(material)
+    }
+
+    pub fn material_por_id(&self, id: MaterialId) -> Option<PhysicsMaterial> {
+        self.material_table.por_id(id)
+    }
+
+    /// Actualiza el material guardado y lo aplica en sitio a todos los colliders vivos con ese
+    /// id (mismo camino que `refresh_asset`: `set_material` aplica en sitio y despierta al padre).
+    pub fn actualizar_material_por_id(&mut self, id: MaterialId, material: PhysicsMaterial) -> bool {
+        if !self.material_table.actualizar_por_id(id, material) {
+            return false;
+        }
+        let handles: Vec<ColliderHandle> = self
+            .collider_material_ids
+            .iter()
+            .filter(|(_, m)| **m == id)
+            .map(|(h, _)| *h)
+            .collect();
+        for h in handles {
+            self.set_material(h, &material);
+        }
+        true
+    }
+
+    /// `MaterialId` del collider; 0 si resuelve por legado/defecto o si no existe.
+    pub fn collider_shared_material(&self, entity_id: u64, index: u32) -> MaterialId {
+        self.slot_collider(entity_id, index)
+            .and_then(|s| self.collider_material_id(s.handle))
+            .unwrap_or(MaterialId(0))
+    }
+
+    /// Asigna el material compartido. `MaterialId(0)` limpia a legado/defecto y lo reaplica.
+    pub fn set_collider_shared_material(&mut self, entity_id: u64, index: u32, id: MaterialId) -> bool {
+        let Some(slot) = self.slot_collider(entity_id, index) else {
+            return false;
+        };
+        let material = if id.0 == 0 {
+            slot.fallback
+        } else {
+            match self.material_table.por_id(id) {
+                Some(m) => m,
+                None => return false,
+            }
+        };
+        self.collider_material_ids.insert(slot.handle, id);
+        self.set_material(slot.handle, &material)
+    }
+
+    /// Instancia por collider: la primera llamada clona el material efectivo en un id nuevo y
+    /// re-apunta el collider a él (un `refresh_asset` de la referencia compartida ya no lo toca).
+    /// Las siguientes devuelven el mismo id mientras el collider siga apuntando a esa instancia.
+    pub fn instanciar_material_collider(&mut self, entity_id: u64, index: u32) -> MaterialId {
+        let Some(slot) = self.slot_collider(entity_id, index) else {
+            return MaterialId(0);
+        };
+        let actual = self.collider_material_id(slot.handle).unwrap_or(MaterialId(0));
+        if self.instancia_de_collider.get(&slot.handle) == Some(&actual) && actual.0 != 0 {
+            return actual;
+        }
+        let efectivo = self.material_efectivo(&slot);
+        let nuevo = self.material_table.registrar_instancia(efectivo);
+        if nuevo.0 == 0 {
+            return MaterialId(0);
+        }
+        self.collider_material_ids.insert(slot.handle, nuevo);
+        self.instancia_de_collider.insert(slot.handle, nuevo);
+        self.set_material(slot.handle, &efectivo);
+        nuevo
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_cuerpo_con_colliders(
+        &mut self,
+        entity_id: u64,
+        ids: &[MaterialId],
+    ) -> (RigidBodyHandle, Vec<ColliderHandle>) {
+        let rb = self.rigid_body_set.insert(RigidBodyBuilder::dynamic().build());
+        let mut slots = Vec::new();
+        let mut handles = Vec::new();
+        for id in ids {
+            let rapier = self.collider_set.insert_with_parent(
+                ColliderBuilder::ball(0.5).build(),
+                rb,
+                &mut self.rigid_body_set,
+            );
+            // La clave u64 del mundo es el índice crudo del handle de Rapier.
+            let h: ColliderHandle = rapier.into_raw_parts().0 as u64;
+            self.collider_material_ids.insert(h, *id);
+            let fallback = PhysicsMaterial::PROJECT_DEFAULT;
+            let m = self.material_table.por_id(*id).unwrap_or(PhysicsMaterial::PROJECT_DEFAULT);
+            self.set_material(h, &m);
+            slots.push(ColliderSlot { handle: h, fallback });
+            handles.push(h);
+        }
+        self.registrar_slots_colliders(entity_id, slots, None);
+        (rb, handles)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_material_table_mut(&mut self) -> &mut MaterialTable {
+        &mut self.material_table
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_rapier(&mut self) -> (&mut RigidBodySet, &ColliderSet) {
+        (&mut self.rigid_body_set, &self.collider_set)
+    }
+
+    /// Registra el slot de un collider adjuntado por la vía de scripts
+    /// (los `attach_*_collider` sin config, que usan las FFI): el material
+    /// pasado ES el fallback, porque en esa vía no hay asset. No duplica:
+    /// si el handle ya tiene slot para la entidad, no hace nada (el attach
+    /// de caja de la FFI devuelve el primer collider si el cuerpo ya tenía).
+    fn registrar_slot_script(&mut self, body_handle: BodyHandle, handle: ColliderHandle, fallback: PhysicsMaterial) {
+        let Some((_, entity_id)) = self.body_map.get(&body_handle) else {
+            return;
+        };
+        let entity_id = *entity_id;
+        let slots = self.slots_colliders.entry(entity_id).or_default();
+        if slots.autorados.iter().any(|s| s.handle == handle) {
+            return;
+        }
+        slots.autorados.push(ColliderSlot { handle, fallback });
+    }
+
     /// Refresco en caliente de un Physics Material (§5.3).
     ///
     /// Actualiza en sitio todos los colliders vivos cuyo `MaterialId`
@@ -802,6 +1003,15 @@ impl PhysicsWorld {
             .map(|(_, c)| c.position().rotation)
     }
 
+    /// Diagnóstico/tests: fricción registrada del collider `handle` (clave u64).
+    #[cfg(test)]
+    pub(crate) fn friccion_de_collider(&self, handle: ColliderHandle) -> Option<f32> {
+        self.collider_set
+            .iter()
+            .find(|(ch, _)| ch.into_raw_parts().0 as u64 == handle)
+            .map(|(_, c)| c.friction())
+    }
+
     pub fn attach_box_collider_with_config(
         &mut self,
         body_handle: BodyHandle,
@@ -836,7 +1046,9 @@ impl PhysicsWorld {
         material: &PhysicsMaterial,
         material_ref: &str,
     ) -> Option<ColliderHandle> {
-        self.attach_box_collider_with_config(body_handle, half_extents, material, material_ref, ColliderConfig::default())
+        let handle = self.attach_box_collider_with_config(body_handle, half_extents, material, material_ref, ColliderConfig::default())?;
+        self.registrar_slot_script(body_handle, handle, *material);
+        Some(handle)
     }
 
     /// Attaches a sphere collider to a rigid body.
@@ -871,7 +1083,9 @@ impl PhysicsWorld {
         material: &PhysicsMaterial,
         material_ref: &str,
     ) -> Option<ColliderHandle> {
-        self.attach_sphere_collider_with_config(body_handle, radius, material, material_ref, ColliderConfig::default())
+        let handle = self.attach_sphere_collider_with_config(body_handle, radius, material, material_ref, ColliderConfig::default())?;
+        self.registrar_slot_script(body_handle, handle, *material);
+        Some(handle)
     }
 
     /// Attaches a capsule collider to a rigid body. `half_height` es
@@ -909,7 +1123,9 @@ impl PhysicsWorld {
         material: &PhysicsMaterial,
         material_ref: &str,
     ) -> Option<ColliderHandle> {
-        self.attach_capsule_collider_with_config(body_handle, half_height, radius, material, material_ref, ColliderConfig::default())
+        let handle = self.attach_capsule_collider_with_config(body_handle, half_height, radius, material, material_ref, ColliderConfig::default())?;
+        self.registrar_slot_script(body_handle, handle, *material);
+        Some(handle)
     }
 
     /// Attaches a cylinder collider to a rigid body. `half_height` es
@@ -947,7 +1163,9 @@ impl PhysicsWorld {
         material: &PhysicsMaterial,
         material_ref: &str,
     ) -> Option<ColliderHandle> {
-        self.attach_cylinder_collider_with_config(body_handle, half_height, radius, material, material_ref, ColliderConfig::default())
+        let handle = self.attach_cylinder_collider_with_config(body_handle, half_height, radius, material, material_ref, ColliderConfig::default())?;
+        self.registrar_slot_script(body_handle, handle, *material);
+        Some(handle)
     }
 
     /// Adjunta el collider descrito por un `ColliderShape` (la vía
@@ -2858,8 +3076,9 @@ impl PhysicsWorld {
     }
 
     pub fn remove_rigid_body(&mut self, body_handle: BodyHandle) -> bool {
-        if let Some((rapier_handle, _)) = self.body_map.remove(&body_handle) {
+        if let Some((rapier_handle, entity_id)) = self.body_map.remove(&body_handle) {
             self.handle_lookup.remove(&rapier_handle);
+            self.olvidar_slots_colliders(entity_id);
             self.mprops_override.remove(&body_handle);
             self.rigid_body_set.remove(
                 rapier_handle,
@@ -3024,6 +3243,28 @@ impl PhysicsWorld {
             .iter()
             .filter_map(|&ch| self.collider_set.get(ch))
             .map(|c| (c.friction(), c.restitution()))
+            .collect()
+    }
+
+    /// Diagnóstico/tests: las reglas de combinación de cada collider de
+    /// Rapier del cuerpo, en el orden de `RigidBody::colliders`.
+    /// Hermana de `collider_friction_restitution`: los tests de C6 la usan
+    /// para probar que `set_shared` aplica los combines en vivo, no solo
+    /// fricción/restitución.
+    pub fn collider_combine_rules(
+        &self,
+        body_handle: BodyHandle,
+    ) -> Vec<(CoefficientCombineRule, CoefficientCombineRule)> {
+        let Some((rapier_handle, _)) = self.get_rapier_handle(body_handle) else {
+            return Vec::new();
+        };
+        let Some(rb) = self.rigid_body_set.get(rapier_handle) else {
+            return Vec::new();
+        };
+        rb.colliders()
+            .iter()
+            .filter_map(|&ch| self.collider_set.get(ch))
+            .map(|c| (c.friction_combine_rule(), c.restitution_combine_rule()))
             .collect()
     }
 
@@ -5420,4 +5661,406 @@ fn convex_hull_sostiene_como_caja() {
         );
     }
 
+}
+#[cfg(test)]
+mod tests_ffi_material {
+    use super::*;
+    use crate::ffi::{
+        glass_collider_get_material, glass_collider_get_shared_material,
+        glass_collider_set_shared_material, glass_physics_material_create,
+        glass_physics_material_get, glass_physics_material_set,
+        register_global_physics_world,
+    };
+    use crate::types::{BodyHandle, BodyType};
+    use glass_core::physics_material::PhysicsMaterial;
+    use std::sync::{Arc, Mutex};
+
+    static FFI_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn registrar(world: PhysicsWorld) -> Arc<Mutex<PhysicsWorld>> {
+        let world = Arc::new(Mutex::new(world));
+        register_global_physics_world(world.clone());
+        world
+    }
+
+    fn crear_mat(df: f32, sf: f32, b: f32, fc: i32, bc: i32) -> u32 {
+        unsafe { glass_physics_material_create(df, sf, b, fc, bc) }
+    }
+
+    fn leer_mat(id: u32) -> Option<(f32, f32, f32, i32, i32)> {
+        let mut df = 0.0f32;
+        let mut sf = 0.0f32;
+        let mut b = 0.0f32;
+        let mut fc = -1i32;
+        let mut bc = -1i32;
+        let ok = unsafe {
+            glass_physics_material_get(id, &mut df, &mut sf, &mut b, &mut fc, &mut bc)
+        };
+        if ok == 1 { Some((df, sf, b, fc, bc)) } else { None }
+    }
+
+    fn escribir_mat(id: u32, df: f32, sf: f32, b: f32, fc: i32, bc: i32) -> i32 {
+        unsafe { glass_physics_material_set(id, df, sf, b, fc, bc) }
+    }
+
+    /// Cuerpo con un collider registrado en slots (misma vía que el
+    /// autorado: el slot es lo que resuelve (entity, index) → collider).
+    /// Devuelve (entity_id, body_handle).
+    fn cuerpo(world: &mut PhysicsWorld, ent: u64) -> (u64, BodyHandle) {
+        let bh = world.create_rigid_body(ent, BodyType::Dynamic, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        let h = world
+            .attach_box_collider(bh, [0.5, 0.5, 0.5], &PhysicsMaterial::PROJECT_DEFAULT, "")
+            .expect("collider del cuerpo de test");
+        world.registrar_slots_colliders(
+            ent,
+            vec![ColliderSlot { handle: h, fallback: PhysicsMaterial::PROJECT_DEFAULT }],
+            None,
+        );
+        (ent, bh)
+    }
+
+    fn friccion(world: &PhysicsWorld, bh: BodyHandle) -> (f32, f32) {
+        let v = world.collider_friction_restitution(bh);
+        assert_eq!(v.len(), 1);
+        v[0]
+    }
+
+    fn assert_aprox(a: f32, b: f32) {
+        assert!((a - b).abs() < 1e-5, "esperado {b}, obtenido {a}");
+    }
+
+    #[test]
+    fn material_create_get_set() {
+        let _guard = FFI_TEST_LOCK.lock().unwrap();
+        let _world = registrar(PhysicsWorld::new());
+
+        let id = crear_mat(0.2, 0.3, 0.4, 1, 2);
+        assert_ne!(id, 0, "material_create devolvió 0");
+        let (df, sf, b, fc, bc) = leer_mat(id).expect("material_get falló");
+        assert_aprox(df, 0.2);
+        assert_aprox(sf, 0.3);
+        assert_aprox(b, 0.4);
+        assert_eq!(fc, 1);
+        assert_eq!(bc, 2);
+
+        assert_eq!(escribir_mat(id, 0.5, 0.6, 0.7, 3, 1), 1);
+        let (df, sf, b, fc, bc) = leer_mat(id).expect("material_get tras set falló");
+        assert_aprox(df, 0.5);
+        assert_aprox(sf, 0.6);
+        assert_aprox(b, 0.7);
+        assert_eq!(fc, 3);
+        assert_eq!(bc, 1);
+
+        let mut out_df = 1.0f32;
+        let mut out_sf = 1.0f32;
+        let mut out_b = 1.0f32;
+        let mut out_fc = 99i32;
+        let mut out_bc = 99i32;
+        let ok = unsafe {
+            glass_physics_material_get(
+                0xDEAD_BEEF,
+                &mut out_df,
+                &mut out_sf,
+                &mut out_b,
+                &mut out_fc,
+                &mut out_bc,
+            )
+        };
+        assert_eq!(ok, 0);
+        assert_eq!(out_df, 0.0);
+        assert_eq!(out_sf, 0.0);
+        assert_eq!(out_b, 0.0);
+        assert_eq!(out_fc, 0);
+        assert_eq!(out_bc, 0);
+
+        assert_eq!(escribir_mat(0xDEAD_BEEF, 0.1, 0.2, 0.3, 0, 0), 0);
+    }
+
+    #[test]
+    fn shared_material_null_en_fallback() {
+        let _guard = FFI_TEST_LOCK.lock().unwrap();
+        let mut world = PhysicsWorld::new();
+        let (ent, _) = cuerpo(&mut world, 1);
+        let _world = registrar(world);
+
+        let id = unsafe { glass_collider_get_shared_material(ent, 0) };
+        assert_eq!(id, 0, "un collider sin material asignado debe devolver 0");
+    }
+
+    #[test]
+    fn set_shared_cambia_el_vivo() {
+        let _guard = FFI_TEST_LOCK.lock().unwrap();
+        let mut world = PhysicsWorld::new();
+        let (ent, bh) = cuerpo(&mut world, 1);
+        let world = registrar(world);
+
+        let mat = crear_mat(0.2, 0.2, 0.9, 0, 0);
+        assert_ne!(mat, 0);
+        assert_eq!(
+            unsafe { glass_collider_set_shared_material(ent, 0, mat) },
+            1
+        );
+        assert_eq!(
+            unsafe { glass_collider_get_shared_material(ent, 0) },
+            mat
+        );
+
+        let (f, r) = friccion(&world.lock().unwrap(), bh);
+        assert_aprox(f, 0.2);
+        assert_aprox(r, 0.9);
+    }
+
+    #[test]
+    fn instancia_no_afecta_al_vecino() {
+        let _guard = FFI_TEST_LOCK.lock().unwrap();
+        let mut world = PhysicsWorld::new();
+        let (a, bha) = cuerpo(&mut world, 1);
+        let (b, bhb) = cuerpo(&mut world, 2);
+        // Asset compartido con referencia real: es el que refresh_asset
+        // actualiza por nombre (la vía FFI no tiene referencia).
+        let asset = world.test_material_table_mut().registrar(
+            "assets/hielo.physmat",
+            &PhysicsMaterial {
+                dynamic_friction: 0.2,
+                static_friction: 0.2,
+                bounciness: 0.9,
+                ..PhysicsMaterial::PROJECT_DEFAULT
+            },
+        );
+        assert_ne!(asset.0, 0);
+        let world = registrar(world);
+
+        assert_eq!(unsafe { glass_collider_set_shared_material(a, 0, asset.0) }, 1);
+        assert_eq!(unsafe { glass_collider_set_shared_material(b, 0, asset.0) }, 1);
+
+        let inst = unsafe { glass_collider_get_material(a, 0) };
+        assert_ne!(inst, 0);
+        assert_ne!(inst, asset.0, "la instancia debe tener id propio");
+        let inst2 = unsafe { glass_collider_get_material(a, 0) };
+        assert_eq!(inst2, inst, "la instancia debe ser estable entre llamadas");
+
+        assert_eq!(escribir_mat(inst, 0.9, 0.9, 0.1, 0, 0), 1);
+
+        {
+            let w = world.lock().unwrap();
+            let (fa, ra) = friccion(&w, bha);
+            assert_aprox(fa, 0.9);
+            assert_aprox(ra, 0.1);
+            let (fb, rb) = friccion(&w, bhb);
+            assert_aprox(fb, 0.2);
+            assert_aprox(rb, 0.9);
+        }
+
+        let n = world.lock().unwrap().refresh_asset(
+            "assets/hielo.physmat",
+            &PhysicsMaterial {
+                dynamic_friction: 0.4,
+                static_friction: 0.4,
+                bounciness: 0.5,
+                ..PhysicsMaterial::PROJECT_DEFAULT
+            },
+        );
+        assert!(n >= 1, "refresh_asset debió actualizar al menos un collider");
+
+        {
+            let w = world.lock().unwrap();
+            let (fa, ra) = friccion(&w, bha);
+            assert_aprox(fa, 0.9);
+            assert_aprox(ra, 0.1);
+            let (fb, rb) = friccion(&w, bhb);
+            assert_aprox(fb, 0.4);
+            assert_aprox(rb, 0.5);
+        }
+    }
+
+    #[test]
+    fn set_shared_a_cero_limpia_a_fallback() {
+        let _guard = FFI_TEST_LOCK.lock().unwrap();
+        let mut world = PhysicsWorld::new();
+        let (ent, bh) = cuerpo(&mut world, 1);
+        let (_fresh, bhf) = cuerpo(&mut world, 2);
+        let world = registrar(world);
+
+        let mat = crear_mat(0.1, 0.1, 0.8, 0, 0);
+        assert_ne!(mat, 0);
+        assert_eq!(unsafe { glass_collider_set_shared_material(ent, 0, mat) }, 1);
+        assert_eq!(unsafe { glass_collider_set_shared_material(ent, 0, 0) }, 1);
+
+        let w = world.lock().unwrap();
+        let despues = friccion(&w, bh);
+        let fallback = friccion(&w, bhf);
+        assert_aprox(despues.0, fallback.0);
+        assert_aprox(despues.1, fallback.1);
+    }
+
+    #[test]
+    fn combines_por_valores_unity() {
+        let _guard = FFI_TEST_LOCK.lock().unwrap();
+        let _world = registrar(PhysicsWorld::new());
+
+        for (entrada, esperado) in [(1, 1), (2, 2), (7, 0)] {
+            let id = crear_mat(0.5, 0.5, 0.5, entrada, entrada);
+            assert_ne!(id, 0, "material_create con combine {entrada} devolvió 0");
+            let (_, _, _, fc, bc) = leer_mat(id).expect("material_get falló");
+            assert_eq!(fc, esperado, "friction_combine para entrada {entrada}");
+            assert_eq!(bc, esperado, "bounce_combine para entrada {entrada}");
+        }
+    }
+
+    #[test]
+    fn entradas_no_finitas_rechazadas() {
+        let _guard = FFI_TEST_LOCK.lock().unwrap();
+        let _world = registrar(PhysicsWorld::new());
+
+        assert_eq!(crear_mat(f32::NAN, 0.5, 0.5, 0, 0), 0);
+        assert_eq!(crear_mat(0.5, f32::INFINITY, 0.5, 0, 0), 0);
+        assert_eq!(crear_mat(0.5, 0.5, f32::NEG_INFINITY, 0, 0), 0);
+
+        let id = crear_mat(0.5, 0.5, 0.5, 0, 0);
+        assert_ne!(id, 0);
+
+        assert_eq!(escribir_mat(id, f32::NAN, 0.9, 0.9, 0, 0), 0);
+        let (df, sf, b, _, _) = leer_mat(id).expect("material_get falló");
+        assert_aprox(df, 0.5);
+        assert_aprox(sf, 0.5);
+        assert_aprox(b, 0.5);
+    }
+
+    #[test]
+    fn indice_fuera_de_rango() {
+        let _guard = FFI_TEST_LOCK.lock().unwrap();
+        let mut world = PhysicsWorld::new();
+        let (ent, _) = cuerpo(&mut world, 1);
+        let _world = registrar(world);
+
+        assert_eq!(unsafe { glass_collider_get_shared_material(ent, 99) }, 0);
+        assert_eq!(unsafe { glass_collider_set_shared_material(ent, 99, 1) }, 0);
+        assert_eq!(unsafe { glass_collider_get_shared_material(999_999, 0) }, 0);
+        assert_eq!(unsafe { glass_collider_set_shared_material(999_999, 0, 1) }, 0);
+    }
+
+    /// El hueco que el test físico de C6 dejó al descubierto: los tests de
+    /// C6 comprobaban fricción/restitución en vivo tras `set_shared`, pero
+    /// ningún test leía las reglas de combinación del collider vivo. Un
+    /// material con bounciness 1 y bounceCombine Maximum que llegara con
+    /// Average pasaba todos los tests y rebotaba a ~0,29 en el editor.
+    #[test]
+    fn set_shared_aplica_los_combines_en_vivo() {
+        let _guard = FFI_TEST_LOCK.lock().unwrap();
+        let mut world = PhysicsWorld::new();
+        let (ent, bh) = cuerpo(&mut world, 1);
+        let world = registrar(world);
+
+        // bounciness 1, friction Average (0), bounce Maximum (3): los mismos
+        // valores que el script PhysicsMaterialBounceTest crea por C#.
+        let mat = crear_mat(0.0, 0.0, 1.0, 0, 3);
+        assert_ne!(mat, 0);
+        assert_eq!(
+            unsafe { glass_collider_set_shared_material(ent, 0, mat) },
+            1
+        );
+
+        let w = world.lock().unwrap();
+        let (f, r) = friccion(&w, bh);
+        assert_aprox(f, 0.0);
+        assert_aprox(r, 1.0);
+        let reglas = w.collider_combine_rules(bh);
+        assert_eq!(reglas.len(), 1);
+        assert_eq!(reglas[0].0, CoefficientCombineRule::Average);
+        assert_eq!(reglas[0].1, CoefficientCombineRule::Max);
+    }
+
+    /// Rebote de punta a punta por la vía FFI, a paso fijo 1/60: suelo
+    /// legado 0.05/Average y bola con material C# (bounciness 1, Maximum).
+    /// Con Maximum el par combina a max(1.0, 0.05) = 1.0 y la bola debe
+    /// volver casi a su altura de caída (ratio > 0.9). Es el mismo rebote
+    /// que el test físico mide en el editor, sin su reloj ni su lentitud.
+    #[test]
+    fn rebote_maximum_llega_cerca_de_la_caida() {
+        use glass_core::physics_material::MaterialCombine;
+        use rapier3d::dynamics::CoefficientCombineRule;
+
+        let _guard = FFI_TEST_LOCK.lock().unwrap();
+        let mut world = PhysicsWorld::new();
+
+        // Suelo estático, cara superior en y=0.5, legado 0.7/0.05 Average.
+        let legado = PhysicsMaterial {
+            dynamic_friction: 0.7,
+            static_friction: 0.7,
+            bounciness: 0.05,
+            friction_combine: MaterialCombine::Average,
+            bounce_combine: MaterialCombine::Average,
+        };
+        let suelo = world.create_rigid_body(
+            201,
+            BodyType::Static,
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        );
+        world
+            .attach_box_collider(suelo, [5.0, 0.5, 5.0], &legado, "")
+            .expect("collider del suelo");
+
+        // Bola dinámica en y=4 por la vía de script (attach + slot).
+        let bola = world.create_rigid_body(
+            202,
+            BodyType::Dynamic,
+            [0.0, 4.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        );
+        world
+            .attach_sphere_collider(bola, 0.5, &PhysicsMaterial::PROJECT_DEFAULT, "")
+            .expect("collider de la bola");
+        // Igual que el script C#: sin amortiguación, para que el ratio mida
+        // solo restitution + combine (el motor crea los dinámicos con 1.5).
+        assert!(world.set_linear_damping(bola, 0.0));
+        let world = registrar(world);
+
+        let mat = crear_mat(0.0, 0.0, 1.0, 0, 3);
+        assert_ne!(mat, 0);
+        assert_eq!(
+            unsafe { glass_collider_set_shared_material(202, 0, mat) },
+            1
+        );
+
+        let (rapier_bola, _) = world
+            .lock()
+            .unwrap()
+            .get_rapier_handle(bola)
+            .expect("handle rapier de la bola");
+        let reglas = world.lock().unwrap().collider_combine_rules(bola);
+        assert_eq!(reglas.len(), 1);
+        assert_eq!(reglas[0].1, CoefficientCombineRule::Max);
+
+        // Caída (3 m hasta el contacto en y=1.0) + rebote, a 1/60 fijo.
+        let mut impacto = false;
+        let mut apex = 0.0f32;
+        for _ in 0..600 {
+            world.lock().unwrap().step(1.0 / 60.0);
+            let y = world
+                .lock()
+                .unwrap()
+                .rigid_body_set
+                .get(rapier_bola)
+                .expect("cuerpo de la bola")
+                .translation()
+                .y;
+            if !impacto {
+                if y <= 1.02 {
+                    impacto = true;
+                }
+            } else if y > apex {
+                apex = y;
+            }
+            if impacto && y > 3.9 {
+                break;
+            }
+        }
+        assert!(impacto, "la bola nunca llegó al suelo");
+        let ratio = (apex - 1.0) / 3.0;
+        assert!(
+            ratio > 0.9,
+            "rebote con Maximum: ratio {ratio}, apex {apex} (se esperaba > 0.9)"
+        );
+    }
 }

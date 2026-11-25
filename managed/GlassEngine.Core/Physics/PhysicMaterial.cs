@@ -1,24 +1,38 @@
+using GlassEngine.Core.Interop;
+
 namespace GlassEngine.Core.Physics
 {
-    /// <summary>
-    /// Material físico mínimo (Unity: PhysicMaterial). El motor no tiene
-    /// sistema de assets de materiales físicos: es un objeto de datos con
-    /// fricción y restitución que el CharacterController aplica a su
-    /// cápsula al asignarlo a Material/SharedMaterial.
-    /// </summary>
-    public sealed class PhysicMaterial
+    public sealed class PhysicMaterial : PhysicsMaterial
     {
-        public float Friction { get; set; } = 0.0f;
-        public float Restitution { get; set; } = 0.0f;
-
-        public PhysicMaterial() { }
-
-        public PhysicMaterial(float friction, float restitution)
+        public float Friction
         {
-            Friction = friction;
-            Restitution = restitution;
+            get => dynamicFriction;
+            set => dynamicFriction = value;
         }
 
-        internal PhysicMaterial Clone() => new PhysicMaterial(Friction, Restitution);
+        public float Restitution
+        {
+            get => bounciness;
+            set => bounciness = value;
+        }
+
+        public PhysicMaterial()
+            : base(0.0f, 0.6f, 0.0f, PhysicsMaterialCombine.Average, PhysicsMaterialCombine.Average)
+        {
+        }
+
+        public PhysicMaterial(float friction, float restitution)
+            : base(friction, 0.6f, restitution, PhysicsMaterialCombine.Average, PhysicsMaterialCombine.Average)
+        {
+        }
+
+        // Único Clone: el override del base (el runtime sigue siendo
+        // PhysicMaterial; quien lo necesite tipado, que haga el cast).
+        internal override PhysicsMaterial Clone() => new PhysicMaterial(Friction, Restitution)
+        {
+            staticFriction = staticFriction,
+            frictionCombine = frictionCombine,
+            bounceCombine = bounceCombine
+        };
     }
 }
