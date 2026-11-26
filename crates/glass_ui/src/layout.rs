@@ -817,7 +817,7 @@ mod tests {
         };
 
         let nodo_raiz = NodoDocumento {
-            entidad: 1,
+            entidad: 1, nombre: String::new(),
             padre: None,
             hijos: vec![1],
             graphic: TipoGraphic::Ninguno,
@@ -842,7 +842,7 @@ mod tests {
         };
 
         let nodo_inactivo = NodoDocumento {
-            entidad: 2,
+            entidad: 2, nombre: String::new(),
             padre: Some(0),
             hijos: vec![2],
             graphic: TipoGraphic::Texto,
@@ -861,7 +861,7 @@ mod tests {
         };
 
         let nodo_hijo = NodoDocumento {
-            entidad: 3,
+            entidad: 3, nombre: String::new(),
             padre: Some(1),
             hijos: vec![],
             graphic: TipoGraphic::Ninguno,
@@ -918,7 +918,7 @@ mod tests {
         grupo: Option<glass_core::scene::LayoutGroupData>,
     ) -> crate::documento::NodoDocumento {
         crate::documento::NodoDocumento {
-            entidad,
+            entidad, nombre: String::new(),
             padre,
             hijos,
             graphic: TipoGraphic::Ninguno,
@@ -946,7 +946,7 @@ mod tests {
     /// Canvas raíz de referencia = viewport (escala 1).
     fn canvas_flex(entidad: u64, hijos: Vec<usize>, w: f32, h: f32) -> crate::documento::NodoDocumento {
         crate::documento::NodoDocumento {
-            entidad,
+            entidad, nombre: String::new(),
             padre: None,
             hijos,
             graphic: TipoGraphic::Ninguno,
@@ -1122,7 +1122,7 @@ mod tests {
             canvas_raiz: 0,
             nodos: vec![
                 NodoDocumento {
-                    entidad: 1, padre: None, hijos: vec![1, 2, 3],
+                    entidad: 1, nombre: String::new(), padre: None, hijos: vec![1, 2, 3],
                     graphic: TipoGraphic::Ninguno, es_canvas: true, es_canvas_raiz: true,
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [400.0, 80.0], anchor_min: [0.0, 0.0], anchor_max: [0.0, 0.0], pivot: [0.0, 0.0] },
@@ -1132,7 +1132,7 @@ mod tests {
                     raycast_target: false,
                 },
                 NodoDocumento {
-                    entidad: 2, padre: Some(0), hijos: vec![],
+                    entidad: 2, nombre: String::new(), padre: Some(0), hijos: vec![],
                     graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [100.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
@@ -1140,7 +1140,7 @@ mod tests {
                     style_extra: String::new(), raycast_target: false,
                 },
                 NodoDocumento {
-                    entidad: 3, padre: Some(0), hijos: vec![],
+                    entidad: 3, nombre: String::new(), padre: Some(0), hijos: vec![],
                     graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [80.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
@@ -1148,7 +1148,7 @@ mod tests {
                     style_extra: String::new(), raycast_target: false,
                 },
                 NodoDocumento {
-                    entidad: 4, padre: Some(0), hijos: vec![],
+                    entidad: 4, nombre: String::new(), padre: Some(0), hijos: vec![],
                     graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [60.0, 30.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
@@ -1178,7 +1178,7 @@ mod tests {
             canvas_raiz: 0,
             nodos: vec![
                 NodoDocumento {
-                    entidad: 1, padre: None, hijos: vec![1, 2, 3],
+                    entidad: 1, nombre: String::new(), padre: None, hijos: vec![1, 2, 3],
                     graphic: TipoGraphic::Ninguno, es_canvas: true, es_canvas_raiz: true,
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [320.0, 80.0], anchor_min: [0.0, 0.0], anchor_max: [0.0, 0.0], pivot: [0.0, 0.0] },
@@ -1188,7 +1188,7 @@ mod tests {
                     raycast_target: false,
                 },
                 NodoDocumento {
-                    entidad: 2, padre: Some(0), hijos: vec![],
+                    entidad: 2, nombre: String::new(), padre: Some(0), hijos: vec![],
                     graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [100.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
@@ -1196,7 +1196,7 @@ mod tests {
                     style_extra: String::new(), raycast_target: false,
                 },
                 NodoDocumento {
-                    entidad: 3, padre: Some(0), hijos: vec![],
+                    entidad: 3, nombre: String::new(), padre: Some(0), hijos: vec![],
                     graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [100.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
@@ -1204,7 +1204,7 @@ mod tests {
                     style_extra: String::new(), raycast_target: false,
                 },
                 NodoDocumento {
-                    entidad: 4, padre: Some(0), hijos: vec![],
+                    entidad: 4, nombre: String::new(), padre: Some(0), hijos: vec![],
                     graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [100.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
@@ -1233,7 +1233,7 @@ mod tests {
                 canvas_raiz: 0,
                 nodos: vec![
                     NodoDocumento {
-                        entidad: 1, padre: None, hijos: vec![1],
+                        entidad: 1, nombre: String::new(), padre: None, hijos: vec![1],
                         graphic: TipoGraphic::Ninguno, es_canvas: true, es_canvas_raiz: true,
                         activo: true,
                         rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [1000.0, 1000.0], anchor_min: [0.0, 0.0], anchor_max: [0.0, 0.0], pivot: [0.0, 0.0] },
@@ -1242,7 +1242,7 @@ mod tests {
                         style_extra: String::new(), raycast_target: false,
                     },
                     NodoDocumento {
-                        entidad, padre: Some(0), hijos: vec![],
+                        entidad, nombre: String::new(), padre: Some(0), hijos: vec![],
                         graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
                         activo: true,
                         rect_transform: RectTransformData { anchored_position: [0.0, y], size_delta: [50.0, 50.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },

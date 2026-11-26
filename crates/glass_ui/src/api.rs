@@ -14,6 +14,8 @@
 //!   del componente → `style_extra`, con la pseudo-clase del estado.
 
 use crate::documento::Documento;
+
+pub use crate::interaccion::RastreadorClic;
 use crate::estilos::StyleProps;
 
 /// Tamaño del viewport en píxeles físicos (1280×720 en los tests).
@@ -77,19 +79,46 @@ pub struct EstilosExtra {
     pub avisos: Vec<String>,
 }
 
-/// Sesión de arrastre (espejo de `DragSession` de `canvas_ui`).
-#[derive(Debug, Clone, PartialEq)]
+/// Sesión de arrastre activa (el `nombre` viene del documento).
+#[derive(Clone, Debug, Default)]
 pub struct SesionArrastre {
     pub entidad: u64,
     pub nombre: String,
     pub accion_inicio: String,
     pub accion_fin: String,
+    /// Puntero - esquina del rect en el momento de pulsar.
+    pub agarre: [f32; 2],
+    /// `anchored_position` del rect_transform al pulsar.
+    pub anclado_inicial: [f32; 2],
+    /// Esquina (x, y) del rect al pulsar.
+    pub origen_inicial: [f32; 2],
 }
 
-/// Destino de soltado: la entidad bajo el puntero al soltar.
-#[derive(Debug, Clone, Copy, PartialEq)]
+impl SesionArrastre {
+    /// Posición anclada que corresponde al puntero (x, y) durante el arrastre.
+    pub fn follow(&self, x: f32, y: f32) -> [f32; 2] {
+        let origen_deseado = [x - self.agarre[0], y - self.agarre[1]];
+        [
+            self.anclado_inicial[0] + (origen_deseado[0] - self.origen_inicial[0]),
+            self.anclado_inicial[1] + (origen_deseado[1] - self.origen_inicial[1]),
+        ]
+    }
+
+    /// Devuelve el `anchored_position` capturado al pulsar.
+    pub fn anclado_inicial(&self) -> [f32; 2] {
+        self.anclado_inicial
+    }
+}
+
+/// Destino válido para soltar un arrastre (el `nombre` viene del documento).
+#[derive(Clone, Debug, Default)]
 pub struct DestinoSoltar {
     pub entidad: u64,
+    pub nombre: String,
+    /// `anchored_position` del destino (o [0,0] si no tiene rect_transform).
+    pub anclado: [f32; 2],
+    /// Acción `on_drop` del destino.
+    pub accion_soltar: String,
 }
 
 /// Medida de texto: ancho máximo → tamaño (ancho, alto). P2 lo
@@ -104,23 +133,34 @@ pub fn colocar_documento(doc: &Documento, viewport: Viewport) -> DocumentoColoca
     crate::layout::colocar_documento(doc, viewport)
 }
 
-/// Hit-test: la entidad del nodo superior con `raycast_target` bajo
-/// el punto, o `None` (P4).
-pub fn hit_test(_colocado: &DocumentoColocado, _x: f32, _y: f32) -> Option<u64> {
-    todo!("V2 P4: hit-test")
+/// Devuelve la entidad bajo (x, y) según orden de pintado. Necesita `doc`
+/// porque `raycast_target`, `interactable` y `drag` no viajan en el colocado.
+pub fn hit_test(
+    doc: &Documento,
+    colocado: &DocumentoColocado,
+    x: f32,
+    y: f32,
+) -> Option<u64> {
+    crate::interaccion::hit_test(doc, colocado, x, y)
 }
 
-/// Inicio de arrastre sobre un nodo con `UIDragData` (P4).
-pub fn arrastre_pulsar(_colocado: &DocumentoColocado, _x: f32, _y: f32) -> Option<SesionArrastre> {
-    todo!("V2 P4: arrastre")
+/// Inicia un arrastre bajo (x, y).
+pub fn arrastre_pulsar(
+    doc: &Documento,
+    colocado: &DocumentoColocado,
+    x: f32,
+    y: f32,
+) -> Option<SesionArrastre> {
+    crate::interaccion::arrastre_pulsar(doc, colocado, x, y)
 }
 
-/// Destino de soltado (P4).
+/// Busca destino de soltar para la entidad `arrastrada`.
 pub fn arrastre_soltar(
-    _colocado: &DocumentoColocado,
-    _arrastrada: u64,
-    _x: f32,
-    _y: f32,
+    doc: &Documento,
+    colocado: &DocumentoColocado,
+    arrastrada: u64,
+    x: f32,
+    y: f32,
 ) -> Option<DestinoSoltar> {
-    todo!("V2 P4: arrastre")
+    crate::interaccion::arrastre_soltar(doc, colocado, arrastrada, x, y)
 }

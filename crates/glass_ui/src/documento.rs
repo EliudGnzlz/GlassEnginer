@@ -24,6 +24,9 @@ pub enum TipoGraphic {
 pub struct NodoDocumento {
     /// Id de la entidad de escena de la que deriva.
     pub entidad: u64,
+    /// Nombre de la entidad: viaja con el documento para que las
+    /// sesiones de arrastre y los destinos de suelta lo lleven consigo.
+    pub nombre: String,
     pub padre: Option<usize>,
     pub hijos: Vec<usize>,
     pub graphic: TipoGraphic,

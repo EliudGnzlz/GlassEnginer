@@ -180,6 +180,7 @@ fn construir_nodo(
 
     NodoDocumento {
         entidad: ent.id,
+        nombre: ent.name.clone(),
         padre,
         hijos: Vec::new(),
         graphic,

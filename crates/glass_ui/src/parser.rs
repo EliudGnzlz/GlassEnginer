@@ -672,7 +672,7 @@ mod pruebas {
 
     fn nodo_texto(extra: &str) -> NodoDocumento {
         NodoDocumento {
-            entidad: 1,
+            entidad: 1, nombre: String::new(),
             padre: None,
             hijos: vec![],
             graphic: TipoGraphic::Texto,

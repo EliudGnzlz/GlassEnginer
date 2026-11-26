@@ -22,6 +22,7 @@ use glass_ui::api::{
     arrastre_pulsar, arrastre_soltar, colocar_documento, hit_test, DocumentoColocado, Viewport,
 };
 use glass_ui::derivacion::derivar_documentos;
+use glass_ui::documento::Documento;
 
 const VP: Viewport = Viewport {
     ancho: 1280.0,
@@ -98,9 +99,17 @@ fn escena_boton() -> (SceneState, u64) {
 }
 
 fn colocar(scene: &SceneState) -> DocumentoColocado {
+    colocar_con_doc(scene).1
+}
+
+/// Deriva el documento y lo coloca, devolviendo ambos: el hit-test de
+/// P4 necesita el `Documento` (raycast_target/interactable/drag no
+/// viajan en el colocado).
+fn colocar_con_doc(scene: &SceneState) -> (Documento, DocumentoColocado) {
     let docs = derivar_documentos(scene);
     let doc = docs.into_iter().next().expect("un documento");
-    colocar_documento(&doc, VP)
+    let colocado = colocar_documento(&doc, VP);
+    (doc, colocado)
 }
 
 fn rect_de(colocado: &DocumentoColocado, entidad: u64) -> [f32; 4] {
@@ -244,35 +253,37 @@ fn sin_ui_devuelve_documento_vacio() {
 #[test]
 fn hit_test_acierta_el_centro_del_boton() {
     let (scene, id) = escena_boton();
-    assert_eq!(hit_test(&colocar(&scene), 640.0, 360.0), Some(id));
+    let (doc, colocado) = colocar_con_doc(&scene);
+    assert_eq!(hit_test(&doc, &colocado, 640.0, 360.0), Some(id));
 }
 
 #[test]
 fn hit_test_falla_fuera_del_boton() {
     let (scene, _) = escena_boton();
-    let colocado = colocar(&scene);
-    assert_eq!(hit_test(&colocado, 10.0, 10.0), None);
-    assert_eq!(hit_test(&colocado, 640.0, 100.0), None);
-    assert_eq!(hit_test(&colocado, 100.0, 360.0), None);
+    let (doc, colocado) = colocar_con_doc(&scene);
+    assert_eq!(hit_test(&doc, &colocado, 10.0, 10.0), None);
+    assert_eq!(hit_test(&doc, &colocado, 640.0, 100.0), None);
+    assert_eq!(hit_test(&doc, &colocado, 100.0, 360.0), None);
 }
 
 #[test]
 fn hit_test_bordes_izquierdo_y_superior_dentro_derecho_e_inferior_fuera() {
     let (scene, id) = escena_boton();
-    let colocado = colocar(&scene);
+    let (doc, colocado) = colocar_con_doc(&scene);
     // Rect: x ∈ [530, 750), y ∈ [332, 388).
-    assert_eq!(hit_test(&colocado, 530.0, 332.0), Some(id));
-    assert_eq!(hit_test(&colocado, 749.9, 387.9), Some(id));
-    assert_eq!(hit_test(&colocado, 750.0, 360.0), None);
-    assert_eq!(hit_test(&colocado, 640.0, 388.0), None);
-    assert_eq!(hit_test(&colocado, 529.9, 360.0), None);
+    assert_eq!(hit_test(&doc, &colocado, 530.0, 332.0), Some(id));
+    assert_eq!(hit_test(&doc, &colocado, 749.9, 387.9), Some(id));
+    assert_eq!(hit_test(&doc, &colocado, 750.0, 360.0), None);
+    assert_eq!(hit_test(&doc, &colocado, 640.0, 388.0), None);
+    assert_eq!(hit_test(&doc, &colocado, 529.9, 360.0), None);
 }
 
 #[test]
 fn hit_test_omite_inactivos_y_no_interactuables() {
     let (mut scene, _) = escena_boton();
     scene.entities.iter_mut().find(|e| e.id == 2).unwrap().active = false;
-    assert_eq!(hit_test(&colocar(&scene), 640.0, 360.0), None);
+    let (doc, colocado) = colocar_con_doc(&scene);
+    assert_eq!(hit_test(&doc, &colocado, 640.0, 360.0), None);
 
     let (mut scene, id) = escena_boton();
     scene
@@ -284,7 +295,8 @@ fn hit_test_omite_inactivos_y_no_interactuables() {
         .as_mut()
         .unwrap()
         .interactable = false;
-    assert_eq!(hit_test(&colocar(&scene), 640.0, 360.0), None);
+    let (doc, colocado) = colocar_con_doc(&scene);
+    assert_eq!(hit_test(&doc, &colocado, 640.0, 360.0), None);
 }
 
 #[test]
@@ -296,8 +308,8 @@ fn hit_test_con_solape_gana_el_ultimo_de_la_escena() {
     ];
     enlazar(&mut ents, 1, 2);
     enlazar(&mut ents, 1, 3);
-    let colocado = colocar(&escena(ents));
-    assert_eq!(hit_test(&colocado, 640.0, 360.0), Some(3));
+    let (doc, colocado) = colocar_con_doc(&escena(ents));
+    assert_eq!(hit_test(&doc, &colocado, 640.0, 360.0), Some(3));
 }
 
 // --- Clic (pulsar/soltar, sin máquina de estados: ver [FALTA EN CONTRATO]) ---
@@ -305,9 +317,9 @@ fn hit_test_con_solape_gana_el_ultimo_de_la_escena() {
 #[test]
 fn clic_completo_pulsar_y_soltar_dentro() {
     let (scene, id) = escena_boton();
-    let colocado = colocar(&scene);
-    assert_eq!(hit_test(&colocado, 640.0, 360.0), Some(id));
-    assert_eq!(hit_test(&colocado, 645.0, 355.0), Some(id));
+    let (doc, colocado) = colocar_con_doc(&scene);
+    assert_eq!(hit_test(&doc, &colocado, 640.0, 360.0), Some(id));
+    assert_eq!(hit_test(&doc, &colocado, 645.0, 355.0), Some(id));
     let ent = scene.entities.iter().find(|e| e.id == id).unwrap();
     assert_eq!(
         ent.ui_button.as_ref().unwrap().on_click_action, "StartGame",
@@ -318,17 +330,17 @@ fn clic_completo_pulsar_y_soltar_dentro() {
 #[test]
 fn clic_se_cancela_al_soltar_fuera() {
     let (scene, id) = escena_boton();
-    let colocado = colocar(&scene);
-    assert_eq!(hit_test(&colocado, 640.0, 360.0), Some(id));
-    assert_eq!(hit_test(&colocado, 20.0, 20.0), None);
+    let (doc, colocado) = colocar_con_doc(&scene);
+    assert_eq!(hit_test(&doc, &colocado, 640.0, 360.0), Some(id));
+    assert_eq!(hit_test(&doc, &colocado, 20.0, 20.0), None);
 }
 
 #[test]
 fn sin_clic_si_la_pulsacion_fue_fuera() {
     let (scene, id) = escena_boton();
-    let colocado = colocar(&scene);
-    assert_eq!(hit_test(&colocado, 20.0, 20.0), None);
-    assert_eq!(hit_test(&colocado, 640.0, 360.0), Some(id));
+    let (doc, colocado) = colocar_con_doc(&scene);
+    assert_eq!(hit_test(&doc, &colocado, 20.0, 20.0), None);
+    assert_eq!(hit_test(&doc, &colocado, 640.0, 360.0), Some(id));
 }
 
 #[test]
@@ -341,10 +353,11 @@ fn clic_no_salta_de_un_boton_a_otro() {
     enlazar(&mut ents, 1, 2);
     enlazar(&mut ents, 1, 3);
     let mut scene = escena(ents);
-    let colocado = colocar(&scene);
-    assert_eq!(hit_test(&colocado, 640.0, 360.0), Some(3));
+    let (doc, colocado) = colocar_con_doc(&scene);
+    assert_eq!(hit_test(&doc, &colocado, 640.0, 360.0), Some(3));
     scene.entities.iter_mut().find(|e| e.id == 3).unwrap().active = false;
-    assert_eq!(hit_test(&colocar(&scene), 640.0, 360.0), Some(2));
+    let (doc, colocado) = colocar_con_doc(&scene);
+    assert_eq!(hit_test(&doc, &colocado, 640.0, 360.0), Some(2));
 }
 
 #[test]
@@ -355,8 +368,8 @@ fn escena_real_canvas_ui_test_el_boton_jugar_recibe_el_clic() {
     );
     let mut scene = SceneState::default();
     scene.load_from_json(path).expect("la escena de prueba carga");
-    let colocado = colocar(&scene);
-    let hit = hit_test(&colocado, 640.0, 360.0).expect("el centro cae en el botón JUGAR");
+    let (doc, colocado) = colocar_con_doc(&scene);
+    let hit = hit_test(&doc, &colocado, 640.0, 360.0).expect("el centro cae en el botón JUGAR");
     let ent = scene.entities.iter().find(|e| e.id == hit).unwrap();
     assert_eq!(ent.name, "Start Button Test");
     assert_eq!(ent.ui_button.as_ref().unwrap().on_click_action, "StartGame");
@@ -401,12 +414,12 @@ fn press_devuelve_el_draggable_y_fuera_da_none() {
         ancho: 800.0,
         alto: 600.0,
     });
-    let sesion = arrastre_pulsar(&colocado, 400.0, 300.0).expect("debe pulsar el draggable");
+    let sesion = arrastre_pulsar(&doc, &colocado, 400.0, 300.0).expect("debe pulsar el draggable");
     assert_eq!(sesion.entidad, 2);
     assert_eq!(sesion.nombre, "arrastrable");
     assert_eq!(sesion.accion_inicio, "begin");
     assert_eq!(sesion.accion_fin, "end");
-    assert!(arrastre_pulsar(&colocado, 10.0, 10.0).is_none());
+    assert!(arrastre_pulsar(&doc, &colocado, 10.0, 10.0).is_none());
 }
 
 #[test]
@@ -421,7 +434,7 @@ fn follow_conserva_el_agarre() {
         ancho: 800.0,
         alto: 600.0,
     });
-    let sesion = arrastre_pulsar(&colocado, 400.0, 300.0).expect("debe pulsar el draggable");
+    let sesion = arrastre_pulsar(&doc, &colocado, 400.0, 300.0).expect("debe pulsar el draggable");
     assert_eq!(sesion.entidad, 2);
 }
 
@@ -440,7 +453,7 @@ fn drop_target_excluye_al_arrastrado_y_da_none_sin_casilla() {
         ancho: 800.0,
         alto: 600.0,
     });
-    let hit = arrastre_soltar(&colocado, 2, 400.0, 300.0).expect("debe encontrar la casilla");
+    let hit = arrastre_soltar(&doc, &colocado, 2, 400.0, 300.0).expect("debe encontrar la casilla");
     assert_eq!(hit.entidad, 10);
 
     let mut ents2 = vec![canvas_raiz(1), arrastrable(2, "arrastrado", [0.0, 0.0])];
@@ -451,7 +464,7 @@ fn drop_target_excluye_al_arrastrado_y_da_none_sin_casilla() {
         ancho: 800.0,
         alto: 600.0,
     });
-    assert!(arrastre_soltar(&colocado2, 2, 400.0, 300.0).is_none());
+    assert!(arrastre_soltar(&doc2, &colocado2, 2, 400.0, 300.0).is_none());
 }
 
 #[test]
@@ -469,7 +482,7 @@ fn un_no_draggable_encima_no_bloquea_al_draggable_de_debajo() {
         ancho: 800.0,
         alto: 600.0,
     });
-    let sesion = arrastre_pulsar(&colocado, 400.0, 300.0).expect("debe atravesar el no draggable");
+    let sesion = arrastre_pulsar(&doc, &colocado, 400.0, 300.0).expect("debe atravesar el no draggable");
     assert_eq!(sesion.entidad, 2);
     assert_eq!(sesion.nombre, "debajo");
 }

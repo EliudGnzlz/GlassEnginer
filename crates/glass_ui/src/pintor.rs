@@ -488,7 +488,7 @@ mod tests {
     /// Helper: crea un NodoDocumento mínimo activo sin graphic.
     fn nodo_base(entidad: u64, padre: Option<usize>, hijos: Vec<usize>) -> NodoDocumento {
         NodoDocumento {
-            entidad,
+            entidad, nombre: String::new(),
             padre,
             hijos,
             graphic: TipoGraphic::Ninguno,
