@@ -3074,8 +3074,15 @@ fn estado_instancia_prefab(
     match glass_core::prefab::Prefab::resolver_ruta(raiz_proyecto, fuente) {
         None => Some(EstadoInstanciaPrefab::VinculoRoto),
         Some(_) => {
-            let huella_actual =
-                glass_core::prefab::huella_subarbol(scene.entities.iter(), raiz_id, |e| e.id);
+            // La clave es el id LOCAL del asset, no el id de escena: el
+            // hash guardado se calculó con ids locales al instanciar, y
+            // ambos solo coinciden por casualidad en escenas vacías (la
+            // misma clave que usa `refrescar_instancias_prefab`).
+            let huella_actual = glass_core::prefab::huella_subarbol(
+                scene.entities.iter(),
+                raiz_id,
+                |e| e.prefab_local_id.unwrap_or(u64::MAX),
+            );
             if Some(huella_actual) == hash_guardado {
                 Some(EstadoInstanciaPrefab::Intacta)
             } else {
@@ -3129,9 +3136,22 @@ mod tests {
         let prefab = Prefab::from_entity(&origen, r).unwrap();
         prefab.save_to_file(assets.join("mi_prefab.prefab.json")).unwrap();
 
-        // Instancia vinculada en una escena de trabajo.
+        // Instancia vinculada en una escena de trabajo. El relleno previo
+        // desplaza los ids de escena para que NUNCA coincidan con los ids
+        // locales del asset: con la clave equivocada (id de escena) este
+        // test pasaba en falso y una instancia recién creada se leía
+        // «Modificada» en escenas reales (cazado en el test físico de C).
         let mut scene = SceneState::new();
+        for i in 0..3 {
+            scene.create_entity(format!("Relleno{i}"), vec!["Transform".into()]);
+        }
         let inst = scene.instantiate_prefab(&prefab, None, None, Some(fuente));
+        let raiz_inst = scene.get_entity(inst).unwrap();
+        assert_ne!(
+            raiz_inst.id,
+            raiz_inst.prefab_local_id.unwrap(),
+            "el test exige ids de escena distintos de los locales"
+        );
 
         // Entidad normal: sin estado.
         let normal = scene.create_entity("Normal".into(), vec!["Transform".into()]);
