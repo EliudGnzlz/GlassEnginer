@@ -244,3 +244,28 @@ explícita). No se re-audita: máximo una re-auditoría y no se usa.
 - **Pez 1 Menor, sin rollback → APLICAR.** El borrado de `canvas_ui`
   va en un único commit en la rama de V2; revertirlo restaura el
   sistema viejo. Sin feature flag: la rama es el mecanismo.
+
+## 9. Addenda al cierre de P0/P1 (2026-11-26)
+
+- **P0 cerrado** (`lu/v2-nucleo` 74f49de): contrato en `api.rs` + 23 tests
+  portados en `tests/port_canvas_ui.rs`: 3 pasan, 20 en rojo por `todo!()`
+  en `colocar_documento` (verificado por Lu: los 20 panics son en
+  `api.rs:104`). Puerta G1 cumplida.
+- **P1 cerrado** (`lu/v2-nucleo` 391e977): `parser.rs` con parser CSS,
+  cascada y fuzz (500 entradas, semilla fija); lib 24 passed (13 + 11
+  nuevos). Los stubs de `parsear_estilo_extra`/`resolver_estilos` se
+  borraron de `api.rs` al aplicar lo real.
+- **G0 verificado**: `glslang-tools` instalado en la VM de Lu,
+  `glslangValidator` 15.1.0 en `/usr/bin/glslangValidator`; compila
+  `ui.vert` y `ui.frag` a `/tmp` con RC 0. P2 puede arrancar.
+- **[FALTA EN CONTRATO] (del port P0, para P2/P3/P4):** (1) máquina de
+  estados pulsar/soltar (`ButtonClickTracker`) — P4; (2) función de
+  pintado `pintar_documento -> Vec<Segmento>` para los conteos de
+  vértices — P3; (3) `SesionArrastre::follow()` y agarre — P4;
+  (4) `DestinoSoltar` incompleto (falta nombre, anchored, drop_action)
+  — P4; (5) `preserve_aspect` necesita el tamaño del sprite (el
+  contrato no lo recibe) — P2/P3; (6) `hit_test` debe confirmar que
+  omite botones con `interactable = false` — P4.
+- **Medición de los paquetes:** los informes de P0/P1 no trajeron la
+  medición de proveedor (chars); desde P2, cada informe de paquete
+  trae su medición como manda la norma.
