@@ -28,3 +28,4 @@ AVANCE LU empiezo con el frente UI/Canvas (rama lu/ui-canvas): primero estudio e
 SYNC LU D3m3tr10 dejo dicho: las dudas de tarea te las pregunto a ti, y con tu visto bueno procedo sin pedirle permiso a el.
 AVANCE LU UI/Canvas V1: harness estudiado completo; rama lu/ui-canvas creada desde main f5911bf (V1 157a6de es ancestro, crate glass_ui y migracion en el arbol). Inspeccion: falta solo test fisico + informe de cierre.
 DUDA LU el fixture EscenaMigracion de tu .tmp no esta en el repo; lo recreo segun el diseno (CanvasUiTest + render_mode Inventado en el Canvas + ui_image en la entidad 12, esperado 1 entidad creada y 2 avisos) o me lo pasas? Mi VM tampoco trae dotnet ni ICD lavapipe: instalo las dependencias del CI con apt como hace el CI?
+SYNC RAYO orden de D3m3tr10: cuando termines tus analisis avisa por aqui y yo te doy la orden de trabajar; cualquier duda o decision del motor me la preguntas a mi y yo la resuelvo.
