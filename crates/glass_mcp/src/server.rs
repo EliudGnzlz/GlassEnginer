@@ -66,6 +66,81 @@ fn cargar_controlador_animator(
     glass_core::animator::AnimatorController::load_from_file(&ruta)
 }
 
+/// Localiza el .csproj de la fachada (donde viven los scripts C#
+/// del motor) con la búsqueda canónica del Ripper.
+fn fachada_csproj() -> Option<std::path::PathBuf> {
+    glass_ripper::entorno::buscar_fachada()
+}
+
+/// Recorre los .cs bajo `dir` (sin bin/obj) y extrae, por archivo,
+/// las clases declaradas con su namespace. Devuelve
+/// (ruta relativa, clases (nombre completo, es_script)).
+fn listar_clases_cs(
+    dir: &std::path::Path,
+) -> Vec<(String, Vec<(String, bool)>)> {
+    let mut salida: Vec<(String, Vec<(String, bool)>)> = Vec::new();
+    let mut pila: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
+    while let Some(d) = pila.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        let mut entradas: Vec<_> = rd.filter_map(|e| e.ok()).collect();
+        entradas.sort_by_key(|e| e.file_name());
+        for e in entradas {
+            let ruta = e.path();
+            let nombre = e.file_name().to_string_lossy().to_string();
+            if ruta.is_dir() {
+                if nombre != "bin" && nombre != "obj" {
+                    pila.push(ruta);
+                }
+                continue;
+            }
+            if !nombre.ends_with(".cs") {
+                continue;
+            }
+            let Ok(texto) = std::fs::read_to_string(&ruta) else {
+                continue;
+            };
+            let mut ns = String::new();
+            let mut clases: Vec<(String, bool)> = Vec::new();
+            for linea in texto.lines() {
+                let l = linea.trim();
+                if let Some(resto) = l.strip_prefix("namespace ") {
+                    ns = resto
+                        .trim_end_matches(['{', ';'])
+                        .trim()
+                        .to_string();
+                }
+                if l.contains(" class ") || l.starts_with("class ") {
+                    let tras = l.split("class ").nth(1).unwrap_or("");
+                    let nombre_clase: String = tras
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    if !nombre_clase.is_empty() {
+                        let completo = if ns.is_empty() {
+                            nombre_clase
+                        } else {
+                            format!("{ns}.{nombre_clase}")
+                        };
+                        let es_script = l.contains(": GlassBehaviour")
+                            || l.contains(": MonoBehaviour");
+                        clases.push((completo, es_script));
+                    }
+                }
+            }
+            if !clases.is_empty() {
+                let rel = ruta
+                    .strip_prefix(dir)
+                    .unwrap_or(&ruta)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                salida.push((rel, clases));
+            }
+        }
+    }
+    salida.sort();
+    salida
+}
+
 fn referencia_physmat(name: &str) -> Result<String, String> {
     use glass_core::physics_material::{es_referencia_physmat_valida, PhysicsMaterial};
 
@@ -104,6 +179,7 @@ fn is_mutating_tool(name: &str) -> bool {
             | "glass_animator_play"
             | "glass_audio_source_control"
             | "glass_console_log"
+            | "glass_scripts_compile"
             | "glass_editor_selection"
             | "glass_editor_camera"
             | "glass_play_control"
@@ -816,6 +892,16 @@ impl McpServer {
                                 },
                                 "required": []
                             }
+                        },
+                        {
+                            "name": "glass_scripts_list",
+                            "description": "Lista las clases C# de la fachada (managed/GlassEngine.Core) con su archivo, marcando cuáles son scripts (derivan de GlassBehaviour/MonoBehaviour) asignables al componente Script.",
+                            "inputSchema": { "type": "object", "properties": {}, "required": [] }
+                        },
+                        {
+                            "name": "glass_scripts_compile",
+                            "description": "Compila de verdad la fachada y sus scripts con dotnet build y devuelve success y los errores CS extraídos. Es la compilación que luego carga el motor.",
+                            "inputSchema": { "type": "object", "properties": {}, "required": [] }
                         },
                         {
                             "name": "glass_prefab_instantiate",
@@ -5694,6 +5780,106 @@ impl McpServer {
                 )
             }
 
+            "glass_scripts_list" => {
+                let Some(csproj) = fachada_csproj() else {
+                    return McpResponse::error(
+                        id,
+                        -32004,
+                        "No se encontró la fachada GlassEngine.Core.csproj (GLASS_FACADE_CSPROJ o junto al ejecutable)",
+                    );
+                };
+                let dir = csproj.parent().unwrap_or(std::path::Path::new("."));
+                let archivos = listar_clases_cs(dir);
+                let total_clases: usize =
+                    archivos.iter().map(|(_, c)| c.len()).sum();
+                let total_scripts: usize = archivos
+                    .iter()
+                    .flat_map(|(_, c)| c.iter())
+                    .filter(|(_, es)| *es)
+                    .count();
+                let payload = json!({
+                    "project": csproj.to_string_lossy(),
+                    "files": archivos
+                        .iter()
+                        .map(|(rel, clases)| {
+                            json!({
+                                "file": rel,
+                                "classes": clases
+                                    .iter()
+                                    .map(|(n, es)| json!({ "name": n, "is_script": es }))
+                                    .collect::<Vec<_>>(),
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                    "total_classes": total_clases,
+                    "total_scripts": total_scripts,
+                });
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&payload).unwrap_or_default()
+                        }]
+                    }),
+                )
+            }
+
+            "glass_scripts_compile" => {
+                let Some(csproj) = fachada_csproj() else {
+                    return McpResponse::error(
+                        id,
+                        -32004,
+                        "No se encontró la fachada GlassEngine.Core.csproj (GLASS_FACADE_CSPROJ o junto al ejecutable)",
+                    );
+                };
+                let dotnet = std::env::var("GLASS_DOTNET")
+                    .unwrap_or_else(|_| "dotnet".to_string());
+                let t0 = std::time::Instant::now();
+                let salida = std::process::Command::new(&dotnet)
+                    .args(["build", "--nologo", "-v", "q"])
+                    .arg(&csproj)
+                    .env("DOTNET_NOLOGO", "1")
+                    .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
+                    .output();
+                match salida {
+                    Ok(out) => {
+                        let texto = format!(
+                            "{}\n{}",
+                            String::from_utf8_lossy(&out.stdout),
+                            String::from_utf8_lossy(&out.stderr)
+                        );
+                        let mut errores: Vec<String> = texto
+                            .lines()
+                            .filter(|l| l.contains("error CS"))
+                            .map(|l| l.trim().to_string())
+                            .collect();
+                        errores.dedup();
+                        errores.truncate(50);
+                        let payload = json!({
+                            "success": out.status.success(),
+                            "duration_ms": t0.elapsed().as_millis(),
+                            "errors": errores,
+                        });
+                        McpResponse::success(
+                            id,
+                            json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": serde_json::to_string_pretty(&payload)
+                                        .unwrap_or_default()
+                                }]
+                            }),
+                        )
+                    }
+                    Err(e) => McpResponse::error(
+                        id,
+                        -32004,
+                        format!("No se pudo ejecutar dotnet ({dotnet}): {e}"),
+                    ),
+                }
+            }
+
             _ => McpResponse::method_not_found(id, name),
         }
     }
@@ -6611,6 +6797,28 @@ fn entity_set_duplicate_find() {
             assert!(is_mutating_tool(tool), "{tool}");
             assert!(APP_EXEC_TOOLS.contains(&tool), "{tool}");
         }
+    }
+
+    #[test]
+    fn scripts_list_con_fachada_real_y_compile_sin_fachada() {
+        // Una sola fn para no pisar la variable de entorno entre tests.
+        let csproj = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../managed/GlassEngine.Core/GlassEngine.Core.csproj");
+        assert!(csproj.is_file(), "fachada real esperada en {}", csproj.display());
+        std::env::set_var("GLASS_FACADE_CSPROJ", &csproj);
+        let srv = servidor();
+        let plano = |r: String| r.replace("\\\"", "\"");
+        let r = plano(llamar(&srv, "glass_scripts_list", json!({})));
+        assert!(r.contains("PlayerController"), "{r}");
+        assert!(r.contains("\"is_script\": true"), "{r}");
+        assert!(r.contains("\"total_scripts\":"), "{r}");
+        assert!(is_mutating_tool("glass_scripts_compile"));
+        assert!(!is_mutating_tool("glass_scripts_list"));
+
+        std::env::set_var("GLASS_FACADE_CSPROJ", "/ruta/inexistente/X.csproj");
+        let r = llamar(&srv, "glass_scripts_compile", json!({}));
+        assert!(r.contains("-32004"), "{r}");
+        std::env::remove_var("GLASS_FACADE_CSPROJ");
     }
 
     #[test]
