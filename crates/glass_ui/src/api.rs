@@ -40,6 +40,29 @@ impl RectColocado {
     }
 }
 
+
+// Añadir DESPUÉS de la definición de DocumentoColocado (o junto a los otros tipos públicos):
+
+/// Celda de avance de un carácter en coordenadas de documento.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CeldaCaracter {
+    /// Índice del carácter en `texto.chars()`, empezando en 0.
+    pub indice: usize,
+    /// El carácter.
+    pub caracter: char,
+    /// `[x, y, ancho_avance, alto_línea]` en coordenadas de documento (píxeles físicos).
+    pub celda: [f32; 4],
+}
+
+/// Mapa carácter→posición para un nodo de texto colocado.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct MapaTexto {
+    /// Una celda por cada carácter visible colocado.
+    pub celdas: Vec<CeldaCaracter>,
+    /// Texto que se ve tras aplicar el modo de desbordamiento.
+    pub texto_visible: String,
+}
+
 /// Un nodo con su rect y sus estilos ya resueltos.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodoColocado {
@@ -47,6 +70,8 @@ pub struct NodoColocado {
     pub entidad: u64,
     pub rect: RectColocado,
     pub estilos: StyleProps,
+    /// Mapa carácter→posición del texto (vacío si no es texto).
+    pub mapa_texto: MapaTexto,
 }
 
 /// El documento colocado: la salida del layout (P2).

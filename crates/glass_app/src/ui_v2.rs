@@ -586,6 +586,44 @@ mod tests {
         assert_eq!(segs[2].batch.vertex_count(), 18);
     }
 
+
+    #[test]
+    fn lote_v2_fuente_desconocida_cae_al_atlas_por_defecto() {
+        use glass_core::{EntityData, RectTransformData};
+        let mut scene = SceneState::default();
+        let mut canvas = canvas_raiz();
+        canvas.children = vec![2];
+        let mut e_txt = EntityData::new(2, "texto".to_string(), Vec::new());
+        e_txt.active = true;
+        e_txt.parent = Some(1);
+        e_txt.rect_transform = Some(RectTransformData {
+            anchored_position: [0.0, 0.0],
+            size_delta: [220.0, 56.0],
+            anchor_min: [0.5, 0.5],
+            anchor_max: [0.5, 0.5],
+            pivot: [0.5, 0.5],
+        });
+        e_txt.ui_text = Some(glass_core::UITextData {
+            text: "A\u{20ac}\u{e000}".to_string(),
+            font_size: 16.0,
+            font: "fuente_que_no_existe".to_string(),
+            ..Default::default()
+        });
+        scene.replace_entities(vec![canvas, e_txt]);
+
+        let imgs = UiSceneImages::new();
+        let mut font = atlas();
+        let mut fonts = UiFonts { default: &mut font, named: &mut std::collections::HashMap::new() };
+        let segs = build_canvas_batch_v2(&scene, &mut fonts, &imgs, 800.0, 600.0);
+        // Cadena de reserva: fuente de proyecto ausente -> atlas por
+        // defecto; '€' se inserta dinámicamente; U+E000 no tiene
+        // contorno y se sustituye por '?'. El lote es un solo segmento
+        // de texto (3 glifos x 6 vértices) en el atlas Font.
+        assert_eq!(segs.len(), 1, "solo el segmento de texto");
+        assert_eq!(segs[0].atlas, UiAtlasKind::Font);
+        assert_eq!(segs[0].batch.vertex_count(), 18);
+    }
+
     #[test]
     fn lote_v2_sin_canvas_devuelve_vacio() {
         let scene = SceneState::default();
