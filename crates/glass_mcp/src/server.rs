@@ -55,6 +55,17 @@ pub const APP_EXEC_TOOLS: [&str; 5] = ["glass_play_control", "glass_scene_save",
 
 /// Normaliza el nombre de un material físico a su referencia
 /// (ruta relativa a Assets con el sufijo `.physmat.json`).
+/// Carga el AnimatorController nombrado desde
+/// `<assets>/animators/<nombre>.animator.json`.
+fn cargar_controlador_animator(
+    controller: &str,
+) -> Result<glass_core::animator::AnimatorController, String> {
+    let ruta = carpeta_assets()
+        .join("animators")
+        .join(format!("{controller}.animator.json"));
+    glass_core::animator::AnimatorController::load_from_file(&ruta)
+}
+
 fn referencia_physmat(name: &str) -> Result<String, String> {
     use glass_core::physics_material::{es_referencia_physmat_valida, PhysicsMaterial};
 
@@ -90,6 +101,7 @@ fn is_mutating_tool(name: &str) -> bool {
             | "glass_import_model"
             | "glass_entity_set"
             | "glass_entity_duplicate"
+            | "glass_animator_play"
             | "glass_play_control"
             | "glass_scene_save"
             | "glass_scene_load"
@@ -717,6 +729,31 @@ impl McpServer {
                                     "name": { "type": "string", "description": "Subcadena del nombre" },
                                     "component": { "type": "string", "description": "Nombre canónico de componente (p. ej. Transform)" }
                                 }
+                            }
+                        },
+                        {
+                            "name": "glass_animator_play",
+                            "description": "Controla la reproducción del Animator de una entidad: play (clip o estado), crossfade (con fundido) o stop. Sin controlador, play fija el clip; con controlador, salta al estado.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "integer" },
+                                    "action": { "type": "string", "enum": ["play", "crossfade", "stop"] },
+                                    "state": { "type": "string", "description": "Nombre del clip o estado (requerido para play/crossfade)" },
+                                    "fade": { "type": "number", "description": "Duración del fundido en crossfade (por defecto 0.25)" }
+                                },
+                                "required": ["entity_id", "action"]
+                            }
+                        },
+                        {
+                            "name": "glass_animator_info",
+                            "description": "Clips, estados y parámetros del Animator de una entidad: el componente, su controlador (si lo hay) y el estado de runtime.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "integer" }
+                                },
+                                "required": ["entity_id"]
                             }
                         },
                         {
@@ -5249,6 +5286,209 @@ impl McpServer {
         }))
     }
 
+    "glass_animator_play" => {
+        let entity_id = match args.get("entity_id").and_then(|v| v.as_u64()) {
+            Some(v) => v,
+            None => return McpResponse::invalid_params(id, "entity_id requerido"),
+        };
+
+        let action = match args.get("action").and_then(|v| v.as_str()) {
+            Some(v) => v,
+            None => return McpResponse::invalid_params(id, "action requerido"),
+        };
+
+        if !matches!(action, "play" | "crossfade" | "stop") {
+            return McpResponse::invalid_params(id, "action inválida");
+        }
+
+        let ent = match scene.entities.iter_mut().find(|e| e.id == entity_id) {
+            Some(e) => e,
+            None => {
+                return McpResponse::error(
+                    id,
+                    -32001,
+                    format!("Entity #{entity_id} not found"),
+                )
+            }
+        };
+
+        match action {
+            "stop" => {
+                let animator = match ent.animator.as_mut() {
+                    Some(a) => a,
+                    None => {
+                        return McpResponse::error(
+                            id,
+                            -32004,
+                            "La entidad no tiene Animator",
+                        )
+                    }
+                };
+
+                animator.playing = false;
+                animator.pending_play = None;
+                animator.pending_free_crossfade = None;
+
+                let payload = json!({
+                    "entity_id": entity_id,
+                    "action": action,
+                    "playing": animator.playing,
+                    "clip": animator.clip.clone(),
+                    "controller": animator.controller.clone(),
+                    "current_state": animator.current_state.clone(),
+                    "pending": serde_json::Value::Null,
+                });
+
+                McpResponse::success(id, json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&payload).unwrap_or_default() }] }))
+            }
+            "play" | "crossfade" => {
+                let state = match args.get("state").and_then(|v| v.as_str()) {
+                    Some(s) if !s.is_empty() => s.to_string(),
+                    _ => return McpResponse::invalid_params(id, "state requerido"),
+                };
+
+                let fade = match args.get("fade") {
+                    Some(v) => match v.as_f64() {
+                        Some(f) => f as f32,
+                        None => {
+                            return McpResponse::invalid_params(
+                                id,
+                                "fade debe ser un número",
+                            )
+                        }
+                    },
+                    None => 0.25,
+                };
+
+                let animator = ent.animator.get_or_insert_with(Default::default);
+                if !ent.components.iter().any(|c| c == "Animator") {
+                    ent.components.push("Animator".to_string());
+                }
+
+                if animator.controller.is_empty() {
+                    if action == "play" {
+                        animator.clip = state;
+                        animator.playing = true;
+                    } else {
+                        animator.pending_free_crossfade =
+                            Some((state, fade.max(0.0)));
+                        animator.playing = true;
+                    }
+                } else {
+                    let fade = if action == "play" {
+                        0.1
+                    } else {
+                        fade.max(0.0)
+                    };
+                    animator.pending_play = Some((state, fade));
+                    animator.playing = true;
+                }
+
+                let pending = animator
+                    .pending_play
+                    .as_ref()
+                    .map(|(name, _)| name.clone())
+                    .or_else(|| {
+                        animator
+                            .pending_free_crossfade
+                            .as_ref()
+                            .map(|(name, _)| name.clone())
+                    });
+
+                let payload = json!({
+                    "entity_id": entity_id,
+                    "action": action,
+                    "playing": animator.playing,
+                    "clip": animator.clip.clone(),
+                    "controller": animator.controller.clone(),
+                    "current_state": animator.current_state.clone(),
+                    "pending": pending,
+                });
+
+                McpResponse::success(id, json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&payload).unwrap_or_default() }] }))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    "glass_animator_info" => {
+        let entity_id = match args.get("entity_id").and_then(|v| v.as_u64()) {
+            Some(v) => v,
+            None => return McpResponse::invalid_params(id, "entity_id requerido"),
+        };
+
+        let ent = match scene.entities.iter().find(|e| e.id == entity_id) {
+            Some(e) => e,
+            None => {
+                return McpResponse::error(
+                    id,
+                    -32001,
+                    format!("Entity #{entity_id} not found"),
+                )
+            }
+        };
+
+        let animator = match ent.animator.as_ref() {
+            Some(a) => a,
+            None => {
+                return McpResponse::error(
+                    id,
+                    -32004,
+                    "La entidad no tiene Animator",
+                )
+            }
+        };
+
+        let mut out = json!({
+            "entity_id": entity_id,
+            "clip": animator.clip.clone(),
+            "playing": animator.playing,
+            "speed": animator.speed,
+            "controller": animator.controller.clone(),
+            "current_state": animator.current_state.clone(),
+            "state_time": animator.state_time,
+            "params": animator.params.clone(),
+            "states": serde_json::Value::Null,
+            "default_state": serde_json::Value::Null,
+            "parameters": serde_json::Value::Null,
+        });
+
+        if !animator.controller.is_empty() {
+            match cargar_controlador_animator(&animator.controller) {
+                Ok(ctrl) => {
+                    out["states"] = json!(ctrl
+                        .states
+                        .iter()
+                        .map(|s| json!({
+                            "name": s.name.clone(),
+                            "clip": s.clip.clone(),
+                            "speed": s.speed,
+                            "loop": s.r#loop,
+                        }))
+                        .collect::<Vec<_>>());
+
+                    out["default_state"] = json!(ctrl.default_state);
+
+                    out["parameters"] = json!(ctrl
+                        .parameters
+                        .iter()
+                        .map(|p| json!({
+                            "name": p.name.clone(),
+                            "kind": serde_json::to_value(p.kind)
+                                .unwrap_or(serde_json::Value::Null),
+                            "default": p.default,
+                        }))
+                        .collect::<Vec<_>>());
+                }
+                Err(e) => {
+                    out["controller_error"] = json!(e);
+                }
+            }
+        }
+
+        McpResponse::success(id, json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&out).unwrap_or_default() }] }))
+    }
+
             _ => McpResponse::method_not_found(id, name),
         }
     }
@@ -6037,6 +6277,58 @@ fn entity_set_duplicate_find() {
     );
     assert!(r.contains("-32602"), "auto-padre: {r}");
 }
+
+    #[test]
+    fn animator_play_e_info() {
+        let srv = servidor();
+        let plano = |r: String| r.replace("\\\"", "\"");
+
+        let creada = llamar(&srv, "glass_create_entity", json!({ "name": "AnimatorTest" }));
+        let entity_id = id_desde_texto(&creada);
+        llamar(
+            &srv,
+            "glass_component_set",
+            json!({
+                "entity_id": entity_id,
+                "component": "Animator",
+                "values": { "clip": "Idle", "playing": false }
+            }),
+        );
+
+        let info = plano(llamar(&srv, "glass_animator_info", json!({ "entity_id": entity_id })));
+        assert!(info.contains("\"clip\": \"Idle\""), "{info}");
+        assert!(info.contains("\"states\": null"), "{info}");
+
+        let play = plano(llamar(
+            &srv,
+            "glass_animator_play",
+            json!({ "entity_id": entity_id, "action": "play", "state": "Run" }),
+        ));
+        assert!(play.contains("\"playing\": true"), "{play}");
+        assert!(play.contains("\"clip\": \"Run\""), "{play}");
+
+        let stop = plano(llamar(
+            &srv,
+            "glass_animator_play",
+            json!({ "entity_id": entity_id, "action": "stop" }),
+        ));
+        assert!(stop.contains("\"playing\": false"), "{stop}");
+
+        let missing = llamar(
+            &srv,
+            "glass_animator_play",
+            json!({ "entity_id": 999999, "action": "play", "state": "Run" }),
+        );
+        assert!(missing.contains("-32001"), "{missing}");
+
+        let creada2 = llamar(&srv, "glass_create_entity", json!({ "name": "SinAnimator" }));
+        let entity_id2 = id_desde_texto(&creada2);
+        let info2 = llamar(&srv, "glass_animator_info", json!({ "entity_id": entity_id2 }));
+        assert!(info2.contains("-32004"), "{info2}");
+
+        assert!(is_mutating_tool("glass_animator_play"));
+        assert!(!is_mutating_tool("glass_animator_info"));
+    }
 
     #[test]
     fn prefab_list_responde_con_el_formato() {
