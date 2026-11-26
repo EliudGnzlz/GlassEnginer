@@ -160,17 +160,26 @@ impl MedidaTexto for MedidorTexto {
         let scaled = font.as_scaled(scale);
         let line_height = scaled.ascent() - scaled.descent() + scaled.line_gap();
 
-        let avances = avances_con_kern(texto, tamano);
-        let ancho_total: f32 = avances.iter().map(|a| a.1).sum();
-
-        if !ancho_max.is_finite() || ancho_total <= ancho_max {
-            return (ancho_total, line_height);
+        // '\n' es salto forzado: cada párrafo se mide por separado, igual
+        // que el mapa (antes, medir contaba '\n' como un carácter normal
+        // y devolvía una sola línea de alto; el mapa producía varias).
+        let mut ancho = 0.0f32;
+        let mut alto = 0.0f32;
+        for parrafo in texto.split('\n') {
+            let avances = avances_con_kern(parrafo, tamano);
+            let ancho_total: f32 = avances.iter().map(|a| a.1).sum();
+            if !ancho_max.is_finite() || ancho_total <= ancho_max {
+                ancho = ancho.max(ancho_total);
+                alto += line_height;
+            } else {
+                let lineas = partir_en_lineas(&avances, ancho_max);
+                alto += line_height * lineas.len() as f32;
+                ancho = ancho.max(
+                    lineas.iter().map(|l| l.ancho).fold(0.0f32, f32::max),
+                );
+            }
         }
-
-        let lineas = partir_en_lineas(&avances, ancho_max);
-        let num_lineas = lineas.len().max(1) as f32;
-        let ancho_max_linea = lineas.iter().map(|l| l.ancho).fold(0.0f32, f32::max);
-        (ancho_max_linea, line_height * num_lineas)
+        (ancho, alto)
     }
 }
 
@@ -212,7 +221,10 @@ pub fn construir_mapa_texto(
 
     match overflow {
         TextOverflow::Truncar if !sin_restriccion => {
-            let avances = avances_con_kern(texto, tamano);
+            // Una sola línea: '\n' termina el texto visible (antes, los
+            // avances se calculaban sobre todo el texto incluido '\n').
+            let primera_linea = texto.split('\n').next().unwrap_or("");
+            let avances = avances_con_kern(primera_linea, tamano);
             let mut celdas = Vec::new();
             let mut texto_visible = String::new();
             let mut x_acum = 0.0f32;
@@ -237,7 +249,9 @@ pub fn construir_mapa_texto(
             MapaTexto { celdas, texto_visible }
         }
         TextOverflow::PuntosSuspensivos if !sin_restriccion => {
-            let avances = avances_con_kern(texto, tamano);
+            // Una sola línea: '\n' termina el texto visible.
+            let primera_linea = texto.split('\n').next().unwrap_or("");
+            let avances = avances_con_kern(primera_linea, tamano);
             // Medir el carácter '…'
             let ellipsis_gid = scaled.glyph_id('…');
             let ellipsis_w = scaled.h_advance(ellipsis_gid);
@@ -259,7 +273,7 @@ pub fn construir_mapa_texto(
                     });
                     x_acum += avance;
                 }
-                return MapaTexto { celdas, texto_visible: texto.to_string() };
+                return MapaTexto { celdas, texto_visible: primera_linea.to_string() };
             }
             let mut celdas = Vec::new();
             let mut texto_visible = String::new();
@@ -1790,6 +1804,49 @@ mod tests {
         let a = mapa.celdas.iter().find(|c| c.indice == 0).expect("debe existir A");
         assert!((a.celda[1] - 0.0).abs() <= 0.01, "A debe estar en la línea 0");
         assert_eq!(mapa.texto_visible, texto);
+    }
+
+    #[test]
+    fn medir_con_salto_de_linea_cuenta_dos_lineas() {
+        // Hallazgo pez 1/2 (fin de módulo V3): medir contaba '\n' como
+        // un carácter normal y devolvía una sola línea de alto mientras
+        // el mapa producía dos. Ahora medir y mapa coinciden.
+        let medidor = MedidorTexto::new();
+        let tam = 16.0;
+        let (ancho, alto) = medidor.medir("AB\nCD", tam, f32::INFINITY);
+        assert!((alto - 2.0 * alto_linea(tam)).abs() <= 0.01, "alto={alto}");
+        let (ancho_ab, _) = medidor.medir("AB", tam, f32::INFINITY);
+        let (ancho_cd, _) = medidor.medir("CD", tam, f32::INFINITY);
+        assert!((ancho - ancho_ab.max(ancho_cd)).abs() <= 0.01, "ancho={ancho}");
+    }
+
+    #[test]
+    fn mapa_texto_truncar_y_puntos_se_detienen_en_salto_de_linea() {
+        // Hallazgo pez 1/2: Truncar/PuntosSuspensivos calculaban avances
+        // sobre todo el texto incluido '\n'. Una sola línea: el salto
+        // termina el texto visible.
+        let tam = 16.0;
+        let mapa = construir_mapa_texto(
+            "abc\ndef",
+            tam,
+            1000.0,
+            TextOverflow::Truncar,
+            "Left",
+            [0.0, 0.0],
+        );
+        assert_eq!(mapa.texto_visible, "abc");
+        assert!(mapa.celdas.iter().all(|c| c.indice < 3));
+
+        let mapa = construir_mapa_texto(
+            "abcdefgh\nxyz",
+            tam,
+            40.0,
+            TextOverflow::PuntosSuspensivos,
+            "Left",
+            [0.0, 0.0],
+        );
+        assert!(!mapa.texto_visible.contains('\n'), "sin salto: {}", mapa.texto_visible);
+        assert!(mapa.texto_visible.ends_with('…'), "con puntos: {}", mapa.texto_visible);
     }
 
 

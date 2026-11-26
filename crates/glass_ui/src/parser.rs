@@ -913,6 +913,19 @@ mod pruebas {
     }
 
     #[test]
+    fn outline_no_existe_como_propiedad() {
+        // Hallazgo pez 2 (fin de módulo V3): V3b afirma contorno
+        // "verificado vacuo" sin ninguna comprobación. No hay propiedad
+        // de contorno en V3: cualquier declaración outline se rechaza
+        // con aviso y no asigna nada.
+        let r = parsear_estilo_extra("outline: 2px solid red;");
+        assert_eq!(r.base.text_overflow, None);
+        assert!(!r.avisos.is_empty());
+        let r = parsear_estilo_extra("text-outline: 1px;");
+        assert!(!r.avisos.is_empty());
+    }
+
+    #[test]
     fn fusionar_text_overflow_respeta_la_capa() {
         let mut destino = StyleProps::default();
         let capa = StyleProps {
