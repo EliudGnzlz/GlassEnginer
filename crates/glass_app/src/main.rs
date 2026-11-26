@@ -53,7 +53,6 @@ use glass_scripting::{
 };
 use glass_scripting::host::FalloDotnet;
 mod bake;
-mod canvas_ui;
 mod ui_v2;
 mod prefabs_vivos;
 mod luces_objeto;
@@ -2060,7 +2059,7 @@ struct GlassEngineApp {
     /// escena activa (uno por línea); si cambia, se reconstruye el
     /// mapa y se resube el atlas al renderer.
     pub ui_images_key: String,
-    pub ui_images_map: canvas_ui::UiSceneImages,
+    pub ui_images_map: crate::ui_v2::UiSceneImages,
     /// Atlas de CPU de las fuentes con nombre (assets/fonts) que
     /// la escena usa, y el registro de las que fallaron al cargar
     /// (para no reintentar ni repetir el aviso cada frame).
@@ -2575,7 +2574,7 @@ impl GlassEngineApp {
             scene_state,
             portal_prev_pos: std::collections::HashMap::new(),
             ui_images_key: String::new(),
-            ui_images_map: canvas_ui::UiSceneImages::new(),
+            ui_images_map: crate::ui_v2::UiSceneImages::new(),
             ui_font_atlases: std::collections::HashMap::new(),
             materiales: std::collections::HashMap::new(),
             materiales_failed: std::collections::HashSet::new(),
@@ -3399,7 +3398,7 @@ impl GlassEngineApp {
         let cargada = match self.scene_state.lock() {
             Ok(mut sc) => match sc.load_from_json(scene_path) {
                 Ok(()) => {
-                    crate::canvas_ui::migrar_ui_escena_cargada(&mut sc, Some(scene_path));
+                    glass_ui::migracion::migrar_escena_cargada(&mut sc, Some(scene_path), cfg!(feature = "editor"));
                     crate::prefabs_vivos::refrescar_prefabs_escena_cargada(
                         &mut sc,
                         self.raiz_proyecto_actual.as_deref(),
@@ -4508,7 +4507,7 @@ for stem in &referenciados {
                 // Migración UI en memoria de la escena recién
                 // sustituida (sin ruta: esta vía no escribe copia).
                 if let Ok(mut sc) = self.scene_state.lock() {
-                    crate::canvas_ui::migrar_ui_escena_cargada(&mut sc, None);
+                    glass_ui::migracion::migrar_escena_cargada(&mut sc, None, cfg!(feature = "editor"));
                     // `raiz_proyecto_actual` solo existe en la build con
                     // editor: sin él, el refresco es no-op (mismo patrón
                     // que en la recarga bajo demanda y en materiales).
@@ -5661,7 +5660,7 @@ let resueltos = if body.has_collider {
             // pedir este mismo candado — invocando dentro, el primer
             // botón que crease un objeto colgaría el frame. Antes ningún
             // handler tocaba la escena y el riesgo era latente.
-            let mut completed_click: Option<canvas_ui::CanvasButtonClick> = None;
+            let mut completed_click: Option<crate::ui_v2::CanvasButtonClick> = None;
             if let Ok(scene) = self.scene_state.lock() {
                 let docs = glass_ui::derivacion::derivar_documentos(&scene);
                 let doc = docs.into_iter().next();
@@ -5692,7 +5691,7 @@ let resueltos = if body.has_collider {
                                 .find(|n| n.entidad == ent_boton)
                                 .map(|n| n.nombre.clone())
                                 .unwrap_or_default();
-                            completed_click = Some(canvas_ui::CanvasButtonClick {
+                            completed_click = Some(crate::ui_v2::CanvasButtonClick {
                                 entity_id: ent_boton,
                                 entity_name: nombre,
                                 action: accion,
@@ -8137,11 +8136,11 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                     if key != self.ui_images_key {
                         self.ui_images_key = key;
                         let built = match self.scene_state.lock() {
-                            Ok(scene) => canvas_ui::build_ui_scene_images(
+                            Ok(scene) => crate::ui_v2::build_ui_scene_images(
                                 &scene,
                                 std::path::Path::new("assets"),
                             ),
-                            Err(_) => (canvas_ui::UiSceneImages::new(), None),
+                            Err(_) => (crate::ui_v2::UiSceneImages::new(), None),
                         };
                         self.ui_images_map = built.0;
                         match built.1 {
@@ -8209,7 +8208,7 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 match self.scene_state.lock() {
                     Ok(scene) => crate::ui_v2::build_canvas_batch_v2(
                         &scene,
-                        &canvas_ui::UiFonts {
+                        &crate::ui_v2::UiFonts {
                             default: font,
                             named: &self.ui_font_atlases,
                         },
@@ -9086,9 +9085,10 @@ impl ApplicationHandler for GlassEngineApp {
                 let cargada = match self.scene_state.lock() {
                     Ok(mut sc) => match sc.load_from_json(scene_file) {
                         Ok(()) => {
-                            crate::canvas_ui::migrar_ui_escena_cargada(
+                            glass_ui::migracion::migrar_escena_cargada(
                                 &mut sc,
                                 Some(scene_file.as_str()),
+                                cfg!(feature = "editor"),
                             );
                             let raiz = crate::prefabs_vivos::raiz_desde_ruta_escena(scene_file);
                             crate::prefabs_vivos::refrescar_prefabs_escena_cargada(
@@ -9119,9 +9119,10 @@ impl ApplicationHandler for GlassEngineApp {
                     let cargada = match self.scene_state.lock() {
                         Ok(mut sc) => match sc.load_from_json(&default_sc) {
                             Ok(()) => {
-                                crate::canvas_ui::migrar_ui_escena_cargada(
+                                glass_ui::migracion::migrar_escena_cargada(
                                     &mut sc,
                                     Some(default_sc.as_str()),
+                                    cfg!(feature = "editor"),
                                 );
                                 let raiz =
                                     crate::prefabs_vivos::raiz_desde_ruta_escena(&default_sc);

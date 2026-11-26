@@ -1,7 +1,111 @@
-use crate::canvas_ui;
 use glass_core::scene::SceneState;
 use glass_renderer::ui::{FontAtlas, UiAtlasKind, UiBatch, UiSegment, MODO_COLOR, MODO_IMAGEN, MODO_SOMBRA};
 use glass_ui::pintor::{MedidaImagen, ModoPintado, Segmento};
+
+
+/// Fuentes disponibles para maquetar el Canvas: la incrustada
+/// («default», la DejaVu) y las cargadas de assets/fonts por
+/// nombre. La app mantiene los atlas de CPU (para medir) y el
+/// renderer, los pases GPU con el mismo nombre.
+pub struct UiFonts<'a> {
+    pub default: &'a FontAtlas,
+    pub named: &'a std::collections::HashMap<String, FontAtlas>,
+}
+
+impl<'a> UiFonts<'a> {
+    /// Atlas y tipo de segmento para un nombre de fuente:
+    /// «default», vacío o desconocido → la incrustada.
+    pub fn resolve(&self, name: &str) -> (&'a FontAtlas, UiAtlasKind) {
+        if name.is_empty() || name == "default" {
+            return (self.default, UiAtlasKind::Font);
+        }
+        match self.named.get(name) {
+            Some(atlas) => (atlas, UiAtlasKind::FontNamed(name.to_string())),
+            None => (self.default, UiAtlasKind::Font),
+        }
+    }
+}
+
+/// Un clic completado sobre un botón del Canvas: qué entidad es y qué
+/// acción declara su `UIButtonData` (`on_click_action`, el «On Click
+/// Event» del inspector).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanvasButtonClick {
+    pub entity_id: u64,
+    pub entity_name: String,
+    pub action: String,
+}
+
+/// Entrada del mapa de imágenes de la escena: uv en el atlas y tamaño
+/// original en píxeles (necesario para `preserve_aspect`).
+#[derive(Clone, Debug)]
+pub struct UiImageEntry {
+    pub uv: [f32; 4],
+    pub pixel_size: (u32, u32),
+}
+
+/// Sprites de la escena indexados por nombre de sprite.
+pub type UiSceneImages = std::collections::HashMap<String, UiImageEntry>;
+
+/// Recoge los sprites distintos de las entidades activas (en orden de
+/// primera aparición), los decodifica desde `assets_root` y los empaqueta
+/// en un atlas. Devuelve el mapa de sprites y el atlas (si hubo alguno).
+pub fn build_ui_scene_images(
+    scene: &SceneState,
+    assets_root: &std::path::Path,
+) -> (UiSceneImages, Option<glass_renderer::UiImageAtlas>) {
+    let mut mapa: UiSceneImages = UiSceneImages::new();
+
+    // 1) nombres distintos, orden determinista = orden de aparición
+    let mut nombres: Vec<String> = Vec::new();
+    for ent in scene.entities.iter().filter(|e| e.active) {
+        if let Some(img) = &ent.ui_image {
+            if !img.sprite.is_empty() && !nombres.iter().any(|n| n == &img.sprite) {
+                nombres.push(img.sprite.clone());
+            }
+        }
+    }
+    if nombres.is_empty() {
+        return (mapa, None);
+    }
+
+    // 2) decodificación (los fallos se registran y se saltan)
+    let mut decodificadas: Vec<(String, image::RgbaImage)> = Vec::new();
+    for nombre in nombres {
+        let ruta = assets_root.join(&nombre);
+        match image::ImageReader::open(&ruta) {
+            Ok(reader) => match reader.decode() {
+                Ok(dinamica) => decodificadas.push((nombre, dinamica.to_rgba8())),
+                Err(e) => log::warn!("no se pudo decodificar {:?}: {}", ruta, e),
+            },
+            Err(e) => log::warn!("no se pudo abrir {:?}: {}", ruta, e),
+        }
+    }
+    if decodificadas.is_empty() {
+        return (mapa, None);
+    }
+
+    // 3) empaquetado en el mismo orden de primera aparición
+    let refs: Vec<(u32, u32, &[u8])> = decodificadas
+        .iter()
+        .map(|(_, img)| (img.width(), img.height(), img.as_raw().as_slice()))
+        .collect();
+    match glass_renderer::pack_ui_image_atlas(&refs, 2048) {
+        Some(atlas) => {
+            for ((nombre, img), uv) in decodificadas.iter().zip(atlas.uvs.iter()) {
+                mapa.insert(
+                    nombre.clone(),
+                    UiImageEntry {
+                        uv: *uv,
+                        pixel_size: (img.width(), img.height()),
+                    },
+                );
+            }
+            (mapa, Some(atlas))
+        }
+        None => (mapa, None),
+    }
+}
 
 /// Calcula el clip en coordenadas locales al quad, restando el origen del rect.
 fn clip_local(
@@ -144,7 +248,7 @@ pub fn push_segmento(
 
 /// Adaptador de `MedidaImagen` sobre el mapa de sprites de la escena.
 struct MedidaEscena<'a> {
-    imagenes: &'a canvas_ui::UiSceneImages,
+    imagenes: &'a UiSceneImages,
 }
 
 impl MedidaImagen for MedidaEscena<'_> {
@@ -169,8 +273,8 @@ fn segmento_mut(segs: &mut Vec<UiSegment>, kind: UiAtlasKind) -> &mut UiBatch {
 /// por atlas. Sin documento (escena sin Canvas) devuelve un vec vacío.
 pub fn build_canvas_batch_v2(
     scene: &SceneState,
-    fonts: &canvas_ui::UiFonts<'_>,
-    images: &canvas_ui::UiSceneImages,
+    fonts: &UiFonts<'_>,
+    images: &UiSceneImages,
     screen_w: f32,
     screen_h: f32,
 ) -> Vec<UiSegment> {
@@ -417,11 +521,11 @@ mod tests {
         canvas
     }
 
-    fn imagenes(uv: [f32; 4], pixel_size: (u32, u32)) -> canvas_ui::UiSceneImages {
-        let mut m = canvas_ui::UiSceneImages::new();
+    fn imagenes(uv: [f32; 4], pixel_size: (u32, u32)) -> UiSceneImages {
+        let mut m = UiSceneImages::new();
         m.insert(
             "sprite.png".to_string(),
-            canvas_ui::UiImageEntry { uv, pixel_size },
+            UiImageEntry { uv, pixel_size },
         );
         m
     }
@@ -464,7 +568,7 @@ mod tests {
 
         let imgs = imagenes([0.0, 0.0, 0.5, 0.5], (200, 100));
         let font = atlas();
-        let fonts = canvas_ui::UiFonts { default: &font, named: &std::collections::HashMap::new() };
+        let fonts = UiFonts { default: &font, named: &std::collections::HashMap::new() };
         let segs = build_canvas_batch_v2(&scene, &fonts, &imgs, 800.0, 600.0);
         // La cascada V2 pinta el fondo del componente antes que su
         // contenido: fondo blanco de la imagen, la imagen, fondo azul
@@ -481,9 +585,9 @@ mod tests {
     #[test]
     fn lote_v2_sin_canvas_devuelve_vacio() {
         let scene = SceneState::default();
-        let imgs = canvas_ui::UiSceneImages::new();
+        let imgs = UiSceneImages::new();
         let font = atlas();
-        let fonts = canvas_ui::UiFonts { default: &font, named: &std::collections::HashMap::new() };
+        let fonts = UiFonts { default: &font, named: &std::collections::HashMap::new() };
         let segs = build_canvas_batch_v2(&scene, &fonts, &imgs, 800.0, 600.0);
         assert!(segs.is_empty());
     }
