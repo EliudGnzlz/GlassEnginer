@@ -87,5 +87,10 @@ pub struct StyleProps {
     /// Columnas del grid (`grid-template-columns`): lista de tamaños
     /// en el orden de la plantilla; `Relleno` se expande en el layout.
     pub grid_template_columns: Option<Vec<TamanoColumna>>,
+    /// Orden de pintado dentro de la capa superior (`sort-order`).
+    pub sort_order: Option<i32>,
+    /// `true` = el nodo se pinta en la capa superior del documento,
+    /// sin heredar el clip del padre (`override-sorting`).
+    pub override_sorting: Option<bool>,
 }
 

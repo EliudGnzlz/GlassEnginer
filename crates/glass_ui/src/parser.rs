@@ -447,6 +447,15 @@ fn aplicar_declaracion(props: &mut StyleProps, avisos: &mut Vec<String>, prop: &
             Some(c) => props.grid_template_columns = Some(c),
             None => aviso_invalido(avisos, prop, valor),
         },
+        "sort-order" => match valor.trim().parse::<i32>() {
+            Ok(v) => props.sort_order = Some(v),
+            Err(_) => aviso_invalido(avisos, prop, valor),
+        },
+        "override-sorting" => match valor.trim().to_ascii_lowercase().as_str() {
+            "true" => props.override_sorting = Some(true),
+            "false" => props.override_sorting = Some(false),
+            _ => aviso_invalido(avisos, prop, valor),
+        },
         _ => avisos.push(format!("propiedad desconocida: '{prop}'")),
     }
 }
@@ -521,6 +530,8 @@ fn fusionar(destino: &mut StyleProps, capa: &StyleProps) {
     fusionar_campo!(destino, capa, color);
     fusionar_campo!(destino, capa, font_size);
     fusionar_campo!(destino, capa, grid_template_columns);
+    fusionar_campo!(destino, capa, sort_order);
+    fusionar_campo!(destino, capa, override_sorting);
 }
 
 /// Defecto del tipo: absoluto; con LayoutGroup, flex del grupo.

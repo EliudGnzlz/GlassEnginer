@@ -50,13 +50,59 @@ const SOLID_BLOCK: u32 = 8;
 /// frame pide más, se trunca con aviso en el log (ver `record`).
 const MAX_UI_VERTICES: usize = 16_384;
 
+/// Vértice de UI del lote V2 (144 bytes). Todos los canales viajan por
+/// atributo (sin buffers uniformes por dibujo) para permitir batchear
+/// rects con distinto radio/clip/degradado en una sola llamada.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct UiVertex {
-    pub pos: [f32; 2],   // píxeles de pantalla, origen arriba-izquierda
-    pub uv: [f32; 2],    // coordenadas en el atlas de fuente
-    pub color: [f32; 4], // RGBA lineal, igual convención que el resto del motor
+    pub pos: [f32; 2],     // 0: píxeles de pantalla, origen arriba-izquierda
+    pub uv: [f32; 2],      // 8: coordenadas en el atlas (texto/imagen)
+    pub color: [f32; 4],   // 16: RGBA PREMULTIPLICADO (rgb*a, a)
+    pub local: [f32; 2],   // 32: coordenada local al rect (px desde sup-izq)
+    pub tamano: [f32; 2],  // 40: tamaño del rect (px)
+    pub radios: [f32; 4],  // 48: radios de esquina [sup-izq, sup-der, inf-der, inf-izq]
+    pub clip: [f32; 4],    // 64: rect de clip LOCAL al nodo [x, y, w, h]; w<=0 = sin recorte
+    pub pack1: [f32; 4],   // 80: [clip_softness, modo, grad_angulo, grad_t0]
+    pub pack2: [f32; 4],   // 96: [grad_t1, desenfoque, 0, 0]
+    pub grad_c0: [f32; 4], // 112: color inicial del degradado (premult)
+    pub grad_c1: [f32; 4], // 128: color final del degradado (premult)
 }
+// Total: 144 bytes. Modos: 0 color, 1 imagen, 2 texto/SDF, 3 sombra.
+
+impl UiVertex {
+    /// Vértice V2 con radios, clip y degradado neutros (sin radio, sin
+    /// recorte, sin degradado, sin desenfoque). `modo` es MODO_COLOR,
+    /// MODO_IMAGEN, MODO_TEXTO o MODO_SOMBRA.
+    pub fn nuevo(
+        pos: [f32; 2],
+        uv: [f32; 2],
+        color: [f32; 4],
+        local: [f32; 2],
+        tamano: [f32; 2],
+        modo: f32,
+    ) -> Self {
+        Self {
+            pos,
+            uv,
+            color,
+            local,
+            tamano,
+            radios: [0.0; 4],
+            clip: [0.0; 4],
+            pack1: [0.0, modo, 0.0, 0.0],
+            pack2: [0.0; 4],
+            grad_c0: [0.0; 4],
+            grad_c1: [0.0; 4],
+        }
+    }
+}
+
+// Modos de pintado; P3b2 los usa para rellenar `pack1.y` sin números mágicos.
+pub const MODO_COLOR: f32 = 0.0;
+pub const MODO_IMAGEN: f32 = 1.0;
+pub const MODO_TEXTO: f32 = 2.0;
+pub const MODO_SOMBRA: f32 = 3.0;
 
 /// Métricas de un glifo en el atlas, en píxeles al tamaño de rasterizado.
 #[derive(Clone, Copy, Debug)]
@@ -272,12 +318,21 @@ impl UiBatch {
     /// Quad genérico: `rect` = [x, y, ancho, alto] en píxeles de
     /// pantalla; `uv` = (u0, v0, u1, v1) en el atlas.
     pub fn push_quad(&mut self, rect: [f32; 4], uv: [f32; 4], color: [f32; 4]) {
+        self.push_quad_modo(rect, uv, color, MODO_COLOR);
+    }
+
+    /// Quad con modo explícito (color/imagen/texto/sombra). `local` es la
+    /// coordenada dentro del rect (0,0 en su esquina superior izquierda) y
+    /// `tamano` el tamaño del rect; el shader los usa para radios, clip y
+    /// degradados.
+    pub fn push_quad_modo(&mut self, rect: [f32; 4], uv: [f32; 4], color: [f32; 4], modo: f32) {
         let [x, y, w, h] = rect;
         let [u0, v0, u1, v1] = uv;
-        let tl = UiVertex { pos: [x, y], uv: [u0, v0], color };
-        let tr = UiVertex { pos: [x + w, y], uv: [u1, v0], color };
-        let bl = UiVertex { pos: [x, y + h], uv: [u0, v1], color };
-        let br = UiVertex { pos: [x + w, y + h], uv: [u1, v1], color };
+        let tamano = [w, h];
+        let tl = UiVertex::nuevo([x, y], [u0, v0], color, [0.0, 0.0], tamano, modo);
+        let tr = UiVertex::nuevo([x + w, y], [u1, v0], color, [w, 0.0], tamano, modo);
+        let bl = UiVertex::nuevo([x, y + h], [u0, v1], color, [0.0, h], tamano, modo);
+        let br = UiVertex::nuevo([x + w, y + h], [u1, v1], color, [w, h], tamano, modo);
         self.vertices
             .extend_from_slice(&[tl, bl, tr, tr, bl, br]);
     }
@@ -316,7 +371,79 @@ impl UiBatch {
                     g.size[0] * k,
                     g.size[1] * k,
                 ];
-                self.push_quad(quad, g.uv, color);
+                self.push_quad_modo(quad, g.uv, color, MODO_TEXTO);
+            }
+            pen_x += g.advance * k;
+        }
+    }
+
+    /// Quad con todos los campos V2: radios de esquina, clip en
+    /// coordenadas LOCALES al rect (restar su origen), degradado
+    /// (ángulo, t0, t1, c0, c1) y desenfoque de sombra. `clip` es
+    /// `Some((rect_local, softness))` o `None` (sin recorte).
+    pub fn push_quad_extendido(
+        &mut self,
+        rect: [f32; 4],
+        uv: [f32; 4],
+        color: [f32; 4],
+        modo: f32,
+        radios: [f32; 4],
+        clip: Option<([f32; 4], f32)>,
+        degradado: Option<(f32, f32, f32, [f32; 4], [f32; 4])>,
+        desenfoque: f32,
+    ) {
+        let [x, y, w, h] = rect;
+        let [u0, v0, u1, v1] = uv;
+        let tamano = [w, h];
+        let (clip_rect, softness) = clip.unwrap_or(([0.0; 4], 0.0));
+        let (angulo, t0, t1, c0, c1) = degradado.unwrap_or((0.0, 0.0, 0.0, [0.0; 4], [0.0; 4]));
+        let base = |pos: [f32; 2], uv: [f32; 2], local: [f32; 2]| {
+            let mut v = UiVertex::nuevo(pos, uv, color, local, tamano, modo);
+            v.radios = radios;
+            v.clip = clip_rect;
+            v.pack1 = [softness, modo, angulo, t0];
+            v.pack2 = [t1, desenfoque, 0.0, 0.0];
+            v.grad_c0 = c0;
+            v.grad_c1 = c1;
+            v
+        };
+        let tl = base([x, y], [u0, v0], [0.0, 0.0]);
+        let tr = base([x + w, y], [u1, v0], [w, 0.0]);
+        let bl = base([x, y + h], [u0, v1], [0.0, h]);
+        let br = base([x + w, y + h], [u1, v1], [w, h]);
+        self.vertices.extend_from_slice(&[tl, bl, tr, tr, bl, br]);
+    }
+
+    /// Texto con radios y clip del segmento (mismo maquetado que
+    /// `push_text`: origen sup-izq, saltos `\n`, avance por glifo).
+    pub fn push_text_extendido(
+        &mut self,
+        atlas: &FontAtlas,
+        origin_top_left: [f32; 2],
+        text: &str,
+        font_size: f32,
+        color: [f32; 4],
+        radios: [f32; 4],
+        clip: Option<([f32; 4], f32)>,
+    ) {
+        let k = font_size / ATLAS_RASTER_PX;
+        let mut pen_x = origin_top_left[0];
+        let mut baseline_y = origin_top_left[1] + atlas.ascent * k;
+        for c in text.chars() {
+            if c == '\n' {
+                pen_x = origin_top_left[0];
+                baseline_y += atlas.line_height * k;
+                continue;
+            }
+            let Some(g) = atlas.glyph(c) else { continue };
+            if g.size[0] > 0.0 && g.size[1] > 0.0 {
+                let quad = [
+                    pen_x + g.bearing[0] * k,
+                    baseline_y + g.bearing[1] * k,
+                    g.size[0] * k,
+                    g.size[1] * k,
+                ];
+                self.push_quad_extendido(quad, g.uv, color, MODO_TEXTO, radios, clip, None, 0.0);
             }
             pen_x += g.advance * k;
         }
@@ -653,6 +780,7 @@ impl UiRenderer {
                 .binding(0)
                 .stride(std::mem::size_of::<UiVertex>() as u32)
                 .input_rate(vk::VertexInputRate::VERTEX)];
+            // Vértice V2 (144 bytes): geometría, radios, clip, degradado y sombra.
             let attr_desc = [
                 vk::VertexInputAttributeDescription::default()
                     .location(0)
@@ -669,6 +797,46 @@ impl UiRenderer {
                     .binding(0)
                     .format(vk::Format::R32G32B32A32_SFLOAT)
                     .offset(16),
+                vk::VertexInputAttributeDescription::default()
+                    .location(3)
+                    .binding(0)
+                    .format(vk::Format::R32G32_SFLOAT)
+                    .offset(32),
+                vk::VertexInputAttributeDescription::default()
+                    .location(4)
+                    .binding(0)
+                    .format(vk::Format::R32G32_SFLOAT)
+                    .offset(40),
+                vk::VertexInputAttributeDescription::default()
+                    .location(5)
+                    .binding(0)
+                    .format(vk::Format::R32G32B32A32_SFLOAT)
+                    .offset(48),
+                vk::VertexInputAttributeDescription::default()
+                    .location(6)
+                    .binding(0)
+                    .format(vk::Format::R32G32B32A32_SFLOAT)
+                    .offset(64),
+                vk::VertexInputAttributeDescription::default()
+                    .location(7)
+                    .binding(0)
+                    .format(vk::Format::R32G32B32A32_SFLOAT)
+                    .offset(80),
+                vk::VertexInputAttributeDescription::default()
+                    .location(8)
+                    .binding(0)
+                    .format(vk::Format::R32G32B32A32_SFLOAT)
+                    .offset(96),
+                vk::VertexInputAttributeDescription::default()
+                    .location(9)
+                    .binding(0)
+                    .format(vk::Format::R32G32B32A32_SFLOAT)
+                    .offset(112),
+                vk::VertexInputAttributeDescription::default()
+                    .location(10)
+                    .binding(0)
+                    .format(vk::Format::R32G32B32A32_SFLOAT)
+                    .offset(128),
             ];
             let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
                 .vertex_binding_descriptions(&binding_desc)
@@ -700,7 +868,9 @@ impl UiRenderer {
             let blend_attachment = [vk::PipelineColorBlendAttachmentState::default()
                 .color_write_mask(vk::ColorComponentFlags::RGBA)
                 .blend_enable(true)
-                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                // Alfa premultiplicado: el pintor ya multiplicó rgb por a;
+                // SRC_ALPHA lo oscurecería dos veces.
+                .src_color_blend_factor(vk::BlendFactor::ONE)
                 .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
                 .color_blend_op(vk::BlendOp::ADD)
                 .src_alpha_blend_factor(vk::BlendFactor::ONE)
@@ -1166,7 +1336,7 @@ impl UiBatch {
     /// Quad de imagen: `rect` en píxeles de pantalla y `uv` la
     /// sub-región del atlas de imágenes; `color` es el tinte.
     pub fn push_image(&mut self, rect: [f32; 4], uv: [f32; 4], color: [f32; 4]) {
-        self.push_quad(rect, uv, color);
+        self.push_quad_modo(rect, uv, color, MODO_IMAGEN);
     }
 }
 

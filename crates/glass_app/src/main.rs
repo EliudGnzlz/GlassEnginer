@@ -54,6 +54,7 @@ use glass_scripting::{
 use glass_scripting::host::FalloDotnet;
 mod bake;
 mod canvas_ui;
+mod ui_v2;
 mod prefabs_vivos;
 mod luces_objeto;
 mod ibl;
