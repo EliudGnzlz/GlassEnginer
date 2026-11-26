@@ -368,6 +368,7 @@ jobs:
             gh release create "$TAG" \
               --title "GlassEnginer Hub $TAG" \
               --prerelease \
+              --latest \
               --notes-file notas.md \
               --target "${{ github.sha }}" \
               *.exe *.AppImage checksums.txt
@@ -387,6 +388,7 @@ jobs:
             gh release create "$TAG" \
               --title "GlassEnginer Launcher $TAG" \
               --prerelease \
+              --latest \
               --notes-file notas.md \
               --target "${{ github.sha }}" \
               *.exe *.zip *.AppImage checksums.txt
