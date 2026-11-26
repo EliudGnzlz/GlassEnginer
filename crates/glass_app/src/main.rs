@@ -4674,6 +4674,155 @@ for stem in &referenciados {
                     serde_json::to_string_pretty(&payload).unwrap_or_default(),
                 )))
             }
+            "glass_editor_selection" => {
+                let action = args.get("action").and_then(|a| a.as_str()).unwrap_or("get");
+                match action {
+                    "get" => {
+                        let sel = self.editor_layout.hierarchy.selected_entity;
+                        let payload = serde_json::json!({ "selected_entity": sel });
+                        Some(Ok(texto(
+                            serde_json::to_string_pretty(&payload).unwrap_or_default(),
+                        )))
+                    }
+                    "set" => {
+                        match args.get("entity_id") {
+                            None | Some(serde_json::Value::Null) => {
+                                self.editor_layout.hierarchy.selected_entity = None;
+                                Some(Ok(texto(
+                                    "{\"selected_entity\": null}".to_string(),
+                                )))
+                            }
+                            Some(v) => match v.as_u64() {
+                                Some(eid) => {
+                                    let existe = self
+                                        .scene_state
+                                        .lock()
+                                        .map(|sc| {
+                                            sc.entities.iter().any(|e| e.id == eid)
+                                        })
+                                        .unwrap_or(false);
+                                    if existe {
+                                        self.editor_layout.hierarchy.selected_entity =
+                                            Some(eid);
+                                        Some(Ok(texto(format!(
+                                            "{{\"selected_entity\": {eid}}}"
+                                        ))))
+                                    } else {
+                                        Some(Err(format!("Entity #{eid} not found")))
+                                    }
+                                }
+                                None => Some(Err(
+                                    "'entity_id' debe ser un entero o null".to_string(),
+                                )),
+                            },
+                        }
+                    }
+                    otro => Some(Err(format!(
+                        "Acción no válida para glass_editor_selection: {otro} (get|set)"
+                    ))),
+                }
+            }
+            "glass_editor_camera" => {
+                let action = args.get("action").and_then(|a| a.as_str()).unwrap_or("get");
+                let vp = &mut self.editor_layout.viewport;
+                match action {
+                    "get" => {
+                        let payload = serde_json::json!({
+                            "yaw": vp.editor_cam_yaw,
+                            "pitch": vp.editor_cam_pitch,
+                            "distance": vp.editor_cam_dist,
+                            "center": vp.editor_cam_center,
+                        });
+                        Some(Ok(texto(
+                            serde_json::to_string_pretty(&payload).unwrap_or_default(),
+                        )))
+                    }
+                    "set" => {
+                        let num = |k: &str| args.get(k).and_then(|v| v.as_f64());
+                        if let Some(y) = num("yaw") {
+                            if !y.is_finite() {
+                                return Some(Err("'yaw' debe ser finito".to_string()));
+                            }
+                            vp.editor_cam_yaw = y as f32;
+                        }
+                        if let Some(p2) = num("pitch") {
+                            if !p2.is_finite() {
+                                return Some(Err("'pitch' debe ser finito".to_string()));
+                            }
+                            vp.editor_cam_pitch = (p2 as f32).clamp(-1.553, 1.553);
+                        }
+                        if let Some(d) = num("distance") {
+                            if !d.is_finite() || d <= 0.0 {
+                                return Some(Err(
+                                    "'distance' debe ser un número > 0".to_string(),
+                                ));
+                            }
+                            vp.editor_cam_dist = d as f32;
+                        }
+                        if let Some(c) = args.get("center") {
+                            let arr = c.as_array().filter(|a| a.len() == 3).and_then(|a| {
+                                Some([
+                                    a[0].as_f64()? as f32,
+                                    a[1].as_f64()? as f32,
+                                    a[2].as_f64()? as f32,
+                                ])
+                            });
+                            match arr {
+                                Some(centro) if centro.iter().all(|n| n.is_finite()) => {
+                                    vp.editor_cam_center = centro;
+                                }
+                                _ => {
+                                    return Some(Err(
+                                        "'center' debe ser [x, y, z] finito".to_string(),
+                                    ))
+                                }
+                            }
+                        }
+                        let payload = serde_json::json!({
+                            "yaw": vp.editor_cam_yaw,
+                            "pitch": vp.editor_cam_pitch,
+                            "distance": vp.editor_cam_dist,
+                            "center": vp.editor_cam_center,
+                        });
+                        Some(Ok(texto(
+                            serde_json::to_string_pretty(&payload).unwrap_or_default(),
+                        )))
+                    }
+                    "frame" => {
+                        let Some(eid) = args.get("entity_id").and_then(|v| v.as_u64())
+                        else {
+                            return Some(Err(
+                                "'entity_id' requerido para frame".to_string(),
+                            ));
+                        };
+                        let pos = self.scene_state.lock().ok().and_then(|sc| {
+                            sc.entities
+                                .iter()
+                                .find(|e| e.id == eid)
+                                .map(|e| e.transform.position)
+                        });
+                        match pos {
+                            Some(p2) => {
+                                vp.editor_cam_center = p2;
+                                let payload = serde_json::json!({
+                                    "yaw": vp.editor_cam_yaw,
+                                    "pitch": vp.editor_cam_pitch,
+                                    "distance": vp.editor_cam_dist,
+                                    "center": vp.editor_cam_center,
+                                });
+                                Some(Ok(texto(
+                                    serde_json::to_string_pretty(&payload)
+                                        .unwrap_or_default(),
+                                )))
+                            }
+                            None => Some(Err(format!("Entity #{eid} not found"))),
+                        }
+                    }
+                    otro => Some(Err(format!(
+                        "Acción no válida para glass_editor_camera: {otro} (get|set|frame)"
+                    ))),
+                }
+            }
             _ => None,
         }
     }

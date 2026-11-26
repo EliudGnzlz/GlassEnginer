@@ -51,7 +51,7 @@ pub struct McpServer {
 /// Queue cuando el bucle del motor está bombeando. Las de consulta
 /// responden directas, como siempre.
 /// Tools que solo puede ejecutar la app del editor (estado de Play, ruta de guardado).
-pub const APP_EXEC_TOOLS: [&str; 6] = ["glass_play_control", "glass_scene_save", "glass_scene_new", "glass_undo", "glass_redo", "glass_console_log"];
+pub const APP_EXEC_TOOLS: [&str; 8] = ["glass_play_control", "glass_scene_save", "glass_scene_new", "glass_undo", "glass_redo", "glass_console_log", "glass_editor_selection", "glass_editor_camera"];
 
 /// Normaliza el nombre de un material físico a su referencia
 /// (ruta relativa a Assets con el sufijo `.physmat.json`).
@@ -104,6 +104,8 @@ fn is_mutating_tool(name: &str) -> bool {
             | "glass_animator_play"
             | "glass_audio_source_control"
             | "glass_console_log"
+            | "glass_editor_selection"
+            | "glass_editor_camera"
             | "glass_play_control"
             | "glass_scene_save"
             | "glass_scene_load"
@@ -783,6 +785,34 @@ impl McpServer {
                                     "limit": { "type": "integer", "description": "Máximo de entradas (por defecto 50, tope 300)" },
                                     "level": { "type": "string", "description": "Nivel exacto: INFO, WARN o ERROR" },
                                     "contains": { "type": "string", "description": "Subcadena a buscar en el texto (insensible a mayúsculas)" }
+                                },
+                                "required": []
+                            }
+                        },
+                        {
+                            "name": "glass_editor_selection",
+                            "description": "Lee o fija la selección del editor: action get devuelve la entidad seleccionada; set con entity_id la selecciona (null la limpia). La sirve la app en vivo.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "action": { "type": "string", "enum": ["get", "set"] },
+                                    "entity_id": { "type": ["integer", "null"], "description": "Entidad a seleccionar con set; null limpia la selección" }
+                                },
+                                "required": []
+                            }
+                        },
+                        {
+                            "name": "glass_editor_camera",
+                            "description": "Cámara orbital de la vista de escena: get la lee, set ajusta yaw/pitch/distance/center y frame centra la vista en una entidad. La sirve la app en vivo.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "action": { "type": "string", "enum": ["get", "set", "frame"] },
+                                    "yaw": { "type": "number" },
+                                    "pitch": { "type": "number", "description": "Se limita a ±89°" },
+                                    "distance": { "type": "number", "description": "Distancia al centro (> 0)" },
+                                    "center": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                                    "entity_id": { "type": "integer", "description": "Entidad a centrar con frame" }
                                 },
                                 "required": []
                             }
@@ -5653,6 +5683,17 @@ impl McpServer {
                 )
             }
 
+            "glass_editor_selection" | "glass_editor_camera" => {
+                // La selección y la cámara de escena viven en el
+                // layout del editor (app): las sirve el ejecutor de
+                // app (APP_EXEC_TOOLS). Sin app, -32008.
+                McpResponse::error(
+                    id,
+                    -32008,
+                    format!("{name} necesita el editor en vivo (selección/cámara son del layout de la app)"),
+                )
+            }
+
             _ => McpResponse::method_not_found(id, name),
         }
     }
@@ -6559,6 +6600,17 @@ fn entity_set_duplicate_find() {
         assert!(r.contains("-32008"), "{r}");
         assert!(is_mutating_tool("glass_console_log"));
         assert!(APP_EXEC_TOOLS.contains(&"glass_console_log"));
+    }
+
+    #[test]
+    fn seleccion_y_camara_son_de_app_y_sin_app_dan_32008() {
+        let srv = servidor();
+        for tool in ["glass_editor_selection", "glass_editor_camera"] {
+            let r = llamar(&srv, tool, json!({ "action": "get" }));
+            assert!(r.contains("-32008"), "{tool}: {r}");
+            assert!(is_mutating_tool(tool), "{tool}");
+            assert!(APP_EXEC_TOOLS.contains(&tool), "{tool}");
+        }
     }
 
     #[test]
