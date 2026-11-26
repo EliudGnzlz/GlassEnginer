@@ -39,6 +39,8 @@ pub struct McpServer {
     mesh_session: Arc<Mutex<Option<glass_mesh_edit::MeshSession>>>,
     /// Puerta del complemento «herramienta-3d»: si es false, no se listan ni ejecutan las tools glass_mesh_*.
     mesh_tools_enabled: std::sync::atomic::AtomicBool,
+    /// SceneManager del motor, registrado por la app al arrancar (modo --mcp-live).
+    scene_manager: std::sync::Mutex<Option<std::sync::Arc<std::sync::Mutex<glass_core::scenes::SceneManager>>>>,
     /// Command Queue (Fase 8): la ejecuta el bucle del motor.
     pub queue: Arc<crate::queue::CommandQueue>,
 }
@@ -46,7 +48,10 @@ pub struct McpServer {
 /// Tools que ALTERAN el estado (Fase 8): pasan por la Command
 /// Queue cuando el bucle del motor está bombeando. Las de consulta
 /// responden directas, como siempre.
-pub fn is_mutating_tool(name: &str) -> bool {
+/// Tools que solo puede ejecutar la app del editor (estado de Play, ruta de guardado).
+pub const APP_EXEC_TOOLS: [&str; 3] = ["glass_play_control", "glass_scene_save", "glass_scene_new"];
+
+fn is_mutating_tool(name: &str) -> bool {
     matches!(
         name,
         "glass_create_entity"
@@ -59,6 +64,10 @@ pub fn is_mutating_tool(name: &str) -> bool {
             | "glass_prefab_revert"
             | "glass_component_set"
             | "glass_import_unitypackage"
+            | "glass_play_control"
+            | "glass_scene_save"
+            | "glass_scene_load"
+            | "glass_scene_new"
             | "glass_set_ui_text"
             | "glass_set_entity_material"
             | "glass_material_property_set"
@@ -96,6 +105,25 @@ impl McpServer {
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// Registra el SceneManager del motor para las tools de escenas.
+    pub fn set_scene_manager(
+        &self,
+        manager: std::sync::Arc<std::sync::Mutex<glass_core::scenes::SceneManager>>,
+    ) {
+        let mut slot = self.scene_manager.lock().unwrap_or_else(|e| e.into_inner());
+        *slot = Some(manager);
+    }
+
+    /// Clona el Arc del SceneManager si está registrado.
+    fn scene_manager(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<glass_core::scenes::SceneManager>>> {
+        self.scene_manager
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     pub fn new(scene: Arc<Mutex<SceneState>>) -> Self {
         Self {
             scene,
@@ -105,6 +133,7 @@ impl McpServer {
             mesh_session: Arc::new(Mutex::new(None)),
             // Abierta por defecto: los usos sin puerta (tests incluidos) no cambian.
             mesh_tools_enabled: std::sync::atomic::AtomicBool::new(true),
+            scene_manager: std::sync::Mutex::new(None),
             queue: Arc::new(crate::queue::CommandQueue::new()),
         }
     }
@@ -480,6 +509,57 @@ impl McpServer {
                                     "values": { "type": "object", "description": "Campos a escribir del componente" }
                                 },
                                 "required": ["entity_id", "component", "values"]
+                            }
+                        },
+                        {
+                            "name": "glass_play_control",
+                            "description": "Controla la reproducción del editor: play, pause, stop o step (un frame de simulación estando en pausa). La ejecuta la app; requiere el editor en marcha.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "action": { "type": "string", "enum": ["play", "pause", "stop", "step"] }
+                                },
+                                "required": ["action"]
+                            }
+                        },
+                        {
+                            "name": "glass_scene_list",
+                            "description": "Lista las escenas del proyecto y marca la activa.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "glass_scene_save",
+                            "description": "Guarda la escena activa en su archivo (o con el nombre dado, como Guardar como). La ejecuta la app; requiere el editor en marcha.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "glass_scene_load",
+                            "description": "Pide cargar una escena del proyecto por nombre; la carga se aplica al final del frame, como desde el menú de escenas.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string" }
+                                },
+                                "required": ["name"]
+                            }
+                        },
+                        {
+                            "name": "glass_scene_new",
+                            "description": "Crea una escena nueva y vacía con el nombre dado y la deja cargada. La ejecuta la app; requiere el editor en marcha.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string" }
+                                },
+                                "required": ["name"]
                             }
                         },
                         {
@@ -1104,19 +1184,45 @@ impl McpServer {
     /// motor una vez por frame, antes de física y scripts. Ejecuta
     /// los pendientes en orden de envío y guarda cada desenlace.
     pub fn pump_queue(&self) {
+        self.pump_queue_with(|_, _| None)
+    }
+
+    /// Como `pump_queue`, pero las tools de `APP_EXEC_TOOLS` se ofrecen
+    /// antes al ejecutor de la app (la app del editor, que tiene el
+    /// estado de Play y la ruta de guardado). Si este devuelve `None`,
+    /// se sigue el camino normal de `execute_tool`.
+    pub fn pump_queue_with<F>(&self, mut exec: F)
+    where
+        F: FnMut(&str, &serde_json::Value) -> Option<Result<serde_json::Value, String>>,
+    {
         let pass = self.queue.note_pump();
         for cmd in self.queue.take_pending() {
-            let resp = self.execute_tool(None, &cmd.tool, cmd.args.clone());
-            match (&resp.result, &resp.error) {
-                (_, Some(e)) => self
-                    .queue
-                    .complete(cmd.id, Err(e.message.clone()), pass, false),
-                (Some(r), _) => self
-                    .queue
-                    .complete(cmd.id, Ok(r.clone()), pass, false),
-                _ => self
-                    .queue
-                    .complete(cmd.id, Ok(serde_json::json!({})), pass, false),
+            let app_outcome = if APP_EXEC_TOOLS.contains(&cmd.tool.as_str()) {
+                exec(&cmd.tool, &cmd.args)
+            } else {
+                None
+            };
+            match app_outcome {
+                Some(Ok(v)) => {
+                    self.queue.complete(cmd.id, Ok(v), pass, false);
+                }
+                Some(Err(m)) => {
+                    self.queue.complete(cmd.id, Err(m), pass, false);
+                }
+                None => {
+                    let resp = self.execute_tool(None, &cmd.tool, cmd.args.clone());
+                    match (&resp.result, &resp.error) {
+                        (_, Some(e)) => self
+                            .queue
+                            .complete(cmd.id, Err(e.message.clone()), pass, false),
+                        (Some(r), _) => {
+                            self.queue.complete(cmd.id, Ok(r.clone()), pass, false)
+                        }
+                        _ => self
+                            .queue
+                            .complete(cmd.id, Ok(serde_json::json!({})), pass, false),
+                    }
+                }
             }
         }
     }
@@ -4283,6 +4389,91 @@ impl McpServer {
                 }
                 }
             }
+            "glass_scene_list" => {
+                let Some(manager) = self.scene_manager() else {
+                    return McpResponse::error(
+                        id,
+                        -32008,
+                        "glass_scene_list requiere el motor en marcha (modo --mcp-live): el SceneManager se registra al arrancar el editor",
+                    );
+                };
+                let manager = match manager.lock() {
+                    Ok(m) => m,
+                    Err(e) => {
+                        return McpResponse::error(
+                            id,
+                            -32000,
+                            format!("SceneManager envenenado: {e}"),
+                        )
+                    }
+                };
+                let payload = json!({
+                    "active": manager.active_scene_name(),
+                    "active_key": manager.active_scene_key(),
+                    "scenes": manager.available_scenes(),
+                });
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&payload).unwrap_or_default()
+                            }
+                        ]
+                    }),
+                )
+            }
+
+            "glass_scene_load" => {
+                let Some(scene_name) = args.get("name").and_then(|v| v.as_str()) else {
+                    return McpResponse::invalid_params(id, "Field 'name' is required");
+                };
+                let Some(manager) = self.scene_manager() else {
+                    return McpResponse::error(
+                        id,
+                        -32008,
+                        "glass_scene_load requiere el motor en marcha (modo --mcp-live): el SceneManager se registra al arrancar el editor",
+                    );
+                };
+                let mut manager = match manager.lock() {
+                    Ok(m) => m,
+                    Err(e) => {
+                        return McpResponse::error(
+                            id,
+                            -32000,
+                            format!("SceneManager envenenado: {e}"),
+                        )
+                    }
+                };
+                match manager.request_load(scene_name) {
+                    Ok(clave) => McpResponse::success(
+                        id,
+                        json!({
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": format!("Carga de la escena '{scene_name}' solicitada (clave {clave}); se aplica al final del frame.")
+                                }
+                            ]
+                        }),
+                    ),
+                    Err(e) => McpResponse::error(
+                        id,
+                        -32004,
+                        format!("No se pudo solicitar la escena '{scene_name}': {e}"),
+                    ),
+                }
+            }
+
+            "glass_play_control" | "glass_scene_save" | "glass_scene_new" => {
+                McpResponse::error(
+                    id,
+                    -32008,
+                    format!("{name} requiere el editor en marcha (modo --mcp-live)"),
+                )
+            }
+
             _ => McpResponse::method_not_found(id, name),
         }
     }
@@ -4765,6 +4956,62 @@ mod tests_catchup {
             json!({ "entity_id": 4242, "component": "NoExiste", "values": {} }),
         );
         assert!(r.contains("-32602"), "set desconocido: {r}");
+    }
+
+    #[test]
+    fn app_tools_clasificadas_y_sin_editor_dan_32008() {
+        for tool in APP_EXEC_TOOLS {
+            assert!(is_mutating_tool(tool), "{tool} debería ser mutante");
+        }
+        assert!(is_mutating_tool("glass_scene_load"));
+        assert!(!is_mutating_tool("glass_scene_list"));
+
+        let srv = servidor();
+        let r = llamar(&srv, "glass_play_control", json!({"action": "play"}));
+        assert!(r.contains("-32008"), "play_control: {r}");
+        let r = llamar(&srv, "glass_scene_list", json!({}));
+        assert!(r.contains("-32008"), "scene_list: {r}");
+        let r = llamar(&srv, "glass_scene_load", json!({"name": "X"}));
+        assert!(r.contains("-32008"), "scene_load: {r}");
+    }
+
+    #[test]
+    fn scene_list_y_load_con_manager() {
+        let dir = std::env::temp_dir().join(format!("glass_mcp_m2_scenes_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("crear dir temporal");
+
+        let manager = glass_core::scenes::SceneManager::new(&dir);
+        let srv = servidor();
+        srv.set_scene_manager(std::sync::Arc::new(std::sync::Mutex::new(manager)));
+
+        let r = llamar(&srv, "glass_scene_list", json!({}));
+        assert!(!r.contains("-32008"), "scene_list con manager: {r}");
+        assert!(r.contains("Untitled"), "scene_list sin la activa: {r}");
+
+        let r = llamar(&srv, "glass_scene_load", json!({"name": "NoExisteM2"}));
+        assert!(r.contains("-32004"), "scene_load inexistente: {r}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pump_queue_with_ejecuta_las_de_app() {
+        let srv = servidor();
+        let cid = srv
+            .queue
+            .submit("glass_play_control", json!({"action": "play"}));
+
+        srv.pump_queue_with(|tool, _| {
+            if tool == "glass_play_control" {
+                Some(Ok(json!({"content": [{"type": "text", "text": "PLAY-OK"}]})))
+            } else {
+                None
+            }
+        });
+
+        let status = format!("{:?}", srv.queue.status(cid));
+        assert!(status.contains("Done"), "estado: {status}");
+        assert!(status.contains("PLAY-OK"), "result: {status}");
     }
 
     #[test]

@@ -1946,6 +1946,11 @@ struct GlassEngineApp {
     /// play_state del frame anterior, para detectar transiciones.
     #[cfg(feature = "editor")]
     prev_play_state: glass_editor::PlayState,
+    /// Paso de simulación pedido por el MCP (`glass_play_control`
+    /// acción step) estando en pausa: la puerta de simulación lo
+    /// consume una sola vez.
+    #[cfg(feature = "editor")]
+    paso_mcp_pendiente: bool,
     /// Velocidad vertical acumulada del driver de CC: (entidad seleccionada, vy).
     // Ambos campos solo se leen en builds con editor (el Play y su
     // driver de CC); en el binario de juego quedan escritos y sin uso.
@@ -2391,6 +2396,9 @@ impl GlassEngineApp {
         let scene_manager = Arc::new(Mutex::new(scene_manager));
         #[cfg(feature = "editor")]
         let mcp_server = Arc::new(McpServer::new(scene_state.clone()));
+        // Tools de escenas del MCP: el SceneManager compartido.
+        #[cfg(feature = "editor")]
+        mcp_server.set_scene_manager(scene_manager.clone());
         // Puerta del complemento «herramienta-3d» para las tools glass_mesh_*.
         #[cfg(feature = "editor")]
         mcp_server
@@ -2502,6 +2510,8 @@ impl GlassEngineApp {
             play_snapshot: None,
             #[cfg(feature = "editor")]
             prev_play_state: glass_editor::PlayState::Edit,
+            #[cfg(feature = "editor")]
+            paso_mcp_pendiente: false,
             cc_driver_vy: None,
             cc_autorados_en_play: Vec::new(),
             // Arranque directo al editor: la pantalla de carga se ve
@@ -4557,6 +4567,187 @@ for stem in &referenciados {
         }
     }
 
+    /// Ejecutor de las tools MCP que solo puede resolver la app
+    /// (`glass_mcp::APP_EXEC_TOOLS`): Play, guardar escena y escena
+    /// nueva. Lo invoca el bombeo de la Command Queue al inicio del
+    /// frame; las transiciones de Play y las cargas las aplican los
+    /// mecanismos de fin de frame de siempre, así que aquí basta con
+    /// mover el mismo estado que mueve la interfaz.
+    #[cfg(feature = "editor")]
+    fn ejecutar_tool_app(
+        &mut self,
+        tool: &str,
+        args: &serde_json::Value,
+    ) -> Option<Result<serde_json::Value, String>> {
+        use glass_editor::PlayState as P;
+        let texto = |t: String| serde_json::json!({ "content": [{ "type": "text", "text": t }] });
+        match tool {
+            "glass_play_control" => {
+                let action = args.get("action").and_then(|a| a.as_str()).unwrap_or("");
+                let estado = self.editor_layout.viewport.play_state;
+                let r = match (action, estado) {
+                    ("play", P::Playing) => Ok("Ya está en Play.".to_string()),
+                    ("play", _) => {
+                        self.editor_layout.viewport.play_state = P::Playing;
+                        Ok("Play: la transición se aplica al final del frame (foto de la escena, física y scripts).".to_string())
+                    }
+                    ("pause", P::Playing) => {
+                        self.editor_layout.viewport.play_state = P::Paused;
+                        Ok("Pausa.".to_string())
+                    }
+                    ("pause", _) => Err("Solo se puede pausar desde Play.".to_string()),
+                    ("stop", P::Playing) | ("stop", P::Paused) => {
+                        self.editor_layout.viewport.play_state = P::Edit;
+                        Ok("Stop: al final del frame se restaura la escena autorada.".to_string())
+                    }
+                    ("stop", _) => Err("No hay partida en curso.".to_string()),
+                    ("step", P::Paused) => {
+                        self.paso_mcp_pendiente = true;
+                        Ok("Paso: este frame corre un ciclo de simulación (scripts y física).".to_string())
+                    }
+                    ("step", _) => {
+                        Err("Step requiere estar en pausa (Play y luego pause).".to_string())
+                    }
+                    _ => Err(format!(
+                        "Acción desconocida: '{action}' (play|pause|stop|step)"
+                    )),
+                };
+                Some(r.map(texto))
+            }
+            "glass_scene_save" => Some(self.mcp_guardar_escena(args).map(texto)),
+            "glass_scene_new" => Some(self.mcp_escena_nueva(args).map(texto)),
+            _ => None,
+        }
+    }
+
+    /// Guardado de escena del MCP: las mismas reglas que el Ctrl+S
+    /// del editor (prefab en edición primero, diff de instancias
+    /// recalculado antes de escribir, ruta directa si la hay).
+    #[cfg(feature = "editor")]
+    fn mcp_guardar_escena(&mut self, args: &serde_json::Value) -> Result<String, String> {
+        if let Some(r) = self
+            .editor_layout
+            .guardar_prefab_en_edicion(&self.scene_state)
+        {
+            return r.map(|()| "Prefab en edición guardado.".to_string());
+        }
+        let nombre = args.get("name").and_then(|n| n.as_str());
+        if let Some(nombre) = nombre {
+            // Guardar como: clave del VFS, escribir y dejarla activa.
+            let key = glass_core::scenes::scene_key_for_name(nombre);
+            let mut manager = self
+                .scene_manager
+                .lock()
+                .map_err(|_| "SceneManager envenenado".to_string())?;
+            let path = manager
+                .vfs()
+                .resolve(&key)
+                .map_err(|e| format!("Ruta inválida: {e}"))?;
+            if let Some(padre) = path.parent() {
+                let _ = std::fs::create_dir_all(padre);
+            }
+            let mut scene = self
+                .scene_state
+                .lock()
+                .map_err(|_| "SceneState envenenado".to_string())?;
+            if let Some(raiz) = self.raiz_proyecto_actual.as_deref() {
+                scene.recalcular_overrides_prefab(&|fuente| {
+                    glass_core::Prefab::cargar_desde_proyecto(raiz, fuente)
+                });
+            }
+            scene
+                .save_to_json(&path.to_string_lossy())
+                .map_err(|e| format!("No se pudo guardar: {e:?}"))?;
+            self.editor_layout.marcar_guardada(&scene);
+            drop(scene);
+            let corto = glass_core::scenes::short_scene_name(&key);
+            manager.set_active_name(&corto);
+            drop(manager);
+            self.ruta_escena_actual = Some(path.clone());
+            self.nombre_escena_con_ruta = corto;
+            Ok(format!("Escena guardada como {key} ({})", path.display()))
+        } else if let Some(ruta) = self.ruta_escena_actual.clone() {
+            let mut scene = self
+                .scene_state
+                .lock()
+                .map_err(|_| "SceneState envenenado".to_string())?;
+            if let Some(raiz) = self.raiz_proyecto_actual.as_deref() {
+                scene.recalcular_overrides_prefab(&|fuente| {
+                    glass_core::Prefab::cargar_desde_proyecto(raiz, fuente)
+                });
+            }
+            scene
+                .save_to_json(&ruta.to_string_lossy())
+                .map_err(|e| format!("No se pudo guardar: {e:?}"))?;
+            self.editor_layout.marcar_guardada(&scene);
+            Ok(format!("Escena guardada en {}", ruta.display()))
+        } else {
+            // Sin ruta directa: la clave de guardado del SceneManager.
+            let manager = self
+                .scene_manager
+                .lock()
+                .map_err(|_| "SceneManager envenenado".to_string())?;
+            let path = manager
+                .save_path()
+                .map_err(|e| format!("Sin ruta de guardado: {e}"))?;
+            drop(manager);
+            if let Some(padre) = path.parent() {
+                let _ = std::fs::create_dir_all(padre);
+            }
+            let mut scene = self
+                .scene_state
+                .lock()
+                .map_err(|_| "SceneState envenenado".to_string())?;
+            if let Some(raiz) = self.raiz_proyecto_actual.as_deref() {
+                scene.recalcular_overrides_prefab(&|fuente| {
+                    glass_core::Prefab::cargar_desde_proyecto(raiz, fuente)
+                });
+            }
+            scene
+                .save_to_json(&path.to_string_lossy())
+                .map_err(|e| format!("No se pudo guardar: {e:?}"))?;
+            self.editor_layout.marcar_guardada(&scene);
+            Ok(format!("Escena guardada en {}", path.display()))
+        }
+    }
+
+    /// Escena nueva del MCP: escribe el archivo con la escena por
+    /// defecto y pide su carga al SceneManager (se aplica al final
+    /// del frame, con la misma limpieza que un cambio de escena
+    /// desde el menú).
+    #[cfg(feature = "editor")]
+    fn mcp_escena_nueva(&mut self, args: &serde_json::Value) -> Result<String, String> {
+        let nombre = args
+            .get("name")
+            .and_then(|n| n.as_str())
+            .ok_or_else(|| "Falta el nombre de la escena".to_string())?;
+        let key = glass_core::scenes::scene_key_for_name(nombre);
+        let mut manager = self
+            .scene_manager
+            .lock()
+            .map_err(|_| "SceneManager envenenado".to_string())?;
+        let path = manager
+            .vfs()
+            .resolve(&key)
+            .map_err(|e| format!("Ruta inválida: {e}"))?;
+        if path.exists() {
+            return Err(format!("Ya existe una escena con ese nombre ({key})"));
+        }
+        if let Some(padre) = path.parent() {
+            std::fs::create_dir_all(padre)
+                .map_err(|e| format!("No se pudo crear la carpeta: {e}"))?;
+        }
+        SceneState::default()
+            .save_to_json(&path.to_string_lossy())
+            .map_err(|e| format!("No se pudo crear la escena: {e:?}"))?;
+        manager
+            .request_load(nombre)
+            .map_err(|e| format!("Escena creada en {key}, pero la carga falló: {e}"))?;
+        Ok(format!(
+            "Escena '{nombre}' creada en {key}; su carga se aplica al final del frame."
+        ))
+    }
+
     /// Reconstruye el mundo de Rapier a partir de los componentes `Physics`.
     /// Detecta las transiciones de play_state y actúa en un único punto
     /// (las vías de UI solo cambian play_state). Se llama al FINAL del
@@ -5121,7 +5312,14 @@ let resueltos = if body.has_collider {
         // Solo existe servidor MCP (y cola) en la build con editor:
         // en el juego puro el campo no está y no hay nada que bombear.
         #[cfg(feature = "editor")]
-        self.mcp_server.pump_queue();
+        {
+            // El ejecutor de la app resuelve las tools que solo puede
+            // ejecutar ella (Play, guardar, escena nueva): el cierre
+            // captura &mut self y la llamada va sobre el clon del Arc,
+            // así no hay doble préstamo del campo.
+            let server = self.mcp_server.clone();
+            server.pump_queue_with(|tool, args| self.ejecutar_tool_app(tool, args));
+        }
 
         // Antes de recargar o expulsar activos hay que garantizar que la GPU
         // terminó el frame anterior: la recarga en caliente y `evict_idle`
@@ -5595,6 +5793,12 @@ let resueltos = if body.has_collider {
         let simulation_running = self.is_standalone || is_playing || self.is_platformer_test || self.is_sample_game_test;
         #[cfg(not(feature = "editor"))]
         let simulation_running = true;
+
+        // Paso único pedido por el MCP estando en pausa: este frame
+        // corre un ciclo de simulación y el pedido se consume.
+        #[cfg(feature = "editor")]
+        let simulation_running =
+            simulation_running || std::mem::take(&mut self.paso_mcp_pendiente);
 
         // 1b. Driver de prueba del CC autorado (editor): mueve al personaje seleccionado con WASD antes del paso de física, como haría un script.
         // 2. Ejecutar paso de C# Scripting (.NET CoreCLR) — solo si simulación activa.
