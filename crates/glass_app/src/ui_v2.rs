@@ -488,3 +488,95 @@ mod tests {
         assert!(segs.is_empty());
     }
 }
+
+#[cfg(test)]
+mod tests_texto_v2 {
+    use super::*;
+    use glass_core::scene::parsear_escena;
+
+    #[test]
+    fn texto_v2_uvs_son_glifo_no_solido() {
+        let json = std::fs::read_to_string("../../assets/scenes/CanvasUiTest.scene.json")
+            .expect("leer escena");
+        let (_v, entities) = parsear_escena(&json).expect("parsear");
+        let mut scene = SceneState::default();
+        scene.replace_entities(entities);
+        let docs = glass_ui::derivacion::derivar_documentos(&scene);
+        let doc = &docs[0];
+        let colocado = glass_ui::api::colocar_documento(
+            doc,
+            glass_ui::api::Viewport { ancho: 1280.0, alto: 720.0 },
+        );
+        let atlas = FontAtlas::build(include_bytes!("../../../assets/fonts/DejaVuSans.ttf"))
+            .expect("atlas");
+        let segs = glass_ui::pintor::pintar_documento(doc, &colocado, &glass_ui::pintor::MedidaImagenNula);
+        let mut lote = UiBatch::new();
+        for seg in &segs {
+            if seg.modo == ModoPintado::Texto {
+                push_segmento(&mut lote, &atlas, seg, &|_| None);
+            }
+        }
+        assert!(!lote.vertices().is_empty(), "sin vértices de texto");
+        let sol = atlas.solid_uv;
+        let mut n_solido = 0usize;
+        for v in lote.vertices() {
+            // UV del texel sólido = (sol[0], sol[1]) en las 4 esquinas.
+            if (v.uv[0] - sol[0]).abs() < 1e-6 && (v.uv[1] - sol[1]).abs() < 1e-6 {
+                n_solido += 1;
+            }
+        }
+        eprintln!(
+            "vértices texto: {}, con UV sólido: {}, primer UV: {:?}",
+            lote.vertices().len(),
+            n_solido,
+            lote.vertices().first().map(|v| v.uv)
+        );
+        assert_eq!(n_solido, 0, "vértices de texto con UV del texel sólido");
+    }
+}
+
+#[cfg(test)]
+mod tests_drag_escena {
+    use super::*;
+    use glass_core::scene::parsear_escena;
+
+    #[test]
+    fn drag_escena_rects_paso_a_paso() {
+        let ruta = "/home/hatch/workspace/goals/glassenginer-second-agent-work/hidden_files/p4c_fisico/escenas/EscenaArrastre.scene.json";
+        let json = std::fs::read_to_string(ruta).expect("leer escena");
+        let (_v, entities) = parsear_escena(&json).expect("parsear");
+        let mut scene = SceneState::default();
+        scene.replace_entities(entities);
+        let vp = glass_ui::api::Viewport { ancho: 1280.0, alto: 720.0 };
+        let colocar = |scene: &SceneState| {
+            let docs = glass_ui::derivacion::derivar_documentos(scene);
+            let doc = docs.into_iter().next().expect("doc");
+            let col = glass_ui::api::colocar_documento(&doc, vp);
+            let panel = col.nodos.iter().zip(doc.nodos.iter()).find(|(_, n)| n.entidad == 20).unwrap();
+            let rect = panel.0.rect;
+            (doc, col, rect)
+        };
+        let (doc, col, r0) = colocar(&scene);
+        eprintln!("antes: panel rect={:?}", r0);
+        let ses = glass_ui::api::arrastre_pulsar(&doc, &col, 507.0, 360.0).expect("pulsar");
+        drop(doc);
+        drop(col);
+        eprintln!("sesión: entidad={} anclado_inicial={:?} agarre={:?} origen={:?}", ses.entidad, ses.anclado_inicial, ses.agarre, ses.origen_inicial);
+        // follow hasta el centro de la casilla, como el arrastre físico
+        let nueva = ses.follow(773.0, 360.0);
+        eprintln!("follow(773,360)={:?}", nueva);
+        if let Some(ent) = scene.entities.iter_mut().find(|e| e.id == 20) {
+            ent.rect_transform.as_mut().unwrap().anchored_position = nueva;
+        }
+        let (doc2, col2, r1) = colocar(&scene);
+        eprintln!("tras follow: panel rect={:?}", r1);
+        let destino = glass_ui::api::arrastre_soltar(&doc2, &col2, 20, 773.0, 360.0).expect("destino");
+        eprintln!("destino: entidad={} anclado={:?} acción={}", destino.entidad, destino.anclado, destino.accion_soltar);
+        if let Some(ent) = scene.entities.iter_mut().find(|e| e.id == 20) {
+            ent.rect_transform.as_mut().unwrap().anchored_position = destino.anclado;
+        }
+        let (_doc3, _col3, r2) = colocar(&scene);
+        eprintln!("tras soltar: panel rect={:?}", r2);
+        assert!(r2.ancho < 100.0, "el panel no debe estirarse: {:?}", r2);
+    }
+}

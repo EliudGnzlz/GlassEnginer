@@ -5479,6 +5479,52 @@ mod tests_catchup {
     }
 
     #[test]
+    fn glass_ui_tree_lee_documento_colocado() {
+        // Integración P4c: la tool `glass_ui_tree` sobre la escena viva
+        // devuelve los rects del documento colocado V2 (no del viejo
+        // resolutor): se comparan contra el fixture congelado en V1.
+        let srv = servidor();
+        let json = std::fs::read_to_string("../../assets/scenes/CanvasUiTest.scene.json")
+            .expect("leer la escena de ejemplo");
+        let (version, entities) = crate::scene::parsear_escena(&json).expect("parsear la escena");
+        {
+            let mut sc = srv.scene.lock().unwrap();
+            sc.ui_schema_version = version;
+            sc.replace_entities(entities);
+        }
+        let resp = llamar(&srv, "glass_ui_tree", json!({ "width": 1280.0, "height": 720.0 }));
+        let v: serde_json::Value = serde_json::from_str(&resp).expect("respuesta JSON válida");
+        let texto = v["result"]["content"][0]["text"]
+            .as_str()
+            .expect("content[0].text");
+        let arbol: serde_json::Value = serde_json::from_str(texto).expect("árbol JSON válido");
+        let elementos = arbol["elements"].as_array().expect("array elements");
+        let fixture = std::fs::read_to_string(
+            "../../crates/glass_ui/tests/fixtures/rects_canvasuitest_1280x720.json",
+        )
+        .expect("leer el fixture congelado");
+        let esperado: serde_json::Value =
+            serde_json::from_str(&fixture).expect("fixture JSON válido");
+        let esperado = esperado.as_object().expect("objeto fixture");
+        assert_eq!(elementos.len(), esperado.len(), "nº de elementos");
+        for el in elementos {
+            let id = el["entity_id"].as_u64().expect("entity_id");
+            let rect = el["rect"].as_array().expect("rect array");
+            let esp = esperado
+                .get(&id.to_string())
+                .expect("entidad en el fixture");
+            for i in 0..4 {
+                let got = rect[i].as_f64().expect("número");
+                let want = esp[i].as_f64().expect("número");
+                assert!(
+                    (got - want).abs() < 0.5,
+                    "entidad {id} coord {i}: {got} vs {want}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn lista_incluye_las_tools_de_prefab() {
         let srv = servidor();
         let resp = srv

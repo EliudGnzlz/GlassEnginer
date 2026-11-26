@@ -31,11 +31,21 @@ void main() {
         base = mix(v_grad_c0, v_grad_c1, (t - v_pack1.w) / max(v_pack2.x - v_pack1.w, 0.0001));
     } else if (modo > 0.5 && modo < 1.5) {
         // 3. Imagen: la textura aporta el color, el vértice tiñe.
-        base = texture(atlas_tex, v_uv) * v_color;
+        // La mezcla es PREMULTIPLICADA (ONE / ONE_MINUS_SRC_ALPHA):
+        // el texel también debe premultiplicarse por su propio alfa,
+        // o un texel semitransparente filtraría su RGB a plena
+        // intensidad (en P4c el texto blanco sobre negro salía como
+        // bloques sólidos por el mismo motivo en la rama de texto).
+        vec4 tex = texture(atlas_tex, v_uv);
+        base = vec4(tex.rgb * tex.a * v_color.rgb, tex.a * v_color.a);
     } else if (modo > 1.5 && modo < 2.5) {
         // 3. Texto/SDF: cobertura en alfa; modula color base (o degradado).
+        // Con mezcla premultiplicada hay que multiplicar TAMBIÉN el RGB
+        // por la cobertura: si solo se baja el alfa, fuera del glifo
+        // (cobertura 0) el RGB seguiría a plena intensidad y el quad
+        // entero saldría sólido (bloques blancos en P4c).
         float cobertura = texture(atlas_tex, v_uv).a;
-        base = vec4(base.rgb, base.a * cobertura);
+        base = vec4(base.rgb * cobertura, base.a * cobertura);
     }
     // modo 3 (sombra) y modo 0 (color) no tocan base aquí.
 

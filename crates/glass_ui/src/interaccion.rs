@@ -210,14 +210,19 @@ impl RastreadorClic {
         ent
     }
 
-    /// Al soltar devuelve la acción del clic si corresponde, y limpia el estado.
+    /// Al soltar devuelve (entidad del botón, acción) si corresponde, y
+    /// limpia el estado. La entidad es la del BOTÓN que aporta la acción
+    /// (el propio nodo o su ancestro más cercano con botón interactable),
+    /// no el nodo golpeado: si el clic cae sobre el texto hijo de un
+    /// botón, la acción debe invocarse en el botón (ahí vive el script),
+    /// no en la etiqueta.
     pub fn soltar(
         &mut self,
         doc: &Documento,
         colocado: &DocumentoColocado,
         x: f32,
         y: f32,
-    ) -> Option<String> {
+    ) -> Option<(u64, String)> {
         let ent_pulsada = self.pulsado.take()?;
         let ent_suelta = hit_test(doc, colocado, x, y)?;
 
@@ -242,14 +247,14 @@ impl RastreadorClic {
         self.pulsado = None;
     }
 
-    /// Busca la acción de clic del nodo o de su ancestro más cercano con botón
-    /// interactable.
-    fn accion_boton(doc: &Documento, mut idx: usize) -> Option<String> {
+    /// Busca (entidad del botón, acción) del nodo o de su ancestro más
+    /// cercano con botón interactable.
+    fn accion_boton(doc: &Documento, mut idx: usize) -> Option<(u64, String)> {
         loop {
             let nodo = &doc.nodos[idx];
             if let Some(ref btn) = nodo.boton {
                 if btn.interactable {
-                    return Some(btn.on_click_action.clone());
+                    return Some((nodo.entidad, btn.on_click_action.clone()));
                 } else {
                     // Botón no interactable: no burbujea más
                     return None;
@@ -634,7 +639,7 @@ mod tests {
         let (doc, colocado) = doc_boton(true);
         let mut r = RastreadorClic::new();
         assert_eq!(r.pulsar(&doc, &colocado, 640.0, 360.0), Some(2));
-        assert_eq!(r.soltar(&doc, &colocado, 645.0, 355.0), Some("StartGame".to_string()));
+        assert_eq!(r.soltar(&doc, &colocado, 645.0, 355.0), Some((2, "StartGame".to_string())));
         // Suelta fuera: se cancela.
         assert_eq!(r.pulsar(&doc, &colocado, 640.0, 360.0), Some(2));
         assert_eq!(r.soltar(&doc, &colocado, 20.0, 20.0), None);
@@ -655,6 +660,6 @@ mod tests {
         let mut colocado_b = colocado_b;
         colocado_b.nodos.push(nc(2, 3, RectColocado { x: 600.0, y: 340.0, ancho: 80.0, alto: 20.0 }));
         assert_eq!(r.pulsar(&doc_b, &colocado_b, 640.0, 350.0), Some(3));
-        assert_eq!(r.soltar(&doc_b, &colocado_b, 640.0, 350.0), Some("StartGame".to_string()));
+        assert_eq!(r.soltar(&doc_b, &colocado_b, 640.0, 350.0), Some((2, "StartGame".to_string())));
     }
 }

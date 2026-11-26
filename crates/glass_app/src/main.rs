@@ -5677,21 +5677,23 @@ let resueltos = if body.has_collider {
                             .pulsar(doc, colocado, mouse_render_x, mouse_render_y);
                     }
                     if mouse_up_edge {
-                        let pulsado = self.rastreador_clic.pulsado();
-                        if let Some(accion) = self.rastreador_clic.soltar(
+                        if let Some((ent_boton, accion)) = self.rastreador_clic.soltar(
                             doc,
                             colocado,
                             mouse_render_x,
                             mouse_render_y,
                         ) {
-                            let nombre = pulsado
-                                .and_then(|id| {
-                                    doc.nodos.iter().find(|n| n.entidad == id)
-                                })
+                            // La entidad es la del botón (no la del nodo
+                            // golpeado, p. ej. su etiqueta hija): ahí vive
+                            // el script que recibe la acción en C#.
+                            let nombre = doc
+                                .nodos
+                                .iter()
+                                .find(|n| n.entidad == ent_boton)
                                 .map(|n| n.nombre.clone())
                                 .unwrap_or_default();
                             completed_click = Some(canvas_ui::CanvasButtonClick {
-                                entity_id: pulsado.unwrap_or(0),
+                                entity_id: ent_boton,
                                 entity_name: nombre,
                                 action: accion,
                             });
