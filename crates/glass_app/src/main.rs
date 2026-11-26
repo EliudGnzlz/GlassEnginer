@@ -2399,6 +2399,12 @@ impl GlassEngineApp {
         // Tools de escenas del MCP: el SceneManager compartido.
         #[cfg(feature = "editor")]
         mcp_server.set_scene_manager(scene_manager.clone());
+        // Librería de materiales físicos: una sola instancia para la
+        // app y las tools MCP de physmat (set invalida la caché y el
+        // motor relee el asset en caliente).
+        let physmat_lib = Arc::new(Mutex::new(biblioteca_physmat(&scene_manager)));
+        #[cfg(feature = "editor")]
+        mcp_server.set_physmat_library(physmat_lib.clone());
         // Puerta del complemento «herramienta-3d» para las tools glass_mesh_*.
         #[cfg(feature = "editor")]
         mcp_server
@@ -2574,7 +2580,7 @@ impl GlassEngineApp {
             materiales_failed: std::collections::HashSet::new(),
             material_textures: std::collections::HashSet::new(),
             ui_font_failed: std::collections::HashSet::new(),
-            physmat_lib: Arc::new(Mutex::new(biblioteca_physmat(&scene_manager))),
+            physmat_lib,
             scene_manager,
             #[cfg(feature = "editor")]
             mcp_server,

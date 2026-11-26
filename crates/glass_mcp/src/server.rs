@@ -41,6 +41,8 @@ pub struct McpServer {
     mesh_tools_enabled: std::sync::atomic::AtomicBool,
     /// SceneManager del motor, registrado por la app al arrancar (modo --mcp-live).
     scene_manager: std::sync::Mutex<Option<std::sync::Arc<std::sync::Mutex<glass_core::scenes::SceneManager>>>>,
+    /// Librería de materiales físicos, registrada por la app al arrancar (modo --mcp-live).
+    physmat_library: std::sync::Mutex<Option<std::sync::Arc<std::sync::Mutex<glass_core::physics_material::PhysicsMaterialLibrary>>>>,
     /// Command Queue (Fase 8): la ejecuta el bucle del motor.
     pub queue: Arc<crate::queue::CommandQueue>,
 }
@@ -50,6 +52,27 @@ pub struct McpServer {
 /// responden directas, como siempre.
 /// Tools que solo puede ejecutar la app del editor (estado de Play, ruta de guardado).
 pub const APP_EXEC_TOOLS: [&str; 3] = ["glass_play_control", "glass_scene_save", "glass_scene_new"];
+
+/// Normaliza el nombre de un material físico a su referencia
+/// (ruta relativa a Assets con el sufijo `.physmat.json`).
+fn referencia_physmat(name: &str) -> Result<String, String> {
+    use glass_core::physics_material::{es_referencia_physmat_valida, PhysicsMaterial};
+
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("El nombre del material físico no puede estar vacío".to_string());
+    }
+    let mut reference = trimmed.to_string();
+    if !reference.ends_with(PhysicsMaterial::SUFFIX) {
+        reference.push_str(PhysicsMaterial::SUFFIX);
+    }
+    if !es_referencia_physmat_valida(&reference) {
+        return Err(format!(
+            "Referencia de material físico inválida: '{reference}' (debe ser una ruta relativa a la raíz de Assets, con '/', y sin '..')"
+        ));
+    }
+    Ok(reference)
+}
 
 fn is_mutating_tool(name: &str) -> bool {
     matches!(
@@ -68,6 +91,7 @@ fn is_mutating_tool(name: &str) -> bool {
             | "glass_scene_save"
             | "glass_scene_load"
             | "glass_scene_new"
+            | "glass_physmat_set"
             | "glass_set_ui_text"
             | "glass_set_entity_material"
             | "glass_material_property_set"
@@ -124,6 +148,25 @@ impl McpServer {
             .clone()
     }
 
+    /// Registra la librería de materiales físicos compartida con el motor.
+    pub fn set_physmat_library(
+        &self,
+        lib: std::sync::Arc<std::sync::Mutex<glass_core::physics_material::PhysicsMaterialLibrary>>,
+    ) {
+        let mut slot = self.physmat_library.lock().unwrap_or_else(|e| e.into_inner());
+        *slot = Some(lib);
+    }
+
+    /// Clona el Arc de la librería de materiales si está registrada.
+    fn physmat_library(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<glass_core::physics_material::PhysicsMaterialLibrary>>> {
+        self.physmat_library
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     pub fn new(scene: Arc<Mutex<SceneState>>) -> Self {
         Self {
             scene,
@@ -134,6 +177,7 @@ impl McpServer {
             // Abierta por defecto: los usos sin puerta (tests incluidos) no cambian.
             mesh_tools_enabled: std::sync::atomic::AtomicBool::new(true),
             scene_manager: std::sync::Mutex::new(None),
+            physmat_library: std::sync::Mutex::new(None),
             queue: Arc::new(crate::queue::CommandQueue::new()),
         }
     }
@@ -560,6 +604,37 @@ impl McpServer {
                                     "name": { "type": "string" }
                                 },
                                 "required": ["name"]
+                            }
+                        },
+                        {
+                            "name": "glass_physmat_list",
+                            "description": "Lista los materiales físicos (.physmat.json) del proyecto.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "glass_physmat_get",
+                            "description": "Devuelve los valores de un material físico por su referencia (ruta relativa a Assets, p. ej. 'Hielo.physmat.json').",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string", "description": "Referencia del material físico relativa a la raíz de Assets." }
+                                },
+                                "required": ["name"]
+                            }
+                        },
+                        {
+                            "name": "glass_physmat_set",
+                            "description": "Crea o edita un material físico: escribe solo los campos dados sobre el asset actual (o sobre los valores de un asset nuevo). Campos: dynamic_friction, static_friction, bounciness, friction_combine, bounce_combine (Average|Minimum|Multiply|Maximum).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string", "description": "Referencia del material físico relativa a la raíz de Assets." },
+                                    "values": { "type": "object", "description": "Campos del material a escribir (solo primer nivel)." }
+                                },
+                                "required": ["name", "values"]
                             }
                         },
                         {
@@ -4474,6 +4549,202 @@ impl McpServer {
                 )
             }
 
+            "glass_physmat_list" => {
+                let Some(lib_arc) = self.physmat_library() else {
+                    return McpResponse::error(
+                        id,
+                        -32008,
+                        "glass_physmat_list requiere el motor en marcha (modo --mcp-live): la librería de materiales se registra al arrancar el editor",
+                    );
+                };
+                let lib = match lib_arc.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        return McpResponse::error(
+                            id,
+                            -32000,
+                            "La librería de materiales está bloqueada (mutex envenenado)",
+                        )
+                    }
+                };
+
+                let materials = lib.list();
+                let texto = serde_json::to_string_pretty(&json!({ "materials": materials }))
+                    .unwrap_or_default();
+
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [
+                            { "type": "text", "text": texto }
+                        ]
+                    }),
+                )
+            }
+
+            "glass_physmat_get" => {
+                let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
+                    return McpResponse::invalid_params(id, "Falta el parámetro 'name' (string)");
+                };
+                let reference = match referencia_physmat(name) {
+                    Ok(reference) => reference,
+                    Err(e) => return McpResponse::invalid_params(id, &e),
+                };
+                let Some(lib_arc) = self.physmat_library() else {
+                    return McpResponse::error(
+                        id,
+                        -32008,
+                        "glass_physmat_get requiere el motor en marcha (modo --mcp-live): la librería de materiales se registra al arrancar el editor",
+                    );
+                };
+                let mut lib = match lib_arc.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        return McpResponse::error(
+                            id,
+                            -32000,
+                            "La librería de materiales está bloqueada (mutex envenenado)",
+                        )
+                    }
+                };
+
+                let Some(material) = lib.get(&reference) else {
+                    return McpResponse::error(
+                        id,
+                        -32004,
+                        format!("No existe el material físico '{reference}'"),
+                    );
+                };
+
+                let texto = serde_json::to_string_pretty(&json!({
+                    "name": reference,
+                    "values": material,
+                }))
+                .unwrap_or_default();
+
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [
+                            { "type": "text", "text": texto }
+                        ]
+                    }),
+                )
+            }
+
+            "glass_physmat_set" => {
+                let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
+                    return McpResponse::invalid_params(id, "Falta el parámetro 'name' (string)");
+                };
+                let Some(values) = args.get("values") else {
+                    return McpResponse::invalid_params(id, "Falta el parámetro 'values' (object)");
+                };
+                if !values.is_object() {
+                    return McpResponse::invalid_params(id, "El parámetro 'values' debe ser un objeto");
+                }
+                let reference = match referencia_physmat(name) {
+                    Ok(reference) => reference,
+                    Err(e) => return McpResponse::invalid_params(id, &e),
+                };
+                let Some(lib_arc) = self.physmat_library() else {
+                    return McpResponse::error(
+                        id,
+                        -32008,
+                        "glass_physmat_set requiere el motor en marcha (modo --mcp-live): la librería de materiales se registra al arrancar el editor",
+                    );
+                };
+                let mut lib = match lib_arc.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        return McpResponse::error(
+                            id,
+                            -32000,
+                            "La librería de materiales está bloqueada (mutex envenenado)",
+                        )
+                    }
+                };
+
+                // 1) Base: asset existente o valores por defecto de uno nuevo.
+                let base = lib
+                    .get(&reference)
+                    .unwrap_or(glass_core::physics_material::PhysicsMaterial::NEW_ASSET);
+
+                // 2) Fusión superficial (solo primer nivel) + deserialización + saneado.
+                let mut base_value = match serde_json::to_value(base) {
+                    Ok(value) => value,
+                    Err(e) => {
+                        return McpResponse::error(
+                            id,
+                            -32000,
+                            format!("No se pudo serializar el material físico base: {e}"),
+                        )
+                    }
+                };
+                if let (Some(base_obj), Some(patch_obj)) =
+                    (base_value.as_object_mut(), values.as_object())
+                {
+                    for (key, value) in patch_obj {
+                        base_obj.insert(key.clone(), value.clone());
+                    }
+                }
+                let merged: glass_core::physics_material::PhysicsMaterial =
+                    match serde_json::from_value(base_value) {
+                        Ok(material) => material,
+                        Err(e) => {
+                            return McpResponse::invalid_params(
+                                id,
+                                &format!("Valores de material físico inválidos: {e}"),
+                            )
+                        }
+                    };
+                let material = merged.sanitized();
+
+                // 3) Escribir el asset en disco.
+                let path = lib.assets_root().join(&reference);
+                if let Some(parent) = path.parent() {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        return McpResponse::error(
+                            id,
+                            -32000,
+                            format!(
+                                "No se pudo crear el directorio '{}': {e}",
+                                parent.display()
+                            ),
+                        );
+                    }
+                }
+                if let Err(e) = std::fs::write(&path, material.to_json()) {
+                    return McpResponse::error(
+                        id,
+                        -32000,
+                        format!("No se pudo escribir '{}': {e}", path.display()),
+                    );
+                }
+
+                // 4) Invalidar la caché para recarga en caliente.
+                lib.invalidate(&reference);
+
+                // 5) Respuesta con dos elementos de content (como otras escrituras).
+                let texto = serde_json::to_string_pretty(&json!({
+                    "name": reference,
+                    "values": material,
+                }))
+                .unwrap_or_default();
+
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": format!("Material físico '{reference}' guardado.")
+                            },
+                            { "type": "text", "text": texto }
+                        ]
+                    }),
+                )
+            }
+
             _ => McpResponse::method_not_found(id, name),
         }
     }
@@ -5012,6 +5283,76 @@ mod tests_catchup {
         let status = format!("{:?}", srv.queue.status(cid));
         assert!(status.contains("Done"), "estado: {status}");
         assert!(status.contains("PLAY-OK"), "result: {status}");
+    }
+
+    #[test]
+    fn physmat_sin_libreria_da_32008() {
+        let srv = servidor();
+
+        let list = llamar(&srv, "glass_physmat_list", json!({}));
+        assert!(list.contains("-32008"), "{list}");
+
+        let get = llamar(&srv, "glass_physmat_get", json!({ "name": "Hielo" }));
+        assert!(get.contains("-32008"), "{get}");
+
+        let set = llamar(
+            &srv,
+            "glass_physmat_set",
+            json!({ "name": "Hielo", "values": { "bounciness": 0.5 } }),
+        );
+        assert!(set.contains("-32008"), "{set}");
+
+        assert!(is_mutating_tool("glass_physmat_set"));
+        assert!(!is_mutating_tool("glass_physmat_list"));
+        assert!(!is_mutating_tool("glass_physmat_get"));
+    }
+
+    #[test]
+    fn physmat_set_get_list_roundtrip() {
+        let srv = servidor();
+
+        let dir = std::env::temp_dir().join(format!(
+            "glass_physmat_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let lib = std::sync::Arc::new(std::sync::Mutex::new(
+            glass_core::physics_material::PhysicsMaterialLibrary::new(dir.clone()),
+        ));
+        srv.set_physmat_library(lib);
+
+        // set
+        let set = llamar(
+            &srv,
+            "glass_physmat_set",
+            json!({
+                "name": "Hielo",
+                "values": { "dynamic_friction": 0.1, "bounciness": 0.9 }
+            }),
+        );
+        assert!(set.contains("Hielo.physmat.json"), "{set}");
+        assert!(dir.join("Hielo.physmat.json").exists());
+
+        // get
+        let get = llamar(&srv, "glass_physmat_get", json!({ "name": "Hielo" }));
+        assert!(get.contains("0.1"), "{get}");
+        assert!(get.contains("0.8999"), "{get}");
+
+        // list
+        let list = llamar(&srv, "glass_physmat_list", json!({}));
+        assert!(list.contains("Hielo.physmat.json"), "{list}");
+
+        // inexistente
+        let missing = llamar(&srv, "glass_physmat_get", json!({ "name": "Fantasma" }));
+        assert!(missing.contains("-32004"), "{missing}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

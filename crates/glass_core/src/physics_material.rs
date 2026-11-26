@@ -158,6 +158,35 @@ impl PhysicsMaterialLibrary {
         }
     }
 
+    /// Raíz de assets de la librería.
+    pub fn assets_root(&self) -> &std::path::Path {
+        &self.assets_root
+    }
+
+    /// Referencias de todos los assets `.physmat.json` bajo la raíz,
+    /// relativas a ella con separadores '/', ordenadas.
+    pub fn list(&self) -> Vec<String> {
+        let mut refs = Vec::new();
+        let mut pila = vec![self.assets_root.clone()];
+        while let Some(dir) = pila.pop() {
+            let Ok(entradas) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entrada in entradas.flatten() {
+                let ruta = entrada.path();
+                if ruta.is_dir() {
+                    pila.push(ruta);
+                } else if es_physmat(&entrada.file_name().to_string_lossy()) {
+                    if let Ok(rel) = ruta.strip_prefix(&self.assets_root) {
+                        refs.push(rel.to_string_lossy().replace('\\', "/"));
+                    }
+                }
+            }
+        }
+        refs.sort();
+        refs
+    }
+
     /// Retira de la caché la entrada asociada a `reference`. Si la
     /// referencia no está cacheada, no hace nada. Tras esta llamada, la
     /// próxima `get` vuelve a leer el archivo desde disco (y vuelve a
@@ -229,6 +258,25 @@ pub fn resolve_collider_material(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listar_referencias_recursivo_y_ordenado() {
+        let raiz = std::env::temp_dir().join(format!("glass_physmat_list_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&raiz);
+        std::fs::create_dir_all(raiz.join("Materiales")).unwrap();
+        std::fs::write(raiz.join("Hielo.physmat.json"), "{}").unwrap();
+        std::fs::write(raiz.join("Materiales/Goma.physmat.json"), "{}").unwrap();
+        std::fs::write(raiz.join("Materiales/notas.txt"), "x").unwrap();
+        let lib = PhysicsMaterialLibrary::new(raiz.clone());
+        assert_eq!(
+            lib.list(),
+            vec![
+                "Hielo.physmat.json".to_string(),
+                "Materiales/Goma.physmat.json".to_string()
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
 
     #[test]
     fn roundtrip_json() {
