@@ -262,6 +262,8 @@ fn is_mutating_tool(name: &str) -> bool {
             | "glass_audio_source_control"
             | "glass_console_log"
             | "glass_scripts_compile"
+            | "glass_physics_apply"
+            | "glass_physics_settings"
             | "glass_editor_selection"
             | "glass_editor_camera"
             | "glass_play_control"
@@ -993,6 +995,31 @@ impl McpServer {
                                 "properties": {
                                     "path": { "type": "string", "description": "Subcarpeta relativa a la raíz de assets (por defecto la raíz)" },
                                     "type": { "type": "string", "description": "Filtro por tipo de asset" }
+                                },
+                                "required": []
+                            }
+                        },
+                        {
+                            "name": "glass_physics_apply",
+                            "description": "Actúa sobre el cuerpo físico de una entidad (en Play): aplica un impulso y/o una fuerza, o fija su velocidad lineal. Al menos uno de los tres.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "integer" },
+                                    "force": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                                    "impulse": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                                    "velocity": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+                                },
+                                "required": ["entity_id"]
+                            }
+                        },
+                        {
+                            "name": "glass_physics_settings",
+                            "description": "Lee la gravedad del mundo físico; con 'gravity' [x, y, z] la cambia en el acto.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "gravity": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
                                 },
                                 "required": []
                             }
@@ -6006,6 +6033,159 @@ impl McpServer {
                 )
             }
 
+            "glass_physics_apply" => {
+                let entity_id = match args.get("entity_id").and_then(|v| v.as_u64()) {
+                    Some(v) => v,
+                    None => return McpResponse::invalid_params(id, "Falta 'entity_id' (integer)"),
+                };
+                let vec3 = |k: &str| -> Result<Option<[f32; 3]>, String> {
+                    match args.get(k) {
+                        None => Ok(None),
+                        Some(v) => {
+                            let a = v.as_array().filter(|a| a.len() == 3).and_then(|a| {
+                                Some([
+                                    a[0].as_f64()? as f32,
+                                    a[1].as_f64()? as f32,
+                                    a[2].as_f64()? as f32,
+                                ])
+                            });
+                            match a {
+                                Some(x) if x.iter().all(|n| n.is_finite()) => Ok(Some(x)),
+                                _ => Err(format!("'{k}' debe ser [x, y, z] finito")),
+                            }
+                        }
+                    }
+                };
+                let force = match vec3("force") {
+                    Ok(v) => v,
+                    Err(m) => return McpResponse::invalid_params(id, &m),
+                };
+                let impulse = match vec3("impulse") {
+                    Ok(v) => v,
+                    Err(m) => return McpResponse::invalid_params(id, &m),
+                };
+                let velocity = match vec3("velocity") {
+                    Ok(v) => v,
+                    Err(m) => return McpResponse::invalid_params(id, &m),
+                };
+                if force.is_none() && impulse.is_none() && velocity.is_none() {
+                    return McpResponse::invalid_params(
+                        id,
+                        "Nada que aplicar: pasa force, impulse o velocity",
+                    );
+                }
+                if !scene.entities.iter().any(|e| e.id == entity_id) {
+                    return McpResponse::error(
+                        id,
+                        -32001,
+                        format!("Entity #{entity_id} not found"),
+                    );
+                }
+                let physics = self.get_physics();
+                let mut physics = match physics.lock() {
+                    Ok(g) => g,
+                    Err(e) => {
+                        return McpResponse::error(
+                            id,
+                            -32000,
+                            format!("Mutex poison error: {e}"),
+                        )
+                    }
+                };
+                let Some(handle) = physics.get_body_by_entity(entity_id) else {
+                    return McpResponse::error(
+                        id,
+                        -32004,
+                        "La entidad no tiene cuerpo físico activo (hace falta Rigidbody y el mundo en marcha, p. ej. en Play)",
+                    );
+                };
+                let mut aplicadas: Vec<&str> = Vec::new();
+                if let Some(i) = impulse {
+                    if !physics.apply_impulse(handle, i) {
+                        return McpResponse::error(id, -32000, "apply_impulse falló");
+                    }
+                    aplicadas.push("impulse");
+                }
+                if let Some(f) = force {
+                    if !physics.apply_force(handle, f) {
+                        return McpResponse::error(id, -32000, "apply_force falló");
+                    }
+                    aplicadas.push("force");
+                }
+                if let Some(v) = velocity {
+                    if !physics.set_linear_velocity(handle, v) {
+                        return McpResponse::error(id, -32000, "set_linear_velocity falló");
+                    }
+                    aplicadas.push("velocity");
+                }
+                let payload = json!({
+                    "entity_id": entity_id,
+                    "applied": aplicadas,
+                    "velocity": physics.get_linear_velocity(handle),
+                });
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&payload).unwrap_or_default()
+                        }]
+                    }),
+                )
+            }
+
+            "glass_physics_settings" => {
+                let physics = self.get_physics();
+                let mut physics = match physics.lock() {
+                    Ok(g) => g,
+                    Err(e) => {
+                        return McpResponse::error(
+                            id,
+                            -32000,
+                            format!("Mutex poison error: {e}"),
+                        )
+                    }
+                };
+                if let Some(g) = args.get("gravity") {
+                    let a = g.as_array().filter(|a| a.len() == 3).and_then(|a| {
+                        Some([
+                            a[0].as_f64()? as f32,
+                            a[1].as_f64()? as f32,
+                            a[2].as_f64()? as f32,
+                        ])
+                    });
+                    match a {
+                        Some(x) if x.iter().all(|n| n.is_finite()) => {
+                            physics.gravity[0] = x[0];
+                            physics.gravity[1] = x[1];
+                            physics.gravity[2] = x[2];
+                        }
+                        _ => {
+                            return McpResponse::invalid_params(
+                                id,
+                                "'gravity' debe ser [x, y, z] finito",
+                            )
+                        }
+                    }
+                }
+                let payload = json!({
+                    "gravity": [
+                        physics.gravity[0],
+                        physics.gravity[1],
+                        physics.gravity[2]
+                    ],
+                });
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&payload).unwrap_or_default()
+                        }]
+                    }),
+                )
+            }
+
             _ => McpResponse::method_not_found(id, name),
         }
     }
@@ -6969,6 +7149,40 @@ fn entity_set_duplicate_find() {
         assert!(r.iter().any(|(p, t, _)| p == "foto.png" && *t == "texture"));
         assert!(r.iter().any(|(p, t, _)| p == "notas.txt" && *t == "other"));
         assert!(!is_mutating_tool("glass_list_assets"));
+    }
+
+    #[test]
+    fn physics_settings_get_set_y_apply_sin_cuerpo() {
+        let srv = servidor();
+        let plano = |r: String| r.replace("\\\"", "\"");
+        let r = plano(llamar(&srv, "glass_physics_settings", json!({})));
+        assert!(r.contains("\"gravity\":"), "{r}");
+        let r = plano(llamar(
+            &srv,
+            "glass_physics_settings",
+            json!({ "gravity": [0, -20, 0] }),
+        ));
+        assert!(r.contains("-20"), "{r}");
+        let r = plano(llamar(&srv, "glass_physics_settings", json!({})));
+        assert!(r.contains("-20"), "{r}");
+
+        // Apply: entidad inexistente -32001; existente sin cuerpo -32004.
+        let r = llamar(
+            &srv,
+            "glass_physics_apply",
+            json!({ "entity_id": 999999, "impulse": [0, 5, 0] }),
+        );
+        assert!(r.contains("-32001"), "{r}");
+        let creada = llamar(&srv, "glass_create_entity", json!({ "name": "SinCuerpo" }));
+        let eid = id_desde_texto(&creada);
+        let r = llamar(
+            &srv,
+            "glass_physics_apply",
+            json!({ "entity_id": eid, "impulse": [0, 5, 0] }),
+        );
+        assert!(r.contains("-32004"), "{r}");
+        assert!(is_mutating_tool("glass_physics_apply"));
+        assert!(is_mutating_tool("glass_physics_settings"));
     }
 
     #[test]
