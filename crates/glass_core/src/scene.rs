@@ -2080,6 +2080,73 @@ impl SceneState {
         }
     }
 
+    /// Duplica una entidad con todo su subárbol: ids nuevos,
+    /// `parent`/`children` remapeados dentro de la copia y la raíz
+    /// copia como hermana de la original (mismo padre, registrada
+    /// en su lista de hijos). Devuelve el id de la raíz copia.
+    pub fn duplicate_entity(&mut self, id: u64) -> Option<u64> {
+        // Recorrido del subárbol, la raíz primero.
+        let mut orden: Vec<u64> = Vec::new();
+        let mut pila = vec![id];
+        while let Some(actual) = pila.pop() {
+            let Some(ent) = self.get_entity(actual) else {
+                continue;
+            };
+            orden.push(actual);
+            for hijo in ent.children.iter().rev() {
+                pila.push(*hijo);
+            }
+        }
+        if orden.is_empty() {
+            return None;
+        }
+        let padre_raiz = self.get_entity(id).and_then(|e| e.parent);
+
+        // Mapa de ids viejos a nuevos, en el orden del recorrido.
+        let mut mapa: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+        for viejo in &orden {
+            let nuevo = self.next_entity_id;
+            self.next_entity_id += 1;
+            mapa.insert(*viejo, nuevo);
+        }
+
+        // Clonar con los punteros remapeados y empujar manteniendo
+        // el índice de ids sincronizado, como hace create_entity.
+        let clones: Vec<EntityData> = orden
+            .iter()
+            .filter_map(|viejo| {
+                let mut copia = self.get_entity(*viejo)?.clone();
+                copia.id = *mapa.get(viejo)?;
+                copia.parent = if *viejo == id {
+                    padre_raiz
+                } else {
+                    copia.parent.and_then(|p| mapa.get(&p).copied())
+                };
+                copia.children = copia
+                    .children
+                    .iter()
+                    .filter_map(|h| mapa.get(h).copied())
+                    .collect();
+                Some(copia)
+            })
+            .collect();
+        let raiz_nueva = *mapa.get(&id)?;
+        for copia in clones {
+            let pos = self.entities.len();
+            let cid = copia.id;
+            self.entities.push(copia);
+            self.id_index.borrow_mut().insert(cid, pos);
+        }
+        if let Some(pid) = padre_raiz {
+            if let Some(p) = self.get_entity_mut(pid) {
+                if !p.children.contains(&raiz_nueva) {
+                    p.children.push(raiz_nueva);
+                }
+            }
+        }
+        Some(raiz_nueva)
+    }
+
     /// Mueve una entidad hacia arriba en el orden visual de la jerarquía
     pub fn move_entity_up(&mut self, id: u64) -> bool {
         let parent = self.get_entity(id).and_then(|e| e.parent);
@@ -3377,6 +3444,37 @@ mod regression_physics_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicate_entity_copia_el_subarbol_con_ids_nuevos() {
+        let mut sc = SceneState::new();
+        let padre = sc.create_entity("Padre".into(), vec!["Transform".into()]);
+        let hijo = sc.create_entity("Hijo".into(), vec!["Transform".into()]);
+        let nieto = sc.create_entity("Nieto".into(), vec!["Transform".into()]);
+        assert!(sc.reparent(hijo, Some(padre)));
+        assert!(sc.reparent(nieto, Some(hijo)));
+        let total = sc.entities.len();
+
+        let copia = sc.duplicate_entity(padre).expect("la raíz debe existir");
+        assert_ne!(copia, padre);
+        assert_eq!(sc.entities.len(), total + 3);
+        let raiz = sc.get_entity(copia).unwrap();
+        assert_eq!(raiz.name, "Padre");
+        assert_eq!(raiz.parent, None);
+        assert_eq!(raiz.children.len(), 1);
+        let hijo_copia = raiz.children[0];
+        assert_ne!(hijo_copia, hijo);
+        let hc = sc.get_entity(hijo_copia).unwrap();
+        assert_eq!(hc.name, "Hijo");
+        assert_eq!(hc.parent, Some(copia));
+        assert_eq!(hc.children.len(), 1);
+        let nieto_copia = hc.children[0];
+        assert_eq!(sc.get_entity(nieto_copia).unwrap().name, "Nieto");
+        assert_eq!(sc.get_entity(nieto_copia).unwrap().parent, Some(hijo_copia));
+        // El original queda intacto.
+        assert_eq!(sc.get_entity(padre).unwrap().children, vec![hijo]);
+        assert!(sc.duplicate_entity(9999).is_none());
+    }
 
     #[test]
     fn resolve_ui_rect_esquina_inferior_izquierda_sample_scene() {

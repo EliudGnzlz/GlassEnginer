@@ -88,6 +88,8 @@ fn is_mutating_tool(name: &str) -> bool {
             | "glass_component_set"
             | "glass_import_unitypackage"
             | "glass_import_model"
+            | "glass_entity_set"
+            | "glass_entity_duplicate"
             | "glass_play_control"
             | "glass_scene_save"
             | "glass_scene_load"
@@ -679,6 +681,42 @@ impl McpServer {
                                     "overwrite": { "type": "boolean", "description": "Sustituye el archivo si ya existe en el destino (opcional)" }
                                 },
                                 "required": ["path"]
+                            }
+                        },
+                        {
+                            "name": "glass_entity_set",
+                            "description": "Renombra una entidad, la activa/desactiva o la reparenta.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "integer", "description": "Id de la entidad a modificar" },
+                                    "name": { "type": "string", "description": "Nuevo nombre (cadena no vacía)" },
+                                    "active": { "type": "boolean", "description": "Activa o desactiva la entidad" },
+                                    "parent_id": { "type": ["integer", "null"], "description": "Nuevo padre; null = raíz. Si se omite, no se toca el padre." }
+                                },
+                                "required": ["entity_id"]
+                            }
+                        },
+                        {
+                            "name": "glass_entity_duplicate",
+                            "description": "Duplica una entidad con todo su subárbol (ids nuevos).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "integer", "description": "Id de la entidad a duplicar" }
+                                },
+                                "required": ["entity_id"]
+                            }
+                        },
+                        {
+                            "name": "glass_find_entities",
+                            "description": "Busca entidades por nombre (subcadena, insensible a mayúsculas) o por componente.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string", "description": "Subcadena del nombre" },
+                                    "component": { "type": "string", "description": "Nombre canónico de componente (p. ej. Transform)" }
+                                }
                             }
                         },
                         {
@@ -5044,6 +5082,173 @@ impl McpServer {
                 )
             }
 
+    "glass_entity_set" => {
+        let eid = match args.get("entity_id").and_then(|v| v.as_u64()) {
+            Some(v) => v,
+            None => return McpResponse::invalid_params(id, "Falta 'entity_id' (integer)"),
+        };
+        if scene.get_entity(eid).is_none() {
+            return McpResponse::error(id, -32001, format!("Entity #{eid} not found"));
+        }
+
+        if let Some(valor) = args.get("name") {
+            match valor.as_str() {
+                Some(s) if !s.trim().is_empty() => {
+                    if let Some(ent) = scene.get_entity_mut(eid) {
+                        ent.name = s.to_string();
+                    }
+                }
+                _ => {
+                    return McpResponse::invalid_params(
+                        id,
+                        "El campo 'name' debe ser una cadena no vacía",
+                    )
+                }
+            }
+        }
+
+        if let Some(valor) = args.get("active") {
+            match valor.as_bool() {
+                Some(b) => {
+                    if let Some(ent) = scene.get_entity_mut(eid) {
+                        ent.active = b;
+                    }
+                }
+                None => {
+                    return McpResponse::invalid_params(id, "El campo 'active' debe ser booleano")
+                }
+            }
+        }
+
+        // El padre SOLO se toca si la clave existe en args.
+        if let Some(valor) = args.get("parent_id") {
+            let nuevo_padre: Option<u64> = if valor.is_null() {
+                None
+            } else if let Some(pid) = valor.as_u64() {
+                if scene.get_entity(pid).is_none() {
+                    return McpResponse::error(id, -32001, format!("Entity #{pid} not found"));
+                }
+                Some(pid)
+            } else {
+                return McpResponse::invalid_params(
+                    id,
+                    "El campo 'parent_id' debe ser integer o null",
+                );
+            };
+            if !scene.reparent(eid, nuevo_padre) {
+                return McpResponse::error(
+                    id,
+                    -32602,
+                    "Reparentado inválido (ciclo o la propia entidad)",
+                );
+            }
+        }
+
+        let ent = match scene.get_entity(eid) {
+            Some(e) => e,
+            None => return McpResponse::error(id, -32001, format!("Entity #{eid} not found")),
+        };
+        let payload = json!({
+            "id": ent.id,
+            "name": ent.name,
+            "active": ent.active,
+            "parent": ent.parent,
+            "children": ent.children,
+            "components": ent.components,
+        });
+        let texto = serde_json::to_string_pretty(&payload)
+            .unwrap_or_else(|_| payload.to_string());
+        McpResponse::success(id, json!({
+            "content": [{ "type": "text", "text": texto }]
+        }))
+    }
+
+    "glass_entity_duplicate" => {
+        let eid = match args.get("entity_id").and_then(|v| v.as_u64()) {
+            Some(v) => v,
+            None => return McpResponse::invalid_params(id, "Falta 'entity_id' (integer)"),
+        };
+        match scene.duplicate_entity(eid) {
+            Some(nuevo) => {
+                let nombre = scene
+                    .get_entity(nuevo)
+                    .map(|e| e.name.clone())
+                    .unwrap_or_default();
+                let payload = json!({
+                    "entity_id": eid,
+                    "new_entity_id": nuevo,
+                    "name": nombre,
+                });
+                let texto = serde_json::to_string_pretty(&payload)
+                    .unwrap_or_else(|_| payload.to_string());
+                McpResponse::success(id, json!({
+                    "content": [{ "type": "text", "text": texto }]
+                }))
+            }
+            None => McpResponse::error(id, -32001, format!("Entity #{eid} not found")),
+        }
+    }
+
+    "glass_find_entities" => {
+        let filtro_nombre: Option<String> = match args.get("name") {
+            Some(v) => match v.as_str() {
+                Some(s) => Some(s.to_lowercase()),
+                None => {
+                    return McpResponse::invalid_params(id, "El campo 'name' debe ser string")
+                }
+            },
+            None => None,
+        };
+        let filtro_componente: Option<String> = match args.get("component") {
+            Some(v) => match v.as_str() {
+                Some(s) => Some(s.to_string()),
+                None => {
+                    return McpResponse::invalid_params(id, "El campo 'component' debe ser string")
+                }
+            },
+            None => None,
+        };
+
+        let mut coincidencias: Vec<_> = scene
+            .entities
+            .iter()
+            .filter(|e| {
+                let ok_nombre = match &filtro_nombre {
+                    Some(f) => e.name.to_lowercase().contains(f.as_str()),
+                    None => true,
+                };
+                let ok_componente = match &filtro_componente {
+                    Some(f) => e.components.iter().any(|c| c == f),
+                    None => true,
+                };
+                ok_nombre && ok_componente
+            })
+            .collect();
+        coincidencias.sort_by_key(|e| e.id);
+
+        let entidades: Vec<_> = coincidencias
+            .iter()
+            .map(|e| {
+                json!({
+                    "id": e.id,
+                    "name": e.name.clone(),
+                    "active": e.active,
+                    "parent": e.parent,
+                    "components": e.components.clone(),
+                })
+            })
+            .collect();
+        let payload = json!({
+            "count": entidades.len(),
+            "entities": entidades,
+        });
+        let texto = serde_json::to_string_pretty(&payload)
+            .unwrap_or_else(|_| payload.to_string());
+        McpResponse::success(id, json!({
+            "content": [{ "type": "text", "text": texto }]
+        }))
+    }
+
             _ => McpResponse::method_not_found(id, name),
         }
     }
@@ -5736,6 +5941,102 @@ mod tests_catchup {
         let r = llamar(&srv, "glass_redo", json!({}));
         assert!(r.contains("-32008"), "redo: {r}");
     }
+
+fn id_desde_texto(texto: &str) -> u64 {
+    let pos = texto.find("id=").expect("respuesta de create sin 'id='");
+    let resto = texto[pos + 3..].trim_start();
+    let digitos: String = resto.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digitos.parse().expect("id no numérico en la respuesta de create")
+}
+
+fn numero_tras(texto: &str, clave: &str) -> u64 {
+    // La respuesta viaja como JSON dentro de JSON: las comillas del
+    // contenido llegan escapadas (\"). Se normaliza antes de buscar.
+    let plano = texto.replace("\\\"", "\"");
+    let pat = format!("\"{clave}\"");
+    let pos = plano
+        .find(&pat)
+        .unwrap_or_else(|| panic!("clave {pat} no encontrada en: {texto}"));
+    let resto = &plano[pos + pat.len()..];
+    let idx = resto.find(':').expect("sin ':' tras la clave");
+    let digitos: String = resto[idx + 1..]
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digitos.parse().expect("valor numérico no válido")
+}
+
+#[test]
+fn entity_set_duplicate_find() {
+    let srv = servidor();
+
+    let torre = id_desde_texto(&llamar(
+        &srv,
+        "glass_create_entity",
+        json!({ "name": "Torre" }),
+    ));
+    let gemela = id_desde_texto(&llamar(
+        &srv,
+        "glass_create_entity",
+        json!({ "name": "TorreGemela" }),
+    ));
+
+    // find insensible a mayúsculas: "torre" -> ambas
+    let r = llamar(&srv, "glass_find_entities", json!({ "name": "torre" }));
+    assert_eq!(numero_tras(&r, "count"), 2, "find 'torre': {r}");
+    assert!(r.contains("Torre"), "find 'torre': {r}");
+    assert!(r.contains("TorreGemela"), "find 'torre': {r}");
+
+    // rename + desactivar la primera
+    let r = llamar(
+        &srv,
+        "glass_entity_set",
+        json!({ "entity_id": torre, "name": "Castillo", "active": false }),
+    );
+    assert!(r.contains("Castillo"), "set rename: {r}");
+    assert!(r.contains("false"), "set active=false: {r}");
+
+    // ahora "torre" ya no coincide con la renombrada
+    let r = llamar(&srv, "glass_find_entities", json!({ "name": "torre" }));
+    assert_eq!(numero_tras(&r, "count"), 1, "find tras rename: {r}");
+
+    // duplicar la segunda -> id nuevo distinto
+    let r = llamar(
+        &srv,
+        "glass_entity_duplicate",
+        json!({ "entity_id": gemela }),
+    );
+    let copia = numero_tras(&r, "new_entity_id");
+    assert_ne!(copia, gemela, "duplicate: {r}");
+
+    // por componente
+    let r = llamar(
+        &srv,
+        "glass_find_entities",
+        json!({ "component": "Transform" }),
+    );
+    assert!(
+        numero_tras(&r, "count") >= 3,
+        "find Transform: {r}"
+    );
+
+    // entidad inexistente -> -32001
+    let r = llamar(
+        &srv,
+        "glass_entity_set",
+        json!({ "entity_id": 999999, "name": "X" }),
+    );
+    assert!(r.contains("-32001"), "entidad inexistente: {r}");
+
+    // reparent a sí misma -> -32602
+    let r = llamar(
+        &srv,
+        "glass_entity_set",
+        json!({ "entity_id": torre, "parent_id": torre }),
+    );
+    assert!(r.contains("-32602"), "auto-padre: {r}");
+}
 
     #[test]
     fn prefab_list_responde_con_el_formato() {
