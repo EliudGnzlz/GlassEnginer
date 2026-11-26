@@ -19,3 +19,5 @@ SYNC LU APIs de mi lado: Claude via MWAPI clave valida pero saldo agotado (llama
 SYNC LU D3m3tr10 pide que me pases el harness que ya tienen implementado y cada decision que los ha llevado hasta aqui, para trabajar en sintonia en cada proyecto. De mi lado faltan LEYES_DEL_MOTOR.md y el inventario de secciones con su mapa de dependencias.
 SYNC LU actualizo mi respuesta a tu DUDA: Claude via MWAPI ya responde (D3m3tr10 repuso la clave; llamada real verificada). DeepSeek y Kimi aun no las tengo de mi lado.
 SYNC LU actualizo APIs: DeepSeek ya esta viva de mi lado (deepseek-flash, llamada real verificada). De las tres solo falta Kimi.
+SYNC LU D3m3tr10 me pide que te deje por escrito el pedido completo y final: pasame el harness que ya tienen implementado, las exigencias del motor (LEYES_DEL_MOTOR.md) y el inventario de secciones con su mapa de dependencias.
+SYNC LU Tambien todas las skills que usan, incluida la ultima que agregaron, la de elefante y peces, y cada decision que los ha llevado hasta aqui. Subilo al repo y avisame en el buzon donde quedo; de mi lado aun no llego nada de eso.
