@@ -57,6 +57,8 @@ pub fn is_mutating_tool(name: &str) -> bool {
             | "glass_prefab_create_variant"
             | "glass_prefab_instantiate"
             | "glass_prefab_revert"
+            | "glass_component_set"
+            | "glass_import_unitypackage"
             | "glass_set_ui_text"
             | "glass_set_entity_material"
             | "glass_material_property_set"
@@ -453,6 +455,31 @@ impl McpServer {
                                     "overwrite": { "type": "boolean" }
                                 },
                                 "required": ["path", "variant_path"]
+                            }
+                        },
+                        {
+                            "name": "glass_component_get",
+                            "description": "Devuelve el JSON completo de un componente de una entidad (Transform, MeshRenderer, Rigidbody, Collider, CharacterController, Camera, Light, Script, AudioSource, Canvas, RectTransform, Text, Button, Image, DragDrop, Animator, Fog, Particles, Portal).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "integer", "description": "ID numérico de la entidad" },
+                                    "component": { "type": "string", "description": "Nombre del componente (p. ej. Collider, Light)" }
+                                },
+                                "required": ["entity_id", "component"]
+                            }
+                        },
+                        {
+                            "name": "glass_component_set",
+                            "description": "Escribe campos de un componente de una entidad desde un JSON parcial: solo cambian los campos dados. Si la entidad no tiene el componente, lo crea con sus valores por defecto más los dados. Es mutante: pasa por la Command Queue como las demás tools de escritura.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "integer", "description": "ID numérico de la entidad" },
+                                    "component": { "type": "string", "description": "Nombre del componente (p. ej. Collider, Light)" },
+                                    "values": { "type": "object", "description": "Campos a escribir del componente" }
+                                },
+                                "required": ["entity_id", "component", "values"]
                             }
                         },
                         {
@@ -3281,6 +3308,111 @@ impl McpServer {
                     }),
                 )
             }
+            "glass_component_get" => {
+                let entity_id = match args.get("entity_id").and_then(|n| n.as_u64()) {
+                    Some(i) => i,
+                    None => return McpResponse::invalid_params(id, "Field 'entity_id' is required"),
+                };
+                let nombre = match args.get("component").and_then(|c| c.as_str()) {
+                    Some(c) => c,
+                    None => return McpResponse::invalid_params(id, "Field 'component' is required"),
+                };
+                let ent = match scene.entities.iter().find(|e| e.id == entity_id) {
+                    Some(e) => e,
+                    None => {
+                        return McpResponse::error(
+                            id,
+                            -32001,
+                            format!("Entity #{} not found", entity_id),
+                        )
+                    }
+                };
+                match glass_core::componentes::componente_json(ent, nombre) {
+                    Err(msg) => McpResponse::invalid_params(id, &msg),
+                    Ok(None) => McpResponse::error(
+                        id,
+                        -32004,
+                        format!(
+                            "La entidad #{} no tiene el componente {}",
+                            entity_id, nombre
+                        ),
+                    ),
+                    Ok(Some(v)) => McpResponse::success(
+                        id,
+                        json!({
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": serde_json::to_string_pretty(&json!({
+                                        "entity_id": entity_id,
+                                        "component": nombre,
+                                        "values": v
+                                    })).unwrap_or_default()
+                                }
+                            ]
+                        }),
+                    ),
+                }
+            }
+
+            "glass_component_set" => {
+                let entity_id = match args.get("entity_id").and_then(|n| n.as_u64()) {
+                    Some(i) => i,
+                    None => return McpResponse::invalid_params(id, "Field 'entity_id' is required"),
+                };
+                let nombre = match args.get("component").and_then(|c| c.as_str()) {
+                    Some(c) => c.to_string(),
+                    None => return McpResponse::invalid_params(id, "Field 'component' is required"),
+                };
+                let values = match args.get("values").filter(|v| v.is_object()) {
+                    Some(v) => v.clone(),
+                    None => {
+                        return McpResponse::invalid_params(
+                            id,
+                            "Field 'values' is required and must be an object",
+                        )
+                    }
+                };
+                let ent = match scene.entities.iter_mut().find(|e| e.id == entity_id) {
+                    Some(e) => e,
+                    None => {
+                        return McpResponse::error(
+                            id,
+                            -32001,
+                            format!("Entity #{} not found", entity_id),
+                        )
+                    }
+                };
+                match glass_core::componentes::aplicar_componente(ent, &nombre, &values) {
+                    Err(msg) => McpResponse::invalid_params(id, &msg),
+                    Ok(()) => {
+                        let actual = glass_core::componentes::componente_json(ent, &nombre)
+                            .ok()
+                            .flatten()
+                            .unwrap_or(serde_json::Value::Null);
+                        McpResponse::success(
+                            id,
+                            json!({
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": format!("Componente {} de la entidad #{} actualizado.", nombre, entity_id)
+                                    },
+                                    {
+                                        "type": "text",
+                                        "text": serde_json::to_string_pretty(&json!({
+                                            "entity_id": entity_id,
+                                            "component": nombre,
+                                            "values": actual
+                                        })).unwrap_or_default()
+                                    }
+                                ]
+                            }),
+                        )
+                    }
+                }
+            }
+
             "glass_prefab_create_variant" => {
                 let Some(path) = args.get("path").and_then(|p| p.as_str()) else {
                     return McpResponse::invalid_params(id, "Field 'path' is required");
@@ -4577,6 +4709,62 @@ mod tests_catchup {
         assert!(is_mutating_tool("glass_prefab_revert"));
         assert!(!is_mutating_tool("glass_prefab_list"));
         assert!(!is_mutating_tool("glass_prefab_overrides"));
+    }
+
+    #[test]
+    fn component_tools_declaradas_y_clasificadas() {
+        let srv = servidor();
+        let resp = srv
+            .handle_json(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+            .unwrap_or_default();
+        assert!(resp.contains("glass_component_get"), "tools/list: {resp}");
+        assert!(resp.contains("glass_component_set"), "tools/list: {resp}");
+        assert!(is_mutating_tool("glass_component_set"));
+        assert!(is_mutating_tool("glass_import_unitypackage"));
+        assert!(!is_mutating_tool("glass_component_get"));
+    }
+
+    #[test]
+    fn component_set_get_roundtrip() {
+        let srv = servidor();
+        srv.scene
+            .lock()
+            .unwrap()
+            .entities
+            .push(glass_core::scene::EntityData::new(
+                4242,
+                "CajaMcp".into(),
+                vec!["Transform".into()],
+            ));
+
+        let r = llamar(
+            &srv,
+            "glass_component_set",
+            json!({ "entity_id": 4242, "component": "Collider", "values": { "box_extents": [2, 1, 2] } }),
+        );
+        assert!(!r.contains("\"error\""), "set Collider: {r}");
+
+        let r = llamar(
+            &srv,
+            "glass_component_get",
+            json!({ "entity_id": 4242, "component": "Collider" }),
+        );
+        assert!(r.contains("box_extents"), "get Collider: {r}");
+        assert!(r.contains("2.0"), "get Collider: {r}");
+
+        let r = llamar(
+            &srv,
+            "glass_component_get",
+            json!({ "entity_id": 4242, "component": "Light" }),
+        );
+        assert!(r.contains("-32004"), "get Light ausente: {r}");
+
+        let r = llamar(
+            &srv,
+            "glass_component_set",
+            json!({ "entity_id": 4242, "component": "NoExiste", "values": {} }),
+        );
+        assert!(r.contains("-32602"), "set desconocido: {r}");
     }
 
     #[test]

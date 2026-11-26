@@ -9,6 +9,7 @@ pub mod lightmap;
 pub mod events;
 pub mod math;
 pub mod prefab;
+pub mod componentes;
 pub mod primitives;
 pub mod project;
 pub mod scenes;
