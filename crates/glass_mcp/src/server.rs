@@ -54,6 +54,7 @@ pub fn is_mutating_tool(name: &str) -> bool {
             | "glass_destroy_entity"
             | "glass_modify_component"
             | "glass_prefab_create"
+            | "glass_prefab_create_variant"
             | "glass_prefab_instantiate"
             | "glass_prefab_revert"
             | "glass_set_ui_text"
@@ -438,6 +439,20 @@ impl McpServer {
                                     "overwrite": { "type": "boolean" }
                                 },
                                 "required": ["entity_id", "path"]
+                            }
+                        },
+                        {
+                            "name": "glass_prefab_create_variant",
+                            "description": "Crea una variante de un prefab del proyecto: un nuevo .prefab.json que hereda de la base (variant_of) con el diff vacío. Las rutas deben empezar por Assets/ o assets/ y terminar en .prefab.json. Es mutante: pasa por la Command Queue como las demás tools de escritura.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "path": { "type": "string" },
+                                    "variant_path": { "type": "string" },
+                                    "name": { "type": "string" },
+                                    "overwrite": { "type": "boolean" }
+                                },
+                                "required": ["path", "variant_path"]
                             }
                         },
                         {
@@ -3153,7 +3168,7 @@ impl McpServer {
                     }
                 }
 
-                let mut encontrados: Vec<(String, String, usize)> = Vec::new();
+                let mut encontrados: Vec<(String, String, usize, Option<String>)> = Vec::new();
                 let mut ilegibles = 0usize;
                 while let Some(dir) = pila.pop() {
                     let Ok(entradas) = std::fs::read_dir(&dir) else {
@@ -3182,7 +3197,8 @@ impl McpServer {
                                     .collect::<Vec<_>>()
                                     .join("/");
                                 let k = 1 + prefab.descendant_entities.len();
-                                encontrados.push((relativa, prefab.name, k));
+                                let variante_de = prefab.variant_of.clone();
+                                encontrados.push((relativa, prefab.name, k, variante_de));
                             }
                             Err(_) => ilegibles += 1,
                         }
@@ -3191,8 +3207,11 @@ impl McpServer {
                 encontrados.sort_by(|a, b| a.0.cmp(&b.0));
 
                 let mut texto = format!("Prefabs en el proyecto ({}):", encontrados.len());
-                for (ruta, nombre, k) in &encontrados {
+                for (ruta, nombre, k, variante_de) in &encontrados {
                     texto.push_str(&format!("\n- {ruta} · {nombre} · {k} entidades"));
+                    if let Some(base) = variante_de {
+                        texto.push_str(&format!(" · variante de {base}"));
+                    }
                 }
                 if ilegibles > 0 {
                     texto.push_str(&format!(
@@ -3257,6 +3276,80 @@ impl McpServer {
                             "text": format!(
                                 "Prefab '{}' creado en {path} ({k} entidades) desde la entidad #{entity_id}",
                                 prefab.name
+                            )
+                        }]
+                    }),
+                )
+            }
+            "glass_prefab_create_variant" => {
+                let Some(path) = args.get("path").and_then(|p| p.as_str()) else {
+                    return McpResponse::invalid_params(id, "Field 'path' is required");
+                };
+                let Some(variant_path) = args.get("variant_path").and_then(|p| p.as_str()) else {
+                    return McpResponse::invalid_params(id, "Field 'variant_path' is required");
+                };
+                let ruta_valida = |p: &str| {
+                    (p.starts_with("Assets/") || p.starts_with("assets/"))
+                        && p.ends_with(".prefab.json")
+                        && !p.contains("..")
+                };
+                if !ruta_valida(path) {
+                    return McpResponse::invalid_params(
+                        id,
+                        "Field 'path' must start with 'Assets/' or 'assets/', end with '.prefab.json' and not contain '..'",
+                    );
+                }
+                if !ruta_valida(variant_path) {
+                    return McpResponse::invalid_params(
+                        id,
+                        "Field 'variant_path' must start with 'Assets/' or 'assets/', end with '.prefab.json' and not contain '..'",
+                    );
+                }
+                let overwrite = args
+                    .get("overwrite")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let destino = raiz_proyecto().join(variant_path);
+                if destino.exists() && !overwrite {
+                    return McpResponse::error(
+                        id,
+                        -32009,
+                        format!("Ya existe un prefab en '{variant_path}' (usa overwrite para reemplazarlo)"),
+                    );
+                }
+                let Some(base) =
+                    glass_core::prefab::Prefab::cargar_desde_proyecto(&raiz_proyecto(), path)
+                else {
+                    return McpResponse::error(
+                        id,
+                        -32004,
+                        format!("No se encontró el prefab base '{path}'"),
+                    );
+                };
+                let nombre = args
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| {
+                        variant_path
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(variant_path)
+                            .trim_end_matches(".prefab.json")
+                            .to_string()
+                    });
+                let variante = glass_core::prefab::Prefab::variante_vacia(&nombre, path, &base);
+                if let Err(e) = variante.save_to_file(&destino) {
+                    return McpResponse::error(id, -32002, e.to_string());
+                }
+                let k = 1 + variante.descendant_entities.len();
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": format!(
+                                "Variante '{nombre}' creada en {variant_path} desde {path} (diff vacío, {k} entidades)"
                             )
                         }]
                     }),
@@ -4470,6 +4563,7 @@ mod tests_catchup {
             .unwrap_or_default();
         for tool in [
             "glass_prefab_create",
+            "glass_prefab_create_variant",
             "glass_prefab_instantiate",
             "glass_prefab_list",
             "glass_prefab_revert",
@@ -4478,6 +4572,7 @@ mod tests_catchup {
             assert!(resp.contains(tool), "tools/list no declara {tool}");
         }
         assert!(is_mutating_tool("glass_prefab_create"));
+        assert!(is_mutating_tool("glass_prefab_create_variant"));
         assert!(is_mutating_tool("glass_prefab_instantiate"));
         assert!(is_mutating_tool("glass_prefab_revert"));
         assert!(!is_mutating_tool("glass_prefab_list"));
@@ -4514,6 +4609,35 @@ mod tests_catchup {
             json!({"entity_id": 1, "path": "Assets/../x.prefab.json"}),
         );
         assert!(con_salto.contains("error"), "respuesta inesperada: {con_salto}");
+    }
+
+    #[test]
+    fn prefab_create_variant_rechaza_rutas_invalidas() {
+        let srv = servidor();
+        let sin_assets = llamar(
+            &srv,
+            "glass_prefab_create_variant",
+            json!({"path": "Assets/prefabs/base.prefab.json", "variant_path": "prefabs/v.prefab.json"}),
+        );
+        assert!(sin_assets.contains("error"), "respuesta inesperada: {sin_assets}");
+
+        let con_salto = llamar(
+            &srv,
+            "glass_prefab_create_variant",
+            json!({"path": "Assets/../base.prefab.json", "variant_path": "Assets/prefabs/v.prefab.json"}),
+        );
+        assert!(con_salto.contains("error"), "respuesta inesperada: {con_salto}");
+    }
+
+    #[test]
+    fn prefab_create_variant_sin_base_da_32004() {
+        let srv = servidor();
+        let resp = llamar(
+            &srv,
+            "glass_prefab_create_variant",
+            json!({"path": "Assets/prefabs/no_existe_base.prefab.json", "variant_path": "Assets/prefabs/v_nueva.prefab.json"}),
+        );
+        assert!(resp.contains("32004"), "respuesta inesperada: {resp}");
     }
 
     #[test]
@@ -4561,6 +4685,7 @@ mod tests_catchup {
                     padre_local_id: Some(5),
                     nombre: "Extra".to_string(),
                     indice: 0,
+                    subarbol: None,
                 }],
                 quitadas: vec![7],
             });

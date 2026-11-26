@@ -2513,14 +2513,46 @@ impl SceneState {
 
         self.entities.push(root_clone);
 
+        // Ids del asset que cuelgan de una raíz anidada (sin contar la
+        // propia raíz anidada): conservan el `prefab_local_id` que traen
+        // del asset, que es su id en el asset interior.
+        let mut dentro_de_anidada: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        for desc in &prefab.descendant_entities {
+            if desc.prefab_source.is_some() {
+                let sub = crate::prefab::recorrer_subarbol(
+                    std::iter::once(&prefab.root_entity).chain(&prefab.descendant_entities),
+                    desc.id,
+                );
+                for n in sub.iter().skip(1) {
+                    dentro_de_anidada.insert(n.e.id);
+                }
+            }
+        }
+
         for desc in &prefab.descendant_entities {
             let mut desc_clone = desc.clone();
             let new_id = id_map[&desc.id];
             desc_clone.id = new_id;
             desc_clone.parent = desc.parent.and_then(|old_pid| id_map.get(&old_pid).copied());
-            desc_clone.prefab_source = None;
-            desc_clone.prefab_hash = None;
-            desc_clone.prefab_local_id = vinculo.then_some(desc.id);
+            if desc.prefab_source.is_some() {
+                // Raíz anidada: conserva SU vínculo (fuente y huella de su
+                // asset, que trae el clon). Si esta instancia va vinculada,
+                // su local_id es su hueco en el asset exterior; si no, se
+                // queda con el que trae del asset (su id en el interior).
+                if vinculo {
+                    desc_clone.prefab_local_id = Some(desc.id);
+                }
+                desc_clone.prefab_overrides = None;
+            } else if dentro_de_anidada.contains(&desc.id) {
+                // Miembro de una instancia anidada: su local_id es su id
+                // en el asset interior y viene ya en el clon.
+                desc_clone.prefab_source = None;
+                desc_clone.prefab_hash = None;
+            } else {
+                desc_clone.prefab_source = None;
+                desc_clone.prefab_hash = None;
+                desc_clone.prefab_local_id = vinculo.then_some(desc.id);
+            }
             desc_clone.children = desc_clone
                 .children
                 .iter()
@@ -2564,8 +2596,16 @@ impl SceneState {
                 avisos.push(format!("#{raiz_id} ({fuente}): vínculo roto"));
                 continue;
             };
+            // La raíz se clavea con su id en SU asset: una raíz anidada
+            // guarda en `prefab_local_id` su hueco en el asset exterior,
+            // y con esa clave su huella nunca coincidiría con la del asset.
+            let id_raiz_asset = prefab.root_entity.id;
             let huella_escena = crate::prefab::huella_subarbol(&self.entities, raiz_id, |e| {
-                e.prefab_local_id.unwrap_or(u64::MAX)
+                if e.id == raiz_id {
+                    id_raiz_asset
+                } else {
+                    e.prefab_local_id.unwrap_or(u64::MAX)
+                }
             });
             let huella_asset = prefab.huella();
             if guardada.as_deref() == Some(huella_escena.as_str()) {
@@ -2623,8 +2663,13 @@ impl SceneState {
             let Some(prefab) = resolver(&fuente) else {
                 continue;
             };
+            let id_raiz_asset = prefab.root_entity.id;
             let huella = crate::prefab::huella_subarbol(&self.entities, raiz_id, |e| {
-                e.prefab_local_id.unwrap_or(u64::MAX)
+                if e.id == raiz_id {
+                    id_raiz_asset
+                } else {
+                    e.prefab_local_id.unwrap_or(u64::MAX)
+                }
             });
             let nuevo = if guardada.as_deref() == Some(huella.as_str()) {
                 None
@@ -2715,6 +2760,11 @@ impl SceneState {
         let local_raiz = prefab.root_entity.id;
         let por_id: std::collections::HashMap<u64, &EntityData> =
             self.entities.iter().map(|e| (e.id, e)).collect();
+        let asset_por_id: std::collections::HashMap<u64, &EntityData> =
+            std::iter::once(&prefab.root_entity)
+                .chain(&prefab.descendant_entities)
+                .map(|e| (e.id, e))
+                .collect();
         let mut locales_vistos: HashSet<u64> = HashSet::from([local_raiz]);
         let mut visitadas: HashSet<u64> = HashSet::from([raiz_id]);
         // (id de escena, id del padre, local_id del padre, nombre, índice entre hermanos)
@@ -2730,6 +2780,22 @@ impl SceneState {
                     .enumerate()
                 {
                     if !visitadas.insert(hijo.id) {
+                        continue;
+                    }
+                    // La anidada ALMACENADA en el asset (su entidad en el
+                    // asset también es raíz de instancia) no es añadida
+                    // ni se desciende en ella: la re-expansión la
+                    // reproduce desde el asset y su subárbol es suyo.
+                    let es_almacenada = hijo.prefab_source.is_some()
+                        && hijo.prefab_local_id.is_some_and(|l| {
+                            asset_por_id
+                                .get(&l)
+                                .is_some_and(|a| a.prefab_source.is_some())
+                        });
+                    if es_almacenada {
+                        if let Some(l) = hijo.prefab_local_id {
+                            locales_vistos.insert(l);
+                        }
                         continue;
                     }
                     let es_anadida = match hijo.prefab_local_id {
@@ -2872,6 +2938,27 @@ impl SceneState {
             .collect();
         let local_raiz = prefab.root_entity.id;
 
+        // Entidades del asset bajo una raíz anidada almacenada: no son
+        // miembros directos de esta instancia (el subárbol pertenece a
+        // la anidada), así que nunca cuentan como quitadas de ésta.
+        let bajo_anidada_asset: HashSet<u64> = {
+            let nodos = crate::prefab::recorrer_subarbol(
+                std::iter::once(&prefab.root_entity).chain(&prefab.descendant_entities),
+                prefab.root_entity.id,
+            );
+            let mut excluidos = HashSet::new();
+            for n in &nodos {
+                if let Some(p) = n.padre {
+                    if excluidos.contains(&p.id)
+                        || (p.id != prefab.root_entity.id && p.prefab_source.is_some())
+                    {
+                        excluidos.insert(n.e.id);
+                    }
+                }
+            }
+            excluidos
+        };
+
         // Preorden por la parte vinculada de la instancia. Un hijo sin
         // local_id (o con uno desconocido o repetido, o raíz de otra
         // instancia) es una añadida y no se recorre por dentro: lo que
@@ -2888,6 +2975,22 @@ impl SceneState {
             let mut vinculados: Vec<(u64, &EntityData)> = Vec::new();
             for hijo in e.children.iter().filter_map(|c| por_id.get(c).copied()) {
                 if !visitadas.insert(hijo.id) {
+                    continue;
+                }
+                // Anidada ALMACENADA en el asset (su entidad en el asset
+                // también es raíz de instancia): es pareja para comparar
+                // sus propiedades como miembro, sin descender — su
+                // subárbol es territorio de la instancia anidada.
+                let es_almacenada = hijo.prefab_source.is_some()
+                    && hijo.prefab_local_id.is_some_and(|l| {
+                        asset_por_id
+                            .get(&l)
+                            .is_some_and(|a| a.prefab_source.is_some())
+                    });
+                if es_almacenada {
+                    let l = hijo.prefab_local_id.unwrap();
+                    locales_vistos.insert(l);
+                    parejas.push((l, hijo));
                     continue;
                 }
                 // La raíz de una instancia anidada cuenta como añadida
@@ -2919,6 +3022,7 @@ impl SceneState {
                             padre_local_id: Some(local),
                             nombre: hijo.name.clone(),
                             indice,
+                            subarbol: None,
                         });
                         indice += 1;
                     }
@@ -2947,7 +3051,7 @@ impl SceneState {
             .descendant_entities
             .iter()
             .map(|e| e.id)
-            .filter(|id| !locales_vistos.contains(id))
+            .filter(|id| !locales_vistos.contains(id) && !bajo_anidada_asset.contains(id))
             .collect();
 
         Some(PrefabOverrides {
@@ -3017,6 +3121,32 @@ impl SceneState {
         Ok(())
     }
 
+    /// Convierte la instancia en entidades normales TAMBIÉN en sus
+    /// instancias anidadas (el «Unpack Completely» de Unity): desempaqueta
+    /// la raíz y después cada raíz anidada de su subárbol, de fuera hacia
+    /// dentro.
+    pub fn desempaquetar_instancia_completa(&mut self, raiz_id: u64) -> Result<(), String> {
+        match self.get_entity(raiz_id) {
+            Some(e) if e.prefab_source.is_some() => {}
+            Some(_) => {
+                return Err(format!(
+                    "La entidad #{raiz_id} no es raíz de una instancia de prefab"
+                ))
+            }
+            None => return Err(format!("La entidad #{raiz_id} no existe en la escena")),
+        }
+        let anidadas: Vec<u64> = crate::prefab::recorrer_subarbol(&self.entities, raiz_id)
+            .iter()
+            .filter(|n| n.e.id != raiz_id && n.e.prefab_source.is_some())
+            .map(|n| n.e.id)
+            .collect();
+        self.desempaquetar_instancia(raiz_id)?;
+        for id in anidadas {
+            self.desempaquetar_instancia(id)?;
+        }
+        Ok(())
+    }
+
     /// Sustituye el subárbol de la instancia `raiz_id` por el contenido de
     /// `prefab`, emparejando entidades por `prefab_local_id`. Conserva el id
     /// de escena de las que siguen en el asset, crea las nuevas y elimina las
@@ -3025,12 +3155,13 @@ impl SceneState {
         use crate::prefab::recorrer_subarbol;
         use std::collections::{HashMap, HashSet};
 
-        let (transform, parent_externo, fuente, huella) = match self.get_entity(raiz_id) {
+        let (transform, parent_externo, fuente, huella, local_raiz) = match self.get_entity(raiz_id) {
             Some(r) => (
                 r.transform.clone(),
                 r.parent,
                 r.prefab_source.clone(),
                 r.prefab_hash.clone(),
+                r.prefab_local_id,
             ),
             None => return,
         };
@@ -3052,9 +3183,36 @@ impl SceneState {
             std::iter::once(&prefab.root_entity).chain(&prefab.descendant_entities),
             prefab.root_entity.id,
         );
+        // Categoría de cada entidad del asset respecto a las anidadas
+        // ALMACENADAS: la raíz de una anidada y su subárbol se copian
+        // del asset tal cual (su vínculo y sus ids locales interiores
+        // son suyos), no como miembros de esta instancia. El recorrido
+        // trae al padre siempre antes que al hijo.
+        let mut es_raiz_anidada: HashSet<u64> = HashSet::new();
+        let mut bajo_anidada: HashSet<u64> = HashSet::new();
+        for n in &nodos {
+            if let Some(p) = n.padre {
+                if es_raiz_anidada.contains(&p.id) || bajo_anidada.contains(&p.id) {
+                    bajo_anidada.insert(n.e.id);
+                } else if n.e.prefab_source.is_some() {
+                    es_raiz_anidada.insert(n.e.id);
+                }
+            }
+        }
         let mut asset_a_escena: HashMap<u64, u64> = HashMap::new();
         for n in &nodos {
-            let id = match escena_por_local.get(&n.e.id) {
+            // Clave de emparejado con la escena: la raíz y los miembros
+            // por su id en el asset (la anidada, por su hueco); lo que
+            // cuelga de una anidada, por su local ALMACENADO (su id en
+            // el asset interior), que es el que la escena conserva.
+            let clave = if n.padre.is_none() {
+                Some(prefab.root_entity.id)
+            } else if bajo_anidada.contains(&n.e.id) {
+                n.e.prefab_local_id
+            } else {
+                Some(n.e.id)
+            };
+            let id = match clave.and_then(|c| escena_por_local.get(&c)) {
                 Some(&id) => id,
                 None => {
                     let id = self.next_entity_id;
@@ -3069,9 +3227,28 @@ impl SceneState {
         for n in &nodos {
             let mut e = n.e.clone();
             e.id = asset_a_escena[&n.e.id];
-            e.prefab_local_id = Some(n.e.id);
-            e.prefab_source = None;
-            e.prefab_hash = None;
+            if n.padre.is_none() {
+                // La raíz conserva el local que traía en la escena: si es
+                // una raíz ANIDADA, ese local es su hueco en el asset
+                // exterior, no su id en el suyo — pisarlo con el id del
+                // asset la desvincula de la instancia exterior (su diff
+                // la contaría como añadida y a su hueco como quitada).
+                e.prefab_local_id = Some(local_raiz.unwrap_or(n.e.id));
+            } else if es_raiz_anidada.contains(&n.e.id) {
+                // Raíz de la anidada almacenada: el clon ya trae su
+                // vínculo del asset; su local pasa a ser su hueco aquí.
+                e.prefab_local_id = Some(n.e.id);
+            } else if bajo_anidada.contains(&n.e.id) {
+                // Dentro de la anidada: copia literal del asset (local,
+                // fuente y hash almacenados son los suyos).
+                e.prefab_local_id = n.e.prefab_local_id;
+                e.prefab_source = n.e.prefab_source.clone();
+                e.prefab_hash = n.e.prefab_hash.clone();
+            } else {
+                e.prefab_local_id = Some(n.e.id);
+                e.prefab_source = None;
+                e.prefab_hash = None;
+            }
             e.children = n
                 .e
                 .children
@@ -4665,6 +4842,8 @@ mod prefab_diff_tests {
                 entidad(12, "B", &["Transform"], Some(10), &[]),
                 entidad(13, "C", &["Transform", "MeshRenderer"], Some(11), &[]),
             ],
+            variant_of: None,
+            variant_overrides: None,
         }
     }
 
@@ -4819,6 +4998,7 @@ mod prefab_diff_tests {
                 padre_local_id: Some(11),
                 nombre: "Extra".into(),
                 indice: 0,
+                subarbol: None,
             }],
             quitadas: vec![12],
         });
@@ -4870,6 +5050,8 @@ mod prefab_refresco_diff_tests {
                 entidad(12, "B", &["Transform"], Some(10), &[]),
                 entidad(13, "C", &["Transform", "MeshRenderer"], Some(11), &[]),
             ],
+            variant_of: None,
+            variant_overrides: None,
         }
     }
 
@@ -5075,6 +5257,8 @@ mod prefab_refresco_revision_tests {
                 entidad(12, "B", &["Transform"], Some(10), &[]),
                 entidad(13, "C", &["Transform", "MeshRenderer"], Some(11), &[]),
             ],
+            variant_of: None,
+            variant_overrides: None,
         }
     }
 
@@ -5084,6 +5268,8 @@ mod prefab_refresco_revision_tests {
             name: "Interno".to_string(),
             root_entity: entidad(11, "Interno", &["Transform"], None, &[99]),
             descendant_entities: vec![entidad(99, "InternoHijo", &["Transform"], Some(11), &[])],
+            variant_of: None,
+            variant_overrides: None,
         }
     }
 
@@ -5206,6 +5392,195 @@ mod prefab_refresco_revision_tests {
             "la vinculada original conserva su override"
         );
     }
+
+    /// Asset exterior con una instancia anidada dentro: el descendiente
+    /// 20 ES una raíz de instancia del asset INTERNO (su `prefab_local_id`
+    /// en el asset, 11, es su id en el asset interior) y su hijo 21 trae
+    /// el local_id interior 99. El 30 es un miembro normal.
+    fn prefab_exterior_con_anidada() -> Prefab {
+        let interno = prefab_interno();
+        let mut anidada = entidad(20, "Interno", &["Transform"], Some(10), &[21]);
+        anidada.prefab_source = Some(INTERNO.to_string());
+        anidada.prefab_hash = Some(interno.huella());
+        anidada.prefab_local_id = Some(11);
+        let mut hijo_anidada = entidad(21, "InternoHijo", &["Transform"], Some(20), &[]);
+        hijo_anidada.prefab_local_id = Some(99);
+        Prefab {
+            format_version: 1,
+            name: "Exterior".to_string(),
+            root_entity: entidad(10, "Exterior", &["Transform"], None, &[20, 30]),
+            descendant_entities: vec![
+                anidada,
+                hijo_anidada,
+                entidad(30, "Suelto", &["Transform"], Some(10), &[]),
+            ],
+            variant_of: None,
+            variant_overrides: None,
+        }
+    }
+
+    #[test]
+    fn instanciar_preserva_el_vinculo_de_la_anidada() {
+        let exterior = prefab_exterior_con_anidada();
+        let interno = prefab_interno();
+        let mut scene = SceneState::default();
+        let raiz = scene.instantiate_prefab(&exterior, None, None, Some(FUENTE));
+
+        let por_local = |l: u64| {
+            scene
+                .entities
+                .iter()
+                .find(|e| e.prefab_local_id == Some(l))
+                .unwrap_or_else(|| panic!("sin entidad con local {l}"))
+        };
+        // La anidada conserva SU vínculo; su local_id pasa a ser su hueco
+        // en el asset exterior (20), no su id interior (11).
+        let anidada = por_local(20);
+        assert_eq!(anidada.prefab_source.as_deref(), Some(INTERNO));
+        assert_eq!(anidada.prefab_hash.as_deref(), Some(interno.huella().as_str()));
+        // Su hijo conserva el local_id interior (99).
+        let hijo = por_local(99);
+        assert_eq!(hijo.parent, Some(anidada.id));
+        assert!(hijo.prefab_source.is_none());
+        // El miembro normal recibe su local del exterior y ningún vínculo.
+        let suelto = por_local(30);
+        assert!(suelto.prefab_source.is_none());
+        assert_eq!(scene.get_entity(raiz).unwrap().prefab_source.as_deref(), Some(FUENTE));
+    }
+
+    #[test]
+    fn desempaquetar_completa_corta_tambien_la_anidada() {
+        let exterior = prefab_exterior_con_anidada();
+        // Desempaquetar normal: la anidada SIGUE vinculada.
+        let mut scene = SceneState::default();
+        let raiz = scene.instantiate_prefab(&exterior, None, None, Some(FUENTE));
+        scene.desempaquetar_instancia(raiz).unwrap();
+        assert!(
+            scene.entities.iter().any(|e| e.prefab_source.is_some()),
+            "el desempaquetado normal deja viva la anidada"
+        );
+
+        // Completa: no queda vínculo alguno en el subárbol.
+        let mut scene = SceneState::default();
+        let raiz = scene.instantiate_prefab(&exterior, None, None, Some(FUENTE));
+        scene.desempaquetar_instancia_completa(raiz).unwrap();
+        assert!(scene.entities.iter().all(|e| e.prefab_source.is_none()
+            && e.prefab_hash.is_none()
+            && e.prefab_local_id.is_none()
+            && e.prefab_overrides.is_none()));
+        // Y sobre una entidad normal, error claro.
+        let suelto = scene.entities.iter().find(|e| e.name == "Suelto").unwrap().id;
+        assert!(scene.desempaquetar_instancia_completa(suelto).is_err());
+    }
+
+    #[test]
+    fn la_anidada_se_refresca_cuando_deriva_su_propio_asset() {
+        // Regresión del test físico de la Fase E: la raíz anidada guarda
+        // en `prefab_local_id` su hueco en el asset EXTERIOR (20), que no
+        // es su id en el suyo (11); clavear su huella con ese hueco la
+        // hacía leerse «modificada» para siempre y nunca se refrescaba.
+        let exterior = prefab_exterior_con_anidada();
+        let mut scene = SceneState::default();
+        scene.instantiate_prefab(&exterior, None, None, Some(FUENTE));
+
+        let mut interno_nuevo = prefab_interno();
+        interno_nuevo.descendant_entities[0].name = "InternoHijo2".to_string();
+        interno_nuevo.descendant_entities[0].transform.position = [9.0, 0.0, 0.0];
+        let huella_nueva = interno_nuevo.huella();
+
+        let avisos = scene.refrescar_instancias_prefab(&|f: &str| {
+            if f == INTERNO {
+                Some(interno_nuevo.clone())
+            } else {
+                Some(prefab_exterior_con_anidada())
+            }
+        });
+        assert!(avisos.is_empty(), "avisos inesperados: {avisos:?}");
+        let hijo = scene
+            .entities
+            .iter()
+            .find(|e| e.prefab_local_id == Some(99))
+            .expect("el hijo de la anidada sigue");
+        assert_eq!(hijo.name, "InternoHijo2");
+        assert_eq!(hijo.transform.position, [9.0, 0.0, 0.0]);
+        let anidada = scene
+            .entities
+            .iter()
+            .find(|e| e.prefab_source.as_deref() == Some(INTERNO))
+            .expect("la anidada sigue vinculada");
+        assert_eq!(anidada.prefab_hash.as_deref(), Some(huella_nueva.as_str()));
+        // Su local sigue siendo su hueco en la exterior (20), no su id
+        // interior (11): la re-expansión de la anidada no debe pisarlo,
+        // o la exterior la contaría como añadida y a su hueco como
+        // quitada en el próximo recálculo.
+        assert_eq!(anidada.prefab_local_id, Some(20));
+        scene.recalcular_overrides_prefab(&|f: &str| {
+            if f == INTERNO {
+                Some(interno_nuevo.clone())
+            } else {
+                Some(prefab_exterior_con_anidada())
+            }
+        });
+        assert!(
+            scene.entities.iter().all(|e| e.prefab_overrides.is_none()),
+            "tras refrescar la anidada, el recálculo no fabrica diffs"
+        );
+    }
+
+    #[test]
+    fn recalcular_no_fabrica_diff_para_la_exterior_con_anidada_almacenada() {
+        // La exterior intacta con anidada ALMACENADA en su asset: el
+        // recálculo al guardar no debe inventarse añadidas/quitadas con
+        // el subárbol anidado (su hijo interior no es una quitada ni la
+        // anidada una añadida de la exterior).
+        let exterior = prefab_exterior_con_anidada();
+        let mut scene = SceneState::default();
+        scene.instantiate_prefab(&exterior, None, None, Some(FUENTE));
+        scene.recalcular_overrides_prefab(&|f: &str| {
+            if f == INTERNO {
+                Some(prefab_interno())
+            } else {
+                Some(prefab_exterior_con_anidada())
+            }
+        });
+        assert!(
+            scene.entities.iter().all(|e| e.prefab_overrides.is_none()),
+            "ninguna instancia intacta debe ganar un diff fabricado"
+        );
+    }
+
+    #[test]
+    fn la_deriva_de_la_exterior_reexpande_sin_romper_la_anidada_almacenada() {
+        // El asset exterior deriva en un miembro normal («Suelto» se
+        // renombra): la re-expansión trae el cambio y la anidada
+        // almacenada conserva su vínculo y los locales interiores.
+        let mut exterior_nuevo = prefab_exterior_con_anidada();
+        exterior_nuevo.descendant_entities[2].name = "Suelto2".to_string();
+        let mut scene = SceneState::default();
+        scene.instantiate_prefab(&prefab_exterior_con_anidada(), None, None, Some(FUENTE));
+        let avisos = scene.refrescar_instancias_prefab(&|f: &str| {
+            if f == INTERNO {
+                Some(prefab_interno())
+            } else {
+                Some(exterior_nuevo.clone())
+            }
+        });
+        assert!(avisos.is_empty(), "avisos inesperados: {avisos:?}");
+        assert!(scene.entities.iter().any(|e| e.name == "Suelto2"));
+        let anidada = scene
+            .entities
+            .iter()
+            .find(|e| e.prefab_source.as_deref() == Some(INTERNO))
+            .expect("la anidada sigue vinculada tras re-expandir la exterior");
+        assert_eq!(anidada.prefab_local_id, Some(20));
+        let hijo = scene
+            .entities
+            .iter()
+            .find(|e| e.prefab_local_id == Some(99))
+            .expect("el hijo de la anidada conserva su local interior");
+        assert_eq!(hijo.name, "InternoHijo");
+        assert_eq!(hijo.parent, Some(anidada.id));
+    }
 }
 
 #[cfg(test)]
@@ -5228,6 +5603,8 @@ mod prefab_recalculo_tests {
             name: "Recalculo".to_string(),
             root_entity: entidad(10, "Raiz", None, &[11]),
             descendant_entities: vec![entidad(11, "Hijo", Some(10), &[])],
+            variant_of: None,
+            variant_overrides: None,
         }
     }
 

@@ -778,6 +778,8 @@ mod tests {
                 name: "P".to_string(),
                 root_entity: entidad(10, None, vec![11]),
                 descendant_entities: vec![entidad(11, Some(10), Vec::new())],
+                variant_of: None,
+                variant_overrides: None,
             },
             entidad_por_fileid: mapa,
             componente_por_fileid: HashMap::new(),

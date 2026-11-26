@@ -402,6 +402,37 @@ pub fn crear_prefab_en(dir: &Path, nombre: &str) -> Result<PathBuf, String> {
     Ok(destino)
 }
 
+/// Crea `<dir>/<Base>Variante.prefab.json`: una variante de la base
+/// `ruta_base` con el diff vacío (Fase E). `fuente_base` es la ruta de la
+/// base relativa al proyecto, la que guardará el `variant_of`; la base se
+/// carga resuelta desde `raiz_proyecto` para que su expansión quede como
+/// snapshot en el archivo de la variante.
+pub fn crear_variante_en(
+    dir: &Path,
+    ruta_base: &Path,
+    fuente_base: &str,
+    raiz_proyecto: &Path,
+) -> Result<PathBuf, String> {
+    let nombre_archivo = ruta_base
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| format!("Nombre de archivo no válido: {}", ruta_base.display()))?;
+    let base_nombre = nombre_sin_sufijo(nombre_archivo, &[".prefab.json", ".json"]);
+    let nombre = format!("{base_nombre}Variante");
+    validar_nombre(&nombre)?;
+    let base = glass_core::Prefab::cargar_desde_proyecto(raiz_proyecto, fuente_base)
+        .ok_or_else(|| format!("No se pudo cargar la base {fuente_base}"))?;
+    let destino = dir.join(format!("{nombre}.prefab.json"));
+    if destino.exists() {
+        return Err(format!("Ya existe {}", destino.display()));
+    }
+    let variante = glass_core::Prefab::variante_vacia(&nombre, fuente_base, &base);
+    variante
+        .save_to_file(&destino)
+        .map_err(|e| format!("No se pudo escribir {}: {e}", destino.display()))?;
+    Ok(destino)
+}
+
 /// Renombra un elemento dentro de su misma carpeta.
 pub fn renombrar(ruta: &Path, nuevo_nombre: &str) -> Result<PathBuf, String> {
     let nuevo = nuevo_nombre.trim();
@@ -1570,6 +1601,28 @@ impl ProjectPanel {
         }
     }
 
+    /// Crea una variante del prefab `ruta` en su misma carpeta (Fase E).
+    fn crear_variante(&mut self, ruta: PathBuf) {
+        let Some(dir) = ruta.parent().map(|d| d.to_path_buf()) else {
+            self.set_error(format!("La ruta no tiene carpeta padre: {}", ruta.display()));
+            return;
+        };
+        let fuente = glass_core::prefab::ruta_fuente_prefab(&ruta);
+        let raiz_proyecto = self
+            .assets_root
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| self.assets_root.clone());
+        match crear_variante_en(&dir, &ruta, &fuente, &raiz_proyecto) {
+            Ok(ruta_nueva) => {
+                self.seleccion = Some(ruta_nueva.clone());
+                self.refrescar();
+                self.set_info(format!("Variante creada: {}", ruta_nueva.display()));
+            }
+            Err(e) => self.set_error(e),
+        }
+    }
+
     /// Borra (a la papelera) el asset seleccionado, si hay selección.
     /// Es la vía de la tecla Supr enrutada desde el docking.
     pub fn eliminar_seleccion(&mut self) {
@@ -2487,6 +2540,7 @@ impl ProjectPanel {
         let mut empezar_renombrado: Option<PathBuf> = None;
         let mut a_eliminar: Option<PathBuf> = None;
         let mut a_duplicar: Option<PathBuf> = None;
+        let mut a_crear_variante: Option<PathBuf> = None;
         let mut abrir_explorador: Option<PathBuf> = None;
         let mut nuevo_arrastre: Option<PathBuf> = None;
         let mut confirmar: bool = false;
@@ -2582,6 +2636,10 @@ impl ProjectPanel {
                                 a_duplicar = Some(ruta.clone());
                                 ui.close();
                             }
+                            if es_prefab(&nombre) && ui.button("🧬 Crear variante").clicked() {
+                                a_crear_variante = Some(ruta.clone());
+                                ui.close();
+                            }
                             if ui.button("📂 Abrir en el explorador").clicked() {
                                 abrir_explorador = Some(ruta.clone());
                                 ui.close();
@@ -2629,6 +2687,9 @@ impl ProjectPanel {
         if let Some(ruta) = a_duplicar {
             self.duplicar(ruta);
         }
+        if let Some(ruta) = a_crear_variante {
+            self.crear_variante(ruta);
+        }
         if let Some(ruta) = a_eliminar {
             self.eliminar(ruta);
         }
@@ -2666,6 +2727,7 @@ impl ProjectPanel {
         let mut empezar_renombrado: Option<PathBuf> = None;
         let mut a_eliminar: Option<PathBuf> = None;
         let mut a_duplicar: Option<PathBuf> = None;
+        let mut a_crear_variante: Option<PathBuf> = None;
         let mut abrir_explorador: Option<PathBuf> = None;
         let mut nuevo_arrastre: Option<PathBuf> = None;
         let mut crear_contextual: Option<(TipoCreacion, PathBuf)> = None;
@@ -2908,6 +2970,10 @@ impl ProjectPanel {
                                 a_duplicar = Some(ruta.clone());
                                 ui.close();
                             }
+                            if es_prefab(&nombre) && ui.button("🧬 Crear variante").clicked() {
+                                a_crear_variante = Some(ruta.clone());
+                                ui.close();
+                            }
 
                             ui.menu_button("📦 Mover a…", |ui| {
                                 let destinos = listar_carpetas(&self.assets_root);
@@ -2999,6 +3065,9 @@ impl ProjectPanel {
         }
         if let Some(ruta) = a_duplicar {
             self.duplicar(ruta);
+        }
+        if let Some(ruta) = a_crear_variante {
+            self.crear_variante(ruta);
         }
         if let Some(ruta) = a_eliminar {
             self.eliminar(ruta);
@@ -3479,6 +3548,44 @@ mod tests {
         assert!(prefab.descendant_entities.is_empty());
         assert!(crear_prefab(&raiz, "Heroe").is_err(), "duplicado debe fallar");
         let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn crear_variante_produce_un_archivo_variante_cargable() {
+        // Proyecto temporal: <proj>/Assets/prefabs/Base.prefab.json
+        let proj = std::env::temp_dir()
+            .join(format!("glass_variante_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&proj);
+        let assets = proj.join("Assets");
+        let ruta_base = crear_prefab(&assets, "Base").unwrap();
+        let dir = ruta_base.parent().unwrap().to_path_buf();
+
+        let ruta = crear_variante_en(
+            &dir,
+            &ruta_base,
+            "Assets/prefabs/Base.prefab.json",
+            &proj,
+        )
+        .unwrap();
+        assert!(ruta.ends_with("BaseVariante.prefab.json"));
+
+        let cruda = glass_core::Prefab::load_from_file(&ruta).unwrap();
+        assert_eq!(cruda.variant_of.as_deref(), Some("Assets/prefabs/Base.prefab.json"));
+        assert!(cruda.variant_overrides.as_ref().is_some_and(|d| d.esta_vacia()));
+        // Y resuelve contra la base: mismo contenido que la base.
+        let resuelta = glass_core::Prefab::cargar_desde_proyecto(
+            &proj,
+            "Assets/prefabs/BaseVariante.prefab.json",
+        )
+        .unwrap();
+        assert_eq!(resuelta.name, "BaseVariante");
+        assert_eq!(resuelta.root_entity.name, "Base");
+
+        assert!(
+            crear_variante_en(&dir, &ruta_base, "Assets/prefabs/Base.prefab.json", &proj).is_err(),
+            "duplicada debe fallar"
+        );
+        let _ = std::fs::remove_dir_all(&proj);
     }
 
     #[test]

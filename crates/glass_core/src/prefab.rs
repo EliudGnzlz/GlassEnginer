@@ -12,6 +12,12 @@ pub struct Prefab {
     pub name: String,
     pub root_entity: EntityData,
     pub descendant_entities: Vec<EntityData>,
+    /// Fuente (relativa al proyecto) del prefab base si este asset es una variante.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant_of: Option<String>,
+    /// Diff de la variante respecto a su base (formato de la Fase D, con snapshot en las añadidas).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant_overrides: Option<PrefabOverrides>,
 }
 
 impl Prefab {
@@ -37,6 +43,8 @@ impl Prefab {
             name: root.name.clone(),
             root_entity: root,
             descendant_entities: descendants,
+            variant_of: None,
+            variant_overrides: None,
         })
     }
 
@@ -89,8 +97,174 @@ impl Prefab {
         None
     }
 
-    pub fn cargar_desde_proyecto(raiz: &Path, fuente: &str) -> Option<Self> {
+    /// Carga el asset SIN resolver variantes: el contenido tal cual está en
+    /// disco. Para crear/editar variantes; el resto del motor usa
+    /// `cargar_desde_proyecto`, que resuelve.
+    pub fn cargar_crudo_desde_proyecto(raiz: &Path, fuente: &str) -> Option<Self> {
         Self::load_from_file(Self::resolver_ruta(raiz, fuente)?).ok()
+    }
+
+    /// Carga el asset resolviendo la cadena de variantes: si el archivo es
+    /// una variante, materializa base + su diff (y la base puede ser a su vez
+    /// variante). Un ciclo, una base ausente o un diff imposible de aplicar
+    /// devuelven `None` con el motivo en el log: el vínculo se trata como
+    /// roto, nunca se entra en bucle.
+    pub fn cargar_desde_proyecto(raiz: &Path, fuente: &str) -> Option<Self> {
+        match Self::resolver_variante(raiz, fuente, &mut Vec::new()) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                log::error!("Prefab {fuente}: {e}");
+                None
+            }
+        }
+    }
+
+    fn resolver_variante(raiz: &Path, fuente: &str, cadena: &mut Vec<String>) -> Result<Self, String> {
+        let clave = fuente.replace('\\', "/");
+        let clave = clave.strip_prefix("./").unwrap_or(&clave).to_string();
+        if cadena.iter().any(|c| c == &clave) {
+            let mut ciclo = cadena.clone();
+            ciclo.push(clave);
+            return Err(format!("ciclo de variantes detectado: {}", ciclo.join(" → ")));
+        }
+        let crudo = Self::cargar_crudo_desde_proyecto(raiz, &clave)
+            .ok_or_else(|| format!("asset no encontrado: {clave}"))?;
+        let Some(fuente_base) = crudo.variant_of.clone() else { return Ok(crudo) };
+        cadena.push(clave.clone());
+        let mut resuelto = Self::resolver_variante(raiz, &fuente_base, cadena)?;
+        if let Some(diff) = &crudo.variant_overrides {
+            Self::aplicar_diff_variante(&mut resuelto, diff)
+                .map_err(|e| format!("diff de la variante {clave} sobre {fuente_base}: {e}"))?;
+        }
+        resuelto.name = crudo.name.clone();
+        resuelto.variant_of = crudo.variant_of.clone();
+        resuelto.variant_overrides = None;
+        Ok(resuelto)
+    }
+
+    fn aplicar_diff_variante(base: &mut Self, diff: &PrefabOverrides) -> Result<(), String> {
+        for q in &diff.quitadas {
+            base.eliminar_entidad(*q)?;
+        }
+        for p in &diff.propiedades {
+            base.aplicar_propiedad(p.local_id, &p.path, &p.valor)?;
+        }
+        for a in &diff.anadidas {
+            let sub = a.subarbol.as_ref().ok_or_else(|| {
+                format!("la entidad añadida «{}» de la variante no trae snapshot", a.nombre)
+            })?;
+            if sub.is_empty() {
+                return Err(format!("snapshot vacío en la añadida «{}»", a.nombre));
+            }
+            // Preorden: la primera es la raíz añadida; cada entidad se cuelga
+            // de su padre ya insertado, remapeando ids con los asignados.
+            let mut mapa: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+            for (i, ent) in sub.iter().enumerate() {
+                let padre = if i == 0 {
+                    a.padre_local_id
+                } else {
+                    let padre_snapshot = ent
+                        .parent
+                        .ok_or_else(|| "snapshot de añadida sin padre".to_string())?;
+                    let padre_asignado = mapa.get(&padre_snapshot).copied().ok_or_else(|| {
+                        "el padre de una entidad del snapshot no se insertó antes (¿preorden?)".to_string()
+                    })?;
+                    Some(padre_asignado)
+                };
+                let asignado = base.anadir_entidad(ent.clone(), padre)?;
+                mapa.insert(ent.id, asignado);
+            }
+        }
+        Ok(())
+    }
+
+    /// Diff de `editado` contra `base` en el formato de la Fase D, con el
+    /// snapshot completo en las añadidas: es el diff que se guarda en un
+    /// archivo de variante. `None` si las raíces no coinciden (la vista de
+    /// edición conserva siempre la raíz del asset).
+    ///
+    /// Invariante: los ids nuevos de `editado` deben ser mayores que
+    /// cualquier id que la base haya tenido (el asignador de la escena de
+    /// edición es monótono y nunca reutiliza); un id reutilizado tras
+    /// borrar una entidad se leería como modificación de la borrada.
+    pub fn calcular_diff_entre(base: &Self, editado: &Self) -> Option<PrefabOverrides> {
+        if base.root_entity.id != editado.root_entity.id {
+            return None;
+        }
+        let mut diff = PrefabOverrides::default();
+        let ids_base: std::collections::HashSet<u64> = base.entidades().map(|e| e.id).collect();
+        let ids_edit: std::collections::HashSet<u64> = editado.entidades().map(|e| e.id).collect();
+        // Propiedades: entidades presentes en ambos.
+        for ent_edit in editado.entidades() {
+            if !ids_base.contains(&ent_edit.id) {
+                continue;
+            }
+            let Some(ent_base) = base.entidades().find(|e| e.id == ent_edit.id) else { continue };
+            let es_raiz = ent_edit.id == base.root_entity.id;
+            for path in paths_comparables(es_raiz) {
+                let vb = valor_en_path(ent_base, path);
+                let ve = valor_en_path(ent_edit, path);
+                if vb != ve {
+                    if let Some(valor) = ve {
+                        diff.propiedades.push(OverridePropiedad {
+                            local_id: ent_edit.id,
+                            path: path.to_string(),
+                            valor,
+                            huerfana: false,
+                        });
+                    }
+                }
+            }
+        }
+        // Quitadas: en la base y no en el editado (la raíz nunca). Solo
+        // las de arriba de cada rama: `eliminar_entidad` se lleva el
+        // subárbol entero, y una quitada cuyo padre también falta ya no
+        // existe al aplicar el diff (la resolución fallaría).
+        for ent_base in base.entidades() {
+            if ent_base.id == base.root_entity.id || ids_edit.contains(&ent_base.id) {
+                continue;
+            }
+            let padre_quitado = ent_base
+                .parent
+                .is_some_and(|p| p != base.root_entity.id && !ids_edit.contains(&p));
+            if !padre_quitado {
+                diff.quitadas.push(ent_base.id);
+            }
+        }
+        // Añadidas: raíces de subárbol cuyo padre sí está en la base.
+        for ent_edit in editado.entidades() {
+            if ids_base.contains(&ent_edit.id) {
+                continue;
+            }
+            let padre_en_base = ent_edit.parent.is_some_and(|p| ids_base.contains(&p));
+            if !padre_en_base {
+                continue; // su raíz añadida ya lo cubre
+            }
+            let subarbol: Vec<EntityData> = recorrer_subarbol(editado.entidades(), ent_edit.id)
+                .iter()
+                .map(|n| n.e.clone())
+                .collect();
+            diff.anadidas.push(OverrideAnadida {
+                padre_local_id: ent_edit.parent,
+                nombre: ent_edit.name.clone(),
+                indice: 0,
+                subarbol: Some(subarbol),
+            });
+        }
+        Some(diff)
+    }
+
+    /// Variante recién creada: apunta a la base, sin diff, con la expansión
+    /// de la base como snapshot materializado en el propio archivo.
+    pub fn variante_vacia(nombre: &str, fuente_base: &str, base: &Self) -> Self {
+        Self {
+            format_version: 1,
+            name: nombre.to_string(),
+            root_entity: base.root_entity.clone(),
+            descendant_entities: base.descendant_entities.clone(),
+            variant_of: Some(fuente_base.to_string()),
+            variant_overrides: Some(PrefabOverrides::default()),
+        }
     }
 
     /// Huella del asset: la misma que da una instancia intacta en la escena.
@@ -214,13 +388,36 @@ pub struct OverridePropiedad {
 }
 
 /// Entidad que existe en la instancia y no en el asset.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OverrideAnadida {
     /// Id local del padre en el asset (`None` si cuelga de la raíz).
     pub padre_local_id: Option<u64>,
     pub nombre: String,
     /// Posición entre las entidades añadidas bajo el mismo padre.
     pub indice: usize,
+    /// Snapshot completo del subárbol añadido (raíz primero, preorden) cuando
+    /// el diff vive en un ARCHIVO de variante y debe ser autocontenido. En el
+    /// diff de una instancia en escena va `None`: la entidad vive en la escena.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subarbol: Option<Vec<EntityData>>,
+}
+
+impl PartialEq for OverrideAnadida {
+    fn eq(&self, other: &Self) -> bool {
+        self.padre_local_id == other.padre_local_id
+            && self.nombre == other.nombre
+            && self.indice == other.indice
+            && match (&self.subarbol, &other.subarbol) {
+                (None, None) => true,
+                (Some(a), Some(b)) => {
+                    a.len() == b.len()
+                        && a.iter()
+                            .zip(b.iter())
+                            .all(|(x, y)| serde_json::to_value(x).ok() == serde_json::to_value(y).ok())
+                }
+                _ => false,
+            }
+    }
 }
 
 /// Diferencias de una instancia respecto a su asset.
@@ -401,6 +598,13 @@ pub fn fnv1a_64(bytes: &[u8]) -> u64 {
 /// dan la misma huella. Entran los datos de cada entidad, su clave, la de
 /// su padre y su posición entre los hijos. No entran los ids de escena,
 /// los campos de vínculo ni el transform de la raíz.
+///
+/// Frontera de anidadas: una raíz de instancia anidada (con
+/// `prefab_source`, que no sea la raíz del recorrido) aporta su fila,
+/// pero su subárbol NO entra: es territorio de la instancia anidada, con
+/// su propia huella. Sin esta frontera la huella del asset (que clavea
+/// el subárbol anidado con los ids del asset exterior) y la de la escena
+/// (que lo clavea con los ids del asset interior) jamás coincidirían.
 pub fn huella_subarbol<'a>(
     entidades: impl IntoIterator<Item = &'a EntityData>,
     raiz_id: u64,
@@ -409,8 +613,23 @@ pub fn huella_subarbol<'a>(
     fn v<T: Serialize>(x: &T) -> Value {
         serde_json::to_value(x).unwrap_or(Value::Null)
     }
-    let mut filas: Vec<(u64, Value)> = recorrer_subarbol(entidades, raiz_id)
+    let nodos = recorrer_subarbol(entidades, raiz_id);
+    // Ids bajo una raíz anidada (excluidos): el recorrido es en anchura
+    // con el padre siempre antes que el hijo, así que la exclusión se
+    // propaga en una sola pasada.
+    let mut excluidos: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    for n in &nodos {
+        if let Some(p) = n.padre {
+            if excluidos.contains(&p.id)
+                || (p.id != raiz_id && p.prefab_source.is_some())
+            {
+                excluidos.insert(n.e.id);
+            }
+        }
+    }
+    let mut filas: Vec<(u64, Value)> = nodos
         .into_iter()
+        .filter(|n| !excluidos.contains(&n.e.id))
         .map(|n| {
             let e = n.e;
             let mut f = vec![
@@ -886,7 +1105,7 @@ mod tests {
                 valor: json!([1.0, 2.0, 3.0]),
                 huerfana: false,
             }],
-            anadidas: vec![OverrideAnadida { padre_local_id: Some(2), nombre: "Extra".into(), indice: 0 }],
+            anadidas: vec![OverrideAnadida { padre_local_id: Some(2), nombre: "Extra".into(), indice: 0, subarbol: None }],
             quitadas: vec![5],
         };
         assert!(!o.esta_vacia());
@@ -896,5 +1115,283 @@ mod tests {
         // Un objeto vacío deserializa como diff vacío.
         let vacio: PrefabOverrides = serde_json::from_str("{}").unwrap();
         assert!(vacio.esta_vacia());
+    }
+}
+
+#[cfg(test)]
+mod prefab_variantes_tests {
+    use super::*;
+    use serde_json::json;
+    use std::path::{Path, PathBuf};
+
+    const POS: &str = "transform.position";
+    const BASE: &str = "prefabs/base.prefab";
+
+    /// Carpeta temporal única por test; se borra al salir (también si el test falla).
+    struct DirTemporal(PathBuf);
+
+    impl DirTemporal {
+        fn nuevo(nombre: &str) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let ruta = std::env::temp_dir().join(format!(
+                "glass_core_variantes_{nombre}_{}_{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&ruta).expect("no se pudo crear la carpeta temporal");
+            Self(ruta)
+        }
+    }
+
+    impl Drop for DirTemporal {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn ent(id: u64, nombre: &str, parent: Option<u64>, children: Vec<u64>) -> EntityData {
+        let mut e = EntityData::new(id, nombre.to_string(), vec!["Transform".to_string()]);
+        e.parent = parent;
+        e.children = children;
+        e
+    }
+
+    /// Raíz 1 con hijos 2 «Hijo» y 3 «Otro».
+    fn fixture_base() -> Prefab {
+        Prefab {
+            format_version: 1,
+            name: "Base".to_string(),
+            root_entity: ent(1, "Raiz", None, vec![2, 3]),
+            descendant_entities: vec![
+                ent(2, "Hijo", Some(1), vec![]),
+                ent(3, "Otro", Some(1), vec![]),
+            ],
+            variant_of: None,
+            variant_overrides: None,
+        }
+    }
+
+    fn variante(nombre: &str, fuente_base: &str, diff: PrefabOverrides) -> Prefab {
+        let mut v = Prefab::variante_vacia(nombre, fuente_base, &fixture_base());
+        v.variant_overrides = Some(diff);
+        v
+    }
+
+    /// Diff de V1: posición del 2 a [9,0,0], quita el 3, añade «Nueva» (con hija) bajo el 2.
+    fn diff_v1() -> PrefabOverrides {
+        let mut d = PrefabOverrides::default();
+        d.propiedades.push(OverridePropiedad {
+            local_id: 2,
+            path: POS.to_string(),
+            valor: json!([9.0, 0.0, 0.0]),
+            huerfana: false,
+        });
+        d.quitadas.push(3);
+        d.anadidas.push(OverrideAnadida {
+            padre_local_id: Some(2),
+            nombre: "Nueva".to_string(),
+            indice: 0,
+            subarbol: Some(vec![
+                ent(10, "Nueva", Some(2), vec![11]),
+                ent(11, "NuevaHija", Some(10), vec![]),
+            ]),
+        });
+        d
+    }
+
+    fn escribir(raiz: &Path, fuente: &str, p: &Prefab) {
+        let ruta = raiz.join(fuente);
+        if let Some(dir) = ruta.parent() {
+            std::fs::create_dir_all(dir).expect("no se pudo crear la carpeta del asset");
+        }
+        let texto = serde_json::to_string_pretty(p).expect("no se pudo serializar el prefab");
+        std::fs::write(&ruta, texto).expect("no se pudo escribir el asset");
+    }
+
+    fn todas(p: &Prefab) -> Vec<&EntityData> {
+        std::iter::once(&p.root_entity).chain(p.descendant_entities.iter()).collect()
+    }
+
+    fn por_nombre<'a>(p: &'a Prefab, nombre: &str) -> Option<&'a EntityData> {
+        todas(p).into_iter().find(|e| e.name == nombre)
+    }
+
+    fn por_id(p: &Prefab, id: u64) -> Option<&EntityData> {
+        todas(p).into_iter().find(|e| e.id == id)
+    }
+
+    #[test]
+    fn resolucion_simple() {
+        let dir = DirTemporal::nuevo("simple");
+        escribir(&dir.0, BASE, &fixture_base());
+        escribir(&dir.0, "prefabs/v1.prefab", &variante("V1", BASE, diff_v1()));
+
+        let p = Prefab::cargar_desde_proyecto(&dir.0, "prefabs/v1.prefab")
+            .expect("la variante debe resolverse");
+
+        assert_eq!(p.name, "V1");
+        assert_eq!(p.variant_of.as_deref(), Some(BASE));
+        assert!(p.variant_overrides.is_none());
+
+        let hijo = por_id(&p, 2).expect("falta la entidad 2");
+        assert_eq!(valor_en_path(hijo, POS), Some(json!([9.0, 0.0, 0.0])));
+        assert!(por_nombre(&p, "Otro").is_none(), "la entidad 3 debía quitarse");
+
+        let nueva = por_nombre(&p, "Nueva").expect("falta la añadida");
+        assert_eq!(nueva.parent, Some(2));
+        assert!(hijo.children.contains(&nueva.id));
+
+        let hija = por_nombre(&p, "NuevaHija").expect("falta la hija de la añadida");
+        assert_eq!(hija.parent, Some(nueva.id));
+        assert!(nueva.children.contains(&hija.id));
+
+        assert_eq!(todas(&p).len(), 4);
+    }
+
+    #[test]
+    fn cadena_de_dos_variantes() {
+        let dir = DirTemporal::nuevo("cadena");
+        escribir(&dir.0, BASE, &fixture_base());
+        escribir(&dir.0, "prefabs/v1.prefab", &variante("V1", BASE, diff_v1()));
+
+        // El id de «NuevaHija» solo existe tras resolver V1: V2 depende del orden.
+        let v1 = Prefab::cargar_desde_proyecto(&dir.0, "prefabs/v1.prefab").expect("V1 debe resolverse");
+        let id_hija = por_nombre(&v1, "NuevaHija").expect("falta NuevaHija en V1").id;
+
+        let mut d2 = PrefabOverrides::default();
+        d2.propiedades.push(OverridePropiedad {
+            local_id: 2,
+            path: POS.to_string(),
+            valor: json!([5.0, 0.0, 0.0]),
+            huerfana: false,
+        });
+        d2.quitadas.push(id_hija);
+        escribir(&dir.0, "prefabs/v2.prefab", &variante("V2", "prefabs/v1.prefab", d2));
+
+        let p = Prefab::cargar_desde_proyecto(&dir.0, "prefabs/v2.prefab").expect("V2 debe resolverse");
+
+        assert_eq!(p.name, "V2");
+        assert_eq!(p.variant_of.as_deref(), Some("prefabs/v1.prefab"));
+        assert!(p.variant_overrides.is_none());
+        assert_eq!(valor_en_path(por_id(&p, 2).unwrap(), POS), Some(json!([5.0, 0.0, 0.0])));
+        assert!(por_nombre(&p, "Otro").is_none());
+        assert!(por_nombre(&p, "Nueva").is_some());
+        assert!(por_nombre(&p, "NuevaHija").is_none());
+    }
+
+    #[test]
+    fn ciclo_devuelve_none() {
+        let dir = DirTemporal::nuevo("ciclo");
+        escribir(&dir.0, "prefabs/a.prefab", &variante("A", "prefabs/b.prefab", PrefabOverrides::default()));
+        escribir(&dir.0, "prefabs/b.prefab", &variante("B", "prefabs/a.prefab", PrefabOverrides::default()));
+
+        assert!(Prefab::cargar_desde_proyecto(&dir.0, "prefabs/a.prefab").is_none());
+    }
+
+    #[test]
+    fn base_ausente_devuelve_none() {
+        let dir = DirTemporal::nuevo("ausente");
+        escribir(
+            &dir.0,
+            "prefabs/v.prefab",
+            &variante("V", "prefabs/no_existe.prefab", PrefabOverrides::default()),
+        );
+
+        assert!(Prefab::cargar_desde_proyecto(&dir.0, "prefabs/v.prefab").is_none());
+        // El crudo sí carga: el archivo existe.
+        assert!(Prefab::cargar_crudo_desde_proyecto(&dir.0, "prefabs/v.prefab").is_some());
+    }
+
+    #[test]
+    fn diff_entre_prefabs() {
+        let base = fixture_base();
+        let mut editado = base.clone();
+        editado.aplicar_propiedad(2, POS, &json!([9.0, 0.0, 0.0])).unwrap();
+        editado.eliminar_entidad(3).unwrap();
+        // Las añadidas entran con ids por encima del máximo que la base
+        // haya tenido (10 y 11): es el invariante del asignador monótono
+        // de la escena de edición. Reutilizar el id 3 recién borrado se
+        // leería como «modificar Otro», no como añadir.
+        editado
+            .descendant_entities
+            .iter_mut()
+            .find(|e| e.id == 2)
+            .unwrap()
+            .children
+            .push(10);
+        editado.descendant_entities.push(ent(10, "Nueva", Some(2), vec![11]));
+        editado.descendant_entities.push(ent(11, "NuevaHija", Some(10), vec![]));
+
+        let diff = Prefab::calcular_diff_entre(&base, &editado).expect("las raíces coinciden");
+
+        assert_eq!(diff.propiedades.len(), 1);
+        assert_eq!(diff.propiedades[0].local_id, 2);
+        assert_eq!(diff.propiedades[0].path, POS);
+        assert_eq!(diff.quitadas, vec![3]);
+        assert_eq!(diff.anadidas.len(), 1);
+
+        let a = &diff.anadidas[0];
+        assert_eq!(a.padre_local_id, Some(2));
+        assert_eq!(a.nombre, "Nueva");
+        let sub = a.subarbol.as_ref().expect("la añadida debe traer snapshot");
+        assert_eq!(sub.len(), 2);
+        assert_eq!(sub[0].name, "Nueva");
+        assert_eq!(sub[1].name, "NuevaHija");
+
+        let mut otra = editado.clone();
+        otra.root_entity.id = 99;
+        assert!(Prefab::calcular_diff_entre(&base, &otra).is_none());
+    }
+
+    #[test]
+    fn diff_entre_quitadas_solo_la_cima_del_subarbol() {
+        // Quitar un subárbol entero: el diff trae solo la quitada de
+        // arriba; la de dentro ya no existe al aplicar (eliminar la
+        // cima se lleva el subárbol) y la resolución fallaría con ella.
+        let base = Prefab {
+            format_version: 1,
+            name: "Base".to_string(),
+            root_entity: ent(1, "Raiz", None, vec![2]),
+            descendant_entities: vec![
+                ent(2, "Hijo", Some(1), vec![4]),
+                ent(4, "Nieto", Some(2), vec![]),
+            ],
+            variant_of: None,
+            variant_overrides: None,
+        };
+        let mut editado = base.clone();
+        editado.eliminar_entidad(2).unwrap();
+        let diff = Prefab::calcular_diff_entre(&base, &editado).expect("las raíces coinciden");
+        assert_eq!(diff.quitadas, vec![2]);
+        let mut resuelto = base.clone();
+        Prefab::aplicar_diff_variante(&mut resuelto, &diff)
+            .expect("el diff se aplica sin quitadas ya inexistentes");
+        assert_eq!(resuelto.entidades().count(), 1);
+    }
+
+    #[test]
+    fn serde_variante() {
+        let v = Prefab::variante_vacia("V", BASE, &fixture_base());
+        let json_v = serde_json::to_string(&v).unwrap();
+        assert!(json_v.contains("\"variant_of\""));
+        assert!(json_v.contains("\"variant_overrides\""));
+
+        let leido: Prefab = serde_json::from_str(&json_v).unwrap();
+        assert_eq!(leido.variant_of.as_deref(), Some(BASE));
+        assert!(leido.variant_overrides.as_ref().is_some_and(|d| d.esta_vacia()));
+
+        let json_normal = serde_json::to_string(&fixture_base()).unwrap();
+        assert!(!json_normal.contains("variant_of"));
+        assert!(!json_normal.contains("variant_overrides"));
+
+        let anadida_escena = OverrideAnadida {
+            padre_local_id: None,
+            nombre: "X".to_string(),
+            indice: 0,
+            subarbol: None,
+        };
+        assert!(!serde_json::to_string(&anadida_escena).unwrap().contains("subarbol"));
     }
 }

@@ -813,6 +813,7 @@ fn ejecutar_nucleo(
     ctx: &ContextoEscena,
     prefabs: &HashMap<String, PrefabConvertido>,
     vincular: bool,
+    informar_resumen: bool,
 ) -> Nucleo {
     let mut est = Estado::new(ctx);
 
@@ -1239,7 +1240,7 @@ fn ejecutar_nucleo(
     }
 
     // Informe por prefab, solo en escenas (no en la conversión de prefabs).
-    if vincular {
+    if informar_resumen {
         for (_, r) in &resumen {
             est.avisos.sumar(format!(
                 "Prefab {}: {} instancia(s), {} entidades, {} modificaciones aplicadas",
@@ -1291,7 +1292,7 @@ fn convertir_escena_con_resumen(
     prefabs: &HashMap<String, PrefabConvertido>,
 ) -> (Vec<EntityData>, Vec<String>, Vec<(String, ResumenPrefab)>) {
     let docs = partir_documentos(texto);
-    let n = ejecutar_nucleo(&docs, ctx, prefabs, true);
+    let n = ejecutar_nucleo(&docs, ctx, prefabs, true, true);
     let avisos = n.avisos.lineas();
     (n.entidades, avisos, n.resumen)
 }
@@ -1325,7 +1326,29 @@ fn convertir_prefab_interno(
         .first()
         .map(|c| id_ref(&c.valor, "m_RootGameObject"))
         .filter(|&f| f != 0);
-    let mut n = ejecutar_nucleo(&docs, ctx, prefabs, false);
+    let mut n = ejecutar_nucleo(&docs, ctx, prefabs, true, false);
+// Fase E: si el archivo es una variante de Unity, se guarda COMO
+    // variante (base + diff), no aplanada.
+    if let Some((guid_base, fuente_base)) = detectar_variante(&docs, ctx, prefabs) {
+        if let Some(base) = prefabs.get(&guid_base) {
+            if let Some((prefab, diff)) = derivar_variante(&n, base, &fuente_base) {
+                let mut avisos = n.avisos.lineas();
+                avisos.push(format!(
+                    "variante de {fuente_base}: {} propiedades, {} añadidas, {} quitadas",
+                    diff.propiedades.len(),
+                    diff.anadidas.len(),
+                    diff.quitadas.len()
+                ));
+                let convertido = PrefabConvertido {
+                    prefab,
+                    entidad_por_fileid: n.por_fileid,
+                    componente_por_fileid: n.componente_por_fileid,
+                    guid_fuente: guid.to_string(),
+                };
+                return Ok((convertido, avisos));
+            }
+        }
+    }
     let raices: Vec<usize> = n.entidades[..n.planas]
         .iter()
         .enumerate()
@@ -1355,6 +1378,8 @@ fn convertir_prefab_interno(
         name: raiz.name.clone(),
         root_entity: raiz,
         descendant_entities: n.entidades,
+        variant_of: None,
+        variant_overrides: None,
     };
     Ok((
         PrefabConvertido {
@@ -1628,9 +1653,346 @@ MeshRenderer:
     }
 }
 
+/// Si los documentos forman una variante de Unity (exactamente una
+/// PrefabInstance cuyo origen ya está convertido y ningún GameObject
+/// propio salvo los añadidos por esa instancia), devuelve el guid de la
+/// base y la fuente que el núcleo escribirá en la raíz expandida.
+fn detectar_variante(
+    docs: &[DocumentoUnity],
+    ctx: &ContextoEscena,
+    prefabs: &HashMap<String, PrefabConvertido>,
+) -> Option<(String, String)> {
+    let instancias: Vec<&DocumentoUnity> = docs
+        .iter()
+        .filter(|d| d.clase == 1001 && !d.stripped && d.nombre == "PrefabInstance")
+        .collect();
+    if instancias.len() != 1 {
+        return None;
+    }
+    let instancia = instancias[0];
+    let guid_base = guid_ref(&instancia.valor, "m_SourcePrefab")?;
+    if !prefabs.contains_key(&guid_base) {
+        return None;
+    }
+    let modificacion = campo(&instancia.valor, "m_Modification")?;
+    let anadidos: std::collections::HashSet<i64> =
+        refs_modificacion(modificacion, "m_AddedGameObjects").into_iter().collect();
+    let propios = docs
+        .iter()
+        .filter(|d| d.clase == 1 && !d.stripped)
+        .all(|d| anadidos.contains(&d.file_id));
+    if !propios {
+        return None;
+    }
+    let ruta = (ctx.rutas)(guid_base.as_str())?;
+    let fuente = fuente_proyecto(&ruta);
+    Some((guid_base, fuente))
+}
+
+/// Construye el `Prefab` de una variante a partir de la expansión del
+/// núcleo: el snapshot es la expansión materializada (sin el vínculo de
+/// la raíz, que lo expresa `variant_of`) y el diff sale de comparar la
+/// expansión, remapeada a los ids locales de la base, contra la base.
+/// `None` si la expansión no trae la raíz vinculada esperada o el diff
+/// no se puede derivar (el llamante sigue entonces el camino normal).
+fn derivar_variante(
+    n: &Nucleo,
+    base: &PrefabConvertido,
+    fuente_base: &str,
+) -> Option<(Prefab, glass_core::prefab::PrefabOverrides)> {
+    // Criterio fuerte: la raíz expandida es la entidad vinculada a la base
+    // cuyo id local es la raíz de la base.
+    let id_raiz_base = base.prefab.root_entity.id;
+    let raiz_exp = n.entidades.iter().find(|e| {
+        e.prefab_source.as_deref() == Some(fuente_base)
+            && e.prefab_local_id == Some(id_raiz_base)
+    })?;
+    // Remapeo: id de la expansión -> id para el diff. Los vinculados usan
+    // su id local en la base; los añadidos (sin local) reciben ids por
+    // encima del máximo de la base, en orden de aparición.
+    let max_base = id_raiz_base.max(
+        base.prefab
+            .descendant_entities
+            .iter()
+            .map(|e| e.id)
+            .max()
+            .unwrap_or(0),
+    );
+    let mut mapa: HashMap<u64, u64> = HashMap::new();
+    let mut siguiente = max_base + 1;
+    for e in &n.entidades {
+        let nuevo = match e.prefab_local_id {
+            Some(l) => l,
+            None => {
+                let v = siguiente;
+                siguiente += 1;
+                v
+            }
+        };
+        mapa.insert(e.id, nuevo);
+    }
+    let remapear = |e: &EntityData| -> EntityData {
+        let mut c = e.clone();
+        c.id = mapa[&e.id];
+        c.parent = e.parent.and_then(|p| mapa.get(&p).copied());
+        c.children = e.children.iter().filter_map(|h| mapa.get(h).copied()).collect();
+        c.prefab_source = None;
+        c.prefab_hash = None;
+        c.prefab_local_id = None;
+        c.prefab_overrides = None;
+        c
+    };
+    let mut raiz_diff = remapear(raiz_exp);
+    raiz_diff.parent = None;
+    let editado = glass_core::Prefab {
+        format_version: 1,
+        name: raiz_diff.name.clone(),
+        root_entity: raiz_diff,
+        descendant_entities: n
+            .entidades
+            .iter()
+            .filter(|e| e.id != raiz_exp.id)
+            .map(remapear)
+            .collect(),
+        variant_of: None,
+        variant_overrides: None,
+    };
+    let diff = glass_core::Prefab::calcular_diff_entre(&base.prefab, &editado)?;
+    // Snapshot: la expansión con sus propios ids; la raíz pierde el
+    // vínculo (lo expresa variant_of) y todas pierden el local_id, como
+    // en un prefab normal. Las raíces anidadas de la base conservan SU
+    // vínculo (su fuente es otra).
+    let mut raiz_snap = raiz_exp.clone();
+    raiz_snap.parent = None;
+    raiz_snap.prefab_source = None;
+    raiz_snap.prefab_hash = None;
+    raiz_snap.prefab_local_id = None;
+    raiz_snap.prefab_overrides = None;
+    let descendants: Vec<EntityData> = n
+        .entidades
+        .iter()
+        .filter(|e| e.id != raiz_exp.id)
+        .map(|e| {
+            let mut c = e.clone();
+            c.prefab_local_id = None;
+            c
+        })
+        .collect();
+    let prefab = glass_core::Prefab {
+        format_version: 1,
+        name: raiz_snap.name.clone(),
+        root_entity: raiz_snap,
+        descendant_entities: descendants,
+        variant_of: Some(fuente_base.to_string()),
+        variant_overrides: Some(diff.clone()),
+    };
+    Some((prefab, diff))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+/// Variante de la Casa: mueve la Puerta a x=7 y añade «Extra» bajo la raíz.
+    const VARIANTE: &str = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &700
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 701}
+  m_Layer: 0
+  m_Name: Extra
+  m_TagString: Untagged
+  m_IsActive: 1
+--- !u!4 &701
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 700}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 2, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 5001}
+--- !u!1001 &5000
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 0}
+    m_Modifications:
+    - target: {fileID: 401, guid: 11112222333344445555666677778888, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 7
+      objectReference: {fileID: 0}
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects:
+    - targetCorrespondingSourceObject: {fileID: 400, guid: 11112222333344445555666677778888, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 700}
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 11112222333344445555666677778888, type: 3}
+--- !u!4 &5001 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 400, guid: 11112222333344445555666677778888, type: 3}
+  m_PrefabInstance: {fileID: 5000}
+  m_PrefabAsset: {fileID: 0}
+";
+
+    /// Un GameObject propio (no añadido) que contiene una instancia de la Casa.
+    const PROPIO_E_INSTANCIA: &str = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &800
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 801}
+  m_Layer: 0
+  m_Name: Propio
+  m_TagString: Untagged
+  m_IsActive: 1
+--- !u!4 &801
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 800}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children:
+  - {fileID: 5001}
+  m_Father: {fileID: 0}
+--- !u!1001 &5000
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 801}
+    m_Modifications: []
+    m_RemovedComponents: []
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: 11112222333344445555666677778888, type: 3}
+--- !u!4 &5001 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 400, guid: 11112222333344445555666677778888, type: 3}
+  m_PrefabInstance: {fileID: 5000}
+  m_PrefabAsset: {fileID: 0}
+";
+
+    fn como_f64s(v: &serde_json::Value) -> Vec<f64> {
+        v.as_array()
+            .expect("se esperaba un array")
+            .iter()
+            .map(|x| x.as_f64().expect("se esperaba un número"))
+            .collect()
+    }
+
+    #[test]
+    fn variante_se_convierte_como_variante() {
+        let (convertido, avisos) = convertir_prefab_interno(
+            "guid-variante",
+            VARIANTE,
+            &ctx_con_prefab(),
+            &prefabs_casa(),
+        )
+        .expect("la variante se convierte");
+        let prefab = &convertido.prefab;
+        assert_eq!(prefab.variant_of.as_deref(), Some("Assets/Prefabs/Casa.prefab"));
+        let diff = prefab.variant_overrides.as_ref().expect("la variante trae su diff");
+        assert_eq!(diff.propiedades.len(), 1);
+        let p = &diff.propiedades[0];
+        assert_eq!(p.local_id, 2);
+        assert_eq!(p.path, "transform.position");
+        // En espacio del motor (la conversión voltea la Z de Unity):
+        // la Puerta de la base está en [0, 0, -1] y la variante la mueve en X.
+        assert_eq!(como_f64s(&p.valor), vec![7.0, 0.0, -1.0]);
+        assert_eq!(diff.anadidas.len(), 1);
+        let a = &diff.anadidas[0];
+        let sub = a.subarbol.as_ref().expect("la añadida trae snapshot");
+        assert_eq!(sub.len(), 1);
+        assert_eq!(sub[0].name, "Extra");
+        assert!(diff.quitadas.is_empty());
+        assert_eq!(1 + prefab.descendant_entities.len(), 3);
+        assert!(prefab.root_entity.prefab_source.is_none());
+        assert!(avisos.iter().any(|l| l.contains("variante de")));
+    }
+
+    #[test]
+    fn variante_resuelta_contra_la_base_da_la_materializacion() {
+        let (convertido, _) = convertir_prefab_interno(
+            "guid-variante",
+            VARIANTE,
+            &ctx_con_prefab(),
+            &prefabs_casa(),
+        )
+        .expect("la variante se convierte");
+        let dir = std::env::temp_dir()
+            .join(format!("glass_ripper_variante_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let casa = prefabs_casa();
+        let base = &casa[G_PREFAB].prefab;
+        std::fs::write(
+            dir.join("Casa.prefab.json"),
+            serde_json::to_string_pretty(base).unwrap(),
+        )
+        .unwrap();
+        let mut variante = convertido.prefab.clone();
+        variante.variant_of = Some("Casa.prefab.json".to_string());
+        std::fs::write(
+            dir.join("Variante.prefab.json"),
+            serde_json::to_string_pretty(&variante).unwrap(),
+        )
+        .unwrap();
+        let cargado = glass_core::Prefab::cargar_desde_proyecto(&dir, "Variante.prefab.json")
+            .expect("la variante se resuelve contra la base");
+        let todas: Vec<&EntityData> = std::iter::once(&cargado.root_entity)
+            .chain(cargado.descendant_entities.iter())
+            .collect();
+        let puerta = todas.iter().find(|e| e.name == "Puerta").expect("falta la Puerta");
+        assert_eq!(
+            como_f64s(&serde_json::to_value(puerta.transform.position).unwrap()),
+            vec![7.0, 0.0, -1.0]
+        );
+        let extra = todas.iter().find(|e| e.name == "Extra").expect("falta Extra");
+        assert_eq!(
+            como_f64s(&serde_json::to_value(extra.transform.position).unwrap()),
+            vec![0.0, 2.0, 0.0]
+        );
+        assert_eq!(extra.parent, Some(cargado.root_entity.id));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prefab_con_gameobject_propio_no_es_variante() {
+        let (convertido, _) = convertir_prefab_interno(
+            "guid-propio",
+            PROPIO_E_INSTANCIA,
+            &ctx_con_prefab(),
+            &prefabs_casa(),
+        )
+        .expect("se convierte por el camino normal");
+        assert!(convertido.prefab.variant_of.is_none());
+    }
 
     const G_MALLA: &str = "0123456789abcdef0123456789abcdef";
     const G_MAT: &str = "fedcba9876543210fedcba9876543210";
@@ -2000,7 +2362,10 @@ RectTransform:
     }
 
     #[test]
-    fn vinculo_solo_en_escenas() {
+    fn vinculo_en_escenas_y_en_prefabs() {
+        // Fase E: el anidado dentro de un prefab convertido conserva su
+        // vínculo vivo (antes de la Fase E se aplanaba sin vínculo, la
+        // decisión C de la Fase B; la escena ya lo escribía).
         let prefabs = prefabs_casa();
         let huella = prefabs[G_PREFAB].prefab.huella();
 
@@ -2009,11 +2374,19 @@ RectTransform:
                 .unwrap();
         let expandidas = &como_prefab.prefab.descendant_entities;
         assert_eq!(expandidas.len(), 2);
-        assert!(expandidas.iter().any(|e| e.name == "CasaNueva"));
-        for e in expandidas {
-            assert!(e.prefab_source.is_none(), "{}: {:?}", e.name, e.prefab_source);
-            assert!(e.prefab_hash.is_none(), "{}: {:?}", e.name, e.prefab_hash);
-        }
+        let raiz_anidada = expandidas
+            .iter()
+            .find(|e| e.name == "CasaNueva")
+            .expect("falta la raíz anidada");
+        assert_eq!(raiz_anidada.prefab_source.as_deref(), Some("Assets/Prefabs/Casa.prefab"));
+        assert_eq!(raiz_anidada.prefab_hash, Some(huella.clone()));
+        assert_eq!(raiz_anidada.prefab_local_id, Some(1));
+        let puerta_anidada = expandidas
+            .iter()
+            .find(|e| e.name == "Puerta")
+            .expect("falta Puerta");
+        assert_eq!(puerta_anidada.prefab_local_id, Some(2));
+        assert!(puerta_anidada.prefab_source.is_none());
 
         let (ents, _) = convertir_escena_interno(ESCENA, &ctx_con_prefab(), &prefabs);
         assert_eq!(ents.len(), 3);

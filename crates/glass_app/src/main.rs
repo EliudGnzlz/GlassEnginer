@@ -3441,17 +3441,23 @@ impl GlassEngineApp {
             return;
         };
         let ruta = &ruta;
-        let prefab = match glass_core::Prefab::load_from_file(ruta) {
-            Ok(p) => p,
-            Err(e) => {
-                log::error!("No se pudo abrir el prefab '{}': {e}", ruta.display());
-                self.editor_layout.status_message = Some((
-                    format!("No se pudo abrir el prefab: {e}"),
-                    std::time::Instant::now(),
-                ));
-                return;
-            }
+        // Se carga RESUELTO: si el asset es una variante, la vista de
+        // edición muestra base + diff aplicados (Fase E); si la cadena no
+        // se resuelve (base ausente o ciclo), no se abre.
+        let Some(prefab) = glass_core::Prefab::cargar_desde_proyecto(&raiz, fuente) else {
+            log::error!("No se pudo resolver el prefab '{fuente}'");
+            self.editor_layout.status_message = Some((
+                format!("No se pudo abrir el prefab {fuente}: no se resolvió (¿variante con la base ausente o en ciclo?)"),
+                std::time::Instant::now(),
+            ));
+            return;
         };
+        let variante = prefab.variant_of.clone().map(|fuente_base| {
+            glass_editor::docking::VarianteEnEdicion {
+                raiz_proyecto: raiz.clone(),
+                fuente_base,
+            }
+        });
         let raiz_id = prefab.root_entity.id;
         let nombre = prefab.name.clone();
         let mut entidades = vec![prefab.root_entity];
@@ -3473,7 +3479,7 @@ impl GlassEngineApp {
             log::error!("SceneState bloqueado; no se abrió el prefab");
             return;
         }
-        self.editor_layout.prefab_en_edicion = Some((ruta.to_path_buf(), raiz_id));
+        self.editor_layout.prefab_en_edicion = Some((ruta.to_path_buf(), raiz_id, variante));
         self.editor_layout.hierarchy.selected_entity = Some(raiz_id);
         self.ruta_escena_actual = None;
         self.nombre_escena_con_ruta = format!("{nombre} (prefab)");

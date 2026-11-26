@@ -75,6 +75,17 @@ pub struct AvisoBanner {
     pub cuerpo: String,
 }
 
+/// Datos para guardar una VARIANTE en edición (Fase E): al guardar, el
+/// asset se escribe como `variant_of` + diff contra la base resuelta,
+/// no como prefab plano.
+#[derive(Debug, Clone)]
+pub struct VarianteEnEdicion {
+    /// Raíz del proyecto (para resolver la base y su cadena).
+    pub raiz_proyecto: std::path::PathBuf,
+    /// Fuente de la base, relativa al proyecto.
+    pub fuente_base: String,
+}
+
 pub struct EditorDockingLayout {
     pub hierarchy: HierarchyPanel,
     pub viewport: ViewportPanel,
@@ -143,8 +154,8 @@ pub input_axes_edit: Option<Vec<glass_scripting::input_axes::InputAxisDef>>,
     pub status_message: Option<(String, std::time::Instant)>,
     /// Prefab que el Inspector pidió abrir (fuente relativa al proyecto); lo consume la app.
     pub pending_abrir_prefab: Option<String>,
-    /// Prefab en edición: (ruta absoluta del asset, id de su raíz en la escena). Única copia; la fija la app.
-    pub prefab_en_edicion: Option<(std::path::PathBuf, u64)>,
+    /// Prefab en edición: (ruta absoluta del asset, id de su raíz en la escena, datos de variante si el asset es una variante). Única copia; la fija la app.
+    pub prefab_en_edicion: Option<(std::path::PathBuf, u64, Option<VarianteEnEdicion>)>,
     /// Enrutado de Supr: valor anterior de cada selección y cuál se
     /// tocó por última vez (ver `destino_supr`).
     pub supr_sel_entidad_prev: Option<u64>,
@@ -431,7 +442,7 @@ impl EditorDockingLayout {
         &mut self,
         scene_state: &Arc<Mutex<SceneState>>,
     ) -> Option<Result<(), String>> {
-        let (ruta, raiz_id) = self.prefab_en_edicion.clone()?;
+        let (ruta, raiz_id, variante) = self.prefab_en_edicion.clone()?;
         // La raíz se borró en la vista de edición: el modo ya no tiene
         // asset que escribir. Se sale de él (el siguiente Guardar tratará
         // la escena como escena) en vez de fallar en silencio para siempre.
@@ -445,20 +456,64 @@ impl EditorDockingLayout {
         }
         let (mensaje, exito) = match scene_state.lock() {
             Ok(scene) => match glass_core::Prefab::from_entity(&scene, raiz_id) {
-                Ok(prefab) => {
-                    let k = 1 + prefab.descendant_entities.len();
-                    match prefab.save_to_file(&ruta) {
-                        Ok(()) => {
-                            self.marcar_guardada(&scene);
-                            (
-                                format!("Prefab guardado en {} ({k} entidades)", ruta.display()),
-                                true,
-                            )
+                Ok(editado) => {
+                    // Qué se escribe: el prefab plano de siempre, o — si el
+                    // asset en edición es una variante — su forma de
+                    // variante: snapshot materializado + variant_of + el
+                    // diff contra la base resuelta (Fase E).
+                    let a_escribir: Result<(glass_core::Prefab, String), String> = match &variante {
+                        None => {
+                            let k = 1 + editado.descendant_entities.len();
+                            Ok((editado, format!("Prefab guardado en {} ({k} entidades)", ruta.display())))
                         }
-                        Err(e) => (
-                            format!("No se pudo guardar el prefab {}: {e}", ruta.display()),
-                            false,
-                        ),
+                        Some(v) => {
+                            match glass_core::Prefab::cargar_desde_proyecto(&v.raiz_proyecto, &v.fuente_base) {
+                                Some(base) => match glass_core::Prefab::calcular_diff_entre(&base, &editado) {
+                                    Some(diff) => {
+                                        let resumen = format!(
+                                            "{} propiedades, {} añadidas, {} quitadas",
+                                            diff.propiedades.len(),
+                                            diff.anadidas.len(),
+                                            diff.quitadas.len()
+                                        );
+                                        let variante = glass_core::Prefab {
+                                            format_version: 1,
+                                            name: editado.name.clone(),
+                                            root_entity: editado.root_entity.clone(),
+                                            descendant_entities: editado.descendant_entities.clone(),
+                                            variant_of: Some(v.fuente_base.clone()),
+                                            variant_overrides: Some(diff),
+                                        };
+                                        Ok((variante, format!(
+                                            "Variante guardada en {} (diff contra {}: {resumen})",
+                                            ruta.display(),
+                                            v.fuente_base
+                                        )))
+                                    }
+                                    None => Err(
+                                        "La raíz cambió en la edición: no se puede calcular el diff de la variante"
+                                            .to_string(),
+                                    ),
+                                },
+                                None => Err(format!(
+                                    "No se encontró la base de la variante: {}",
+                                    v.fuente_base
+                                )),
+                            }
+                        }
+                    };
+                    match a_escribir {
+                        Ok((prefab, mensaje_ok)) => match prefab.save_to_file(&ruta) {
+                            Ok(()) => {
+                                self.marcar_guardada(&scene);
+                                (mensaje_ok, true)
+                            }
+                            Err(e) => (
+                                format!("No se pudo guardar el prefab {}: {e}", ruta.display()),
+                                false,
+                            ),
+                        },
+                        Err(e) => (e, false),
                     }
                 }
                 Err(e) => (format!("No se pudo reconstruir el prefab: {e}"), false),

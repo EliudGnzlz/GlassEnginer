@@ -43,6 +43,7 @@ enum HierarchyAction {
     InsertRelative(u64, u64, bool),
     Group(Vec<u64>),
     DesempaquetarPrefab(u64),
+    DesempaquetarCompletoPrefab(u64),
 }
 
 pub struct HierarchyPanel {
@@ -525,6 +526,10 @@ impl HierarchyPanel {
                                 pending_action = Some(HierarchyAction::DesempaquetarPrefab(entity.id));
                                 ui.close();
                             }
+                            if ui.button("📦 Desempaquetar Completo").clicked() {
+                                pending_action = Some(HierarchyAction::DesempaquetarCompletoPrefab(entity.id));
+                                ui.close();
+                            }
                         }
                         if ui.button("🗑 Eliminar").clicked() {
                             pending_action = Some(HierarchyAction::Delete(entity.id));
@@ -696,6 +701,11 @@ impl HierarchyPanel {
                 }
                 HierarchyAction::DesempaquetarPrefab(id) => {
                     if let Err(e) = scene.desempaquetar_instancia(id) {
+                        log::warn!("[Prefabs] {e}");
+                    }
+                }
+                HierarchyAction::DesempaquetarCompletoPrefab(id) => {
+                    if let Err(e) = scene.desempaquetar_instancia_completa(id) {
                         log::warn!("[Prefabs] {e}");
                     }
                 }

@@ -1481,7 +1481,12 @@ impl InspectorPanel {
                     .get_entity(id)
                     .and_then(|e| e.prefab_source.clone())
                     .unwrap_or_default();
-                (fuente, estado)
+                let variante_de = glass_core::prefab::Prefab::cargar_desde_proyecto(
+                    raiz_proyecto,
+                    &fuente,
+                )
+                .and_then(|p| p.variant_of);
+                (fuente, estado, variante_de)
             })
         });
 
@@ -1577,10 +1582,17 @@ impl InspectorPanel {
                 // ==========================================
                 // 1b. PREFAB: fuente y estado del vínculo (Fase C)
                 // ==========================================
-                if let Some((fuente, estado)) = &info_prefab {
+                if let Some((fuente, estado, variante_de)) = &info_prefab {
                     ui.separator();
                     ui.label(RichText::new("🧩 Prefab").strong());
                     ui.label(RichText::new(fuente).small().color(Color32::GRAY));
+                    if let Some(base) = variante_de {
+                        ui.label(
+                            RichText::new(format!("Variante de {base}"))
+                                .small()
+                                .color(Color32::LIGHT_BLUE),
+                        );
+                    }
                     match estado {
                         EstadoInstanciaPrefab::Intacta => {
                             ui.colored_label(
@@ -3743,10 +3755,44 @@ fn estado_instancia_prefab(
                 |e| e.prefab_local_id.unwrap_or(u64::MAX),
             );
             if Some(huella_actual) == hash_guardado {
-                Some(EstadoInstanciaPrefab::Intacta)
-            } else {
-                Some(EstadoInstanciaPrefab::Modificada)
+                return Some(EstadoInstanciaPrefab::Intacta);
             }
+            // Una raíz ANIDADA guarda en `prefab_local_id` su hueco en el
+            // asset exterior, no su id en el suyo: su huella con la clave
+            // de arriba nunca coincide. Solo en ese caso (la comparación
+            // directa falló) se carga el asset para reclavear la raíz con
+            // su id en su propio asset.
+            let es_anidada = scene
+                .entities
+                .iter()
+                .filter(|e| e.prefab_source.is_some() && e.id != raiz_id)
+                .any(|otra| {
+                    glass_core::prefab::recorrer_subarbol(scene.entities.iter(), otra.id)
+                        .iter()
+                        .any(|n| n.e.id == raiz_id)
+                });
+            if es_anidada {
+                if let Some(asset) =
+                    glass_core::prefab::Prefab::cargar_desde_proyecto(raiz_proyecto, fuente)
+                {
+                    let id_raiz_asset = asset.root_entity.id;
+                    let huella_anidada = glass_core::prefab::huella_subarbol(
+                        scene.entities.iter(),
+                        raiz_id,
+                        |e| {
+                            if e.id == raiz_id {
+                                id_raiz_asset
+                            } else {
+                                e.prefab_local_id.unwrap_or(u64::MAX)
+                            }
+                        },
+                    );
+                    if Some(huella_anidada) == hash_guardado {
+                        return Some(EstadoInstanciaPrefab::Intacta);
+                    }
+                }
+            }
+            Some(EstadoInstanciaPrefab::Modificada)
         }
     }
 }
