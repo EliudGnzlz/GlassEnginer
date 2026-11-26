@@ -102,6 +102,7 @@ fn is_mutating_tool(name: &str) -> bool {
             | "glass_entity_set"
             | "glass_entity_duplicate"
             | "glass_animator_play"
+            | "glass_audio_source_control"
             | "glass_play_control"
             | "glass_scene_save"
             | "glass_scene_load"
@@ -754,6 +755,22 @@ impl McpServer {
                                     "entity_id": { "type": "integer" }
                                 },
                                 "required": ["entity_id"]
+                            }
+                        },
+                        {
+                            "name": "glass_audio_source_control",
+                            "description": "Controla la fuente de audio de una entidad: play dispara su clip en 3D por su bus (y crea el componente si falta), stop la marca parada y set ajusta clip/volumen/pitch/bus sin reproducir. El motor no tiene pausa por fuente: sus sonidos son de un disparo.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "integer" },
+                                    "action": { "type": "string", "enum": ["play", "stop", "set"] },
+                                    "clip": { "type": "string", "description": "Nombre del clip (p. ej. beep_440)" },
+                                    "volume": { "type": "number", "description": "Volumen >= 0" },
+                                    "pitch": { "type": "number", "description": "Pitch > 0" },
+                                    "bus": { "type": "string", "enum": ["master", "music", "sfx"] }
+                                },
+                                "required": ["entity_id", "action"]
                             }
                         },
                         {
@@ -5489,6 +5506,128 @@ impl McpServer {
         McpResponse::success(id, json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&out).unwrap_or_default() }] }))
     }
 
+            "glass_audio_source_control" => {
+                let entity_id = match args.get("entity_id").and_then(|v| v.as_u64()) {
+                    Some(v) => v,
+                    None => return McpResponse::invalid_params(id, "Falta 'entity_id' (integer)"),
+                };
+                let action = match args.get("action").and_then(|v| v.as_str()) {
+                    Some(a) if ["play", "stop", "set"].contains(&a) => a.to_string(),
+                    _ => {
+                        return McpResponse::invalid_params(
+                            id,
+                            "Falta 'action' o no es válida (play|stop|set)",
+                        )
+                    }
+                };
+                // Campos opcionales validados antes de tocar la escena.
+                let mut clip: Option<String> = None;
+                if let Some(v) = args.get("clip") {
+                    match v.as_str() {
+                        Some(c) if !c.is_empty() => clip = Some(c.to_string()),
+                        _ => return McpResponse::invalid_params(id, "'clip' debe ser un string no vacío"),
+                    }
+                }
+                let mut volume: Option<f32> = None;
+                if let Some(v) = args.get("volume") {
+                    match v.as_f64() {
+                        Some(n) if n.is_finite() && n >= 0.0 => volume = Some(n as f32),
+                        _ => return McpResponse::invalid_params(id, "'volume' debe ser un número >= 0"),
+                    }
+                }
+                let mut pitch: Option<f32> = None;
+                if let Some(v) = args.get("pitch") {
+                    match v.as_f64() {
+                        Some(n) if n.is_finite() && n > 0.0 => pitch = Some(n as f32),
+                        _ => return McpResponse::invalid_params(id, "'pitch' debe ser un número > 0"),
+                    }
+                }
+                let mut bus: Option<String> = None;
+                if let Some(v) = args.get("bus") {
+                    match v.as_str() {
+                        Some(b) if glass_audio::BusId::from_name(b).is_some() => {
+                            bus = Some(b.to_string())
+                        }
+                        _ => {
+                            return McpResponse::invalid_params(
+                                id,
+                                "'bus' debe ser master, music o sfx",
+                            )
+                        }
+                    }
+                }
+
+                let Some(ent) = scene.entities.iter_mut().find(|e| e.id == entity_id) else {
+                    return McpResponse::error(id, -32001, format!("Entity #{entity_id} not found"));
+                };
+                if ent.audio.is_none() {
+                    if action == "play" {
+                        ent.audio = Some(glass_core::scene::AudioSourceData::default());
+                        if !ent.components.iter().any(|c| c == "AudioSource") {
+                            ent.components.push("AudioSource".to_string());
+                        }
+                    } else {
+                        return McpResponse::error(id, -32004, "La entidad no tiene AudioSource");
+                    }
+                }
+                let posicion = ent.transform.position;
+                let fuente = ent.audio.as_mut().expect("audio presente tras la guarda");
+                if let Some(c) = clip {
+                    fuente.clip_name = c;
+                }
+                if let Some(v) = volume {
+                    fuente.volume = v;
+                }
+                if let Some(p2) = pitch {
+                    fuente.pitch = p2;
+                }
+                if let Some(b) = bus {
+                    fuente.bus = b;
+                }
+
+                let mut handle: Option<u64> = None;
+                match action.as_str() {
+                    "play" => {
+                        fuente.is_playing = true;
+                        let bus_id = glass_audio::BusId::from_name(&fuente.bus)
+                            .unwrap_or(glass_audio::BusId::Sfx);
+                        let h = self.get_audio().play_3d_on_bus(
+                            fuente.clip_name.clone(),
+                            posicion,
+                            fuente.volume,
+                            fuente.pitch,
+                            false,
+                            bus_id,
+                        );
+                        handle = Some(h);
+                    }
+                    "stop" => {
+                        fuente.is_playing = false;
+                    }
+                    _ => {}
+                }
+
+                let payload = json!({
+                    "entity_id": entity_id,
+                    "action": action,
+                    "clip_name": fuente.clip_name.clone(),
+                    "volume": fuente.volume,
+                    "pitch": fuente.pitch,
+                    "is_playing": fuente.is_playing,
+                    "bus": fuente.bus.clone(),
+                    "handle": handle,
+                });
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&payload).unwrap_or_default()
+                        }]
+                    }),
+                )
+            }
+
             _ => McpResponse::method_not_found(id, name),
         }
     }
@@ -6328,6 +6467,64 @@ fn entity_set_duplicate_find() {
 
         assert!(is_mutating_tool("glass_animator_play"));
         assert!(!is_mutating_tool("glass_animator_info"));
+    }
+
+    #[test]
+    fn audio_source_control_set_play_stop() {
+        let srv = servidor();
+        let plano = |r: String| r.replace("\\\"", "\"");
+        let creada = llamar(&srv, "glass_create_entity", json!({ "name": "FuenteM3" }));
+        let eid = id_desde_texto(&creada);
+
+        // Sin AudioSource: set da -32004.
+        let r = llamar(
+            &srv,
+            "glass_audio_source_control",
+            json!({ "entity_id": eid, "action": "set", "volume": 0.5 }),
+        );
+        assert!(r.contains("-32004"), "{r}");
+
+        // play crea el componente y dispara el clip.
+        let r = plano(llamar(
+            &srv,
+            "glass_audio_source_control",
+            json!({ "entity_id": eid, "action": "play", "clip": "beep_880", "volume": 0.7 }),
+        ));
+        assert!(r.contains("\"is_playing\": true"), "{r}");
+        assert!(r.contains("beep_880"), "{r}");
+        assert!(r.contains("\"handle\":"), "{r}");
+
+        // set cambia el volumen sin reproducir.
+        let r = plano(llamar(
+            &srv,
+            "glass_audio_source_control",
+            json!({ "entity_id": eid, "action": "set", "volume": 0.3, "bus": "music" }),
+        ));
+        assert!(r.contains("\"volume\": 0.3"), "{r}");
+        assert!(r.contains("\"bus\": \"music\""), "{r}");
+
+        // stop marca la fuente como parada.
+        let r = plano(llamar(
+            &srv,
+            "glass_audio_source_control",
+            json!({ "entity_id": eid, "action": "stop" }),
+        ));
+        assert!(r.contains("\"is_playing\": false"), "{r}");
+
+        // Bus inválido y entidad ausente.
+        let r = llamar(
+            &srv,
+            "glass_audio_source_control",
+            json!({ "entity_id": eid, "action": "set", "bus": "radio" }),
+        );
+        assert!(r.contains("-32602"), "{r}");
+        let r = llamar(
+            &srv,
+            "glass_audio_source_control",
+            json!({ "entity_id": 999999, "action": "stop" }),
+        );
+        assert!(r.contains("-32001"), "{r}");
+        assert!(is_mutating_tool("glass_audio_source_control"));
     }
 
     #[test]
