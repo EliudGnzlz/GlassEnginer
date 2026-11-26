@@ -142,6 +142,17 @@ fn parse_dimension(valor: &str) -> Option<Dimension> {
 
 /// Color `#rrggbb`, `rgb(r,g,b)` o `rgba(r,g,b,a)` (r/g/b en 0-255,
 /// a en 0-1). Sin colores con nombre en este paquete.
+/// sRGB (0..1) → lineal (Q4a). El pipeline trata el color de vértice
+/// como lineal y lo convierte a sRGB al pintar, así que el CSS debe
+/// entrar ya convertido para que el color escrito sea el que se ve.
+fn srgb_a_lineal(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
 fn parse_color(valor: &str) -> Option<[f32; 4]> {
     let v = valor.trim();
     if let Some(hex) = v.strip_prefix('#') {
@@ -149,7 +160,12 @@ fn parse_color(valor: &str) -> Option<[f32; 4]> {
             let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
             let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
             let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-            return Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]);
+            return Some([
+                srgb_a_lineal(r as f32 / 255.0),
+                srgb_a_lineal(g as f32 / 255.0),
+                srgb_a_lineal(b as f32 / 255.0),
+                1.0,
+            ]);
         }
         return None;
     }
@@ -168,7 +184,12 @@ fn parse_color(valor: &str) -> Option<[f32; 4]> {
                 && (0.0..=255.0).contains(&b)
                 && (0.0..=1.0).contains(&a)
             {
-                return Some([r / 255.0, g / 255.0, b / 255.0, a]);
+                return Some([
+                    srgb_a_lineal(r / 255.0),
+                    srgb_a_lineal(g / 255.0),
+                    srgb_a_lineal(b / 255.0),
+                    a,
+                ]);
             }
         }
         return None;
@@ -180,7 +201,12 @@ fn parse_color(valor: &str) -> Option<[f32; 4]> {
                 (p[0].parse().ok()?, p[1].parse().ok()?, p[2].parse().ok()?);
             if (0.0..=255.0).contains(&r) && (0.0..=255.0).contains(&g) && (0.0..=255.0).contains(&b)
             {
-                return Some([r / 255.0, g / 255.0, b / 255.0, 1.0]);
+                return Some([
+                    srgb_a_lineal(r / 255.0),
+                    srgb_a_lineal(g / 255.0),
+                    srgb_a_lineal(b / 255.0),
+                    1.0,
+                ]);
             }
         }
         return None;
@@ -244,7 +270,9 @@ fn parse_parada(parada: &str) -> Option<[f32; 4]> {
 }
 
 /// `linear-gradient(90deg, color 0%, color 100%)`: solo ángulo y
-/// exactamente 2 paradas en este paquete.
+/// exactamente 2 paradas en este paquete. El ángulo se guarda en la
+/// convención del shader («0° = izq→der, 90° = arriba→abajo»), así
+/// que el ángulo CSS se convierte restando 90 (Q4b: CSS 90° = izq→der).
 fn parse_gradiente(valor: &str) -> Option<(f32, Vec<[f32; 4]>)> {
     let bajo = valor.trim().to_ascii_lowercase();
     let inner = bajo.strip_prefix("linear-gradient(")?.strip_suffix(')')?;
@@ -260,7 +288,7 @@ fn parse_gradiente(valor: &str) -> Option<(f32, Vec<[f32; 4]>)> {
     for parada in &partes[1..] {
         paradas.push(parse_parada(parada)?);
     }
-    Some((angulo, paradas))
+    Some((angulo - 90.0, paradas))
 }
 
 /// `grid-template-columns`: `100px 1fr`, `repeat(auto-fill, 100px)`.
@@ -314,6 +342,21 @@ fn parse_sombra(valor: &str) -> Option<Sombra> {
     }
     let color = parse_color(partes[3])?;
     Some(Sombra { dx, dy, desenfoque: blur, color })
+}
+
+/// Borde CSS: "<ancho>px <color>" (p. ej. "3px #1ed760"). El color
+/// pasa por parse_color, así que ya sale en lineal (Q4a).
+fn parse_borde(valor: &str) -> Option<(f32, [f32; 4])> {
+    let partes = dividir_nivel_superior(valor, ' ');
+    if partes.len() != 2 {
+        return None;
+    }
+    let ancho = parse_px(partes[0])?;
+    if ancho < 0.0 {
+        return None;
+    }
+    let color = parse_color(partes[1])?;
+    Some((ancho, color))
 }
 
 fn aviso_invalido(avisos: &mut Vec<String>, prop: &str, valor: &str) {
@@ -422,6 +465,10 @@ fn aplicar_declaracion(props: &mut StyleProps, avisos: &mut Vec<String>, prop: &
             Some(v) if v.iter().all(|x| *x >= 0.0) => props.border_radius = Some(expandir_radio(&v)),
             _ => aviso_invalido(avisos, prop, valor),
         },
+        "border" => match parse_borde(valor) {
+            Some(b) => props.border = Some(b),
+            None => aviso_invalido(avisos, prop, valor),
+        },
         "box-shadow" => match parse_sombra(valor) {
             Some(s) => props.box_shadow = Some(s),
             None => aviso_invalido(avisos, prop, valor),
@@ -440,6 +487,10 @@ fn aplicar_declaracion(props: &mut StyleProps, avisos: &mut Vec<String>, prop: &
         },
         "font-size" => match parse_px(valor) {
             Some(v) if v >= 0.0 => props.font_size = Some(v),
+            _ => aviso_invalido(avisos, prop, valor),
+        },
+        "letter-spacing" => match parse_px(valor) {
+            Some(v) if v >= 0.0 => props.letter_spacing = Some(v),
             _ => aviso_invalido(avisos, prop, valor),
         },
         "grid-template-columns" => match parse_columnas_grid(valor) {
@@ -529,11 +580,13 @@ fn fusionar(destino: &mut StyleProps, capa: &StyleProps) {
     fusionar_campo!(destino, capa, background_color);
     fusionar_campo!(destino, capa, background_gradient);
     fusionar_campo!(destino, capa, border_radius);
+    fusionar_campo!(destino, capa, border);
     fusionar_campo!(destino, capa, box_shadow);
     fusionar_campo!(destino, capa, opacity);
     fusionar_campo!(destino, capa, overflow);
     fusionar_campo!(destino, capa, color);
     fusionar_campo!(destino, capa, font_size);
+    fusionar_campo!(destino, capa, letter_spacing);
     fusionar_campo!(destino, capa, grid_template_columns);
     fusionar_campo!(destino, capa, sort_order);
     fusionar_campo!(destino, capa, override_sorting);
@@ -810,7 +863,7 @@ mod pruebas {
         );
         assert!(extra.base.background_gradient.is_some());
         let (angulo, paradas) = extra.base.background_gradient.unwrap();
-        assert_eq!(angulo, 90.0);
+        assert_eq!(angulo, 0.0);
         assert_eq!(paradas.len(), 2);
         let sombra = extra.base.box_shadow.unwrap();
         assert_eq!((sombra.dx, sombra.dy, sombra.desenfoque), (2.0, 3.0, 4.0));
@@ -939,6 +992,55 @@ mod pruebas {
         let vacia = StyleProps::default();
         fusionar(&mut destino, &vacia);
         assert_eq!(destino.text_overflow, Some(TextOverflow::Truncar));
+    }
+
+    #[test]
+    fn borde_se_parsea() {
+        let extra = parsear_estilo_extra("border: 3px #1ed760;");
+        let (ancho, color) = extra.base.border.unwrap();
+        assert_eq!(ancho, 3.0);
+        assert!(color[1] > 0.5);
+    }
+
+    #[test]
+    fn borde_invalido_da_aviso_y_no_panico() {
+        let extra = parsear_estilo_extra("border: 3px;");
+        assert_eq!(extra.base.border, None);
+        assert!(!extra.avisos.is_empty());
+    }
+
+    #[test]
+    fn letter_spacing_se_parsea_y_rechaza_negativo() {
+        let extra = parsear_estilo_extra("letter-spacing: 8px;");
+        assert_eq!(extra.base.letter_spacing, Some(8.0));
+        let extra2 = parsear_estilo_extra("letter-spacing: -2px;");
+        assert_eq!(extra2.base.letter_spacing, None);
+    }
+
+    #[test]
+    fn color_hex_se_convierte_a_lineal() {
+        let extra = parsear_estilo_extra("background-color: #0a1531;");
+        let c = extra.base.background_color.unwrap();
+        assert!((c[0] - 0.0030).abs() < 0.001);
+        assert!((c[1] - 0.0075).abs() < 0.001);
+        assert!((c[2] - 0.0308).abs() < 0.001);
+        assert_eq!(c[3], 1.0);
+    }
+
+    #[test]
+    fn color_rgba_medio_se_convierte_a_lineal() {
+        let extra = parsear_estilo_extra("color: rgba(128, 128, 128, 1);");
+        let c = extra.base.color.unwrap();
+        assert!((c[0] - 0.2159).abs() < 0.001);
+        assert_eq!(c[3], 1.0);
+    }
+
+    #[test]
+    fn angulo_degradado_sigue_css() {
+        let extra = parsear_estilo_extra("background: linear-gradient(90deg, #000000, #ffffff);");
+        let (angulo, paradas) = extra.base.background_gradient.unwrap();
+        assert_eq!(angulo, 0.0);
+        assert_eq!(paradas.len(), 2);
     }
 
 }

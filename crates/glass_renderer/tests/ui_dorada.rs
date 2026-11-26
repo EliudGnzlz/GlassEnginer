@@ -12,7 +12,7 @@
 use ash::vk;
 use glass_renderer::offscreen::OffscreenTarget;
 use glass_renderer::sdf_atlas::SdfAtlas;
-use glass_renderer::ui::{UiBatch, UiRenderer};
+use glass_renderer::ui::{MODO_BORDE, UiBatch, UiRenderer};
 use gpu_allocator::vulkan::{AllocationCreateDesc, AllocationScheme, Allocator};
 use gpu_allocator::vulkan::AllocatorCreateDesc as AllocatorDesc;
 use gpu_allocator::MemoryLocation;
@@ -449,7 +449,7 @@ fn texto_extendido_pinta_glifos() {
         let alto_linea = atlas.line_height_at(48.0);
         let ox = 80.0 + (400.0 - w_txt) * 0.5;
         let oy = 380.0 + (160.0 - alto_linea) * 0.5;
-        lote.push_text_extendido(atlas, [ox, oy], "JUGAR", 48.0, [1.0, 1.0, 1.0, 1.0], [0.0; 4], None);
+        lote.push_text_extendido(atlas, [ox, oy], "JUGAR", 48.0, [1.0, 1.0, 1.0, 1.0], [0.0; 4], None, 0.0);
         (w_txt, ox, oy, alto_linea)
     };
     ctx.una_vez(|cmd| {
@@ -563,7 +563,7 @@ fn texto_clasico_vs_extendido_vertices() {
     let w = atlas.measure("JUGAR", 48.0);
     let ox = 80.0 + (400.0 - w) * 0.5;
     let oy = 380.0 + (160.0 - atlas.line_height_at(48.0)) * 0.5;
-    b.push_text_extendido(&mut atlas, [ox, oy], "JUGAR", 48.0, [1.0, 1.0, 1.0, 1.0], [0.0; 4], None);
+    b.push_text_extendido(&mut atlas, [ox, oy], "JUGAR", 48.0, [1.0, 1.0, 1.0, 1.0], [0.0; 4], None, 0.0);
     let va = a.vertices();
     let vb = b.vertices();
     eprintln!("vértices clásico: {}, extendido: {}", va.len(), vb.len());
@@ -747,6 +747,7 @@ fn ancho_borde_sdf_12_y_96() {
             [1.0, 1.0, 1.0, 1.0],
             [0.0; 4],
             None,
+            0.0,
         );
         ctx.una_vez(|cmd| {
             ui.record(cmd, &target, &lote);
@@ -773,4 +774,49 @@ fn ancho_borde_sdf_12_y_96() {
         eprintln!("tamaño {size}: ancho de borde = {ancho:.2} px (fila y={y_fila})");
         assert!(ancho <= 1.5, "borde de {ancho:.2} px a {size} px (> 1,5)");
     }
+}
+
+/// V4/Q3: el borde solo pinta su banda (4 px hacia dentro del rect),
+/// el interior queda transparente (fondo negro del offscreen).
+#[test]
+fn borde_solo_la_banda() {
+    let mut ctx = Ctx::nuevo();
+    let mut ui = UiRenderer::new(
+        ctx.device.clone(),
+        ctx.allocator.as_mut().expect("allocator"),
+        ctx.queue,
+        ctx.pool,
+    )
+    .expect("UiRenderer");
+    let target = OffscreenTarget::new(ctx.device.clone(), ctx.allocator.as_mut().expect("allocator"), W, H)
+        .expect("offscreen 1280x720");
+    limpiar_negro(&ctx, &target);
+    let (u, v) = {
+        let atlas = ui.font();
+        (atlas.solid_uv[0], atlas.solid_uv[1])
+    };
+    let mut lote = UiBatch::new();
+    lote.push_quad_extendido(
+        [400.0, 300.0, 200.0, 100.0],
+        [u, v, u, v],
+        [0.0123, 0.679, 0.117, 1.0],
+        MODO_BORDE,
+        [12.0; 4],
+        None,
+        None,
+        4.0,
+    );
+    ctx.una_vez(|cmd| {
+        ui.record(cmd, &target, &lote);
+    });
+    let img = leer_imagen(&mut ctx, &target);
+    let centro = img.get_pixel(500, 350);
+    eprintln!("centro (500,350): {:?}", centro);
+    assert!(centro[0] < 10 && centro[1] < 10 && centro[2] < 10, "el interior del borde debe quedar transparente, centro={centro:?}");
+    let borde_sup = img.get_pixel(500, 302);
+    eprintln!("borde sup (500,302): {:?}", borde_sup);
+    assert!(borde_sup[1] > 150, "la banda superior debe ser verde, pixel={borde_sup:?}");
+    let borde_izq = img.get_pixel(402, 350);
+    eprintln!("borde izq (402,350): {:?}", borde_izq);
+    assert!(borde_izq[1] > 150, "la banda izquierda debe ser verde, pixel={borde_izq:?}");
 }

@@ -62,10 +62,28 @@ void main() {
         base.a *= 1.0 - smoothstep(0.0, 1.0, dist);
     }
 
-    // 5. Sombra: mismo SDF difuminado por el radio de desenfoque.
-    if (modo > 2.5) {
+    // 5. Sombra (modo 3): mismo SDF difuminado por el radio de desenfoque.
+    if (modo > 2.5 && modo < 3.5) {
         float b = max(v_pack2.y, 1.0);
         base.a *= 1.0 - smoothstep(0.0, b, dist);
+    }
+
+    // 5b. Borde (V4/Q3, modo 4): banda de `ancho` px hacia dentro del
+    // rect redondeado. El ancho viaja en v_pack2.y (el campo de
+    // desenfoque del segmento). Se usa el SDF con signo propio
+    // (negativo dentro, positivo fuera) porque el `dist` del paso 4
+    // no tiene signo definido con radios 0.
+    // Premultiplicado (P4c): RGB y alfa se modulan JUNTOS; si solo
+    // bajara el alfa, la mezcla ONE/ONE_MINUS_SRC_ALPHA seguiría
+    // sumando el RGB a plena intensidad y el borde cubriría el rect.
+    if (modo > 3.5) {
+        float ancho = max(v_pack2.y, 0.0);
+        vec2 qb = abs(v_local - v_tamano * 0.5) - (v_tamano * 0.5 - vec2(rad));
+        float db = length(max(qb, 0.0)) + min(max(qb.x, qb.y), 0.0) - rad;
+        float w = fwidth(db);
+        float banda = smoothstep(-ancho - w * 0.5, -ancho + w * 0.5, db)
+            * (1.0 - smoothstep(-w * 0.5, w * 0.5, db));
+        base *= banda;
     }
 
     // 6. Clip. NOTA: v_clip llega en coordenadas LOCALES al rect del nodo

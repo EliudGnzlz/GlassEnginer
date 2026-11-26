@@ -150,7 +150,7 @@ pub struct DestinoSoltar {
 /// implementa con el rasterizador provisional; V3 lo reimplementa
 /// sin tocar el layout.
 pub trait MedidaTexto {
-    fn medir(&self, texto: &str, tamano: f32, ancho_max: f32) -> (f32, f32);
+    fn medir(&self, texto: &str, tamano: f32, ancho_max: f32, letter_spacing: f32) -> (f32, f32);
 }
 
 /// Layout completo del documento en el viewport (P2).

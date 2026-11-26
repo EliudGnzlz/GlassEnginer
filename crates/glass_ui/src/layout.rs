@@ -48,7 +48,11 @@ impl Default for MedidorTexto {
 
 /// Calcula el avance (con kerning) de cada carácter del texto.
 /// Cada par devuelto es (carácter, avance_incluyendo_kern_con_anterior).
-fn avances_con_kern(texto: &str, tamano: f32) -> Vec<(char, f32)> {
+/// Avances por carácter con kerning de ab_glyph. `espaciado` es el
+/// letter-spacing en px de documento (Q3): se suma a CADA avance,
+/// incluido el del último carácter, como hace CSS — mapa, `medir` y
+/// el pintor usan la misma convención, así que coinciden.
+fn avances_con_kern(texto: &str, tamano: f32, espaciado: f32) -> Vec<(char, f32)> {
     use ab_glyph::{Font, ScaleFont};
     let font = fuente_global();
     let scale = ab_glyph::PxScale::from(tamano);
@@ -61,6 +65,7 @@ fn avances_con_kern(texto: &str, tamano: f32) -> Vec<(char, f32)> {
         if let Some(p) = prev {
             avance += scaled.kern(p, gid);
         }
+        avance += espaciado;
         resultado.push((c, avance));
         prev = Some(gid);
     }
@@ -150,7 +155,7 @@ fn partir_en_lineas(avances: &[(char, f32)], ancho_max: f32) -> Vec<LineaPartida
 }
 
 impl MedidaTexto for MedidorTexto {
-    fn medir(&self, texto: &str, tamano: f32, ancho_max: f32) -> (f32, f32) {
+    fn medir(&self, texto: &str, tamano: f32, ancho_max: f32, letter_spacing: f32) -> (f32, f32) {
         use ab_glyph::{Font, ScaleFont};
         if texto.is_empty() {
             return (0.0, 0.0);
@@ -166,7 +171,7 @@ impl MedidaTexto for MedidorTexto {
         let mut ancho = 0.0f32;
         let mut alto = 0.0f32;
         for parrafo in texto.split('\n') {
-            let avances = avances_con_kern(parrafo, tamano);
+            let avances = avances_con_kern(parrafo, tamano, letter_spacing);
             let ancho_total: f32 = avances.iter().map(|a| a.1).sum();
             if !ancho_max.is_finite() || ancho_total <= ancho_max {
                 ancho = ancho.max(ancho_total);
@@ -196,6 +201,7 @@ pub fn construir_mapa_texto(
     overflow: TextOverflow,
     align: &str,
     origen: [f32; 2],
+    letter_spacing: f32,
 ) -> MapaTexto {
     use ab_glyph::{Font, ScaleFont};
 
@@ -224,7 +230,7 @@ pub fn construir_mapa_texto(
             // Una sola línea: '\n' termina el texto visible (antes, los
             // avances se calculaban sobre todo el texto incluido '\n').
             let primera_linea = texto.split('\n').next().unwrap_or("");
-            let avances = avances_con_kern(primera_linea, tamano);
+            let avances = avances_con_kern(primera_linea, tamano, letter_spacing);
             let mut celdas = Vec::new();
             let mut texto_visible = String::new();
             let mut x_acum = 0.0f32;
@@ -251,10 +257,10 @@ pub fn construir_mapa_texto(
         TextOverflow::PuntosSuspensivos if !sin_restriccion => {
             // Una sola línea: '\n' termina el texto visible.
             let primera_linea = texto.split('\n').next().unwrap_or("");
-            let avances = avances_con_kern(primera_linea, tamano);
-            // Medir el carácter '…'
+            let avances = avances_con_kern(primera_linea, tamano, letter_spacing);
+            // Medir el carácter '…' (con su letter-spacing, como un carácter más).
             let ellipsis_gid = scaled.glyph_id('…');
-            let ellipsis_w = scaled.h_advance(ellipsis_gid);
+            let ellipsis_w = scaled.h_advance(ellipsis_gid) + letter_spacing;
             if ellipsis_w > ancho_max {
                 return MapaTexto { celdas: Vec::new(), texto_visible: String::new() };
             }
@@ -332,7 +338,7 @@ pub fn construir_mapa_texto(
                     linea_actual += 1;
                     continue;
                 }
-                let avances = avances_con_kern(parrafo, tamano);
+                let avances = avances_con_kern(parrafo, tamano, letter_spacing);
                 if sin_restriccion {
                     // Línea única sin restricción.
                     let ancho_linea: f32 = avances.iter().map(|a| a.1).sum();
@@ -551,7 +557,8 @@ pub fn colocar_documento_con_medidor(
                     if nodo.graphic == TipoGraphic::Texto {
                         if let Some(ref txt) = nodo.texto {
                             let tam = estilos.font_size.unwrap_or(14.0);
-                            let (tw, _) = medidor.medir(&txt.text, tam, f32::INFINITY);
+                            let ls = estilos.letter_spacing.unwrap_or(0.0);
+                            let (tw, _) = medidor.medir(&txt.text, tam, f32::INFINITY, ls);
                             ancho_ref = tw;
                         }
                     }
@@ -569,7 +576,8 @@ pub fn colocar_documento_con_medidor(
                     if nodo.graphic == TipoGraphic::Texto {
                         if let Some(ref txt) = nodo.texto {
                             let tam = estilos.font_size.unwrap_or(14.0);
-                            let (_, th) = medidor.medir(&txt.text, tam, ancho_ref);
+                            let ls = estilos.letter_spacing.unwrap_or(0.0);
+                            let (_, th) = medidor.medir(&txt.text, tam, ancho_ref, ls);
                             alto_ref = th;
                         }
                     }
@@ -608,6 +616,7 @@ pub fn colocar_documento_con_medidor(
                     estilos.text_overflow.unwrap_or(TextOverflow::Envolver),
                     &txt.align,
                     [rect.x, rect.y],
+                    estilos.letter_spacing.unwrap_or(0.0),
                 )
             } else {
                 MapaTexto::default()
@@ -1076,7 +1085,7 @@ mod tests {
         use ab_glyph::{Font, ScaleFont};
 
         let medidor = MedidorTexto::new();
-        let (mw, mh) = medidor.medir("Hola mundo 123", 16.0, f32::INFINITY);
+        let (mw, mh) = medidor.medir("Hola mundo 123", 16.0, f32::INFINITY, 0.0);
 
         // Medida directa con ab_glyph.
         let font = fuente_global();
@@ -1675,6 +1684,7 @@ mod tests {
             TextOverflow::Envolver,
             "Left",
             [0.0, 0.0],
+            0.0,
         );
         let esperados = avances_ab_glyph(texto, tam);
         let alto = alto_linea(tam);
@@ -1703,10 +1713,10 @@ mod tests {
         // Elegir ancho para forzar al menos 2 líneas: medir una sola palabra
         // y dejar sitio para una palabra + espacio pero no dos.
         let medidor = MedidorTexto;
-        let una_palabra = medidor.medir("aaa", tam, f32::INFINITY).0;
+        let una_palabra = medidor.medir("aaa", tam, f32::INFINITY, 0.0).0;
         let ancho_max = una_palabra * 2.2;
         // Confirmar que el texto completo no cabe.
-        let (ancho_una_linea, _) = medidor.medir(texto, tam, f32::INFINITY);
+        let (ancho_una_linea, _) = medidor.medir(texto, tam, f32::INFINITY, 0.0);
         assert!(ancho_una_linea > ancho_max, "el ancho debe forzar wrap");
 
         let mapa = construir_mapa_texto(
@@ -1716,6 +1726,7 @@ mod tests {
             TextOverflow::Envolver,
             "Left",
             [0.0, 0.0],
+            0.0,
         );
         let alto = alto_linea(tam);
 
@@ -1750,6 +1761,7 @@ mod tests {
             TextOverflow::Truncar,
             "Left",
             [0.0, 0.0],
+            0.0,
         );
         assert!(texto.starts_with(&truncado.texto_visible), "truncado debe ser prefijo");
         assert!(!truncado.texto_visible.is_empty());
@@ -1764,6 +1776,7 @@ mod tests {
             TextOverflow::PuntosSuspensivos,
             "Left",
             [0.0, 0.0],
+            0.0,
         );
         assert!(puntos.texto_visible.ends_with('…'), "debe terminar en puntos suspensivos");
         for c in &puntos.celdas {
@@ -1773,6 +1786,29 @@ mod tests {
         let ultima = puntos.celdas.last().expect("debe haber celdas");
         assert_eq!(ultima.caracter, '…');
         assert_eq!(ultima.indice, texto.chars().count());
+    }
+
+    #[test]
+    fn mapa_texto_letter_spacing_ensancha() {
+        let tam = 16.0;
+        let base = construir_mapa_texto("AB", tam, f32::INFINITY, TextOverflow::Envolver, "Left", [0.0, 0.0], 0.0);
+        let esp = construir_mapa_texto("AB", tam, f32::INFINITY, TextOverflow::Envolver, "Left", [0.0, 0.0], 10.0);
+        assert_eq!(esp.celdas.len(), 2);
+        for (i, celda) in esp.celdas.iter().enumerate() {
+            assert!((celda.celda[2] - (base.celdas[i].celda[2] + 10.0)).abs() < 0.01);
+        }
+        let ancho_base: f32 = base.celdas.iter().map(|c| c.celda[2]).sum();
+        let ancho_esp: f32 = esp.celdas.iter().map(|c| c.celda[2]).sum();
+        assert!((ancho_esp - (ancho_base + 20.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn medir_letter_spacing_ensancha() {
+        let medidor = MedidorTexto::new();
+        let tam = 16.0;
+        let (a0, _) = medidor.medir("AB", tam, f32::INFINITY, 0.0);
+        let (a1, _) = medidor.medir("AB", tam, f32::INFINITY, 10.0);
+        assert!((a1 - (a0 + 20.0)).abs() < 0.01);
     }
 
     #[test]
@@ -1786,6 +1822,7 @@ mod tests {
             TextOverflow::Envolver,
             "Left",
             [0.0, 0.0],
+            0.0,
         );
         let alto = alto_linea(tam);
 
@@ -1813,10 +1850,10 @@ mod tests {
         // el mapa producía dos. Ahora medir y mapa coinciden.
         let medidor = MedidorTexto::new();
         let tam = 16.0;
-        let (ancho, alto) = medidor.medir("AB\nCD", tam, f32::INFINITY);
+        let (ancho, alto) = medidor.medir("AB\nCD", tam, f32::INFINITY, 0.0);
         assert!((alto - 2.0 * alto_linea(tam)).abs() <= 0.01, "alto={alto}");
-        let (ancho_ab, _) = medidor.medir("AB", tam, f32::INFINITY);
-        let (ancho_cd, _) = medidor.medir("CD", tam, f32::INFINITY);
+        let (ancho_ab, _) = medidor.medir("AB", tam, f32::INFINITY, 0.0);
+        let (ancho_cd, _) = medidor.medir("CD", tam, f32::INFINITY, 0.0);
         assert!((ancho - ancho_ab.max(ancho_cd)).abs() <= 0.01, "ancho={ancho}");
     }
 
@@ -1833,6 +1870,7 @@ mod tests {
             TextOverflow::Truncar,
             "Left",
             [0.0, 0.0],
+            0.0,
         );
         assert_eq!(mapa.texto_visible, "abc");
         assert!(mapa.celdas.iter().all(|c| c.indice < 3));
@@ -1844,6 +1882,7 @@ mod tests {
             TextOverflow::PuntosSuspensivos,
             "Left",
             [0.0, 0.0],
+            0.0,
         );
         assert!(!mapa.texto_visible.contains('\n'), "sin salto: {}", mapa.texto_visible);
         assert!(mapa.texto_visible.ends_with('…'), "con puntos: {}", mapa.texto_visible);
