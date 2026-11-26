@@ -14,16 +14,18 @@
 //!   elementos son quads con (posición, UV, color) en un buffer de
 //!   vértices CPU→GPU que se reescribe cada frame.
 //! - TODO muestrea el atlas de fuente: los rectángulos sólidos apuntan a
-//!   un texel opaco reservado y los glifos a su cobertura en el canal A.
+//!   un texel opaco reservado y los glifos a su DISTANCIA CON SIGNO en el
+//!   canal A (atlas SDF, V3): el fragment shader la evalúa con
+//!   anti-aliasing en espacio de pantalla vía `fwidth()`.
 //! - La fuente es DejaVu Sans, incrustada con `include_bytes!` (como los
-//!   SPIR-V) y rasterizada al arrancar con `ab_glyph` — crate que ya
-//!   estaba en el árbol de dependencias vía epaint/egui, no se añade
-//!   ninguna librería nueva al proyecto, solo se declara el uso directo.
+//!   SPIR-V); el atlas SDF se genera al arrancar desde sus contornos
+//!   (`ttf-parser` + `ab_glyph`) con inserción dinámica de glifos.
 //! - Sin test de profundidad: el orden de dibujo es el orden de la lista
 //!   de entidades de la escena (algoritmo del pintor), como en el editor.
 
 use crate::offscreen::OffscreenTarget;
 use crate::renderer::RendererError;
+use crate::sdf_atlas::{SdfAtlas, MAX_PAGINAS};
 use ab_glyph::{point, Font, FontRef, PxScale};
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme, Allocator};
@@ -341,7 +343,7 @@ impl UiBatch {
     }
 
     /// Rectángulo de color plano (paneles y fondos de botón).
-    pub fn push_solid(&mut self, atlas: &FontAtlas, rect: [f32; 4], color: [f32; 4]) {
+    pub fn push_solid(&mut self, atlas: &SdfAtlas, rect: [f32; 4], color: [f32; 4]) {
         let [u, v] = atlas.solid_uv;
         self.push_quad(rect, [u, v, u, v], color);
     }
@@ -351,7 +353,7 @@ impl UiBatch {
     /// saltos de línea con `\n`.
     pub fn push_text(
         &mut self,
-        atlas: &FontAtlas,
+        atlas: &mut SdfAtlas,
         origin_top_left: [f32; 2],
         text: &str,
         font_size: f32,
@@ -366,7 +368,9 @@ impl UiBatch {
                 baseline_y += atlas.line_height * k;
                 continue;
             }
-            let Some(g) = atlas.glyph(c) else { continue };
+            // Inserción dinámica (V3): si el glifo no está, se genera
+            // (presupuesto 8/frame) o se sustituye por '?' este frame.
+            let g = *atlas.insertar(c);
             if g.size[0] > 0.0 && g.size[1] > 0.0 {
                 let quad = [
                     pen_x + g.bearing[0] * k,
@@ -428,7 +432,7 @@ impl UiBatch {
     #[allow(clippy::too_many_arguments)]
     pub fn push_text_extendido(
         &mut self,
-        atlas: &FontAtlas,
+        atlas: &mut SdfAtlas,
         origin_top_left: [f32; 2],
         text: &str,
         font_size: f32,
@@ -445,7 +449,9 @@ impl UiBatch {
                 baseline_y += atlas.line_height * k;
                 continue;
             }
-            let Some(g) = atlas.glyph(c) else { continue };
+            // Inserción dinámica (V3): si el glifo no está, se genera
+            // (presupuesto 8/frame) o se sustituye por '?' este frame.
+            let g = *atlas.insertar(c);
             if g.size[0] > 0.0 && g.size[1] > 0.0 {
                 let quad = [
                     pen_x + g.bearing[0] * k,
@@ -463,7 +469,7 @@ impl UiBatch {
     /// dibuja egui en el editor).
     pub fn push_text_centered(
         &mut self,
-        atlas: &FontAtlas,
+        atlas: &mut SdfAtlas,
         rect: [f32; 4],
         text: &str,
         font_size: f32,
@@ -481,7 +487,7 @@ impl UiBatch {
 /// Lado GPU del pase 2D: pipeline, atlas en VRAM y buffer de vértices.
 pub struct UiRenderer {
     device: Arc<ash::Device>,
-    font: FontAtlas,
+    font: SdfAtlas,
     /// Render pass gemelo del offscreen pero con `load_op: LOAD`: el 3D
     /// ya escribió el color y la UI se compone encima sin borrarlo.
     render_pass: vk::RenderPass,
@@ -505,14 +511,25 @@ impl UiRenderer {
         queue: vk::Queue,
         command_pool: vk::CommandPool,
     ) -> Result<Self, RendererError> {
-        let font = FontAtlas::build(FONT_TTF).map_err(RendererError::Descriptor)?;
-        Self::create_with_font(device, allocator, queue, command_pool, font, UI_FRAG_SPV)
+        let font = SdfAtlas::build(FONT_TTF).map_err(RendererError::Descriptor)?;
+        let pixels = font.pixels_apilados();
+        Self::create_with_font(
+            device,
+            allocator,
+            queue,
+            command_pool,
+            font,
+            UI_FRAG_SPV,
+            pixels,
+            ATLAS_W,
+            ATLAS_H * MAX_PAGINAS as u32,
+        )
     }
 
     /// Variante para el atlas de IMÁGENES del Canvas (UI v2): la
     /// textura que se sube es el atlas de imágenes dado, no el de
-    /// la fuente. Se construye un FontAtlas real solo para ocupar
-    /// el campo `font` (con sus píxeles sustituidos por el atlas):
+    /// la fuente. Se construye un SdfAtlas real solo para ocupar
+    /// el campo `font` (la textura que se sube es el atlas dado):
     /// esta instancia nunca maqueta texto ni se leen sus métricas;
     /// `record` solo muestrea la textura.
     pub fn new_for_texture(
@@ -523,25 +540,30 @@ impl UiRenderer {
         rgba: Vec<u8>,
         size: u32,
     ) -> Result<Self, RendererError> {
-        let mut font = FontAtlas::build(FONT_TTF).map_err(RendererError::Descriptor)?;
-        font.pixels = rgba;
-        font.width = size;
-        font.height = size;
-        Self::create_with_font(device, allocator, queue, command_pool, font, UI_IMG_FRAG_SPV)
+        let font = SdfAtlas::build(FONT_TTF).map_err(RendererError::Descriptor)?;
+        Self::create_with_font(device, allocator, queue, command_pool, font, UI_IMG_FRAG_SPV, rgba, size, size)
     }
 
+    // 9 parámetros: constructor de un solo uso; agruparlos solo
+    // añadiría indirección en el camino de creación del pase.
+    #[allow(clippy::too_many_arguments)]
     fn create_with_font(
         device: Arc<ash::Device>,
         allocator: &mut Allocator,
         queue: vk::Queue,
         command_pool: vk::CommandPool,
-        font: FontAtlas,
+        font: SdfAtlas,
         frag_spv: &[u8],
+        pixels: Vec<u8>,
+        width: u32,
+        height: u32,
     ) -> Result<Self, RendererError> {
         unsafe {
             // --- 1. Atlas a VRAM (mismo patrón de subida en un envío que
             // las texturas glTF de mesh.rs, sin mip-maps) ---
-            let byte_size = font.pixels.len() as u64;
+            // Para la fuente, `pixels` es el buffer apilado 1024×4096
+            // (V3b); para imágenes, el atlas dado.
+            let byte_size = pixels.len() as u64;
             let (stage_buf, stage_alloc) = create_ui_buffer(
                 &device,
                 allocator,
@@ -552,9 +574,9 @@ impl UiRenderer {
             )?;
             if let Some(ptr) = stage_alloc.mapped_ptr() {
                 std::ptr::copy_nonoverlapping(
-                    font.pixels.as_ptr(),
+                    pixels.as_ptr(),
                     ptr.as_ptr() as *mut u8,
-                    font.pixels.len(),
+                    pixels.len(),
                 );
             }
 
@@ -562,8 +584,8 @@ impl UiRenderer {
                 .image_type(vk::ImageType::TYPE_2D)
                 .format(vk::Format::R8G8B8A8_UNORM)
                 .extent(vk::Extent3D {
-                    width: font.width,
-                    height: font.height,
+                    width,
+                    height,
                     depth: 1,
                 })
                 .mip_levels(1)
@@ -615,8 +637,8 @@ impl UiRenderer {
                             .layer_count(1),
                     )
                     .image_extent(vk::Extent3D {
-                        width: font.width,
-                        height: font.height,
+                        width,
+                        height,
                         depth: 1,
                     })];
                 device.cmd_copy_buffer_to_image(
@@ -934,9 +956,9 @@ impl UiRenderer {
 
             log::info!(
                 "UiRenderer inicializado: atlas de fuente {}x{} ({} glifos), pipeline 2D listo",
-                font.width,
-                font.height,
-                font.glyphs.len()
+                width,
+                height,
+                font.num_glifos()
             );
 
             Ok(Self {
@@ -959,8 +981,139 @@ impl UiRenderer {
     }
 
     /// Las métricas de la fuente, para construir lotes en la app.
-    pub fn font(&self) -> &FontAtlas {
+    pub fn font(&self) -> &SdfAtlas {
         &self.font
+    }
+
+    /// Acceso mutable a la fuente (inserción dinámica de glifos y
+    /// avance de frame, V3).
+    pub fn font_mut(&mut self) -> &mut SdfAtlas {
+        &mut self.font
+    }
+
+    /// Reinicia el presupuesto de inserción de glifos del frame
+    /// (V3): la app lo llama una vez por frame, antes de maquetar.
+    pub fn avanzar_frame_fuente(&mut self) {
+        self.font.avanzar_frame();
+    }
+
+    /// Re-sube a GPU las páginas del atlas SDF con píxeles nuevos
+    /// (V3b): una subida por página sucia (región 1024×1024 en la
+    /// textura apilada). Sin páginas sucias no hace nada.
+    pub fn sincronizar_atlas(
+        &mut self,
+        allocator: &mut Allocator,
+        queue: vk::Queue,
+        command_pool: vk::CommandPool,
+    ) -> Result<(), RendererError> {
+        let sucias = self.font.tomar_paginas_sucias();
+        if sucias.is_empty() {
+            return Ok(());
+        }
+        for pg in sucias {
+            let pixels = match self.font.pixels_pagina(pg) {
+                Some(p) => p.to_vec(),
+                None => continue,
+            };
+            self.subir_pagina(allocator, queue, command_pool, pg, &pixels)?;
+        }
+        Ok(())
+    }
+
+    /// Sube una página 1024×1024 del atlas SDF a su región en la
+    /// textura apilada (filas [pg*1024, (pg+1)*1024)).
+    fn subir_pagina(
+        &self,
+        allocator: &mut Allocator,
+        queue: vk::Queue,
+        command_pool: vk::CommandPool,
+        pagina: usize,
+        pixels: &[u8],
+    ) -> Result<(), RendererError> {
+        unsafe {
+            let byte_size = pixels.len() as u64;
+            let (stage_buf, stage_alloc) = create_ui_buffer(
+                &self.device,
+                allocator,
+                byte_size,
+                vk::BufferUsageFlags::TRANSFER_SRC,
+                MemoryLocation::CpuToGpu,
+                "ui_font_staging",
+            )?;
+            if let Some(ptr) = stage_alloc.mapped_ptr() {
+                std::ptr::copy_nonoverlapping(
+                    pixels.as_ptr(),
+                    ptr.as_ptr() as *mut u8,
+                    pixels.len(),
+                );
+            }
+            let device = &self.device;
+            let atlas_image = self.atlas_image;
+            record_one_time_submit(device, queue, command_pool, |cmd| {
+                let subresource = vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .level_count(1)
+                    .layer_count(1);
+                let a_textura = [vk::ImageMemoryBarrier::default()
+                    .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .src_access_mask(vk::AccessFlags::SHADER_READ)
+                    .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                    .image(atlas_image)
+                    .subresource_range(subresource)];
+                device.cmd_pipeline_barrier(
+                    cmd,
+                    vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &a_textura,
+                );
+                let region = [vk::BufferImageCopy::default()
+                    .image_subresource(
+                        vk::ImageSubresourceLayers::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .layer_count(1),
+                    )
+                    .image_offset(vk::Offset3D {
+                        x: 0,
+                        y: (pagina as u32 * ATLAS_H) as i32,
+                        z: 0,
+                    })
+                    .image_extent(vk::Extent3D {
+                        width: ATLAS_W,
+                        height: ATLAS_H,
+                        depth: 1,
+                    })];
+                device.cmd_copy_buffer_to_image(
+                    cmd,
+                    stage_buf,
+                    atlas_image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &region,
+                );
+                let a_lectura = [vk::ImageMemoryBarrier::default()
+                    .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                    .image(atlas_image)
+                    .subresource_range(subresource)];
+                device.cmd_pipeline_barrier(
+                    cmd,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::FRAGMENT_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &a_lectura,
+                );
+            })?;
+            let _ = allocator.free(stage_alloc);
+            self.device.destroy_buffer(stage_buf, None);
+            Ok(())
+        }
     }
 
     /// Graba el lote de UI sobre el framebuffer del target dentro del
@@ -1150,45 +1303,47 @@ mod tests {
 
     #[test]
     fn atlas_contiene_ascii_y_acentos() {
-        let atlas = FontAtlas::build(FONT_TTF).expect("la fuente incrustada debe rasterizar");
-        assert!(atlas.glyph('A').is_some());
-        assert!(atlas.glyph('á').is_some(), "Latin-1: á debe estar en el atlas");
-        assert!(atlas.glyph('ñ').is_some());
-        assert!(atlas.glyph('¿').is_some());
+        let atlas = SdfAtlas::build(FONT_TTF).expect("la fuente incrustada debe rasterizar");
+        assert!(atlas.glifo('A').size[0] > 0.0);
+        assert!(atlas.glifo('á').size[0] > 0.0, "Latin-1: á debe estar en el atlas");
+        assert!(atlas.glifo('ñ').size[0] > 0.0);
+        assert!(atlas.glifo('¿').size[0] > 0.0);
         assert!(atlas.ascent > 0.0);
         assert!(atlas.line_height > atlas.ascent);
         // El espacio avanza pero no dibuja quad.
-        let space = atlas.glyph(' ').expect("espacio");
+        let space = atlas.glifo(' ');
         assert!(space.advance > 0.0);
         assert_eq!(space.size, [0.0, 0.0]);
     }
 
     #[test]
     fn medir_y_lote_de_texto() {
-        let atlas = FontAtlas::build(FONT_TTF).expect("atlas");
+        let mut atlas = SdfAtlas::build(FONT_TTF).expect("atlas");
         let w = atlas.measure("Score: 0", 22.0);
         assert!(w > 40.0 && w < 200.0, "ancho medido razonable: {w}");
         let mut batch = UiBatch::new();
-        batch.push_text(&atlas, [20.0, 660.0], "Score: 0", 22.0, [1.0, 0.9, 0.2, 1.0]);
+        batch.push_text(&mut atlas, [20.0, 660.0], "Score: 0", 22.0, [1.0, 0.9, 0.2, 1.0]);
         // "Score: 0" tiene 7 caracteres con glifo visible (el espacio no
         // emite quad): 7 quads × 6 vértices.
         assert_eq!(batch.vertex_count(), 7 * 6);
         // El primer vértice (S) debe caer dentro del área del texto.
+        // La celda SDF incluye el margen SPREAD (4 px a 64 px), así que
+        // el quad puede empezar hasta spread*k a la izquierda de la pluma.
         let v = batch.vertices()[0];
-        assert!(v.pos[0] >= 20.0 && v.pos[0] < 60.0, "x del primer glifo: {}", v.pos[0]);
+        assert!(v.pos[0] >= 20.0 - 4.0 * 22.0 / 64.0 && v.pos[0] < 60.0, "x del primer glifo: {}", v.pos[0]);
         assert!(v.pos[1] >= 660.0 && v.pos[1] < 700.0, "y del primer glifo: {}", v.pos[1]);
     }
 
     #[test]
     fn lote_solid_y_centrado() {
-        let atlas = FontAtlas::build(FONT_TTF).expect("atlas");
+        let mut atlas = SdfAtlas::build(FONT_TTF).expect("atlas");
         let mut batch = UiBatch::new();
         batch.push_solid(&atlas, [10.0, 10.0, 100.0, 40.0], [0.25, 0.55, 0.85, 1.0]);
         assert_eq!(batch.vertex_count(), 6);
         let v = batch.vertices()[0];
         assert_eq!(v.pos, [10.0, 10.0]);
         assert_eq!(v.uv, atlas.solid_uv);
-        batch.push_text_centered(&atlas, [10.0, 10.0, 100.0, 40.0], "OK", 14.0, [1.0; 4]);
+        batch.push_text_centered(&mut atlas, [10.0, 10.0, 100.0, 40.0], "OK", 14.0, [1.0; 4]);
         assert_eq!(batch.vertex_count(), 6 + 2 * 6);
     }
 }
@@ -1424,7 +1579,7 @@ impl UiBatch {
     /// Dibuja el texto línea a línea alineado dentro del rect [x, y, ancho, alto].
     pub fn push_text_aligned(
         &mut self,
-        atlas: &FontAtlas,
+        atlas: &mut SdfAtlas,
         rect: [f32; 4],
         text: &str,
         font_size: f32,
@@ -1460,10 +1615,21 @@ impl UiRenderer {
         command_pool: vk::CommandPool,
         font_bytes: &[u8],
     ) -> Result<Self, RendererError> {
-        // Construimos el atlas de fuente mapeando el error de construcción.
-        let font = FontAtlas::build(font_bytes).map_err(RendererError::Descriptor)?;
+        // Construimos el atlas SDF mapeando el error de construcción.
+        let font = SdfAtlas::build(font_bytes).map_err(RendererError::Descriptor)?;
+        let pixels = font.pixels_apilados();
         // Delegamos en la creación común con el fragment shader de fuente.
-        Self::create_with_font(device, allocator, queue, command_pool, font, UI_FRAG_SPV)
+        Self::create_with_font(
+            device,
+            allocator,
+            queue,
+            command_pool,
+            font,
+            UI_FRAG_SPV,
+            pixels,
+            ATLAS_W,
+            ATLAS_H * MAX_PAGINAS as u32,
+        )
     }
 }
 
@@ -1474,7 +1640,7 @@ mod tests_dyn1 {
     #[test]
     fn alineaciones_producen_x_creciente_y_centrado_correcto() {
         // Atlas con la fuente incrustada.
-        let atlas = FontAtlas::build(FONT_TTF).unwrap();
+        let mut atlas = SdfAtlas::build(FONT_TTF).unwrap();
         let font_size = 16.0;
         let rect = [0.0f32, 0.0, 400.0, 100.0];
         let texto = "Hola";
@@ -1482,13 +1648,13 @@ mod tests_dyn1 {
 
         // Lotes separados para cada alineación.
         let mut lote_izq = UiBatch::default();
-        lote_izq.push_text_aligned(&atlas, rect, texto, font_size, color, "Left");
+        lote_izq.push_text_aligned(&mut atlas, rect, texto, font_size, color, "Left");
 
         let mut lote_centro = UiBatch::default();
-        lote_centro.push_text_aligned(&atlas, rect, texto, font_size, color, "Center");
+        lote_centro.push_text_aligned(&mut atlas, rect, texto, font_size, color, "Center");
 
         let mut lote_der = UiBatch::default();
-        lote_der.push_text_aligned(&atlas, rect, texto, font_size, color, "Right");
+        lote_der.push_text_aligned(&mut atlas, rect, texto, font_size, color, "Right");
 
         // Primer vértice de cada lote (incluye el bearing del glifo).
         let x_izq = lote_izq.vertices[0].pos[0];

@@ -12,9 +12,12 @@ fn fuente() -> Vec<u8> {
 
 /// Evalúa la cobertura SDF en un punto de pantalla (bilineal sobre el
 /// canal A de la celda, distancia en texels -> px de pantalla ->
-/// smoothstep de 1 px). El conjunto inicial vive entero en la página 0.
+/// smoothstep de 1 px). `pixels` es el buffer APILADO (1024×4096) y el
+/// UV de la entry ya viene en espacio apilado (V3b): la V se mapea sobre
+/// 4096 filas, no sobre la página. El conjunto inicial vive entero en
+/// la página 0, pero el muestreo es el mismo que hará la GPU.
 fn cobertura_sdf_en_punto(
-    atlas: &SdfAtlas,
+    pixels: &[u8],
     entry: &glass_renderer::ui::GlyphEntry,
     sx: f32,
     sy: f32,
@@ -36,22 +39,19 @@ fn cobertura_sdf_en_punto(
     let (u1, v1) = (entry.uv[2], entry.uv[3]);
     let u = u0 + (cx / cw) * (u1 - u0);
     let v = v0 + (cy / ch) * (v1 - v0);
-    let pixels = match atlas.pixels_pagina(0) {
-        Some(p) => p,
-        None => return 0.0,
-    };
     // Convención de textura: u=0 es el borde izquierdo del texel 0 y los
     // centros de texel están en (i+0,5)/1024. (La fórmula u*1023 desplaza
     // el muestreo ~0,3 texels y desenfoca los bordes: media 0,04.)
+    // La V es apilada (4096 filas): v=0 es la fila 0 de la página 0.
     let fx = (u * 1024.0 - 0.5).clamp(0.0, 1023.0);
-    let fy = (v * 1024.0 - 0.5).clamp(0.0, 1023.0);
+    let fy = (v * 4096.0 - 0.5).clamp(0.0, 4095.0);
     let x0 = fx.floor() as usize;
     let y0 = fy.floor() as usize;
     let x1 = (x0 + 1).min(1023);
-    let y1 = (y0 + 1).min(1023);
+    let y1 = (y0 + 1).min(4095);
     let tx = fx - x0 as f32;
     let ty = fy - y0 as f32;
-    let a = |x: usize, y: usize| -> f32 { pixels[((y * 1024 + x) * 4 + 3) as usize] as f32 };
+    let a = |x: usize, y: usize| -> f32 { pixels[(y * 1024 + x) * 4 + 3] as f32 };
     let a00 = a(x0, y0);
     let a10 = a(x1, y0);
     let a01 = a(x0, y1);
@@ -80,6 +80,7 @@ fn atlas_construye_conjunto_inicial() {
 fn cobertura_sdf_contra_ab_glyph() {
     let bytes = fuente();
     let atlas = SdfAtlas::build(&bytes).expect("build");
+    let apilados = atlas.pixels_apilados();
     let font = FontRef::try_from_slice(&bytes).expect("font");
     let mut diffs: Vec<f32> = Vec::new();
     let mut peores: Vec<(f32, char, f32)> = Vec::new(); // (error, glifo, tamaño)
@@ -108,7 +109,7 @@ fn cobertura_sdf_contra_ab_glyph() {
             for (x, y, cov_directa) in directo {
                 let sx = bounds.min.x + x as f32 + 0.5;
                 let sy = bounds.min.y + y as f32 + 0.5;
-                let cov_sdf = cobertura_sdf_en_punto(&atlas, entry, sx, sy, size_px);
+                let cov_sdf = cobertura_sdf_en_punto(&apilados, entry, sx, sy, size_px);
                 let d = (cov_sdf - cov_directa).abs();
                 diffs.push(d);
                 if d > 0.3 {
@@ -140,7 +141,7 @@ fn cobertura_sdf_contra_ab_glyph() {
         *por_glifo.entry(*c).or_insert(0) += 1;
     }
     let mut pg: Vec<(char, usize)> = por_glifo.into_iter().collect();
-    pg.sort_by(|a, b| b.1.cmp(&a.1));
+    pg.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
     eprintln!("glifos con más píxeles >0,3: {:?}", &pg[..pg.len().min(10)]);
     assert!(media <= 0.03, "media {media:.4} > 0,03");
     // p99: medido 0,1023 (umbral Q2 original 0,10). El exceso es el
@@ -233,7 +234,7 @@ fn tope_de_paginas() {
             if let Some(c) = char::from_u32(cp) {
                 let _ = atlas.insertar(c);
                 n += 1;
-                if n % 8 == 0 {
+                if n.is_multiple_of(8) {
                     atlas.avanzar_frame();
                 }
             }

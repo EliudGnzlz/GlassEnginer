@@ -39,12 +39,13 @@ void main() {
         vec4 tex = texture(atlas_tex, v_uv);
         base = vec4(tex.rgb * tex.a * v_color.rgb, tex.a * v_color.a);
     } else if (modo > 1.5 && modo < 2.5) {
-        // 3. Texto/SDF: cobertura en alfa; modula color base (o degradado).
-        // Con mezcla premultiplicada hay que multiplicar TAMBIÉN el RGB
-        // por la cobertura: si solo se baja el alfa, fuera del glifo
-        // (cobertura 0) el RGB seguiría a plena intensidad y el quad
-        // entero saldría sólido (bloques blancos en P4c).
-        float cobertura = texture(atlas_tex, v_uv).a;
+        // 3. Texto/SDF: evaluar distancia con signo y anti-alias en pantalla.
+        const float SPREAD_PX = 4.0; // rango de distancia codificado en el atlas
+        float a = texture(atlas_tex, v_uv).a;
+        float dist = (a - 0.5) * 2.0 * SPREAD_PX; // distancia en texeles: >0 dentro, <0 fuera
+        float w = fwidth(dist); // texeles por píxel de pantalla
+        float cobertura = smoothstep(-w * 0.5, w * 0.5, dist);
+        // Premultiplicado (P4c): RGB y alfa modulados por cobertura.
         base = vec4(base.rgb * cobertura, base.a * cobertura);
     }
     // modo 3 (sombra) y modo 0 (color) no tocan base aquí.

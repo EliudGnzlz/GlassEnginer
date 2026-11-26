@@ -2063,7 +2063,7 @@ struct GlassEngineApp {
     /// Atlas de CPU de las fuentes con nombre (assets/fonts) que
     /// la escena usa, y el registro de las que fallaron al cargar
     /// (para no reintentar ni repetir el aviso cada frame).
-    pub ui_font_atlases: std::collections::HashMap<String, glass_renderer::FontAtlas>,
+    pub ui_font_atlases: std::collections::HashMap<String, glass_renderer::SdfAtlas>,
     /// Activos de material cargados (Materiales v1), por nombre.
     pub materiales: std::collections::HashMap<String, glass_core::MaterialData>,
     /// Materiales que fallaron al cargar (avisar una sola vez).
@@ -8184,7 +8184,7 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                         let cargada = std::fs::read(&path)
                             .map_err(|e| e.to_string())
                             .and_then(|bytes| {
-                                glass_renderer::FontAtlas::build(&bytes)
+                                glass_renderer::SdfAtlas::build(&bytes)
                                     .map(|atlas| (bytes, atlas))
                             })
                             .and_then(|(bytes, atlas)| {
@@ -8204,17 +8204,25 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                         }
                     }
                 }
-                let font = renderer.ui_font();
+                // Presupuesto de inserción de glifos del frame (V3):
+                // una vez por frame, antes de maquetar el Canvas.
+                renderer.avanzar_frame_fuentes_ui();
+                // El tamaño se lee antes del préstamo mutable de la fuente.
+                let (ancho_pantalla, alto_pantalla) = (
+                    renderer.offscreen.extent.width as f32,
+                    renderer.offscreen.extent.height as f32,
+                );
+                let font = renderer.ui_font_mut();
                 match self.scene_state.lock() {
                     Ok(scene) => crate::ui_v2::build_canvas_batch_v2(
                         &scene,
-                        &crate::ui_v2::UiFonts {
+                        &mut crate::ui_v2::UiFonts {
                             default: font,
-                            named: &self.ui_font_atlases,
+                            named: &mut self.ui_font_atlases,
                         },
                         &self.ui_images_map,
-                        renderer.offscreen.extent.width as f32,
-                        renderer.offscreen.extent.height as f32,
+                        ancho_pantalla,
+                        alto_pantalla,
                     ),
                     Err(_) => Vec::new(),
                 }

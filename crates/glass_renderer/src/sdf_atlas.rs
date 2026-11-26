@@ -244,9 +244,16 @@ pub struct SdfAtlas {
     paginas: Vec<Pagina>,
     glyphs: HashMap<char, GlyphEntry>,
     /// Página (índice en `paginas`) donde vive cada glifo. El UV de la
-    /// entrada es local a su página: el render debe muestrear la textura
-    /// de esa página (la integración V3b lo usa).
+    /// entrada está en ESPACIO APILADO: la textura GPU es una sola imagen
+    /// de ATLAS_W × (ATLAS_H * MAX_PAGINAS) con las páginas apiladas en
+    /// vertical, así que v = (página * ATLAS_H + y) / (ATLAS_H * MAX_PAGINAS)
+    /// (V3b). El UV nunca caduca al crecer el atlas porque el denominador
+    /// es el máximo (4 páginas), no las existentes.
     paginas_por_glifo: HashMap<char, usize>,
+    /// Páginas con píxeles nuevos desde la última subida a GPU. El
+    /// render las re-sube por región (V3b); `tomar_paginas_sucias`
+    /// las vacía.
+    paginas_sucias: std::collections::HashSet<usize>,
     pub ascent: f32,
     pub descent: f32,
     pub line_height: f32,
@@ -259,6 +266,10 @@ pub struct SdfAtlas {
     font_bytes: Vec<u8>,
 }
 
+/// Celda SDF generada: píxeles RGBA, ancho y alto de la celda, y la
+/// entrada del glifo (UV, tamaño, bearing, avance).
+type CeldaGenerada = (Vec<u8>, u32, u32, GlyphEntry);
+
 /// Genera la celda SDF para un carácter usando ttf_parser y ab_glyph.
 /// Devuelve `Ok(Some((celda_rgba, cw, ch, entry)))` si tiene contorno,
 /// `Ok(None)` si no tiene contorno (p.ej. espacio),
@@ -268,7 +279,7 @@ fn generar_celda(
     face: &ttf_parser::Face<'_>,
     font: &FontRef<'_>,
     k: f32,
-) -> Result<Option<(Vec<u8>, u32, u32, GlyphEntry)>, String> {
+) -> Result<Option<CeldaGenerada>, String> {
     let glyph_id_ab = font.glyph_id(c);
     let avance_h = font.h_advance_unscaled(glyph_id_ab) * k;
 
@@ -388,13 +399,18 @@ fn generar_celda(
         }
         let r0 = ((y0 - celda_y0).floor() as i32).max(0) as usize;
         let r1 = ((y1 - celda_y0).ceil() as i32).min(ch as i32 - 1).max(0) as usize;
-        for r in r0..=r1 {
+        for (r, fila) in cruces_por_fila
+            .iter_mut()
+            .enumerate()
+            .take(r1 + 1)
+            .skip(r0)
+        {
             let py = celda_y0 + r as f32 + 0.5;
             if (s.a[1] <= py && s.b[1] > py) || (s.b[1] <= py && s.a[1] > py) {
                 let t = (py - s.a[1]) / (s.b[1] - s.a[1]);
                 let x = s.a[0] + t * (s.b[0] - s.a[0]);
                 let dir = if s.b[1] > s.a[1] { 1 } else { -1 };
-                cruces_por_fila[r].push((x, dir));
+                fila.push((x, dir));
             }
         }
     }
@@ -473,6 +489,22 @@ fn generar_celda(
 
 /// Coloca una celda en las páginas del atlas, creando páginas nuevas si es necesario.
 /// Devuelve la GlyphEntry con UV correctos, o None si no cabe.
+/// UV de una caja en espacio apilado: u local a la página, v con el
+/// desplazamiento de la página `pi` dentro de la textura
+/// ATLAS_W × (ATLAS_H * MAX_PAGINAS). El denominador es el máximo,
+/// así que el UV no caduca cuando el atlas gana páginas.
+fn uv_apilado(pi: usize, tx: u32, ty: u32, cw: u32, ch: u32) -> [f32; 4] {
+    let h_total = ATLAS_H as f32 * MAX_PAGINAS as f32;
+    let y0 = (pi as f32 * ATLAS_H as f32 + ty as f32) / h_total;
+    let y1 = (pi as f32 * ATLAS_H as f32 + (ty + ch) as f32) / h_total;
+    [
+        tx as f32 / ATLAS_W as f32,
+        y0,
+        (tx + cw) as f32 / ATLAS_W as f32,
+        y1,
+    ]
+}
+
 fn colocar_en_paginas(
     paginas: &mut Vec<Pagina>,
     c: char,
@@ -497,15 +529,9 @@ fn colocar_en_paginas(
             tx = 0;
         }
         if ty + alto <= ATLAS_H {
-            // Calcular UV antes de colocar
-            let u0 = tx as f32 / ATLAS_W as f32;
-            let v0 = ty as f32 / ATLAS_H as f32;
-            let u1 = (tx + cw) as f32 / ATLAS_W as f32;
-            let v1 = (ty + ch) as f32 / ATLAS_H as f32;
-            // Offset de página en V: cada página ocupa un rango [0..1] propio,
-            // pero como usamos páginas separadas, basta con UV en [0..1].
-            // Indexamos la página por el índice; el UV es local a la página.
-            entry.uv = [u0, v0, u1, v1];
+            // UV en espacio apilado (V3b): v incluye el desplazamiento
+            // de la página dentro de la textura 1024×4096.
+            entry.uv = uv_apilado(pi, tx, ty, cw, ch);
             if pagina.colocar(c, celda, cw, ch, entry) {
                 return Some((entry, pi));
             }
@@ -517,11 +543,8 @@ fn colocar_en_paginas(
         let mut nueva = Pagina::nueva();
         let tx = nueva.shelf_x;
         let ty = nueva.shelf_y;
-        let u0 = tx as f32 / ATLAS_W as f32;
-        let v0 = ty as f32 / ATLAS_H as f32;
-        let u1 = (tx + cw) as f32 / ATLAS_W as f32;
-        let v1 = (ty + ch) as f32 / ATLAS_H as f32;
-        entry.uv = [u0, v0, u1, v1];
+        let pi = paginas.len();
+        entry.uv = uv_apilado(pi, tx, ty, cw, ch);
         if nueva.colocar(c, celda, cw, ch, entry) {
             let idx = paginas.len();
             paginas.push(nueva);
@@ -660,10 +683,13 @@ impl SdfAtlas {
             }
         }
 
+        let paginas_sucias: std::collections::HashSet<usize> =
+            (0..paginas.len()).collect();
         Ok(Self {
             paginas,
             glyphs,
             paginas_por_glifo,
+            paginas_sucias,
             ascent,
             descent,
             line_height,
@@ -718,6 +744,7 @@ impl SdfAtlas {
                         Some((e, pg)) => {
                             self.glyphs.insert(c, e);
                             self.paginas_por_glifo.insert(c, pg);
+                            self.paginas_sucias.insert(pg);
                             self.inserciones_frame += 1;
                         }
                         None => {
@@ -746,6 +773,57 @@ impl SdfAtlas {
     /// Reinicia el contador de inserciones por frame.
     pub fn avanzar_frame(&mut self) {
         self.inserciones_frame = 0;
+    }
+
+    /// Páginas con píxeles nuevos desde la última subida a GPU, y las
+    /// vacía. El render las re-sube por región (V3b).
+    pub fn tomar_paginas_sucias(&mut self) -> Vec<usize> {
+        let mut v: Vec<usize> = self.paginas_sucias.drain().collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Píxeles de todas las páginas apiladas en vertical en una sola
+    /// imagen ATLAS_W × (ATLAS_H * MAX_PAGINAS): la página `p` ocupa
+    /// las filas [p*ATLAS_H, (p+1)*ATLAS_H). Las páginas no creadas
+    /// quedan en cero (transparente = fuera del glifo). Es el buffer
+    /// que se sube a GPU al crear la textura (V3b).
+    pub fn pixels_apilados(&self) -> Vec<u8> {
+        let pagina_bytes = (ATLAS_W * ATLAS_H * 4) as usize;
+        let mut buf = vec![0u8; pagina_bytes * MAX_PAGINAS];
+        for (p, pagina) in self.paginas.iter().enumerate() {
+            let dst = p * pagina_bytes;
+            buf[dst..dst + pagina_bytes].copy_from_slice(&pagina.pixels);
+        }
+        buf
+    }
+
+    /// Ancho de una cadena en píxeles a un tamaño de fuente dado
+    /// (suma de avances, sin kerning — igual que el atlas de bits).
+    pub fn measure(&self, text: &str, font_size: f32) -> f32 {
+        let k = font_size / ATLAS_RASTER_PX;
+        let mut widest = 0.0f32;
+        let mut line = 0.0f32;
+        for c in text.chars() {
+            if c == '\n' {
+                widest = widest.max(line);
+                line = 0.0;
+                continue;
+            }
+            line += self.glifo(c).advance * k;
+        }
+        widest.max(line)
+    }
+
+    /// Alto de línea en píxeles a un tamaño de fuente dado.
+    pub fn line_height_at(&self, font_size: f32) -> f32 {
+        self.line_height * (font_size / ATLAS_RASTER_PX)
+    }
+
+    /// Número de glifos con entrada (incluye los de avance solo,
+    /// como el espacio, y las sustituciones).
+    pub fn num_glifos(&self) -> usize {
+        self.glyphs.len()
     }
 
     /// Número de páginas en uso.
@@ -924,10 +1002,13 @@ impl SdfAtlas {
             advance: ATLAS_RASTER_PX * 0.5,
         });
 
+        let paginas_sucias: std::collections::HashSet<usize> =
+            (0..paginas.len()).collect();
         Ok(Self {
             paginas,
             glyphs,
             paginas_por_glifo,
+            paginas_sucias,
             ascent,
             descent,
             line_height,

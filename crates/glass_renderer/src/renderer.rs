@@ -3,7 +3,8 @@ use crate::mesh::GpuMesh;
 use crate::offscreen::OffscreenTarget;
 use crate::pipeline::{GraphicsPipeline, MeshPipelineLayouts};
 use crate::swapchain::SwapchainContext;
-use crate::ui::{FontAtlas, UiAtlasKind, UiRenderer, UiSegment};
+use crate::sdf_atlas::SdfAtlas;
+use crate::ui::{UiAtlasKind, UiRenderer, UiSegment};
 use ash::vk;
 use gpu_allocator::vulkan::{
     Allocation, AllocationCreateDesc, AllocationScheme, Allocator, AllocatorCreateDesc,
@@ -3882,8 +3883,24 @@ impl GlassRenderer {
     /// Métricas de la fuente de la UI, para que la app construya los
     /// lotes del Canvas (`UiBatch`) con el mismo atlas que muestrea el
     /// pase 2D.
-    pub fn ui_font(&self) -> &FontAtlas {
+    pub fn ui_font(&self) -> &SdfAtlas {
         self.ui.font()
+    }
+
+    /// Acceso mutable a la fuente de la UI (inserción dinámica de
+    /// glifos y avance de frame, V3).
+    pub fn ui_font_mut(&mut self) -> &mut SdfAtlas {
+        self.ui.font_mut()
+    }
+
+    /// Reinicia el presupuesto de inserción de glifos del frame en
+    /// todas las fuentes de UI (por defecto y con nombre). La app lo
+    /// llama una vez por frame, antes de maquetar el Canvas (V3).
+    pub fn avanzar_frame_fuentes_ui(&mut self) {
+        self.ui.avanzar_frame_fuente();
+        for pass in self.ui_named_fonts.values_mut() {
+            pass.avanzar_frame_fuente();
+        }
     }
 
     /// Ejecuta la cadena de post-procesado sobre una vista (bright-pass
@@ -3943,6 +3960,17 @@ impl GlassRenderer {
     ) -> Result<(), RendererError> {
         if segments.iter().all(|s| s.batch.is_empty()) {
             return Ok(());
+        }
+
+        // Páginas SDF nuevas de este frame (inserción dinámica): se
+        // suben a GPU antes de grabar los segmentos que las usan (V3b).
+        {
+            let mut alloc = self.allocator.lock().unwrap();
+            self.ui
+                .sincronizar_atlas(&mut alloc, queue, self.command_pool)?;
+            for pass in self.ui_named_fonts.values_mut() {
+                pass.sincronizar_atlas(&mut alloc, queue, self.command_pool)?;
+            }
         }
         unsafe {
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
