@@ -4622,6 +4622,17 @@ for stem in &referenciados {
             }
             "glass_scene_save" => Some(self.mcp_guardar_escena(args).map(texto)),
             "glass_scene_new" => Some(self.mcp_escena_nueva(args).map(texto)),
+            "glass_undo" | "glass_redo" => {
+                let redo = tool == "glass_redo";
+                let aplicado = self.editor_layout.apply_history(&self.scene_state, redo);
+                let h = &self.editor_layout.undo_history;
+                Some(Ok(texto(format!(
+                    "{{\"applied\": {}, \"can_undo\": {}, \"can_redo\": {}}}",
+                    aplicado,
+                    h.can_undo(),
+                    h.can_redo()
+                ))))
+            }
             _ => None,
         }
     }

@@ -365,7 +365,7 @@ impl EditorDockingLayout {
     /// sobre la escena compartida y ajusta la selección única:
     /// se conserva si la entidad sigue existiendo tras el paso.
     /// Devuelve si se aplicó algún paso.
-    fn apply_history(&mut self, scene_state: &Arc<Mutex<SceneState>>, redo: bool) -> bool {
+    pub fn apply_history(&mut self, scene_state: &Arc<Mutex<SceneState>>, redo: bool) -> bool {
         let Ok(mut sc) = scene_state.lock() else {
             return false;
         };

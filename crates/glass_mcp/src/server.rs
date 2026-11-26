@@ -51,7 +51,7 @@ pub struct McpServer {
 /// Queue cuando el bucle del motor está bombeando. Las de consulta
 /// responden directas, como siempre.
 /// Tools que solo puede ejecutar la app del editor (estado de Play, ruta de guardado).
-pub const APP_EXEC_TOOLS: [&str; 3] = ["glass_play_control", "glass_scene_save", "glass_scene_new"];
+pub const APP_EXEC_TOOLS: [&str; 5] = ["glass_play_control", "glass_scene_save", "glass_scene_new", "glass_undo", "glass_redo"];
 
 /// Normaliza el nombre de un material físico a su referencia
 /// (ruta relativa a Assets con el sufijo `.physmat.json`).
@@ -93,6 +93,8 @@ fn is_mutating_tool(name: &str) -> bool {
             | "glass_scene_load"
             | "glass_scene_new"
             | "glass_physmat_set"
+            | "glass_undo"
+            | "glass_redo"
             | "glass_set_ui_text"
             | "glass_set_entity_material"
             | "glass_material_property_set"
@@ -605,6 +607,22 @@ impl McpServer {
                                     "name": { "type": "string" }
                                 },
                                 "required": ["name"]
+                            }
+                        },
+                        {
+                            "name": "glass_undo",
+                            "description": "Deshace el último paso del historial del editor (el mismo Ctrl+Z: instantáneas del estado autoral).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "glass_redo",
+                            "description": "Rehace el último paso deshecho del historial del editor (el mismo Ctrl+Y).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
                             }
                         },
                         {
@@ -4822,7 +4840,7 @@ impl McpServer {
                 }
             }
 
-            "glass_play_control" | "glass_scene_save" | "glass_scene_new" => {
+            "glass_play_control" | "glass_scene_save" | "glass_scene_new" | "glass_undo" | "glass_redo" => {
                 McpResponse::error(
                     id,
                     -32008,
@@ -5708,6 +5726,15 @@ mod tests_catchup {
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(r.contains("Formato no soportado"), "{r}");
+    }
+
+    #[test]
+    fn undo_redo_sin_editor_dan_32008() {
+        let srv = servidor();
+        let r = llamar(&srv, "glass_undo", json!({}));
+        assert!(r.contains("-32008"), "undo: {r}");
+        let r = llamar(&srv, "glass_redo", json!({}));
+        assert!(r.contains("-32008"), "redo: {r}");
     }
 
     #[test]
