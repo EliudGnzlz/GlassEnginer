@@ -40,6 +40,9 @@ const PBR_SKINNED_VERT_SPV: &[u8] =
 /// la pasada final del post.
 const PBR_LEGACY_FRAG_SPV: &[u8] =
     include_bytes!("../../../assets/shaders/pbr_legacy.frag.spv");
+const PBR_INSTANCED_VERT_SPV: &[u8] = include_bytes!("../../../assets/shaders/pbr_instanced.vert.spv");
+const PBR_INSTANCED_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/pbr_instanced.frag.spv");
+const PBR_INSTANCED_LEGACY_FRAG_SPV: &[u8] = include_bytes!("../../../assets/shaders/pbr_instanced_legacy.frag.spv");
 
 /// Listas de dibujo de un frame para `render_views`: las mallas,
 /// pieles y portales de las vistas de escena y de juego, los
@@ -192,6 +195,83 @@ impl Default for ParticleBuffers {
     }
 }
 
+
+/// Datos POR INSTANCIA del render instanciado (96 B): lo que en el camino
+/// de un draw por ítem viaja en los push constants y cambia de una entidad
+/// a otra. Se lee en pbr_instanced.vert desde el binding 1 (rate INSTANCE).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct InstanceData {
+    /// Matriz de modelo (columnas, locations 3..6).
+    pub model: [f32; 16],
+    /// rgb = albedo, a = opacidad (location 7).
+    pub object_color: [f32; 4],
+    /// x = índice en el UBO del lightmap (-1 = sin bake), y = tamaño del atlas px (location 8).
+    pub lm_params: [f32; 4],
+}
+
+// Contrato con el vertex input de `new_mesh_pipeline_instanced`: sin
+// relleno y con los offsets que declaran los atributos.
+const _: () = {
+    assert!(std::mem::size_of::<InstanceData>() == 96);
+    assert!(std::mem::offset_of!(InstanceData, model) == 0);
+    assert!(std::mem::offset_of!(InstanceData, object_color) == 64);
+    assert!(std::mem::offset_of!(InstanceData, lm_params) == 80);
+};
+
+/// Push constants del camino instanciado (160 B): solo los campos por
+/// vista y material. Se empujan desde el offset 0 dentro del rango de
+/// 256 B que declara el layout de siempre.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct InstancedPushConstants {
+    /// Proyección * Vista (el modelo va por instancia).
+    pub vp: [f32; 16],
+    pub light_dir: [f32; 4],
+    pub light_color: [f32; 4],
+    pub material_params: [f32; 4],
+    pub camera_pos: [f32; 4],
+    pub emissive: [f32; 4],
+    pub uv_transform: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<InstancedPushConstants>() == 160);
+
+impl InstancedPushConstants {
+    /// Construye los push constants del grupo a partir de la VP de la
+    /// vista y de un ítem representativo (copia sus campos por vista y
+    /// material).
+    pub fn from_item(vp: [f32; 16], item: &MeshPushConstants) -> Self {
+        Self {
+            vp,
+            light_dir: item.light_dir,
+            light_color: item.light_color,
+            material_params: item.material_params,
+            camera_pos: item.camera_pos,
+            emissive: item.emissive,
+            uv_transform: item.uv_transform,
+        }
+    }
+}
+
+/// Buffer dinámico de instancias de UNA vista: se reescribe cada frame
+/// por memoria mapeada y crece por duplicación, como el de partículas.
+pub struct InstanceBuffers {
+    pub buffer: vk::Buffer,
+    pub allocation: Option<Allocation>,
+    pub capacity: usize,
+}
+
+impl Default for InstanceBuffers {
+    fn default() -> Self {
+        Self {
+            buffer: vk::Buffer::null(),
+            allocation: None,
+            capacity: 0,
+        }
+    }
+}
+
 /// Vértice de las líneas del editor (rejilla): posición en mundo
 /// y color RGBA (el alfa trae el desvanecido por distancia).
 #[derive(Clone, Copy, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
@@ -293,6 +373,17 @@ impl MeshPushConstants {
         Self {
             mvp,
             ..Default::default()
+        }
+    }
+}
+
+impl MeshPushConstants {
+    /// Extrae los campos por entidad para el buffer de instancias.
+    pub fn instance_data(&self) -> InstanceData {
+        InstanceData {
+            model: self.model,
+            object_color: self.object_color,
+            lm_params: self.lm_params,
         }
     }
 }
@@ -710,6 +801,10 @@ pub struct GlassRenderer {
     pub pipeline: GraphicsPipeline,
     pub mesh_pipeline: GraphicsPipeline,
     pub pbr_pipeline: GraphicsPipeline,
+    /// Gemelos instanciados del PBR opaco (HDR y legacy): mismos layouts
+    /// que `pbr_pipeline`, con el binding 1 por instancia.
+    pub pbr_pipeline_instanced: GraphicsPipeline,
+    pub pbr_pipeline_instanced_legacy: GraphicsPipeline,
     /// Pipeline de mallas con piel (bloque de skinning): ver
     /// `pipeline::GraphicsPipeline::new_skinned_pipeline`.
     pub skinned_pipeline: GraphicsPipeline,
@@ -723,6 +818,9 @@ pub struct GlassRenderer {
     /// Geometría de partículas del frame, por vista.
     pub particle_scene: ParticleBuffers,
     pub particle_game: ParticleBuffers,
+    /// Buffers de instancias por vista (escena / juego).
+    pub instance_scene: InstanceBuffers,
+    pub instance_game: InstanceBuffers,
     /// Pipeline de líneas del editor (rejilla) y su gemelo legacy,
     /// con el buffer de vértices del frame y su view-proj.
     pub editor_line_pipeline: GraphicsPipeline,
@@ -1123,6 +1221,10 @@ impl GlassRenderer {
         let mesh_pipeline_legacy = GraphicsPipeline::new_mesh_pipeline(device.clone(), final_offscreen.render_pass, MESH_VERT_SPV, MESH_FRAG_SPV, MeshPipelineLayouts::default())?;
         let pbr_pipeline = GraphicsPipeline::new_mesh_pipeline(device.clone(), offscreen.render_pass, PBR_VERT_SPV, PBR_FRAG_SPV, MeshPipelineLayouts { shadow: Some(shadow_set_layout), point_lights: Some(point_lights_layout), lm: Some((lm_tex_layout, lm_data_layout)), ibl: Some(ibl_layout) })?;
         let pbr_pipeline_legacy = GraphicsPipeline::new_mesh_pipeline(device.clone(), final_offscreen.render_pass, PBR_VERT_SPV, PBR_LEGACY_FRAG_SPV, MeshPipelineLayouts { shadow: Some(shadow_set_layout), point_lights: Some(point_lights_layout), lm: Some((lm_tex_layout, lm_data_layout)), ibl: Some(ibl_layout) })?;
+        // Gemelos instanciados del PBR opaco: mismos layouts que pbr_pipeline;
+        // el vertex lee model/object_color/lm_params del binding 1.
+        let pbr_pipeline_instanced = GraphicsPipeline::new_mesh_pipeline_instanced(device.clone(), offscreen.render_pass, PBR_INSTANCED_VERT_SPV, PBR_INSTANCED_FRAG_SPV, MeshPipelineLayouts { shadow: Some(shadow_set_layout), point_lights: Some(point_lights_layout), lm: Some((lm_tex_layout, lm_data_layout)), ibl: Some(ibl_layout) })?;
+        let pbr_pipeline_instanced_legacy = GraphicsPipeline::new_mesh_pipeline_instanced(device.clone(), final_offscreen.render_pass, PBR_INSTANCED_VERT_SPV, PBR_INSTANCED_LEGACY_FRAG_SPV, MeshPipelineLayouts { shadow: Some(shadow_set_layout), point_lights: Some(point_lights_layout), lm: Some((lm_tex_layout, lm_data_layout)), ibl: Some(ibl_layout) })?;
         let skinned_pipeline = GraphicsPipeline::new_skinned_pipeline(device.clone(), offscreen.render_pass, PBR_SKINNED_VERT_SPV, PBR_FRAG_SPV, MeshPipelineLayouts { shadow: Some(shadow_set_layout), point_lights: Some(point_lights_layout), lm: Some((lm_tex_layout, lm_data_layout)), ibl: Some(ibl_layout) })?;
         let skinned_pipeline_legacy = GraphicsPipeline::new_skinned_pipeline(device.clone(), final_offscreen.render_pass, PBR_SKINNED_VERT_SPV, PBR_LEGACY_FRAG_SPV, MeshPipelineLayouts { shadow: Some(shadow_set_layout), point_lights: Some(point_lights_layout), lm: Some((lm_tex_layout, lm_data_layout)), ibl: Some(ibl_layout) })?;
         // Objetivos y pipelines de las vistas de portal (bloque
@@ -1835,12 +1937,15 @@ impl GlassRenderer {
             pipeline,
             mesh_pipeline,
             pbr_pipeline,
+            pbr_pipeline_instanced,
             skinned_pipeline,
             triangle_pipeline_legacy,
             particle_pipeline,
             particle_pipeline_legacy,
             particle_scene: ParticleBuffers::default(),
             particle_game: ParticleBuffers::default(),
+            instance_scene: InstanceBuffers::default(),
+            instance_game: InstanceBuffers::default(),
             editor_line_pipeline,
             editor_line_pipeline_legacy,
             selection_outline_pipeline,
@@ -1852,6 +1957,7 @@ impl GlassRenderer {
             particle_draws: std::cell::Cell::new(0),
             mesh_pipeline_legacy,
             pbr_pipeline_legacy,
+            pbr_pipeline_instanced_legacy,
             skinned_pipeline_legacy,
             shadow,
             point_shadows,
@@ -3651,6 +3757,81 @@ impl GlassRenderer {
         }
     }
 
+    /// Sube las instancias de una vista (`game` = vista de juego) al buffer
+    /// mapeado. Si no caben, recrea el buffer con la siguiente potencia de
+    /// dos (mínimo 1024 instancias), como `set_particle_frame`.
+    pub fn set_instance_frame(&mut self, game: bool, instances: &[InstanceData]) {
+        let device = self.device.clone();
+        let allocator = self.allocator.clone();
+        let buffers = if game {
+            &mut self.instance_game
+        } else {
+            &mut self.instance_scene
+        };
+        if instances.is_empty() {
+            return;
+        }
+        unsafe {
+            if instances.len() > buffers.capacity {
+                // Crecer: destruir lo viejo y crear con la nueva capacidad.
+                if buffers.buffer != vk::Buffer::null() {
+                    device.destroy_buffer(buffers.buffer, None);
+                    buffers.buffer = vk::Buffer::null();
+                }
+                let mut alloc = allocator.lock().unwrap();
+                if let Some(a) = buffers.allocation.take() {
+                    let _ = alloc.free(a);
+                }
+                // Si la creación falla, el buffer queda nulo y la capacidad
+                // a 0: nada que destruir dos veces y se reintenta el frame
+                // siguiente.
+                buffers.capacity = 0;
+                let capacity = instances.len().next_power_of_two().max(1024);
+                let info = vk::BufferCreateInfo::default()
+                    .size((capacity * std::mem::size_of::<InstanceData>()) as u64)
+                    .usage(vk::BufferUsageFlags::VERTEX_BUFFER)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE);
+                let Ok(buffer) = device.create_buffer(&info, None) else {
+                    return;
+                };
+                let mem_reqs = device.get_buffer_memory_requirements(buffer);
+                let allocation = match alloc.allocate(&AllocationCreateDesc {
+                    name: "instances",
+                    requirements: mem_reqs,
+                    location: MemoryLocation::CpuToGpu,
+                    linear: true,
+                    allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+                }) {
+                    Ok(a) => a,
+                    Err(_) => {
+                        device.destroy_buffer(buffer, None);
+                        return;
+                    }
+                };
+                if device
+                    .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
+                    .is_err()
+                {
+                    device.destroy_buffer(buffer, None);
+                    let _ = alloc.free(allocation);
+                    return;
+                }
+                buffers.buffer = buffer;
+                buffers.allocation = Some(allocation);
+                buffers.capacity = capacity;
+            }
+            if let Some(alloc) = &buffers.allocation {
+                if let Some(ptr) = alloc.mapped_ptr() {
+                    std::ptr::copy_nonoverlapping(
+                        instances.as_ptr() as *const u8,
+                        ptr.as_ptr() as *mut u8,
+                        std::mem::size_of_val(instances),
+                    );
+                }
+            }
+        }
+    }
+
     /// Draws de partículas del último render_views.
     pub fn particle_draws_last_frame(&self) -> u32 {
         self.particle_draws.get()
@@ -4263,6 +4444,20 @@ impl Drop for GlassRenderer {
                     let _ = alloc.free(a);
                 }
             }
+        // Buffers de instancias (mismo patrón que los de partículas).
+        {
+            let mut alloc = self.allocator.lock().unwrap();
+            for buffers in [&mut self.instance_scene, &mut self.instance_game] {
+                if buffers.buffer != vk::Buffer::null() {
+                    self.device.destroy_buffer(buffers.buffer, None);
+                    buffers.buffer = vk::Buffer::null();
+                }
+                if let Some(a) = buffers.allocation.take() {
+                    let _ = alloc.free(a);
+                }
+                buffers.capacity = 0;
+            }
+        }
             self.device.destroy_buffer(self.graph_globals_buffer, None);
             self.device.destroy_buffer(self.graph_props_dummy_buffer, None);
             self.device

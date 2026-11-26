@@ -189,7 +189,23 @@ impl GraphicsPipeline {
         frag_spv: &[u8],
         layouts: MeshPipelineLayouts,
     ) -> Result<Self, PipelineError> {
-        Self::new_mesh_pipeline_impl(device, render_pass, vert_spv, frag_spv, None, false, layouts)
+        Self::new_mesh_pipeline_impl(device, render_pass, vert_spv, frag_spv, None, false, false, layouts)
+    }
+
+
+    /// Gemelo INSTANCIADO de `new_mesh_pipeline` (opaco): mismo estado,
+    /// mismos sets y mismo rango de push constants (256 B; el camino
+    /// instanciado empuja solo 160 B). Añade el binding 1 por instancia
+    /// (stride 96 B, `InstanceData`): locations 3..6 = columnas de la
+    /// matriz de modelo, 7 = object_color, 8 = lm_params.
+    pub fn new_mesh_pipeline_instanced(
+        device: Arc<ash::Device>,
+        render_pass: vk::RenderPass,
+        vert_spv: &[u8],
+        frag_spv: &[u8],
+        layouts: MeshPipelineLayouts,
+    ) -> Result<Self, PipelineError> {
+        Self::new_mesh_pipeline_impl(device, render_pass, vert_spv, frag_spv, None, false, true, layouts)
     }
 
     /// Igual que `new_mesh_pipeline` pero transparente (mezcla por
@@ -202,7 +218,7 @@ impl GraphicsPipeline {
         frag_spv: &[u8],
         layouts: MeshPipelineLayouts,
     ) -> Result<Self, PipelineError> {
-        Self::new_mesh_pipeline_impl(device, render_pass, vert_spv, frag_spv, None, true, layouts)
+        Self::new_mesh_pipeline_impl(device, render_pass, vert_spv, frag_spv, None, true, false, layouts)
     }
 
     /// Pipeline de un material de GRAFO: idéntico al de mallas (mismo
@@ -233,10 +249,12 @@ impl GraphicsPipeline {
             frag_spv,
             Some(globals_set_layout),
             transparent,
+            false,
             layouts,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_mesh_pipeline_impl(
         device: Arc<ash::Device>,
         render_pass: vk::RenderPass,
@@ -244,6 +262,7 @@ impl GraphicsPipeline {
         frag_spv: &[u8],
         globals_set_layout: Option<vk::DescriptorSetLayout>,
         transparent: bool,
+        instanced: bool,
         layouts: MeshPipelineLayouts,
     ) -> Result<Self, PipelineError> {
         let MeshPipelineLayouts {
@@ -268,12 +287,12 @@ impl GraphicsPipeline {
                 .name(entry_point),
         ];
 
-        let binding_descriptions = [vk::VertexInputBindingDescription::default()
+        let mut binding_descriptions = vec![vk::VertexInputBindingDescription::default()
             .binding(0)
             .stride(std::mem::size_of::<crate::mesh::Vertex>() as u32)
             .input_rate(vk::VertexInputRate::VERTEX)];
 
-        let attribute_descriptions = [
+        let mut attribute_descriptions = vec![
             vk::VertexInputAttributeDescription::default()
                 .location(0)
                 .binding(0)
@@ -290,6 +309,45 @@ impl GraphicsPipeline {
                 .format(vk::Format::R32G32_SFLOAT)
                 .offset(24),
         ];
+
+        // Camino instanciado: binding 1 por instancia con `InstanceData`
+        // (96 B). Los offsets 0/16/32/48/64/80 están fijados por los
+        // asserts const de renderer.rs. Sin `instanced`, el vertex input
+        // queda bit a bit el de siempre.
+        if instanced {
+            binding_descriptions.push(
+                vk::VertexInputBindingDescription::default()
+                    .binding(1)
+                    .stride(std::mem::size_of::<crate::renderer::InstanceData>() as u32)
+                    .input_rate(vk::VertexInputRate::INSTANCE),
+            );
+            // Matriz de modelo: una location por columna (3..6).
+            for col in 0..4u32 {
+                attribute_descriptions.push(
+                    vk::VertexInputAttributeDescription::default()
+                        .location(3 + col)
+                        .binding(1)
+                        .format(vk::Format::R32G32B32A32_SFLOAT)
+                        .offset(col * 16),
+                );
+            }
+            // object_color.
+            attribute_descriptions.push(
+                vk::VertexInputAttributeDescription::default()
+                    .location(7)
+                    .binding(1)
+                    .format(vk::Format::R32G32B32A32_SFLOAT)
+                    .offset(64),
+            );
+            // lm_params.
+            attribute_descriptions.push(
+                vk::VertexInputAttributeDescription::default()
+                    .location(8)
+                    .binding(1)
+                    .format(vk::Format::R32G32B32A32_SFLOAT)
+                    .offset(80),
+            );
+        }
 
         let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_binding_descriptions(&binding_descriptions)
