@@ -644,11 +644,24 @@ mod tests_drag_escena {
     use super::*;
     use glass_core::scene::parsear_escena;
 
+    /// Escena de arrastre como fixture dentro del repo (la misma
+    /// escena física de P4c). Se incrusta en compilación con
+    /// `include_str!`: sin rutas absolutas de la VM ni dependencia
+    /// del directorio de trabajo — el CI de GitHub la tiene porque
+    /// viaja en el repo (el test anterior leía una ruta absoluta de
+    /// /home/hatch y era la causa de los exit 101 de P4c/P4d/f32639f).
+    const ESCENA_ARRASTRE: &str =
+        include_str!("../tests/fixtures/EscenaArrastre.scene.json");
+
+    fn cerca(a: [f32; 4], b: [f32; 4]) {
+        for i in 0..4 {
+            assert!((a[i] - b[i]).abs() < 0.5, "rect {:?} != esperado {:?}", a, b);
+        }
+    }
+
     #[test]
     fn drag_escena_rects_paso_a_paso() {
-        let ruta = "/home/hatch/workspace/goals/glassenginer-second-agent-work/hidden_files/p4c_fisico/escenas/EscenaArrastre.scene.json";
-        let json = std::fs::read_to_string(ruta).expect("leer escena");
-        let (_v, entities) = parsear_escena(&json).expect("parsear");
+        let (_v, entities) = parsear_escena(ESCENA_ARRASTRE).expect("parsear");
         let mut scene = SceneState::default();
         scene.replace_entities(entities);
         let vp = glass_ui::api::Viewport { ancho: 1280.0, alto: 720.0 };
@@ -662,6 +675,9 @@ mod tests_drag_escena {
         };
         let (doc, col, r0) = colocar(&scene);
         eprintln!("antes: panel rect={:?}", r0);
+        // 120×120 con factor 2/3 (referencia 1920×1080 a 1280×720):
+        // centro (506.67, 360), rect [466.67, 320, 80, 80].
+        cerca([r0.x, r0.y, r0.ancho, r0.alto], [466.67, 320.0, 80.0, 80.0]);
         let ses = glass_ui::api::arrastre_pulsar(&doc, &col, 507.0, 360.0).expect("pulsar");
         drop(doc);
         drop(col);
@@ -669,18 +685,26 @@ mod tests_drag_escena {
         // follow hasta el centro de la casilla, como el arrastre físico
         let nueva = ses.follow(773.0, 360.0);
         eprintln!("follow(773,360)={:?}", nueva);
+        assert!((nueva[0] - 66.0).abs() < 0.5 && (nueva[1] - 0.0).abs() < 0.5,
+            "follow(773,360) = {:?}, esperado [66, 0]", nueva);
         if let Some(ent) = scene.entities.iter_mut().find(|e| e.id == 20) {
             ent.rect_transform.as_mut().unwrap().anchored_position = nueva;
         }
         let (doc2, col2, r1) = colocar(&scene);
         eprintln!("tras follow: panel rect={:?}", r1);
+        cerca([r1.x, r1.y, r1.ancho, r1.alto], [644.0, 320.0, 80.0, 80.0]);
         let destino = glass_ui::api::arrastre_soltar(&doc2, &col2, 20, 773.0, 360.0).expect("destino");
         eprintln!("destino: entidad={} anclado={:?} acción={}", destino.entidad, destino.anclado, destino.accion_soltar);
+        assert_eq!(destino.entidad, 21, "el destino debe ser la casilla");
+        assert_eq!(destino.accion_soltar, "SoltarEnCasilla");
+        assert!((destino.anclado[0] - 200.0).abs() < 0.5 && (destino.anclado[1] - 0.0).abs() < 0.5,
+            "anclado destino = {:?}, esperado [200, 0]", destino.anclado);
         if let Some(ent) = scene.entities.iter_mut().find(|e| e.id == 20) {
             ent.rect_transform.as_mut().unwrap().anchored_position = destino.anclado;
         }
         let (_doc3, _col3, r2) = colocar(&scene);
         eprintln!("tras soltar: panel rect={:?}", r2);
+        cerca([r2.x, r2.y, r2.ancho, r2.alto], [733.33, 320.0, 80.0, 80.0]);
         assert!(r2.ancho < 100.0, "el panel no debe estirarse: {:?}", r2);
     }
 }
