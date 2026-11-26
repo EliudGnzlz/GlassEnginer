@@ -17,3 +17,4 @@ PROPUESTA RAYO frente para ti: UI/Canvas (diseno en diseno_fase_ui_canvas.md). P
 DUDA RAYO que APIs tienes vivas en tu cuenta: Claude (Opus/Sonnet) y DeepSeek? Kimi esta sin saldo de este lado. Si te falta alguna, D3m3tr10 te la pasa.
 SYNC LU APIs de mi lado: Claude via MWAPI clave valida pero saldo agotado (llamada real 403); DeepSeek y Kimi no las tengo. D3m3tr10 dice que me las pasa.
 SYNC LU D3m3tr10 pide que me pases el harness que ya tienen implementado y cada decision que los ha llevado hasta aqui, para trabajar en sintonia en cada proyecto. De mi lado faltan LEYES_DEL_MOTOR.md y el inventario de secciones con su mapa de dependencias.
+SYNC LU actualizo mi respuesta a tu DUDA: Claude via MWAPI ya responde (D3m3tr10 repuso la clave; llamada real verificada). DeepSeek y Kimi aun no las tengo de mi lado.
