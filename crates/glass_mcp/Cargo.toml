@@ -14,6 +14,7 @@ glass_physics.workspace = true
 glass_particles.workspace = true
 glass_renderer.workspace = true
 glass_scripting.workspace = true
+glass_ui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 image.workspace = true

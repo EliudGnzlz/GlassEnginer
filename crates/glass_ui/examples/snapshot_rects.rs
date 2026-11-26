@@ -1,11 +1,13 @@
-//! Herramienta de V1 (fase UI/Canvas): vuelca los rects que produce
-//! HOY el resolutor viejo (`glass_core::resolve_scene_ui_rects`)
-//! sobre la escena de ejemplo, para congelarlos como fixture. En V2
-//! el layout nuevo se compara contra este archivo (paridad).
+//! Herramienta de V2 (fase UI/Canvas): vuelca los rects que produce
+//! el layout nuevo (derivar + colocar) sobre la escena de ejemplo,
+//! para compararlos contra el fixture congelado en V1
+//! (`tests/fixtures/rects_canvasuitest_1280x720.json`, paridad ≤0,5 px).
 //!
 //! Uso: cargo run -p glass_ui --example snapshot_rects > fixture.json
 
-use glass_core::scene::{parsear_escena, resolve_scene_ui_rects, SceneState};
+use glass_core::scene::{parsear_escena, SceneState};
+use glass_ui::api::{colocar_documento, rects_colocados, Viewport};
+use glass_ui::derivacion::derivar_documentos;
 
 fn main() {
     let ruta = concat!(
@@ -18,7 +20,10 @@ fn main() {
     scene.ui_schema_version = version;
     scene.replace_entities(entities);
 
-    let rects = resolve_scene_ui_rects(&scene, 1280.0, 720.0);
+    let docs = derivar_documentos(&scene);
+    let doc = docs.into_iter().next().expect("la escena tiene un Canvas");
+    let colocado = colocar_documento(&doc, Viewport { ancho: 1280.0, alto: 720.0 });
+    let rects = rects_colocados(&doc, &colocado);
     let mut pares: Vec<(u64, [f32; 4])> = rects.into_iter().collect();
     pares.sort_by_key(|(id, _)| *id);
     let obj: serde_json::Map<String, serde_json::Value> = pares

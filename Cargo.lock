@@ -2243,6 +2243,7 @@ dependencies = [
  "glass_renderer",
  "glass_ripper",
  "glass_scripting",
+ "glass_ui",
  "image",
  "log",
  "serde",

@@ -3069,7 +3069,21 @@ impl McpServer {
             "glass_ui_tree" => {
                 let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(1280.0) as f32;
                 let height = args.get("height").and_then(|v| v.as_f64()).unwrap_or(720.0) as f32;
-                let rects = glass_core::resolve_scene_ui_rects(&scene, width, height);
+                // V2: los rects se leen del documento colocado, no del
+                // viejo resolutor de glass_core.
+                let rects = {
+                    let docs = glass_ui::derivacion::derivar_documentos(&scene);
+                    match docs.into_iter().next() {
+                        Some(doc) => {
+                            let colocado = glass_ui::api::colocar_documento(
+                                &doc,
+                                glass_ui::api::Viewport { ancho: width, alto: height },
+                            );
+                            glass_ui::api::rects_colocados(&doc, &colocado)
+                        }
+                        None => std::collections::HashMap::new(),
+                    }
+                };
                 let scale = scene
                     .entities
                     .iter()

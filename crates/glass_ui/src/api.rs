@@ -154,6 +154,20 @@ pub fn arrastre_pulsar(
     crate::interaccion::arrastre_pulsar(doc, colocado, x, y)
 }
 
+/// Rects colocados por entidad: el mismo mapa que devolvía el viejo
+/// `glass_core::resolve_scene_ui_rects` (`[x, y, ancho, alto]`), pero
+/// leído del documento colocado V2. Puente para MCP y editor.
+pub fn rects_colocados(
+    doc: &Documento,
+    colocado: &DocumentoColocado,
+) -> std::collections::HashMap<u64, [f32; 4]> {
+    doc.nodos
+        .iter()
+        .zip(colocado.nodos.iter())
+        .map(|(n, nc)| (n.entidad, [nc.rect.x, nc.rect.y, nc.rect.ancho, nc.rect.alto]))
+        .collect()
+}
+
 /// Busca destino de soltar para la entidad `arrastrada`.
 pub fn arrastre_soltar(
     doc: &Documento,
