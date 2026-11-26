@@ -141,6 +141,10 @@ pub struct EditorDockingLayout {
 pub input_axes_edit: Option<Vec<glass_scripting::input_axes::InputAxisDef>>,
     pub project_settings: glass_core::ProjectSettings,
     pub status_message: Option<(String, std::time::Instant)>,
+    /// Prefab que el Inspector pidió abrir (fuente relativa al proyecto); lo consume la app.
+    pub pending_abrir_prefab: Option<String>,
+    /// Prefab en edición: (ruta absoluta del asset, id de su raíz en la escena). Única copia; la fija la app.
+    pub prefab_en_edicion: Option<(std::path::PathBuf, u64)>,
     /// Enrutado de Supr: valor anterior de cada selección y cuál se
     /// tocó por última vez (ver `destino_supr`).
     pub supr_sel_entidad_prev: Option<u64>,
@@ -260,6 +264,8 @@ impl EditorDockingLayout {
             undo_suspendido: false,
             project_settings: glass_core::ProjectSettings::load_or_default("project.json"),
             status_message: None,
+            pending_abrir_prefab: None,
+            prefab_en_edicion: None,
             supr_sel_entidad_prev: None,
             supr_sel_asset_prev: None,
             supr_ultimo_toque: ToqueSupr::Ninguno,
@@ -418,12 +424,64 @@ impl EditorDockingLayout {
         }
     }
 
+    /// Si hay un prefab en edición, lo reconstruye desde la escena y
+    /// escribe su `.prefab.json`. `None` si no hay prefab en edición. El
+    /// desenlace queda en `status_message`.
+    pub fn guardar_prefab_en_edicion(
+        &mut self,
+        scene_state: &Arc<Mutex<SceneState>>,
+    ) -> Option<Result<(), String>> {
+        let (ruta, raiz_id) = self.prefab_en_edicion.clone()?;
+        // La raíz se borró en la vista de edición: el modo ya no tiene
+        // asset que escribir. Se sale de él (el siguiente Guardar tratará
+        // la escena como escena) en vez de fallar en silencio para siempre.
+        if let Ok(scene) = scene_state.lock() {
+            if scene.get_entity(raiz_id).is_none() {
+                self.prefab_en_edicion = None;
+                let mensaje = "La raíz del prefab ya no existe: se salió del modo de edición de prefab sin guardar".to_string();
+                self.status_message = Some((mensaje.clone(), std::time::Instant::now()));
+                return Some(Err(mensaje));
+            }
+        }
+        let (mensaje, exito) = match scene_state.lock() {
+            Ok(scene) => match glass_core::Prefab::from_entity(&scene, raiz_id) {
+                Ok(prefab) => {
+                    let k = 1 + prefab.descendant_entities.len();
+                    match prefab.save_to_file(&ruta) {
+                        Ok(()) => {
+                            self.marcar_guardada(&scene);
+                            (
+                                format!("Prefab guardado en {} ({k} entidades)", ruta.display()),
+                                true,
+                            )
+                        }
+                        Err(e) => (
+                            format!("No se pudo guardar el prefab {}: {e}", ruta.display()),
+                            false,
+                        ),
+                    }
+                }
+                Err(e) => (format!("No se pudo reconstruir el prefab: {e}"), false),
+            },
+            Err(_) => ("SceneState bloqueado; no se guardó nada".to_string(), false),
+        };
+        self.status_message = Some((mensaje.clone(), std::time::Instant::now()));
+        Some(if exito { Ok(()) } else { Err(mensaje) })
+    }
+
     fn save_scene_to(
         &mut self,
         scene_state: &Arc<Mutex<SceneState>>,
         scene_manager: &Arc<Mutex<SceneManager>>,
         save_as: Option<&str>,
     ) {
+        // Fase C: con un prefab en edición, Guardar escribe el
+        // `.prefab.json` (también «Save Scene As»: v1, el nombre elegido
+        // se ignora mientras se edita un prefab).
+        if self.guardar_prefab_en_edicion(scene_state).is_some() {
+            return;
+        }
+
         let ahora = || std::time::Instant::now();
 
         // Se bloquea primero el gestor y después la escena: es el mismo orden
@@ -1587,6 +1645,16 @@ impl EditorDockingLayout {
                 Err(e) => format!("No se pudo cargar el prefab '{}': {e}", ruta.display()),
             };
             self.status_message = Some((mensaje, std::time::Instant::now()));
+        }
+
+        // --- PENDIENTE DEL INSPECTOR: ABRIR UN PREFAB ---
+        // El Inspector deja la ruta pedida con «📂 Abrir»; aquí solo se
+        // reenvía a la app, que es quien sustituye la escena en edición.
+        // Si ya hay uno pendiente, el nuevo espera al siguiente frame.
+        if self.pending_abrir_prefab.is_none() {
+            self.pending_abrir_prefab = self.inspector.pending_abrir_prefab.take();
+        } else {
+            self.inspector.pending_abrir_prefab.take();
         }
 
         // --- PENDIENTE DE MeshForge: ASIGNAR EL MODELO HORNEADO ---

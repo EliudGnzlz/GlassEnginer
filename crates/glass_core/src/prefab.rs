@@ -58,6 +58,40 @@ impl Prefab {
         Ok(prefab)
     }
 
+    /// Resuelve un `prefab_source` contra la raíz del proyecto y carga el
+    /// asset. Si la ruta no existe tal cual, prueba intercambiando la
+    /// capitalización del primer componente (`assets` ↔ `Assets`): las
+    /// fuentes escritas por distintas vías no siempre coinciden en
+    /// mayúsculas y en Linux el sistema de archivos sí distingue.
+    /// Ruta real del asset de una fuente relativa al proyecto: la
+    /// directa si existe; si no, con la capitalización alterna del primer
+    /// componente (`Assets` ↔ `assets`). `None` si no está en ninguna.
+    pub fn resolver_ruta(raiz: &Path, fuente: &str) -> Option<std::path::PathBuf> {
+        let directa = raiz.join(fuente);
+        if directa.is_file() {
+            return Some(directa);
+        }
+        let mut partes = fuente.splitn(2, '/');
+        let primero = partes.next().unwrap_or("");
+        let resto = partes.next().unwrap_or("");
+        let alterno = match primero {
+            "assets" => "Assets",
+            "Assets" => "assets",
+            _ => primero,
+        };
+        if alterno != primero {
+            let alt = raiz.join(alterno).join(resto);
+            if alt.is_file() {
+                return Some(alt);
+            }
+        }
+        None
+    }
+
+    pub fn cargar_desde_proyecto(raiz: &Path, fuente: &str) -> Option<Self> {
+        Self::load_from_file(Self::resolver_ruta(raiz, fuente)?).ok()
+    }
+
     /// Huella del asset: la misma que da una instancia intacta en la escena.
     pub fn huella(&self) -> String {
         huella_subarbol(
@@ -375,6 +409,89 @@ mod tests {
         assert!(avisos[0].contains("vínculo roto"));
         assert_eq!(serde_json::to_string(scene.get_entity(inst).unwrap()).unwrap(), raiz_antes);
         assert_eq!(serde_json::to_string(scene.get_entity(hijo_escena).unwrap()).unwrap(), hijo_antes);
+    }
+
+    #[test]
+    fn revertir_descarta_lo_tocado_y_deja_la_instancia_intacta() {
+        let (mut scene, prefab, inst) = escena_con_instancia();
+        let hijo_escena = scene.get_entity(inst).unwrap().children[0];
+
+        // Tocar la instancia: cambiar un dato del hijo y añadir una entidad.
+        scene.get_entity_mut(hijo_escena).unwrap().tag = "Tocado".into();
+        let extra = scene.create_entity("Extra".into(), vec!["Transform".into()]);
+        assert!(scene.reparent(extra, Some(inst)));
+
+        // Revertir contra el asset original.
+        scene.revertir_instancia_prefab(inst, &prefab).unwrap();
+
+        // Lo tocado se descartó y lo añadido desapareció.
+        assert_eq!(scene.get_entity(hijo_escena).unwrap().tag, "Untagged");
+        assert!(scene.get_entity(extra).is_none());
+        let raiz = scene.get_entity(inst).unwrap();
+        assert_eq!(raiz.children.len(), 1);
+        // La raíz conserva su transform de instancia y su vínculo, intacta.
+        assert_eq!(raiz.transform.position, [1.0, 2.0, 3.0]);
+        assert_eq!(raiz.prefab_source.as_deref(), Some(RUTA));
+        assert_eq!(raiz.prefab_hash, Some(prefab.huella()));
+        let resolver = |r: &str| (r == RUTA).then(|| prefab.clone());
+        assert!(scene.refrescar_instancias_prefab(&resolver).is_empty());
+
+        // Una entidad que no es raíz de instancia no se puede revertir.
+        assert!(scene.revertir_instancia_prefab(hijo_escena, &prefab).is_err());
+        assert!(scene.revertir_instancia_prefab(999_999, &prefab).is_err());
+    }
+
+    #[test]
+    fn desempaquetar_corta_el_vinculo_y_conserva_el_estado() {
+        let (mut scene, _prefab, inst) = escena_con_instancia();
+        let hijo_escena = scene.get_entity(inst).unwrap().children[0];
+        scene.get_entity_mut(hijo_escena).unwrap().tag = "Tocado".into();
+
+        scene.desempaquetar_instancia(inst).unwrap();
+
+        // El estado actual se hornea; el vínculo desaparece de todo el subárbol.
+        let raiz = scene.get_entity(inst).unwrap();
+        assert_eq!(raiz.prefab_source, None);
+        assert_eq!(raiz.prefab_hash, None);
+        assert_eq!(raiz.prefab_local_id, None);
+        assert_eq!(raiz.transform.position, [1.0, 2.0, 3.0]);
+        let hijo = scene.get_entity(hijo_escena).unwrap();
+        assert_eq!(hijo.prefab_local_id, None);
+        assert_eq!(hijo.tag, "Tocado");
+        assert_eq!(hijo.parent, Some(inst));
+
+        // Sin vínculo ya no se puede desempaquetar ni cuenta para el refresco.
+        assert!(scene.desempaquetar_instancia(inst).is_err());
+        let resolver = |_: &str| -> Option<Prefab> { None };
+        assert!(scene.refrescar_instancias_prefab(&resolver).is_empty());
+    }
+
+    #[test]
+    fn cargar_desde_proyecto_resuelve_y_tolera_capitalizacion() {
+        let (_scene, prefab, _inst) = escena_con_instancia();
+        let base = std::env::temp_dir().join(format!(
+            "glass_prefab_resolver_{}",
+            std::process::id()
+        ));
+        let assets = base.join("Assets").join("prefabs");
+        std::fs::create_dir_all(&assets).unwrap();
+        prefab.save_to_file(assets.join("coin.prefab.json")).unwrap();
+
+        // Ruta tal cual y con el primer componente en minúsculas.
+        let directa = Prefab::cargar_desde_proyecto(&base, "Assets/prefabs/coin.prefab.json");
+        assert_eq!(directa.map(|p| p.name), Some("CoinGroup".into()));
+        let alterna = Prefab::cargar_desde_proyecto(&base, "assets/prefabs/coin.prefab.json");
+        assert_eq!(alterna.map(|p| p.name), Some("CoinGroup".into()));
+        // Ausente: None, sin pánico.
+        assert!(Prefab::cargar_desde_proyecto(&base, "Assets/prefabs/no.prefab.json").is_none());
+
+        // resolver_ruta devuelve la ruta REAL (con la capitalización del
+        // disco), que es la que necesita «Abrir» para guardar encima.
+        let real = Prefab::resolver_ruta(&base, "assets/prefabs/coin.prefab.json");
+        assert_eq!(real, Some(assets.join("coin.prefab.json")));
+        assert!(Prefab::resolver_ruta(&base, "Assets/prefabs/no.prefab.json").is_none());
+
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]

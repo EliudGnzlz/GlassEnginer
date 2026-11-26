@@ -2574,6 +2574,64 @@ impl SceneState {
         avisos
     }
 
+    /// Revierte una instancia vinculada a su asset (Fase C): re-expande
+    /// desde `prefab` DESCARTANDO las modificaciones de la instancia
+    /// (incluidas las entidades añadidas en la escena) y deja la huella
+    /// guardada en la del asset, para que la instancia vuelva a contar
+    /// como intacta. La raíz conserva su transform y su padre externo,
+    /// como en el refresco. Error si la entidad no es raíz de instancia.
+    pub fn revertir_instancia_prefab(
+        &mut self,
+        raiz_id: u64,
+        prefab: &crate::prefab::Prefab,
+    ) -> Result<(), String> {
+        match self.get_entity(raiz_id) {
+            Some(e) if e.prefab_source.is_some() => {}
+            Some(_) => {
+                return Err(format!(
+                    "La entidad #{raiz_id} no es raíz de una instancia de prefab"
+                ))
+            }
+            None => return Err(format!("La entidad #{raiz_id} no existe en la escena")),
+        }
+        self.reexpandir_instancia(raiz_id, prefab);
+        let huella = prefab.huella();
+        if let Some(raiz) = self.get_entity_mut(raiz_id) {
+            raiz.prefab_hash = Some(huella);
+        }
+        Ok(())
+    }
+
+    /// Desempaqueta una instancia (Fase C): corta el vínculo de todo el
+    /// subárbol y deja las entidades como normales, horneando su estado
+    /// actual (no se toca ningún otro dato). Error si la entidad no es
+    /// raíz de instancia.
+    pub fn desempaquetar_instancia(&mut self, raiz_id: u64) -> Result<(), String> {
+        match self.get_entity(raiz_id) {
+            Some(e) if e.prefab_source.is_some() => {}
+            Some(_) => {
+                return Err(format!(
+                    "La entidad #{raiz_id} no es raíz de una instancia de prefab"
+                ))
+            }
+            None => return Err(format!("La entidad #{raiz_id} no existe en la escena")),
+        }
+        let ids: Vec<u64> = crate::prefab::recorrer_subarbol(&self.entities, raiz_id)
+            .iter()
+            .map(|n| n.e.id)
+            .collect();
+        for id in ids {
+            if let Some(e) = self.get_entity_mut(id) {
+                e.prefab_local_id = None;
+                if id == raiz_id {
+                    e.prefab_source = None;
+                    e.prefab_hash = None;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Sustituye el subárbol de la instancia `raiz_id` por el contenido de
     /// `prefab`, emparejando entidades por `prefab_local_id`. Conserva el id
     /// de escena de las que siguen en el asset, crea las nuevas y elimina las

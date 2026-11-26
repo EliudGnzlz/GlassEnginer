@@ -1169,6 +1169,14 @@ pub fn escala_proporcional(actual: [f32; 3], eje: usize, nuevo: f32) -> [f32; 3]
 pub struct InspectorPanel {
     show_add_component_menu: bool,
     busqueda_componente: String,
+    /// Id de la raíz de instancia para la que se pide confirmación de
+    /// reversión de prefab (Fase C); la ventana se muestra mientras viva.
+    confirmando_revertir_prefab: Option<u64>,
+    /// Desenlace de la última reversión de prefab (id de la raíz y
+    /// mensaje), para mostrarlo en la sección Prefab del Inspector.
+    resultado_revertir_prefab: Option<(u64, String)>,
+    /// Fuente (ruta relativa al proyecto) del prefab pedido con «📂 Abrir»; la recoge el DockingManager.
+    pub pending_abrir_prefab: Option<String>,
     /// Nombres de modelo disponibles (los .glb bajo `assets/`, sin
     /// extensión) para el selector de malla. Se cachean por entidad
     /// seleccionada y se refrescan al cambiar la selección o con el
@@ -1219,6 +1227,9 @@ impl InspectorPanel {
         Self {
             show_add_component_menu: false,
             busqueda_componente: String::new(),
+            confirmando_revertir_prefab: None,
+            resultado_revertir_prefab: None,
+            pending_abrir_prefab: None,
             model_names: Vec::new(),
             model_names_for: None,
             model_names_dirty: true,
@@ -1452,6 +1463,21 @@ impl InspectorPanel {
             Err(_) => return,
         };
 
+        // Estado del vínculo de prefab de la seleccionada (Fase C): se
+        // calcula con préstamos inmutables ANTES de tomar la entidad en
+        // mutable, porque dentro del ScrollArea la entidad está prestada
+        // y no se puede recorrer la escena.
+        let info_prefab = selected_id.and_then(|id| {
+            let raiz_proyecto = assets_root.parent().unwrap_or(assets_root);
+            estado_instancia_prefab(&scene, id, raiz_proyecto).map(|estado| {
+                let fuente = scene
+                    .get_entity(id)
+                    .and_then(|e| e.prefab_source.clone())
+                    .unwrap_or_default();
+                (fuente, estado)
+            })
+        });
+
         let entity = match selected_id.and_then(|id| scene.entities.iter_mut().find(|e| e.id == id)) {
             Some(e) => e,
             None => {
@@ -1540,6 +1566,56 @@ impl InspectorPanel {
                 });
 
                 ui.separator();
+
+                // ==========================================
+                // 1b. PREFAB: fuente y estado del vínculo (Fase C)
+                // ==========================================
+                if let Some((fuente, estado)) = &info_prefab {
+                    ui.separator();
+                    ui.label(RichText::new("🧩 Prefab").strong());
+                    ui.label(RichText::new(fuente).small().color(Color32::GRAY));
+                    match estado {
+                        EstadoInstanciaPrefab::Intacta => {
+                            ui.colored_label(
+                                Color32::from_rgb(120, 200, 120),
+                                "✓ Instancia intacta",
+                            );
+                        }
+                        EstadoInstanciaPrefab::Modificada => {
+                            ui.colored_label(
+                                Color32::from_rgb(230, 180, 90),
+                                "● Instancia modificada",
+                            );
+                        }
+                        EstadoInstanciaPrefab::VinculoRoto => {
+                            ui.colored_label(
+                                Color32::from_rgb(230, 110, 110),
+                                "⚠ Vínculo roto: el asset no se encuentra",
+                            );
+                        }
+                    }
+                    let puede_revertir = *estado != EstadoInstanciaPrefab::VinculoRoto;
+                    if ui
+                        .add_enabled(puede_revertir, egui::Button::new("↩ Revertir"))
+                        .clicked()
+                    {
+                        self.confirmando_revertir_prefab = Some(entity.id);
+                    }
+                    if ui
+                        .add_enabled(puede_revertir, egui::Button::new("📂 Abrir"))
+                        .on_hover_text(
+                            "Abre el asset del prefab para editarlo; Guardar escribe el .prefab.json",
+                        )
+                        .clicked()
+                    {
+                        self.pending_abrir_prefab = Some(fuente.clone());
+                    }
+                    if let Some((id, msg)) = &self.resultado_revertir_prefab {
+                        if *id == entity.id {
+                            ui.label(RichText::new(msg.as_str()).small());
+                        }
+                    }
+                }
 
                 // ==========================================
                 // 2. COMPONENTE TRANSFORM (ESTILO UNITY)
@@ -2919,6 +2995,93 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                 }
             });
         });
+
+        // Confirmación y aplicación diferida de la reversión de prefab
+        // (Fase C): la ventana vive en el panel y la reversión se aplica
+        // aquí, con el préstamo mutable de la entidad ya soltado.
+        let mut revertir_pendiente: Option<u64> = None;
+        if let Some(id) = self.confirmando_revertir_prefab {
+            if selected_id == Some(id) {
+                let mut cerrar = false;
+                egui::Window::new("↩ Revertir instancia")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ui.ctx(), |ui| {
+                        ui.label(
+                            "Se descartarán los cambios de esta instancia y se \
+                             re-expandirá desde su prefab.",
+                        );
+                        ui.horizontal(|ui| {
+                            if ui.button("↩ Revertir").clicked() {
+                                revertir_pendiente = Some(id);
+                                cerrar = true;
+                            }
+                            if ui.button("Cancelar").clicked() {
+                                cerrar = true;
+                            }
+                        });
+                    });
+                if cerrar {
+                    self.confirmando_revertir_prefab = None;
+                }
+            } else {
+                self.confirmando_revertir_prefab = None;
+            }
+        }
+        if let Some(id) = revertir_pendiente {
+            let raiz_proyecto = assets_root.parent().unwrap_or(assets_root);
+            let fuente = scene.get_entity(id).and_then(|e| e.prefab_source.clone());
+            let mensaje = match fuente
+                .as_ref()
+                .and_then(|f| glass_core::prefab::Prefab::cargar_desde_proyecto(raiz_proyecto, f))
+            {
+                Some(prefab) => match scene.revertir_instancia_prefab(id, &prefab) {
+                    Ok(()) => format!("Instancia revertida a {}", fuente.unwrap_or_default()),
+                    Err(e) => e,
+                },
+                None => "No se pudo cargar el prefab de origen".to_string(),
+            };
+            self.resultado_revertir_prefab = Some((id, mensaje));
+        }
+    }
+}
+
+/// Estado de una instancia de prefab frente a su asset (Fase C).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EstadoInstanciaPrefab {
+    /// El asset no se encuentra en el proyecto.
+    VinculoRoto,
+    /// La huella del subárbol coincide con la guardada al instanciar.
+    Intacta,
+    /// La huella difiere: la instancia tiene cambios locales.
+    Modificada,
+}
+
+/// Estado del vínculo de la entidad `raiz_id`: `None` si no existe o no
+/// es raíz de una instancia de prefab.
+fn estado_instancia_prefab(
+    scene: &SceneState,
+    raiz_id: u64,
+    raiz_proyecto: &Path,
+) -> Option<EstadoInstanciaPrefab> {
+    let raiz = scene.get_entity(raiz_id)?;
+    let fuente = raiz.prefab_source.as_ref()?;
+    let hash_guardado = raiz.prefab_hash.clone();
+    // Solo existencia: el contenido del asset no hace falta para el
+    // estado (la huella se compara con el hash guardado) y parsearlo
+    // entero en cada repintado del Inspector saldría caro.
+    match glass_core::prefab::Prefab::resolver_ruta(raiz_proyecto, fuente) {
+        None => Some(EstadoInstanciaPrefab::VinculoRoto),
+        Some(_) => {
+            let huella_actual =
+                glass_core::prefab::huella_subarbol(scene.entities.iter(), raiz_id, |e| e.id);
+            if Some(huella_actual) == hash_guardado {
+                Some(EstadoInstanciaPrefab::Intacta)
+            } else {
+                Some(EstadoInstanciaPrefab::Modificada)
+            }
+        }
     }
 }
 
@@ -2926,9 +3089,10 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
 mod tests {
     use super::{
         aplicar_acciones_colliders, aplicar_datos, direccion_capsula, direccion_capsula_valida,
-        escala_proporcional, estado_referencia, extraer_componente, instalar_componente,
-        listar_physmats, ref_de_arrastre, referencias_a_physmat, scan_model_names_in,
-        spec_virtual, tamano_convertido, AccionCollider, EstadoRef, TipoComponente,
+        escala_proporcional, estado_instancia_prefab, estado_referencia, extraer_componente,
+        instalar_componente, listar_physmats, ref_de_arrastre, referencias_a_physmat,
+        scan_model_names_in, spec_virtual, tamano_convertido, AccionCollider, EstadoInstanciaPrefab,
+        EstadoRef, TipoComponente,
     };
     use glass_core::physics_material::PhysicsMaterial;
     use glass_core::{CameraData, ColliderSpec, EntityData, PhysicsData, SceneState};
@@ -2947,6 +3111,54 @@ mod tests {
         }
         std::fs::create_dir_all(&dir).expect("crear directorio temporal");
         dir
+    }
+
+    #[test]
+    fn estado_instancia_prefab_cubre_los_casos() {
+        use glass_core::prefab::Prefab;
+        let raiz_proyecto = temp_dir("prefab_estado");
+        let assets = raiz_proyecto.join("Assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        let fuente = "Assets/mi_prefab.prefab.json";
+
+        // Asset: raíz + hijo, guardado en el proyecto temporal.
+        let mut origen = SceneState::new();
+        let r = origen.create_entity("Raiz".into(), vec!["Transform".into()]);
+        let h = origen.create_entity("Hijo".into(), vec!["Transform".into()]);
+        assert!(origen.reparent(h, Some(r)));
+        let prefab = Prefab::from_entity(&origen, r).unwrap();
+        prefab.save_to_file(assets.join("mi_prefab.prefab.json")).unwrap();
+
+        // Instancia vinculada en una escena de trabajo.
+        let mut scene = SceneState::new();
+        let inst = scene.instantiate_prefab(&prefab, None, None, Some(fuente));
+
+        // Entidad normal: sin estado.
+        let normal = scene.create_entity("Normal".into(), vec!["Transform".into()]);
+        assert_eq!(estado_instancia_prefab(&scene, normal, &raiz_proyecto), None);
+
+        // Recién instanciada: intacta.
+        assert_eq!(
+            estado_instancia_prefab(&scene, inst, &raiz_proyecto),
+            Some(EstadoInstanciaPrefab::Intacta)
+        );
+
+        // Tocada (el tag entra en la huella): modificada.
+        let hijo = scene.get_entity(inst).unwrap().children[0];
+        scene.get_entity_mut(hijo).unwrap().tag = "Tocado".into();
+        assert_eq!(
+            estado_instancia_prefab(&scene, inst, &raiz_proyecto),
+            Some(EstadoInstanciaPrefab::Modificada)
+        );
+
+        // Sin asset: vínculo roto.
+        std::fs::remove_file(assets.join("mi_prefab.prefab.json")).unwrap();
+        assert_eq!(
+            estado_instancia_prefab(&scene, inst, &raiz_proyecto),
+            Some(EstadoInstanciaPrefab::VinculoRoto)
+        );
+
+        let _ = std::fs::remove_dir_all(&raiz_proyecto);
     }
 
     fn touch(path: &Path) {

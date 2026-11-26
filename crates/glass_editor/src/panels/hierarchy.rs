@@ -42,6 +42,7 @@ enum HierarchyAction {
     Reparent(u64, Option<u64>),
     InsertRelative(u64, u64, bool),
     Group(Vec<u64>),
+    DesempaquetarPrefab(u64),
 }
 
 pub struct HierarchyPanel {
@@ -389,6 +390,20 @@ impl HierarchyPanel {
                             ui.visuals().text_color()
                         };
 
+                        // Vínculo de prefab (Fase C): la raíz se pinta en
+                        // azul vivo y los descendientes vinculados en un
+                        // azul más tenue, como el cubo azul de Unity. Si
+                        // la fila está seleccionada manda la selección.
+                        let text_color = if is_selected {
+                            text_color
+                        } else if entity.prefab_source.is_some() {
+                            Color32::from_rgb(110, 175, 255)
+                        } else if entity.prefab_local_id.is_some() {
+                            Color32::from_rgb(95, 135, 195)
+                        } else {
+                            text_color
+                        };
+
                         // La fila que se está arrastrando queda
                         // atenuada en su sitio (el «original» se
                         // ve en el fantasma que sigue al ratón).
@@ -503,6 +518,13 @@ impl HierarchyPanel {
                         if ui.button("📋 Duplicar").clicked() {
                             pending_action = Some(HierarchyAction::Duplicate(entity.id));
                             ui.close();
+                        }
+                        if entity.prefab_source.is_some() {
+                            ui.separator();
+                            if ui.button("📦 Desempaquetar Prefab").clicked() {
+                                pending_action = Some(HierarchyAction::DesempaquetarPrefab(entity.id));
+                                ui.close();
+                            }
                         }
                         if ui.button("🗑 Eliminar").clicked() {
                             pending_action = Some(HierarchyAction::Delete(entity.id));
@@ -671,6 +693,11 @@ impl HierarchyPanel {
                 HierarchyAction::Create(preset) => {
                     let new_id = Self::instantiate_preset(&mut scene, preset);
                     self.nota_creacion(preset, new_id);
+                }
+                HierarchyAction::DesempaquetarPrefab(id) => {
+                    if let Err(e) = scene.desempaquetar_instancia(id) {
+                        log::warn!("[Prefabs] {e}");
+                    }
                 }
             }
         }

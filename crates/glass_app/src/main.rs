@@ -3401,6 +3401,8 @@ impl GlassEngineApp {
             #[cfg(feature = "editor")]
             {
                 self.ruta_escena_actual = Some(std::path::PathBuf::from(scene_path));
+                // Una escena normal cierra el modo de edición de prefab.
+                self.editor_layout.prefab_en_edicion = None;
                 self.nombre_escena_con_ruta =
                     glass_core::scenes::short_scene_name(scene_path);
                 // Recién cargada = limpia, aunque el vigía no dispare (mismo
@@ -3411,6 +3413,77 @@ impl GlassEngineApp {
             }
         }
         cargada
+    }
+
+    /// Fase C: abre el asset de un prefab como escena de edición (vista
+    /// simple, sin Prefab Mode): sus entidades sustituyen a la escena SIN
+    /// vínculo — ellas son la fuente — y el gestor queda en modo
+    /// `prefab_en_edicion`, donde Guardar escribe el `.prefab.json`.
+    #[cfg(feature = "editor")]
+    fn abrir_prefab_en_editor(&mut self, fuente: &str) {
+        // La fuente es relativa al proyecto y se resuelve con la misma
+        // tolerancia de capitalización que usa el resto del sistema: la
+        // ruta que se guarda es la REAL del disco.
+        let Some(raiz) = self.raiz_proyecto_actual.clone() else {
+            log::error!("Sin proyecto abierto; no se puede abrir el prefab '{fuente}'");
+            self.editor_layout.status_message = Some((
+                "No hay proyecto abierto; no se puede abrir el prefab".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        };
+        let Some(ruta) = glass_core::Prefab::resolver_ruta(&raiz, fuente) else {
+            log::error!("No se encontró el asset del prefab '{fuente}'");
+            self.editor_layout.status_message = Some((
+                format!("No se encontró el asset del prefab: {fuente}"),
+                std::time::Instant::now(),
+            ));
+            return;
+        };
+        let ruta = &ruta;
+        let prefab = match glass_core::Prefab::load_from_file(ruta) {
+            Ok(p) => p,
+            Err(e) => {
+                log::error!("No se pudo abrir el prefab '{}': {e}", ruta.display());
+                self.editor_layout.status_message = Some((
+                    format!("No se pudo abrir el prefab: {e}"),
+                    std::time::Instant::now(),
+                ));
+                return;
+            }
+        };
+        let raiz_id = prefab.root_entity.id;
+        let nombre = prefab.name.clone();
+        let mut entidades = vec![prefab.root_entity];
+        entidades.extend(prefab.descendant_entities);
+        for e in &mut entidades {
+            e.prefab_source = None;
+            e.prefab_hash = None;
+            e.prefab_local_id = None;
+        }
+        let cargado = match self.scene_state.lock() {
+            Ok(mut sc) => {
+                sc.replace_entities(entidades);
+                self.editor_layout.marcar_guardada(&sc);
+                true
+            }
+            Err(_) => false,
+        };
+        if !cargado {
+            log::error!("SceneState bloqueado; no se abrió el prefab");
+            return;
+        }
+        self.editor_layout.prefab_en_edicion = Some((ruta.to_path_buf(), raiz_id));
+        self.editor_layout.hierarchy.selected_entity = Some(raiz_id);
+        self.ruta_escena_actual = None;
+        self.nombre_escena_con_ruta = format!("{nombre} (prefab)");
+        self.rebuild_physics_from_scene();
+        // Vista simple: no se instancian los scripts del prefab.
+        self.editor_layout.status_message = Some((
+            format!("Editando prefab {nombre}: Guardar escribe el .prefab.json"),
+            std::time::Instant::now(),
+        ));
+        log::info!("Editor: editando el prefab '{}' ({})", nombre, ruta.display());
     }
 
     #[cfg(feature = "editor")]
@@ -3435,6 +3508,8 @@ impl GlassEngineApp {
     pub fn setup_empty_scene(&mut self) {
         let mut state = self.scene_state.lock().unwrap();
         Self::construir_escena_vacia(&mut state);
+        drop(state);
+        self.editor_layout.prefab_en_edicion = None;
     }
 
     /// Si el modelo importado trae piel, sube también su malla gemela con
@@ -3596,6 +3671,7 @@ fn lanzar_hub_al_salir() {
             ),
         }
         self.vigilar_assets(&raiz_assets);
+        self.editor_layout.prefab_en_edicion = None;
         self.editor_layout.project.set_assets_root(raiz_assets);
         self.refrescar_physmat_lib();
         // Los materiales que fallaron contra las raíces del proyecto
@@ -4374,6 +4450,14 @@ for stem in &referenciados {
     ///    nueva: los cuerpos de Rapier apuntan a ids viejos y hay que rehacerlos.
     /// 4. Se instancian los scripts que declara la escena nueva.
     fn apply_pending_scene_load(&mut self) {
+        // Fase C: apertura de prefab pedida desde el Inspector; se aplica
+        // en esta misma ventana de fin de frame que las cargas de escena
+        // (nadie está recorriendo las entidades). Si además hay una carga
+        // de escena pendiente, va después y cierra el modo prefab.
+        #[cfg(feature = "editor")]
+        if let Some(fuente_prefab) = self.editor_layout.pending_abrir_prefab.take() {
+            self.abrir_prefab_en_editor(&fuente_prefab);
+        }
         self.recarga_bajo_demanda.clear();
         let result = {
             let Ok(mut manager) = self.scene_manager.lock() else {
@@ -4447,6 +4531,12 @@ for stem in &referenciados {
                 // 2. Física desde cero: los handles de Rapier no sobreviven a
                 //    una sustitución de entidades.
                 self.rebuild_physics_from_scene();
+
+                // Una escena normal cierra el modo de edición de prefab.
+                #[cfg(feature = "editor")]
+                {
+                    self.editor_layout.prefab_en_edicion = None;
+                }
 
                 // 3. Scripts que declara la escena nueva.
                 self.instantiate_scene_scripts(&loaded.scripted);
@@ -8206,7 +8296,28 @@ self.salir_del_proceso = true;
             if let Some(decision) = editor_layout.decision_cierre.take() {
                 match decision {
                     glass_editor::DecisionCierre::Guardar => {
-                        if let Some(ruta) = self.ruta_escena_actual.clone() {
+                        if let Some(resultado_prefab) =
+                            editor_layout.guardar_prefab_en_edicion(scene_state)
+                        {
+                            match resultado_prefab {
+                                Ok(()) => {
+                                    self.ultimo_autoguardado = std::time::Instant::now();
+                                    self.volver_al_hub_pendiente = false;
+                                    if self.cierre_desde_hub_pendiente {
+                                        self.cierre_desde_hub_pendiente = false;
+                                    } else {
+                                        Self::lanzar_hub_al_salir();
+                                    }
+                                    self.salir_del_proceso = true;
+                                    self.egui_ctx.request_repaint();
+                                }
+                                Err(_) => {
+                                    // El error ya está en status_message
+                                    // (lo dejó guardar_prefab_en_edicion).
+                                    self.volver_al_hub_pendiente = false;
+                                }
+                            }
+                        } else if let Some(ruta) = self.ruta_escena_actual.clone() {
                             let resultado = match scene_state.lock() {
                                 Ok(sc) => {
                                     let r = sc

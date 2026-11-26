@@ -53,6 +53,9 @@ pub fn is_mutating_tool(name: &str) -> bool {
             | "glass_batch_spawn_entities"
             | "glass_destroy_entity"
             | "glass_modify_component"
+            | "glass_prefab_create"
+            | "glass_prefab_instantiate"
+            | "glass_prefab_revert"
             | "glass_set_ui_text"
             | "glass_set_entity_material"
             | "glass_material_property_set"
@@ -408,6 +411,56 @@ impl McpServer {
                         {
                             "name": "glass_destroy_entity",
                             "description": "Destruye una entidad de la escena por su id (Fase 8). Es mutante: pasa por la Command Queue como las demás tools de escritura.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "number" }
+                                },
+                                "required": ["entity_id"]
+                            }
+                        },
+                        {
+                            "name": "glass_prefab_list",
+                            "description": "Lista los assets *.prefab.json del proyecto (bajo Assets/ y assets/) con su ruta relativa, su nombre y su número de entidades. Es de consulta: no modifica la escena.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "glass_prefab_create",
+                            "description": "Crea un asset de prefab (.prefab.json) a partir de una entidad de la escena y todos sus descendientes. La ruta debe empezar por Assets/ o assets/ y terminar en .prefab.json. Es mutante: pasa por la Command Queue como las demás tools de escritura.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "number" },
+                                    "path": { "type": "string" },
+                                    "overwrite": { "type": "boolean" }
+                                },
+                                "required": ["entity_id", "path"]
+                            }
+                        },
+                        {
+                            "name": "glass_prefab_instantiate",
+                            "description": "Instancia un prefab del proyecto en la escena, con posición y padre opcionales, y deja escrito el vínculo vivo con su asset. Es mutante: pasa por la Command Queue como las demás tools de escritura.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "path": { "type": "string" },
+                                    "position": {
+                                        "type": "array",
+                                        "items": { "type": "number" },
+                                        "minItems": 3,
+                                        "maxItems": 3
+                                    },
+                                    "parent_id": { "type": "number" }
+                                },
+                                "required": ["path"]
+                            }
+                        },
+                        {
+                            "name": "glass_prefab_revert",
+                            "description": "Revierte una instancia de prefab a su asset y descarta los cambios locales. Recibe el id de la raíz de la instancia. Es mutante: pasa por la Command Queue como las demás tools de escritura.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -3073,6 +3126,258 @@ impl McpServer {
                 }
             }
 
+            "glass_prefab_list" => {
+                let raiz = raiz_proyecto();
+                let mut pila: Vec<std::path::PathBuf> = Vec::new();
+                // Se usa read_dir sobre la raíz para que, en sistemas de archivos
+                // insensibles a mayúsculas, Assets/ y assets/ no se recorran dos veces.
+                if let Ok(entradas) = std::fs::read_dir(&raiz) {
+                    for entrada in entradas.flatten() {
+                        let nombre = entrada.file_name();
+                        let es_assets = nombre == "Assets" || nombre == "assets";
+                        let es_dir = entrada.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                        if es_assets && es_dir {
+                            pila.push(entrada.path());
+                        }
+                    }
+                }
+
+                let mut encontrados: Vec<(String, String, usize)> = Vec::new();
+                let mut ilegibles = 0usize;
+                while let Some(dir) = pila.pop() {
+                    let Ok(entradas) = std::fs::read_dir(&dir) else {
+                        continue;
+                    };
+                    for entrada in entradas.flatten() {
+                        let Ok(tipo) = entrada.file_type() else {
+                            continue;
+                        };
+                        let ruta = entrada.path();
+                        // file_type() no sigue symlinks: así no hay bucles en el recorrido.
+                        if tipo.is_dir() {
+                            pila.push(ruta);
+                            continue;
+                        }
+                        if !entrada.file_name().to_string_lossy().ends_with(".prefab.json") {
+                            continue;
+                        }
+                        match glass_core::prefab::Prefab::load_from_file(&ruta) {
+                            Ok(prefab) => {
+                                let relativa = ruta
+                                    .strip_prefix(&raiz)
+                                    .unwrap_or(&ruta)
+                                    .components()
+                                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                                    .collect::<Vec<_>>()
+                                    .join("/");
+                                let k = 1 + prefab.descendant_entities.len();
+                                encontrados.push((relativa, prefab.name, k));
+                            }
+                            Err(_) => ilegibles += 1,
+                        }
+                    }
+                }
+                encontrados.sort_by(|a, b| a.0.cmp(&b.0));
+
+                let mut texto = format!("Prefabs en el proyecto ({}):", encontrados.len());
+                for (ruta, nombre, k) in &encontrados {
+                    texto.push_str(&format!("\n- {ruta} · {nombre} · {k} entidades"));
+                }
+                if ilegibles > 0 {
+                    texto.push_str(&format!(
+                        "\n({ilegibles} archivos .prefab.json ilegibles omitidos)"
+                    ));
+                }
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": texto
+                        }]
+                    }),
+                )
+            }
+            "glass_prefab_create" => {
+                let Some(entity_id) = args.get("entity_id").and_then(|n| n.as_u64()) else {
+                    return McpResponse::invalid_params(id, "Field 'entity_id' is required");
+                };
+                let Some(path) = args.get("path").and_then(|p| p.as_str()) else {
+                    return McpResponse::invalid_params(id, "Field 'path' is required");
+                };
+                let ruta_valida = (path.starts_with("Assets/") || path.starts_with("assets/"))
+                    && path.ends_with(".prefab.json")
+                    && !path.contains("..");
+                if !ruta_valida {
+                    return McpResponse::invalid_params(
+                        id,
+                        "Field 'path' must start with 'Assets/' or 'assets/', end with '.prefab.json' and not contain '..'",
+                    );
+                }
+                let overwrite = args
+                    .get("overwrite")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                let destino = raiz_proyecto().join(path);
+                if destino.exists() && !overwrite {
+                    return McpResponse::error(
+                        id,
+                        -32009,
+                        format!("Ya existe un prefab en '{path}' (usa overwrite para reemplazarlo)"),
+                    );
+                }
+
+                let prefab = match glass_core::prefab::Prefab::from_entity(&scene, entity_id) {
+                    Ok(p) => p,
+                    Err(msg) => return McpResponse::error(id, -32004, msg),
+                };
+
+                if let Err(e) = prefab.save_to_file(&destino) {
+                    return McpResponse::error(id, -32002, e.to_string());
+                }
+
+                let k = 1 + prefab.descendant_entities.len();
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": format!(
+                                "Prefab '{}' creado en {path} ({k} entidades) desde la entidad #{entity_id}",
+                                prefab.name
+                            )
+                        }]
+                    }),
+                )
+            }
+            "glass_prefab_instantiate" => {
+                let Some(path) = args.get("path").and_then(|p| p.as_str()) else {
+                    return McpResponse::invalid_params(id, "Field 'path' is required");
+                };
+                let ruta_valida = (path.starts_with("Assets/") || path.starts_with("assets/"))
+                    && path.ends_with(".prefab.json")
+                    && !path.contains("..");
+                if !ruta_valida {
+                    return McpResponse::invalid_params(
+                        id,
+                        "Field 'path' must start with 'Assets/' or 'assets/', end with '.prefab.json' and not contain '..'",
+                    );
+                }
+
+                let world_pos = match args.get("position") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(v) => {
+                        let comps: Option<Vec<f32>> = v.as_array().and_then(|a| {
+                            a.iter().map(|c| c.as_f64().map(|n| n as f32)).collect()
+                        });
+                        match comps {
+                            Some(c) if c.len() == 3 => Some([c[0], c[1], c[2]]),
+                            _ => {
+                                return McpResponse::invalid_params(
+                                    id,
+                                    "Field 'position' must be an array of 3 numbers",
+                                )
+                            }
+                        }
+                    }
+                };
+
+                let parent_id = match args.get("parent_id") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(v) => match v.as_u64() {
+                        Some(n) => Some(n),
+                        None => {
+                            return McpResponse::invalid_params(
+                                id,
+                                "Field 'parent_id' must be a non-negative integer",
+                            )
+                        }
+                    },
+                };
+
+                let Some(prefab) =
+                    glass_core::prefab::Prefab::cargar_desde_proyecto(&raiz_proyecto(), path)
+                else {
+                    return McpResponse::error(
+                        id,
+                        -32010,
+                        format!("Prefab no encontrado: '{path}'"),
+                    );
+                };
+
+                let k = 1 + prefab.descendant_entities.len();
+                if scene.entities.len() + k > MAX_ENTITIES_PER_SCENE {
+                    return McpResponse::error(id, -32003, "Scene capacity reached (10000 entities)");
+                }
+
+                if let Some(p) = parent_id {
+                    if scene.get_entity(p).is_none() {
+                        return McpResponse::error(id, -32004, "Entity not found");
+                    }
+                }
+
+                let new_id = scene.instantiate_prefab(&prefab, parent_id, world_pos, Some(path));
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": format!(
+                                "Prefab '{}' instanciado desde {path}: raíz #{new_id} ({k} entidades)",
+                                prefab.name
+                            )
+                        }]
+                    }),
+                )
+            }
+            "glass_prefab_revert" => {
+                let Some(entity_id) = args.get("entity_id").and_then(|n| n.as_u64()) else {
+                    return McpResponse::invalid_params(id, "Field 'entity_id' is required");
+                };
+
+                let fuente = match scene.get_entity(entity_id) {
+                    None => return McpResponse::error(id, -32004, "Entity not found"),
+                    Some(e) => match e.prefab_source.clone() {
+                        Some(f) => f,
+                        None => {
+                            return McpResponse::error(
+                                id,
+                                -32013,
+                                format!(
+                                    "La entidad #{entity_id} no es raíz de una instancia de prefab"
+                                ),
+                            )
+                        }
+                    },
+                };
+
+                let Some(prefab) =
+                    glass_core::prefab::Prefab::cargar_desde_proyecto(&raiz_proyecto(), &fuente)
+                else {
+                    return McpResponse::error(
+                        id,
+                        -32010,
+                        format!("Vínculo roto: el asset '{fuente}' no se encuentra en el proyecto"),
+                    );
+                };
+
+                match scene.revertir_instancia_prefab(entity_id, &prefab) {
+                    Ok(()) => McpResponse::success(
+                        id,
+                        json!({
+                            "content": [{
+                                "type": "text",
+                                "text": format!(
+                                    "Instancia #{entity_id} revertida a su prefab '{fuente}'"
+                                )
+                            }]
+                        }),
+                    ),
+                    Err(msg) => McpResponse::error(id, -32013, msg),
+                }
+            }
+
             "glass_queue_submit" => {
                 let Some(lista) = args.get("commands").and_then(|v| v.as_array()) else {
                     return McpResponse::invalid_params(id, "Field 'commands' is required");
@@ -4108,6 +4413,84 @@ mod tests_catchup {
             tool, args
         );
         srv.handle_json(&req).unwrap_or_default()
+    }
+
+    #[test]
+    fn lista_incluye_las_tools_de_prefab() {
+        let srv = servidor();
+        let resp = srv
+            .handle_json(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
+            .unwrap_or_default();
+        for tool in [
+            "glass_prefab_create",
+            "glass_prefab_instantiate",
+            "glass_prefab_list",
+            "glass_prefab_revert",
+        ] {
+            assert!(resp.contains(tool), "tools/list no declara {tool}");
+        }
+        assert!(is_mutating_tool("glass_prefab_create"));
+        assert!(is_mutating_tool("glass_prefab_instantiate"));
+        assert!(is_mutating_tool("glass_prefab_revert"));
+        assert!(!is_mutating_tool("glass_prefab_list"));
+    }
+
+    #[test]
+    fn prefab_list_responde_con_el_formato() {
+        // El conteo depende de la raíz que localice el VFS en el entorno
+        // de test (el repo trae assets/prefabs de ejemplo): lo que se
+        // fija aquí es el contrato — éxito y la cabecera del listado.
+        let srv = servidor();
+        let resp = llamar(&srv, "glass_prefab_list", json!({}));
+        assert!(!resp.contains("\"error\""), "respuesta inesperada: {resp}");
+        assert!(
+            resp.contains("Prefabs en el proyecto ("),
+            "respuesta inesperada: {resp}"
+        );
+    }
+
+    #[test]
+    fn prefab_create_rechaza_rutas_invalidas() {
+        let srv = servidor();
+        let sin_assets = llamar(
+            &srv,
+            "glass_prefab_create",
+            json!({"entity_id": 1, "path": "prefabs/x.prefab.json"}),
+        );
+        assert!(sin_assets.contains("error"), "respuesta inesperada: {sin_assets}");
+
+        let con_salto = llamar(
+            &srv,
+            "glass_prefab_create",
+            json!({"entity_id": 1, "path": "Assets/../x.prefab.json"}),
+        );
+        assert!(con_salto.contains("error"), "respuesta inesperada: {con_salto}");
+    }
+
+    #[test]
+    fn prefab_instantiate_inexistente_da_32010() {
+        let srv = servidor();
+        let resp = llamar(
+            &srv,
+            "glass_prefab_instantiate",
+            json!({"path": "Assets/prefabs/no_existe.prefab.json"}),
+        );
+        // -32010 = asset ausente, el mismo código que usa glass_prefab_revert.
+        assert!(resp.contains("32010"), "respuesta inesperada: {resp}");
+    }
+
+    #[test]
+    fn prefab_revert_sobre_entidad_normal_falla() {
+        let srv = servidor();
+        let entidad = {
+            let mut sc = srv.scene.lock().unwrap();
+            sc.create_entity("Normal".to_string(), vec!["Transform".into()])
+        };
+        let resp = llamar(&srv, "glass_prefab_revert", json!({"entity_id": entidad}));
+        assert!(resp.contains("32013"), "respuesta inesperada: {resp}");
+
+        let resp = llamar(&srv, "glass_prefab_revert", json!({"entity_id": 999_999}));
+        assert!(resp.contains("32004"), "respuesta inesperada: {resp}");
     }
 
     #[test]

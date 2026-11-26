@@ -8,31 +8,11 @@ use std::path::{Path, PathBuf};
 use glass_core::prefab::Prefab;
 use glass_core::SceneState;
 
-/// Resuelve la ruta de un `prefab_source` contra la raíz del proyecto.
-/// Si no existe tal cual, prueba intercambiando la capitalización del
-/// primer componente (`assets` ↔ `Assets`): las fuentes escritas por
-/// distintas vías no siempre coinciden en mayúsculas y en Linux el
-/// sistema de archivos sí distingue.
+/// Resuelve la ruta de un `prefab_source` contra la raíz del proyecto
+/// (la lógica vive en `glass_core::prefab::Prefab::cargar_desde_proyecto`,
+/// compartida con el editor y el MCP).
 fn resolver_prefab(raiz: &Path, fuente: &str) -> Option<Prefab> {
-    let directa = raiz.join(fuente);
-    if directa.is_file() {
-        return Prefab::load_from_file(&directa).ok();
-    }
-    let mut partes = fuente.splitn(2, '/');
-    let primero = partes.next().unwrap_or("");
-    let resto = partes.next().unwrap_or("");
-    let alterno = match primero {
-        "assets" => "Assets",
-        "Assets" => "assets",
-        _ => primero,
-    };
-    if alterno != primero {
-        let alt: PathBuf = raiz.join(alterno).join(resto);
-        if alt.is_file() {
-            return Prefab::load_from_file(&alt).ok();
-        }
-    }
-    None
+    Prefab::cargar_desde_proyecto(raiz, fuente)
 }
 
 /// Raíz del proyecto deducida de la ruta de una escena: el ancestro
