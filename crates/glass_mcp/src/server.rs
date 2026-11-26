@@ -51,7 +51,7 @@ pub struct McpServer {
 /// Queue cuando el bucle del motor está bombeando. Las de consulta
 /// responden directas, como siempre.
 /// Tools que solo puede ejecutar la app del editor (estado de Play, ruta de guardado).
-pub const APP_EXEC_TOOLS: [&str; 5] = ["glass_play_control", "glass_scene_save", "glass_scene_new", "glass_undo", "glass_redo"];
+pub const APP_EXEC_TOOLS: [&str; 6] = ["glass_play_control", "glass_scene_save", "glass_scene_new", "glass_undo", "glass_redo", "glass_console_log"];
 
 /// Normaliza el nombre de un material físico a su referencia
 /// (ruta relativa a Assets con el sufijo `.physmat.json`).
@@ -103,6 +103,7 @@ fn is_mutating_tool(name: &str) -> bool {
             | "glass_entity_duplicate"
             | "glass_animator_play"
             | "glass_audio_source_control"
+            | "glass_console_log"
             | "glass_play_control"
             | "glass_scene_save"
             | "glass_scene_load"
@@ -771,6 +772,19 @@ impl McpServer {
                                     "bus": { "type": "string", "enum": ["master", "music", "sfx"] }
                                 },
                                 "required": ["entity_id", "action"]
+                            }
+                        },
+                        {
+                            "name": "glass_console_log",
+                            "description": "Lee las últimas entradas de la consola del editor (la del panel inferior), con filtros opcionales por nivel y por texto. La sirve la app en vivo.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "limit": { "type": "integer", "description": "Máximo de entradas (por defecto 50, tope 300)" },
+                                    "level": { "type": "string", "description": "Nivel exacto: INFO, WARN o ERROR" },
+                                    "contains": { "type": "string", "description": "Subcadena a buscar en el texto (insensible a mayúsculas)" }
+                                },
+                                "required": []
                             }
                         },
                         {
@@ -5628,6 +5642,17 @@ impl McpServer {
                 )
             }
 
+            "glass_console_log" => {
+                // La consola vive en el layout del editor (app): esta
+                // tool la sirve el ejecutor de app (APP_EXEC_TOOLS).
+                // Sin app (servidor suelto o tests) no hay consola.
+                McpResponse::error(
+                    id,
+                    -32008,
+                    "glass_console_log necesita el editor en vivo (la consola es del layout de la app)",
+                )
+            }
+
             _ => McpResponse::method_not_found(id, name),
         }
     }
@@ -6525,6 +6550,15 @@ fn entity_set_duplicate_find() {
         );
         assert!(r.contains("-32001"), "{r}");
         assert!(is_mutating_tool("glass_audio_source_control"));
+    }
+
+    #[test]
+    fn console_log_es_de_app_y_sin_app_da_32008() {
+        let srv = servidor();
+        let r = llamar(&srv, "glass_console_log", json!({ "limit": 5 }));
+        assert!(r.contains("-32008"), "{r}");
+        assert!(is_mutating_tool("glass_console_log"));
+        assert!(APP_EXEC_TOOLS.contains(&"glass_console_log"));
     }
 
     #[test]

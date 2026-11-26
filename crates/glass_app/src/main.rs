@@ -4633,6 +4633,47 @@ for stem in &referenciados {
                     h.can_redo()
                 ))))
             }
+            "glass_console_log" => {
+                let limit = args
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(50)
+                    .min(300) as usize;
+                let nivel = args
+                    .get("level")
+                    .and_then(|v| v.as_str())
+                    .map(|l| l.to_string());
+                let contiene = args
+                    .get("contains")
+                    .and_then(|v| v.as_str())
+                    .map(|c| c.to_lowercase());
+                let logs = &self.editor_layout.console.logs;
+                let total = logs.len();
+                let mut filtrados: Vec<serde_json::Value> = logs
+                    .iter()
+                    .filter(|(_, n)| {
+                        nivel
+                            .as_deref()
+                            .is_none_or(|f| n.eq_ignore_ascii_case(f))
+                    })
+                    .filter(|(t, _)| {
+                        contiene
+                            .as_deref()
+                            .is_none_or(|f| t.to_lowercase().contains(f))
+                    })
+                    .map(|(t, n)| serde_json::json!({ "level": n, "text": t }))
+                    .collect();
+                let desde = filtrados.len().saturating_sub(limit);
+                let entradas: Vec<serde_json::Value> = filtrados.drain(desde..).collect();
+                let payload = serde_json::json!({
+                    "total": total,
+                    "returned": entradas.len(),
+                    "entries": entradas,
+                });
+                Some(Ok(texto(
+                    serde_json::to_string_pretty(&payload).unwrap_or_default(),
+                )))
+            }
             _ => None,
         }
     }
