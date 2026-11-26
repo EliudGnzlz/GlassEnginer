@@ -93,6 +93,15 @@ pub struct SceneManager {
     active_name: String,
     /// Clave de asset de la escena activa.
     active_key: String,
+    /// Archivo del que salió la escena activa, si salió de uno. Es la
+    /// ÚNICA fuente de verdad de «dónde se guarda esta escena»: la fijan
+    /// `apply_pending` (la ruta resuelta de la clave) y `set_active_file`
+    /// (aperturas directas del editor), y la limpian `set_active_name`
+    /// (escenas armadas en código, sin archivo). Antes la ruta vivía en
+    /// espejos de la app y del layout que algunas vías de carga no
+    /// actualizaban, y «Save Scene» acababa escribiendo por la clave
+    /// sobre el archivo de OTRA escena (defecto S1).
+    active_path: Option<std::path::PathBuf>,
     /// Petición pendiente de aplicar al fin de frame.
     pending: Option<String>,
     /// Solicitudes cuyo `apply_pending` ya se consumió, para estadísticas y tests.
@@ -106,6 +115,7 @@ impl SceneManager {
             vfs: AssetVfs::new(root),
             active_name: "Untitled".to_string(),
             active_key: String::new(),
+            active_path: None,
             pending: None,
             applied_count: 0,
         }
@@ -239,6 +249,7 @@ impl SceneManager {
 
         self.active_name = short_scene_name(&key);
         self.active_key = key.clone();
+        self.active_path = Some(path);
         self.applied_count += 1;
 
         Ok(Some(SceneLoaded {
@@ -264,20 +275,44 @@ impl SceneManager {
         scene_key_for_name(&self.active_name)
     }
 
-    /// Ruta absoluta donde guardar la escena activa.
+    /// Ruta absoluta donde guardar la escena activa: el archivo del que
+    /// salió, si lo tiene; si no, la que propone `save_key()`.
     pub fn save_path(&self) -> Result<std::path::PathBuf, SceneError> {
+        if let Some(path) = &self.active_path {
+            return Ok(path.clone());
+        }
         self.vfs
             .resolve(&self.save_key())
             .map_err(SceneError::InvalidPath)
     }
 
+    /// Archivo del que salió la escena activa, si salió de uno.
+    pub fn active_file(&self) -> Option<&std::path::Path> {
+        self.active_path.as_deref()
+    }
+
     /// Marca la escena activa sin cargar nada de disco.
     ///
     /// Lo usan los constructores de escena en código (`setup_*_scene`), que
-    /// arman el mundo a mano y no pasan por un archivo.
+    /// arman el mundo a mano y no pasan por un archivo: la escena queda
+    /// sin archivo asociado y su guardado pasa por «Save Scene As».
     pub fn set_active_name(&mut self, name: &str) {
         self.active_name = name.to_string();
         self.active_key.clear();
+        self.active_path = None;
+    }
+
+    /// Marca la escena activa como salida de un archivo concreto.
+    ///
+    /// La usan las aperturas directas del editor (`open_scene_file`), que
+    /// no pasan por `apply_pending`: sin este registro, el gestor seguía
+    /// creyendo activa la escena anterior y «Save Scene» escribía sobre
+    /// su archivo (defecto S1). `key` es la clave VFS del archivo, o
+    /// vacía si vive fuera del proyecto (la ruta manda igual).
+    pub fn set_active_file(&mut self, name: &str, key: &str, path: std::path::PathBuf) {
+        self.active_name = name.to_string();
+        self.active_key = key.to_string();
+        self.active_path = Some(path);
     }
 }
 
@@ -559,6 +594,44 @@ mod tests {
         assert!(path.ends_with("assets/scenes/Nivel1.scene.json"));
         scene.save_to_json(&path.to_string_lossy()).unwrap();
         assert!(path.exists());
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn archivo_activo_es_la_unica_fuente_del_destino_de_guardado() {
+        // Defecto S1: la identidad de la escena activa (nombre, clave y
+        // archivo) vive SOLO en el gestor; cada vía de sustitución la
+        // actualiza y «guardar» escribe en el archivo registrado.
+        let base = tmp_project("s1");
+        write_scene(&base, "Nivel1", |s| {
+            s.create_entity("Uno".into(), vec!["Transform".into()]);
+        });
+        let mut mgr = SceneManager::new(&base);
+        let mut scene = empty_scene();
+
+        // Carga por el gestor: el archivo queda registrado.
+        mgr.request_load("Nivel1").unwrap();
+        mgr.apply_pending(&mut scene).unwrap().unwrap();
+        let origen = mgr.active_file().unwrap().to_path_buf();
+        assert!(origen.ends_with("assets/scenes/Nivel1.scene.json"));
+        assert_eq!(mgr.save_path().unwrap(), origen);
+
+        // Apertura directa (open_scene_file): otro archivo, incluso
+        // fuera del proyecto y sin clave VFS: manda la ruta registrada.
+        let externa = base.join("fuera/NivelExterno.scene.json");
+        mgr.set_active_file("NivelExterno", "", externa.clone());
+        assert_eq!(mgr.active_scene_name(), "NivelExterno");
+        assert_eq!(mgr.save_path().unwrap(), externa);
+
+        // Escena armada en código: sin archivo; el destino vuelve a ser
+        // la propuesta derivada del nombre, nunca el archivo anterior.
+        mgr.set_active_name("Nivel2");
+        assert!(mgr.active_file().is_none());
+        assert!(mgr
+            .save_path()
+            .unwrap()
+            .ends_with("assets/scenes/Nivel2.scene.json"));
 
         std::fs::remove_dir_all(&base).ok();
     }

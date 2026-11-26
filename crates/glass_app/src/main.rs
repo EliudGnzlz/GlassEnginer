@@ -1970,11 +1970,6 @@ struct GlassEngineApp {
     pub start_instant: std::time::Instant,
     #[cfg(feature = "editor")]
     pub pending_apertura: Option<AccionApertura>,
-    /// Ruta absoluta del archivo de la escena abierta (open_scene_file o
-    /// proyecto recién creado); None si la escena no tiene archivo (preset,
-    /// por defecto o nueva): su guardado pasa por «Save Scene As».
-    #[cfg(feature = "editor")]
-    ruta_escena_actual: Option<std::path::PathBuf>,
     /// Raíz del proyecto abierto (abrir_proyecto); Build & Run construye sobre
     /// ella. None = sin proyecto: el build usa el CWD, como siempre en el
     /// árbol del motor.
@@ -2002,10 +1997,6 @@ struct GlassEngineApp {
     /// milisegundo que `delta_expulsion_ms` no entrega entera se
     /// acumula aquí para no perderla frame a frame.
     reloj_expulsion_resto_ms: f64,
-    /// Nombre activo de la escena cuando se fijó la ruta; si el vigía del
-    /// editor anuncia otro nombre, la ruta ya no vale.
-    #[cfg(feature = "editor")]
-    nombre_escena_con_ruta: String,
     /// Vuelta al Hub en espera de la decisión del diálogo de guardado.
     #[cfg(feature = "editor")]
     volver_al_hub_pendiente: bool,
@@ -2538,8 +2529,6 @@ impl GlassEngineApp {
                 }
             }),
             #[cfg(feature = "editor")]
-            ruta_escena_actual: None,
-            #[cfg(feature = "editor")]
             raiz_proyecto_actual: None,
             #[cfg(feature = "editor")]
             lock_proyecto: None,
@@ -2547,8 +2536,6 @@ impl GlassEngineApp {
             modelos_expulsados: std::collections::HashSet::new(),
             reloj_expulsion_previo: None,
             reloj_expulsion_resto_ms: 0.0,
-            #[cfg(feature = "editor")]
-            nombre_escena_con_ruta: String::new(),
             #[cfg(feature = "editor")]
             volver_al_hub_pendiente: false,
             #[cfg(feature = "editor")]
@@ -3416,11 +3403,10 @@ impl GlassEngineApp {
             self.bootstrap_scene_scripts_and_physics(scene_path);
             #[cfg(feature = "editor")]
             {
-                self.ruta_escena_actual = Some(std::path::PathBuf::from(scene_path));
                 // Una escena normal cierra el modo de edición de prefab.
+                // (La identidad de la escena —nombre y archivo— la registra
+                // el SceneManager en bootstrap_scene_scripts_and_physics.)
                 self.editor_layout.prefab_en_edicion = None;
-                self.nombre_escena_con_ruta =
-                    glass_core::scenes::short_scene_name(scene_path);
                 // Recién cargada = limpia, aunque el vigía no dispare (mismo
                 // nombre que la escena anterior, p. ej. SampleScene).
                 if let Ok(sc) = self.scene_state.lock() {
@@ -3497,8 +3483,6 @@ impl GlassEngineApp {
         }
         self.editor_layout.prefab_en_edicion = Some((ruta.to_path_buf(), raiz_id, variante));
         self.editor_layout.hierarchy.selected_entity = Some(raiz_id);
-        self.ruta_escena_actual = None;
-        self.nombre_escena_con_ruta = format!("{nombre} (prefab)");
         self.rebuild_physics_from_scene();
         // Vista simple: no se instancian los scripts del prefab.
         self.editor_layout.status_message = Some((
@@ -4868,28 +4852,12 @@ for stem in &referenciados {
             self.editor_layout.marcar_guardada(&scene);
             drop(scene);
             let corto = glass_core::scenes::short_scene_name(&key);
-            manager.set_active_name(&corto);
+            manager.set_active_file(&corto, &key, path.clone());
             drop(manager);
-            self.ruta_escena_actual = Some(path.clone());
-            self.nombre_escena_con_ruta = corto;
             Ok(format!("Escena guardada como {key} ({})", path.display()))
-        } else if let Some(ruta) = self.ruta_escena_actual.clone() {
-            let mut scene = self
-                .scene_state
-                .lock()
-                .map_err(|_| "SceneState envenenado".to_string())?;
-            if let Some(raiz) = self.raiz_proyecto_actual.as_deref() {
-                scene.recalcular_overrides_prefab(&|fuente| {
-                    glass_core::Prefab::cargar_desde_proyecto(raiz, fuente)
-                });
-            }
-            scene
-                .save_to_json(&ruta.to_string_lossy())
-                .map_err(|e| format!("No se pudo guardar: {e:?}"))?;
-            self.editor_layout.marcar_guardada(&scene);
-            Ok(format!("Escena guardada en {}", ruta.display()))
         } else {
-            // Sin ruta directa: la clave de guardado del SceneManager.
+            // Sin nombre: el destino lo dicta el SceneManager (el archivo
+            // del que salió la escena activa; defecto S1).
             let manager = self
                 .scene_manager
                 .lock()
@@ -5381,10 +5349,20 @@ let resueltos = if body.has_collider {
         // que es quien marca la escena activa: sin esto, un script que
         // lea el nombre de la escena activa (p. ej. una meta que decide
         // el siguiente nivel) vería el valor por defecto («Untitled») y
-        // enrutaría mal. Se marca con el mismo nombre corto que deriva
-        // `apply_pending` de la clave del activo.
+        // enrutaría mal; y «Save Scene» no sabría de qué archivo salió
+        // esta escena y escribiría sobre el de la anterior (defecto S1).
+        // Se registra nombre, clave VFS si el archivo vive en el
+        // proyecto, y la ruta: el gestor es el único dueño de la
+        // identidad de la escena activa.
         if let Ok(mut manager) = self.scene_manager.lock() {
-            manager.set_active_name(&glass_core::scenes::short_scene_name(scene_path));
+            let ruta = std::path::PathBuf::from(scene_path);
+            let clave = glass_core::vfs::to_asset_key(manager.vfs().root(), &ruta)
+                .unwrap_or_default();
+            manager.set_active_file(
+                &glass_core::scenes::short_scene_name(scene_path),
+                &clave,
+                ruta,
+            );
         }
         let scripted: Vec<(u64, String)> = {
             let Ok(scene) = self.scene_state.lock() else {
@@ -5631,7 +5609,17 @@ let resueltos = if body.has_collider {
         if let Some(action) = accion_lista {
             match action {
                 AccionApertura::LoadSampleScene(preset) => {
-                    self.ruta_escena_actual = None;
+                    // La escena de ejemplo se arma en código: en el gestor
+                    // queda con su nombre y SIN archivo asociado (su
+                    // guardado pasa por «Save Scene As»).
+                    if let Ok(mut m) = self.scene_manager.lock() {
+                        m.set_active_name(match preset {
+                            SampleScenePreset::PlatformerDemo => "PlatformerDemo",
+                            SampleScenePreset::PhysicsPlayground => "PhysicsPlayground",
+                            SampleScenePreset::AudioLightingShowcase => "AudioLightingShowcase",
+                            SampleScenePreset::FullSampleGame => "FullSampleGame",
+                        });
+                    }
                     self.raiz_proyecto_actual = None;
                     // Salir a una escena de ejemplo suelta el proyecto:
                     // su lock queda libre para otra instancia (P1).
@@ -8511,16 +8499,7 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                         .retain(|stem, _| cache.geometries.contains_key(stem));
                 }
             }
-            // Se clona antes de tomar el préstamo mutable de editor_layout.
-            #[cfg(feature = "editor")]
-            let (ruta_clonada, nombre_clonado) =
-                (self.ruta_escena_actual.clone(), self.nombre_escena_con_ruta.clone());
             let editor_layout = &mut self.editor_layout;
-            #[cfg(feature = "editor")]
-            {
-                editor_layout.ruta_escena_actual = ruta_clonada;
-                editor_layout.nombre_escena_con_ruta = nombre_clonado;
-            }
             // Pantalla que el editor muestra mientras precarga.
             fn pantalla_carga_motor(ui: &mut egui::Ui) {
                 use egui::{Color32, RichText};
@@ -8624,8 +8603,12 @@ self.salir_del_proceso = true;
 
             if editor_layout.request_abrir_contenedora_escena {
                 editor_layout.request_abrir_contenedora_escena = false;
-                match &self.ruta_escena_actual {
-                    Some(ruta) => glass_launcher::archivos::abrir_carpeta_contenedora(ruta),
+                match scene_manager
+                    .lock()
+                    .ok()
+                    .and_then(|m| m.active_file().map(|p| p.to_path_buf()))
+                {
+                    Some(ruta) => glass_launcher::archivos::abrir_carpeta_contenedora(&ruta),
                     None => {
                         editor_layout.status_message = Some((
                             "La escena aún no tiene archivo (guárdala primero)".to_string(),
@@ -8637,7 +8620,11 @@ self.salir_del_proceso = true;
 
             if editor_layout.request_copiar_ruta_escena {
                 editor_layout.request_copiar_ruta_escena = false;
-                match &self.ruta_escena_actual {
+                match scene_manager
+                    .lock()
+                    .ok()
+                    .and_then(|m| m.active_file().map(|p| p.to_path_buf()))
+                {
                     Some(ruta) => {
                         self.egui_ctx.copy_text(ruta.to_string_lossy().into_owned());
                         editor_layout.status_message = Some((
@@ -8690,25 +8677,11 @@ self.salir_del_proceso = true;
                 }
             }
 
-            // --- Guardado (B2): cambios de escena, decisión y autoguardado ---
-            if editor_layout
-                .cambio_escena
-                .take()
-                .is_some_and(|nombre| nombre != self.nombre_escena_con_ruta)
-            {
-                self.ruta_escena_actual = None;
-            }
-            // Defensa: si el nombre activo ya no es el de la ruta (p. ej. New
-            // Scene en este mismo frame, antes de que el vigía lo anuncie), la
-            // ruta se descarta y esta escena nunca se escribe sobre ese archivo.
-            if self.ruta_escena_actual.is_some()
-                && matches!(
-                    scene_manager.lock(),
-                    Ok(m) if m.active_scene_name() != self.nombre_escena_con_ruta.as_str()
-                )
-            {
-                self.ruta_escena_actual = None;
-            }
+            // --- Guardado (B2): decisión de cierre y autoguardado ---
+            // (Las defensas que descartaban la ruta guardada al cambiar el
+            // nombre activo ya no existen: el archivo de la escena activa
+            // vive en el SceneManager y siempre es el de la escena en
+            // curso — defecto S1.)
             let en_edicion = editor_layout.viewport.play_state == glass_editor::PlayState::Edit;
             if let Some(decision) = editor_layout.decision_cierre.take() {
                 match decision {
@@ -8734,7 +8707,11 @@ self.salir_del_proceso = true;
                                     self.volver_al_hub_pendiente = false;
                                 }
                             }
-                        } else if let Some(ruta) = self.ruta_escena_actual.clone() {
+                        } else if let Some(ruta) = scene_manager
+                            .lock()
+                            .ok()
+                            .and_then(|m| m.active_file().map(|p| p.to_path_buf()))
+                        {
                             let resultado = match scene_state.lock() {
                                 Ok(sc) => {
                                     let r = sc
@@ -8834,7 +8811,15 @@ self.salir_del_proceso = true;
                 && editor_layout.autosave_minutos > 0
                 && self.ultimo_autoguardado.elapsed()
                     >= std::time::Duration::from_secs(u64::from(editor_layout.autosave_minutos) * 60);
-            if let Some(ruta) = self.ruta_escena_actual.as_ref().filter(|_| toca_autoguardar) {
+            let ruta_autoguardado = if toca_autoguardar {
+                scene_manager
+                    .lock()
+                    .ok()
+                    .and_then(|m| m.active_file().map(|p| p.to_path_buf()))
+            } else {
+                None
+            };
+            if let Some(ruta) = ruta_autoguardado {
                 // El intervalo se reinicia también si falla: se reintenta en
                 // el siguiente intervalo, no en cada frame.
                 self.ultimo_autoguardado = std::time::Instant::now();
