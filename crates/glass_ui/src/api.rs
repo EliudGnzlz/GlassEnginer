@@ -100,8 +100,8 @@ pub trait MedidaTexto {
 }
 
 /// Layout completo del documento en el viewport (P2).
-pub fn colocar_documento(_doc: &Documento, _viewport: Viewport) -> DocumentoColocado {
-    todo!("V2 P2: layout")
+pub fn colocar_documento(doc: &Documento, viewport: Viewport) -> DocumentoColocado {
+    crate::layout::colocar_documento(doc, viewport)
 }
 
 /// Hit-test: la entidad del nodo superior con `raycast_target` bajo

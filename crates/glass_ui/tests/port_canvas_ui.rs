@@ -31,7 +31,15 @@ const VP: Viewport = Viewport {
 fn canvas_raiz(id: u64) -> EntityData {
     let mut e = EntityData::new(id, "Canvas".into(), vec![]);
     e.active = true;
-    e.canvas = Some(CanvasData::default());
+    // Referencia = viewport de los tests (1280×720): el Canvas Scaler
+    // da factor 1 y los rects esperados quedan en píxeles directos.
+    // (Con la referencia por defecto 1920×1080 el factor sería 2/3 y
+    // todos los rects saldrían escalados, como manda el diseño.)
+    e.canvas = Some(CanvasData {
+        render_mode: "ScreenSpaceOverlay".into(),
+        reference_resolution: [1280.0, 720.0],
+        match_width_or_height: 0.5,
+    });
     e.rect_transform = Some(RectTransformData {
         anchored_position: [0.0, 0.0],
         size_delta: [0.0, 0.0],
@@ -131,7 +139,10 @@ fn texto_del_hud_genera_nodo_colocado() {
     let mut ents = vec![canvas_raiz(1), texto];
     enlazar(&mut ents, 1, 2);
     let colocado = colocar(&escena(ents));
-    cerca(rect_de(&colocado, 2), [20.0, 20.0, 250.0, 40.0]);
+    // Ancla [0,0] = esquina inferior-izquierda (convención Unity del
+    // viejo resolver): y = 720 - 20 - 40 = 660. El snapshot congelado
+    // dice lo mismo para la entidad 11, con este mismo RectTransform.
+    cerca(rect_de(&colocado, 2), [20.0, 660.0, 250.0, 40.0]);
 }
 
 #[test]
