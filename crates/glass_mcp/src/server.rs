@@ -87,6 +87,7 @@ fn is_mutating_tool(name: &str) -> bool {
             | "glass_prefab_revert"
             | "glass_component_set"
             | "glass_import_unitypackage"
+            | "glass_import_model"
             | "glass_play_control"
             | "glass_scene_save"
             | "glass_scene_load"
@@ -635,6 +636,31 @@ impl McpServer {
                                     "values": { "type": "object", "description": "Campos del material a escribir (solo primer nivel)." }
                                 },
                                 "required": ["name", "values"]
+                            }
+                        },
+                        {
+                            "name": "glass_import_inspect",
+                            "description": "Inspecciona un .unitypackage SIN importarlo: lista sus assets (ruta, GUID, carpeta o archivo, tamaño) y las rutas sueltas.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "path": { "type": "string", "description": "Ruta al .unitypackage (absoluta o relativa a la raíz del proyecto)" }
+                                },
+                                "required": ["path"]
+                            }
+                        },
+                        {
+                            "name": "glass_import_model",
+                            "description": "Importa un modelo al proyecto: lo copia a Assets (o a la subcarpeta dada); si es .fbx lo convierte además a .glb con el conversor del motor. Con instantiate=true crea una entidad con MeshRenderer al modelo en la escena.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "path": { "type": "string", "description": "Ruta al modelo .glb o .fbx (absoluta o relativa a la raíz del proyecto)" },
+                                    "folder": { "type": "string", "description": "Subcarpeta dentro de Assets (opcional)" },
+                                    "instantiate": { "type": "boolean", "description": "Crea una entidad con MeshRenderer apuntando al modelo (opcional)" },
+                                    "overwrite": { "type": "boolean", "description": "Sustituye el archivo si ya existe en el destino (opcional)" }
+                                },
+                                "required": ["path"]
                             }
                         },
                         {
@@ -3341,6 +3367,261 @@ impl McpServer {
                     Err(e) => McpResponse::error(id, -32005, e.to_string()),
                 }
             }
+            "glass_import_inspect" => {
+                let Some(path) = args.get("path").and_then(|v| v.as_str()) else {
+                    return McpResponse::invalid_params(id, "Falta el parámetro 'path'");
+                };
+                let ruta = resolver_ruta_entrada(path);
+                if !ruta.is_file() {
+                    return McpResponse::error(
+                        id,
+                        -32005,
+                        format!("No existe el paquete: {}", ruta.display()),
+                    );
+                }
+                match glass_ripper::paquete::leer_paquete(&ruta) {
+                    Err(e) => McpResponse::error(id, -32005, format!("{e}")),
+                    Ok(lectura) => {
+                        let carpetas = lectura.entradas.iter().filter(|e| e.es_carpeta).count();
+                        let total = lectura.entradas.len();
+                        let entradas: Vec<serde_json::Value> = lectura
+                            .entradas
+                            .iter()
+                            .map(|e| {
+                                json!({
+                                    "ruta": e.ruta,
+                                    "guid": e.guid,
+                                    "carpeta": e.es_carpeta,
+                                    "bytes": e.asset.as_ref().map_or(0, |a| a.len()),
+                                    "tiene_meta": e.meta_texto.is_some(),
+                                })
+                            })
+                            .collect();
+                        let informe = json!({
+                            "path": ruta.display().to_string(),
+                            "total": total,
+                            "carpetas": carpetas,
+                            "archivos": total - carpetas,
+                            "entradas": entradas,
+                            "sueltas": lectura.sueltas,
+                        });
+                        McpResponse::success(
+                            id,
+                            json!({
+                                "content": [{
+                                    "type": "text",
+                                    "text": serde_json::to_string_pretty(&informe).unwrap_or_default()
+                                }]
+                            }),
+                        )
+                    }
+                }
+            }
+
+            "glass_import_model" => {
+                let Some(path) = args.get("path").and_then(|v| v.as_str()) else {
+                    return McpResponse::invalid_params(id, "Falta el parámetro 'path'");
+                };
+                let origen = resolver_ruta_entrada(path);
+                if !origen.is_file() {
+                    return McpResponse::error(
+                        id,
+                        -32005,
+                        format!("No existe el modelo: {}", origen.display()),
+                    );
+                }
+
+                let ext = origen
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                match ext.as_str() {
+                    "glb" | "fbx" => {}
+                    "blend" => {
+                        return McpResponse::error(
+                            id,
+                            -32005,
+                            "Los .blend se importan desde el editor (puente de Blender en segundo plano); convierte el modelo a .glb o .fbx, o impórtalo arrastrándolo al panel Proyecto",
+                        );
+                    }
+                    _ => {
+                        return McpResponse::error(
+                            id,
+                            -32005,
+                            format!("Formato no soportado para importar modelos: .{ext} (glb, fbx; blend va por el puente de Blender del editor)"),
+                        );
+                    }
+                }
+
+                // Carpeta destino: Assets + subcarpeta opcional (sin '..' ni rutas absolutas).
+                let assets = carpeta_assets();
+                let mut destino_dir = assets.clone();
+                if let Some(folder) = args.get("folder").and_then(|v| v.as_str()) {
+                    let folder = folder.trim();
+                    if !folder.is_empty() {
+                        let rel = std::path::Path::new(folder);
+                        let componentes_validos = rel.components().all(|c| {
+                            matches!(
+                                c,
+                                std::path::Component::Normal(_) | std::path::Component::CurDir
+                            )
+                        });
+                        if folder.contains("..") || !componentes_validos {
+                            return McpResponse::invalid_params(
+                                id,
+                                "'folder' debe ser una subcarpeta relativa dentro de Assets (sin '..')",
+                            );
+                        }
+                        destino_dir = destino_dir.join(rel);
+                    }
+                }
+                if let Err(e) = std::fs::create_dir_all(&destino_dir) {
+                    return McpResponse::error(
+                        id,
+                        -32000,
+                        format!("No se pudo crear la carpeta destino {}: {e}", destino_dir.display()),
+                    );
+                }
+
+                let Some(nombre_archivo) = origen.file_name() else {
+                    return McpResponse::invalid_params(id, "'path' no tiene nombre de archivo");
+                };
+                let copia = destino_dir.join(nombre_archivo);
+                let overwrite = args
+                    .get("overwrite")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                if copia.exists() && !overwrite {
+                    return McpResponse::error(
+                        id,
+                        -32005,
+                        format!(
+                            "Ya existe {} en el destino (usa overwrite=true para sustituirlo)",
+                            copia.display()
+                        ),
+                    );
+                }
+                // Para .fbx, el .glb gemelo también se escribirá: misma regla de sobrescritura.
+                let glb_gemelo = (ext == "fbx").then(|| copia.with_extension("glb"));
+                if let Some(glb) = &glb_gemelo {
+                    if glb.exists() && !overwrite {
+                        return McpResponse::error(
+                            id,
+                            -32005,
+                            format!(
+                                "Ya existe {} en el destino (usa overwrite=true para sustituirlo)",
+                                glb.display()
+                            ),
+                        );
+                    }
+                }
+
+                // Si origen y destino son el mismo archivo, no se copia (fs::copy lo truncaría).
+                let mismo_archivo = match (origen.canonicalize(), copia.canonicalize()) {
+                    (Ok(a), Ok(b)) => a == b,
+                    _ => false,
+                };
+                if !mismo_archivo {
+                    if let Err(e) = std::fs::copy(&origen, &copia) {
+                        return McpResponse::error(
+                            id,
+                            -32000,
+                            format!(
+                                "No se pudo copiar {} a {}: {e}",
+                                origen.display(),
+                                copia.display()
+                            ),
+                        );
+                    }
+                }
+
+                let mut avisos: Vec<String> = Vec::new();
+                let mut conversion = serde_json::Value::Null;
+                let glb_final = match glb_gemelo {
+                    Some(glb) => {
+                        match glass_ripper::modelos::convertir_modelo(&copia, &glb, None) {
+                            Err(e) => {
+                                return McpResponse::error(
+                                    id,
+                                    -32005,
+                                    format!(
+                                        "{}: el .fbx se copió pero la conversión falló: {e}",
+                                        copia.display()
+                                    ),
+                                );
+                            }
+                            Ok((informe, extra)) => {
+                                let c = &informe.conteos;
+                                conversion = json!({
+                                    "meshes": c.meshes,
+                                    "nodes": c.nodes,
+                                    "materials": c.materials,
+                                    "animations": c.animations,
+                                    "skins": c.skins,
+                                    "bytes": c.bytes,
+                                });
+                                avisos.extend(informe.avisos);
+                                avisos.extend(extra);
+                            }
+                        }
+                        glb
+                    }
+                    None => copia.clone(),
+                };
+
+                let imported = referencia_assets(&assets, &copia);
+                let referencia = referencia_assets(&assets, &glb_final);
+
+                let instantiate = args
+                    .get("instantiate")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let entity_id = if instantiate {
+                    let nombre = origen
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "Modelo".to_string());
+                    let new_id = scene.create_entity(
+                        nombre,
+                        vec!["Transform".into(), "MeshRenderer".into()],
+                    );
+                    if let Some(ent) = scene.entities.iter_mut().find(|e| e.id == new_id) {
+                        // MeshData.model es el NOMBRE del modelo en el
+                        // AssetCache (el nombre del .glb sin extensión).
+                        let modelo = std::path::Path::new(&referencia)
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        ent.mesh = Some(glass_core::scene::MeshData {
+                            model: modelo,
+                            ..Default::default()
+                        });
+                    }
+                    Some(new_id)
+                } else {
+                    None
+                };
+
+                let resultado = json!({
+                    "imported": imported,
+                    "glb": referencia,
+                    "conversion": conversion,
+                    "avisos": avisos,
+                    "entity_id": entity_id,
+                });
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&resultado).unwrap_or_default()
+                        }]
+                    }),
+                )
+            }
+
             "glass_destroy_entity" => {
                 let Some(entity_id) = args.get("entity_id").and_then(|n| n.as_u64()) else {
                     return McpResponse::invalid_params(id, "Field 'entity_id' is required");
@@ -4858,6 +5139,40 @@ fn raiz_proyecto() -> std::path::PathBuf {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
 }
 
+/// Carpeta de assets del proyecto: `assets` o `Assets` si existe; `assets` por defecto.
+fn carpeta_assets() -> std::path::PathBuf {
+    let raiz = raiz_proyecto();
+    ["assets", "Assets"]
+        .iter()
+        .map(|n| raiz.join(n))
+        .find(|p| p.is_dir())
+        .unwrap_or_else(|| raiz.join("assets"))
+}
+
+/// Ruta absoluta tal cual; relativa contra la raíz del proyecto.
+fn resolver_ruta_entrada(path: &str) -> std::path::PathBuf {
+    let p = std::path::Path::new(path);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        raiz_proyecto().join(p)
+    }
+}
+
+/// Ruta de `archivo` relativa a `assets`, con '/' como separador.
+fn referencia_assets(assets: &std::path::Path, archivo: &std::path::Path) -> String {
+    archivo
+        .strip_prefix(assets)
+        .unwrap_or(archivo)
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Ruta de asset (`assets/...`) en absoluto, contra la raíz.
 fn ruta_asset_abs(path: &str) -> std::path::PathBuf {
     raiz_proyecto().join(path)
@@ -5353,6 +5668,46 @@ mod tests_catchup {
         assert!(missing.contains("-32004"), "{missing}");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_inspect_sobre_paquete_inexistente() {
+        let srv = servidor();
+
+        let r = llamar(
+            &srv,
+            "glass_import_inspect",
+            json!({ "path": "no_existe.unitypackage" }),
+        );
+        assert!(r.contains("-32005"), "inspect debería fallar con -32005: {r}");
+
+        let r = llamar(&srv, "glass_import_model", json!({ "path": "no_existe.glb" }));
+        assert!(r.contains("-32005"), "import_model debería fallar con -32005: {r}");
+
+        assert!(is_mutating_tool("glass_import_model"));
+        assert!(!is_mutating_tool("glass_import_inspect"));
+    }
+
+    #[test]
+    fn import_model_glb_copia_e_instancia() {
+        // Solo el camino de error de formato: no escribe nada en el repo.
+        let srv = servidor();
+        let dir = std::env::temp_dir().join(format!(
+            "glass_mcp_import_model_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let archivo = dir.join("modelo.txt");
+        std::fs::write(&archivo, b"no es un modelo").unwrap();
+
+        let r = llamar(
+            &srv,
+            "glass_import_model",
+            json!({ "path": archivo.to_str().unwrap() }),
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(r.contains("Formato no soportado"), "{r}");
     }
 
     #[test]
