@@ -61,6 +61,7 @@ mod mouse_input;
 mod logfile;
 #[cfg(feature = "editor")]
 mod proyecto_lock;
+mod project_scripts;
 
 use std::ffi::CStr;
 use std::path::Path;
@@ -1996,6 +1997,10 @@ struct GlassEngineApp {
     /// árbol del motor.
     #[cfg(feature = "editor")]
     raiz_proyecto_actual: Option<std::path::PathBuf>,
+    /// Último ensamblado de scripts de proyecto cargado en el runtime
+    /// .NET (ruta y mtime): evita recargar el mismo DLL en cada
+    /// apertura de escena del mismo proyecto (defecto D4).
+    ensamblado_scripts_cargado: Option<(std::path::PathBuf, std::time::SystemTime)>,
     /// Lock exclusivo del proyecto abierto (P1): ninguna otra instancia
     /// del editor puede abrirlo mientras viva. None = sin proyecto.
     #[cfg(feature = "editor")]
@@ -2551,6 +2556,7 @@ impl GlassEngineApp {
             }),
             #[cfg(feature = "editor")]
             raiz_proyecto_actual: None,
+            ensamblado_scripts_cargado: None,
             #[cfg(feature = "editor")]
             lock_proyecto: None,
             recarga_bajo_demanda: std::collections::HashSet::new(),
@@ -3408,6 +3414,8 @@ impl GlassEngineApp {
         // ESE proyecto antes de cargar (defecto S19).
         if let Some(raiz) = proyecto_de_una_escena(scene_path) {
             self.reanclar_al_proyecto(&raiz);
+            // Y sus scripts, antes de que la escena los instancie (D4).
+            self.cargar_scripts_del_proyecto(&raiz);
         }
         let cargada = match self.scene_state.lock() {
             Ok(mut sc) => match sc.load_from_json(scene_path) {
@@ -3667,6 +3675,9 @@ fn lanzar_hub_al_salir() {
         // ancla de arranque (el directorio de lanzamiento) el material
         // del proyecto no carga (defecto S19).
         self.reanclar_al_proyecto(path);
+        // Los scripts del proyecto tienen que estar cargados ANTES de
+        // que la escena inicial instancie sus componentes (defecto D4).
+        self.cargar_scripts_del_proyecto(path);
         // 3) Cargar la escena; si no hay o falla, escena vacía.
         let cargada = match &escena {
             Some(ruta) => self.open_scene_file(&ruta.to_string_lossy()),
@@ -4505,6 +4516,41 @@ for stem in &referenciados {
             ),
         }
         self.refrescar_physmat_lib();
+    }
+
+    /// Compila (si hace falta) y carga el ensamblado de scripts del
+    /// proyecto: sin esto, solo existen las clases de la fachada y
+    /// cualquier script del proyecto falla al instanciarse (defecto
+    /// D4). Si el DLL resultante es el mismo ya cargado (misma ruta y
+    /// mismo mtime), no se recarga.
+    fn cargar_scripts_del_proyecto(&mut self, raiz: &std::path::Path) {
+        if !self.script_host.is_initialized {
+            return;
+        }
+        let Some(dll) = project_scripts::asegurar_ensamblado_scripts(raiz, &raiz_motor_actual()) else {
+            return;
+        };
+        let mtime = std::fs::metadata(&dll).and_then(|m| m.modified()).ok();
+        if let (Some(mt), Some((ruta_previa, mt_previo))) =
+            (mtime, &self.ensamblado_scripts_cargado)
+        {
+            if *ruta_previa == dll && *mt_previo == mt {
+                return;
+            }
+        }
+        match self.script_host.load_script_assembly(&dll) {
+            Ok(()) => {
+                log::info!(
+                    "Ensamblado de scripts del proyecto cargado: {}",
+                    dll.display()
+                );
+                self.ensamblado_scripts_cargado = mtime.map(|mt| (dll, mt));
+            }
+            Err(e) => log::error!(
+                "No se pudo cargar el ensamblado de scripts del proyecto {}: {e}",
+                dll.display()
+            ),
+        }
     }
 
     /// Aplica la carga de escena pendiente, si la hay, al final del frame.
@@ -9326,6 +9372,11 @@ impl ApplicationHandler for GlassEngineApp {
                 #[cfg(feature = "editor")]
                 if let Some(raiz) = proyecto_de_una_escena(&scene_file) {
                     self.reanclar_al_proyecto(&raiz);
+                }
+                // Los scripts del proyecto de la escena, cargados antes
+                // de que la escena los instancie (defecto D4).
+                if let Some(raiz) = crate::prefabs_vivos::raiz_desde_ruta_escena(&scene_file) {
+                    self.cargar_scripts_del_proyecto(&raiz);
                 }
                 let cargada = match self.scene_state.lock() {
                     Ok(mut sc) => match sc.load_from_json(&scene_file) {

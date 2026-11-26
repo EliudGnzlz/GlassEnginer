@@ -358,6 +358,8 @@ type DispatchContactEventFn = unsafe extern "system" fn(
 type DispatchAnimEventFn = unsafe extern "system" fn(u64, *const std::ffi::c_char, f32, i32, *const std::ffi::c_char);
 /// Cambio de estado de la FSM: (entidad, nombre del estado, entró 1/0).
 type DispatchStateEventFn = unsafe extern "system" fn(u64, *const std::ffi::c_char, i32);
+/// LoadScriptAssembly(pathUtf8) -> i32; 0 = éxito.
+type LoadScriptAssemblyFn = unsafe extern "system" fn(*const c_char) -> i32;
 /// Init dedicado del lote de transforms (patrón de la casa: Init
 /// nuevo y separado; nunca se toca un Init existente). Recibe los
 /// dos punteros que C# usará para pedir y devolver el lote completo
@@ -377,6 +379,8 @@ pub struct ScriptHost {
     contact_event_fn: Option<DispatchContactEventFn>,
     anim_event_fn: Option<DispatchAnimEventFn>,
     state_event_fn: Option<DispatchStateEventFn>,
+    /// Opcional: las fachadas antiguas no lo exportan.
+    load_script_assembly_fn: Option<LoadScriptAssemblyFn>,
     active_instances: HashMap<i32, (u64, String)>, // handle -> (entity_id, script_name)
 }
 
@@ -399,6 +403,7 @@ impl ScriptHost {
             contact_event_fn: None,
             anim_event_fn: None,
             state_event_fn: None,
+            load_script_assembly_fn: None,
             active_instances: HashMap::new(),
         }
     }
@@ -1088,6 +1093,22 @@ impl ScriptHost {
             );
         }
         self.state_event_fn = state_event_fn.map(|f| *f);
+
+        // Ensamblado de scripts del proyecto: misma resolución
+        // tolerante — una fachada antigua sin el export no impide
+        // arrancar; solo se pierden los scripts del proyecto.
+        let load_script_assembly_fn = loader
+            .get_function_with_unmanaged_callers_only::<LoadScriptAssemblyFn>(
+                bridge_type,
+                pdcstr!("LoadScriptAssembly"),
+            )
+            .ok();
+        if load_script_assembly_fn.is_none() {
+            log::warn!(
+                "El ensamblado managed no exporta LoadScriptAssembly: los scripts del proyecto no se cargarán."
+            );
+        }
+        self.load_script_assembly_fn = load_script_assembly_fn.map(|f| *f);
         self.tick_all_fn = tick_all_fn.map(|f| *f);
         self.invoke_click_fn = invoke_click_fn.map(|f| *f);
         self.create_instance_fn = Some(*create_fn);
@@ -1097,6 +1118,32 @@ impl ScriptHost {
         self.is_initialized = true;
 
         log::info!("Host de Scripting .NET CoreCLR inicializado exitosamente.");
+        Ok(())
+    }
+
+    /// Carga (o sustituye) el ensamblado de scripts del proyecto abierto.
+    pub fn load_script_assembly(&mut self, dll_path: &std::path::Path) -> Result<(), ScriptError> {
+        if !self.is_initialized {
+            return Err(ScriptError::InitFailed("Host no inicializado".to_string()));
+        }
+        let load_fn = self.load_script_assembly_fn.ok_or_else(|| {
+            ScriptError::InitFailed(
+                "El ensamblado managed no exporta LoadScriptAssembly".to_string(),
+            )
+        })?;
+        // El lado managed espera UTF-8: una ruta no UTF-8 se rechaza en vez de corromperla.
+        let ruta = dll_path.to_str().ok_or_else(|| {
+            ScriptError::InvalidCString(format!("Ruta no UTF-8: {}", dll_path.display()))
+        })?;
+        let c_ruta = CString::new(ruta)
+            .map_err(|e| ScriptError::InvalidCString(e.to_string()))?;
+        let resultado = unsafe { load_fn(c_ruta.as_ptr()) };
+        if resultado != 0 {
+            return Err(ScriptError::InitFailed(format!(
+                "LoadScriptAssembly devolvió {resultado} al cargar {}",
+                dll_path.display()
+            )));
+        }
         Ok(())
     }
 

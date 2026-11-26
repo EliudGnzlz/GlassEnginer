@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.Loader;
 using GlassEngine.Core.Interop;
 
 namespace GlassEngine.Core;
@@ -195,6 +196,58 @@ public static class RuntimeBridge
     // Caché de resolución de tipos, con negativos memorizados: sin ella, cada
     // creación de instancia recorría todos los ensamblados del dominio.
     private static readonly Dictionary<string, Type?> _typeCache = new();
+
+    // Ensamblado de scripts del PROYECTO abierto (defecto D4): vive en
+    // un AssemblyLoadContext coleccionable propio para poder
+    // sustituirlo al cambiar de proyecto. Sus tipos NO aparecen en
+    // AppDomain.CurrentDomain.GetAssemblies(): ResolveType lo
+    // consulta aparte.
+    private static Assembly? _projectAssembly;
+    private static ProjectScriptLoadContext? _projectContext;
+
+    // Clases ya reportadas como no resueltas: el error se emite una
+    // sola vez por clase y proceso (una escena importada puede tener
+    // cientos de entidades con la misma clase y el registro quedaba
+    // inundado de errores idénticos).
+    private static readonly HashSet<string> _unresolvedReported = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Contexto de carga de los scripts del proyecto. Coleccionable:
+    /// al cambiar de proyecto se descarga y se carga el nuevo.
+    /// </summary>
+    private sealed class ProjectScriptLoadContext : AssemblyLoadContext
+    {
+        public ProjectScriptLoadContext() : base(isCollectible: true)
+        {
+        }
+
+        protected override Assembly? Load(AssemblyName assemblyName)
+        {
+            // Compartir los ensamblados YA cargados en el contexto
+            // "hogar" — el de la propia fachada, donde vive
+            // RuntimeBridge — devolviendo la MISMA instancia: una
+            // segunda copia de la fachada duplicaría GlassBehaviour y
+            // los tipos del proyecto dejarían de ser asignables a él.
+            // Ojo: por hostfxr la fachada NO vive en el contexto por
+            // defecto, sino en el suyo de componente; buscar solo en
+            // Default no la encuentra y la enumeración de tipos del
+            // proyecto muere con FileNotFoundException (verificado en
+            // el defecto D4).
+            var hogar = AssemblyLoadContext.GetLoadContext(typeof(RuntimeBridge).Assembly);
+            if (hogar is not null)
+            {
+                foreach (var loaded in hogar.Assemblies)
+                {
+                    if (loaded.GetName().Name == assemblyName.Name)
+                    {
+                        return loaded;
+                    }
+                }
+            }
+            // Lo demás (framework/TPA) lo resuelve el runtime.
+            return null;
+        }
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     public struct AudioBridgeCallbacks
@@ -2649,6 +2702,62 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         }
     }
 
+    /// <summary>
+    /// Carga (o sustituye) el ensamblado de scripts del proyecto
+    /// abierto, compilado por el motor contra esta fachada. Devuelve
+    /// 0 si cargó; -1 y el motivo en el registro si no.
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "LoadScriptAssembly")]
+    public static int LoadScriptAssembly(IntPtr pathUtf8)
+    {
+        try
+        {
+            string? path = Marshal.PtrToStringUTF8(pathUtf8);
+            if (string.IsNullOrEmpty(path))
+            {
+                Log(4, "LoadScriptAssembly falló: la ruta del ensamblado es nula o vacía.");
+                return -1;
+            }
+
+            lock (_sync)
+            {
+                // Descargar el contexto anterior y soltar sus referencias.
+                if (_projectContext is not null)
+                {
+                    _projectContext.Unload();
+                    _projectContext = null;
+                    _projectAssembly = null;
+                }
+
+                // La caché puede contener tipos (o fallos) del proyecto anterior.
+                _typeCache.Clear();
+                _unresolvedReported.Clear();
+
+                ProjectScriptLoadContext? context = null;
+                try
+                {
+                    context = new ProjectScriptLoadContext();
+                    Assembly assembly = context.LoadFromAssemblyPath(
+                        System.IO.Path.GetFullPath(path)
+                    );
+                    _projectContext = context;
+                    _projectAssembly = assembly;
+                    return 0;
+                }
+                catch
+                {
+                    context?.Unload();
+                    throw;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log(4, $"LoadScriptAssembly falló: {ex.Message}");
+            return -1;
+        }
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "CreateScriptInstance")]
     public static int CreateScriptInstance(ulong entityId, IntPtr typeNameUtf8)
     {
@@ -2662,7 +2771,18 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         Type? type = ResolveType(typeName);
         if (type is null || !typeof(GlassBehaviour).IsAssignableFrom(type) || type.IsAbstract)
         {
-            Log(4, $"CreateScriptInstance falló: No se pudo resolver la clase GlassBehaviour '{typeName}'.");
+            // El error se emite una sola vez por clase: una escena
+            // puede tener cientos de entidades con la misma clase no
+            // resuelta y el registro quedaba inundado (defecto D4).
+            bool shouldLog;
+            lock (_sync)
+            {
+                shouldLog = _unresolvedReported.Add(typeName);
+            }
+            if (shouldLog)
+            {
+                Log(4, $"CreateScriptInstance falló: No se pudo resolver la clase GlassBehaviour '{typeName}'.");
+            }
             return -1;
         }
 
@@ -3066,6 +3186,38 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         if (type is not null)
         {
             return type;
+        }
+
+        // El ensamblado del proyecto vive en un ALC coleccionable y
+        // no aparece en el AppDomain: se consulta aparte, ANTES que
+        // la fachada, para que un script del proyecto pueda usar el
+        // mismo nombre simple que una clase de la fachada.
+        Assembly? projectAssembly = _projectAssembly;
+        if (projectAssembly is not null)
+        {
+            type = projectAssembly.GetType(typeName);
+            if (type is not null)
+            {
+                return type;
+            }
+
+            Type[] projectTypes;
+            try
+            {
+                projectTypes = projectAssembly.GetTypes();
+            }
+            catch (ReflectionTypeLoadException ex)
+            {
+                projectTypes = ex.Types.Where(t => t is not null).Cast<Type>().ToArray();
+            }
+
+            foreach (var candidate in projectTypes)
+            {
+                if (candidate.FullName == typeName || candidate.Name == typeName)
+                {
+                    return candidate;
+                }
+            }
         }
 
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
