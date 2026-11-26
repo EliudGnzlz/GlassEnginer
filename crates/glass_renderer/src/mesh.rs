@@ -776,6 +776,51 @@ pub fn generate_cylinder() -> (Vec<Vertex>, Vec<u32>) {
     (vertices, indices)
 }
 
+/// Genera un cubo centrado en el origen, de lado 2, con normales planas y UVs 0..1 por cara.
+pub fn generate_cube() -> (Vec<Vertex>, Vec<u32>) {
+    // (normal, origen, du, dv) por cara: el vértice (u, v) de la cara
+    // es origen + du·u + dv·v, con du×dv alineado con la normal.
+    type Cara = ([f32; 3], [f32; 3], [f32; 3], [f32; 3]);
+    let faces: [Cara; 6] = [
+        ([1.0, 0.0, 0.0], [1.0, -1.0, -1.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0]),
+        ([-1.0, 0.0, 0.0], [-1.0, -1.0, -1.0], [0.0, 0.0, 2.0], [0.0, 2.0, 0.0]),
+        ([0.0, 1.0, 0.0], [-1.0, 1.0, -1.0], [0.0, 0.0, 2.0], [2.0, 0.0, 0.0]),
+        ([0.0, -1.0, 0.0], [-1.0, -1.0, -1.0], [2.0, 0.0, 0.0], [0.0, 0.0, 2.0]),
+        ([0.0, 0.0, 1.0], [-1.0, -1.0, 1.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]),
+        ([0.0, 0.0, -1.0], [-1.0, -1.0, -1.0], [0.0, 2.0, 0.0], [2.0, 0.0, 0.0]),
+    ];
+
+    let mut vertices: Vec<Vertex> = Vec::with_capacity(24);
+    let mut indices: Vec<u32> = Vec::with_capacity(36);
+
+    for &(normal, origin, du, dv) in &faces {
+        let base = vertices.len() as u32;
+
+        for (u, v) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+            vertices.push(Vertex {
+                position: [
+                    origin[0] + du[0] * u + dv[0] * v,
+                    origin[1] + du[1] * u + dv[1] * v,
+                    origin[2] + du[2] * u + dv[2] * v,
+                ],
+                normal,
+                uv: [u, v],
+            });
+        }
+
+        indices.extend_from_slice(&[
+            base,
+            base + 1,
+            base + 2,
+            base + 1,
+            base + 3,
+            base + 2,
+        ]);
+    }
+
+    (vertices, indices)
+}
+
 /// Número de niveles de la cadena de mip-maps de una textura:
 /// floor(log2(max(ancho, alto))) + 1, hasta llegar a 1×1.
 pub fn mip_level_count(width: u32, height: u32) -> u32 {
@@ -2455,6 +2500,88 @@ mod tests {
                 n[0] * c[0] + n[2] * c[2] // banda: alejándose del eje
             };
             assert!(dot > 0.0, "triángulo {:?} enrollado hacia dentro", tri);
+        }
+    }
+
+    #[test]
+    fn cubo_conteos_extremos_y_normales() {
+        let (vertices, indices) = generate_cube();
+        assert_eq!(vertices.len(), 24, "el cubo debe tener 24 vértices");
+        assert_eq!(indices.len(), 36, "el cubo debe tener 36 índices");
+        for &i in &indices {
+            assert!((i as usize) < 24, "índice {} fuera de rango", i);
+        }
+
+        for v in &vertices {
+            for c in v.position {
+                assert!(
+                    (c.abs() - 1.0).abs() < 1e-6,
+                    "posición {:?} no está en ±1",
+                    v.position
+                );
+            }
+            let l = longitud(v.normal);
+            assert!(
+                (l - 1.0).abs() < 1e-5,
+                "normal {:?} no unitaria (len {})",
+                v.normal,
+                l
+            );
+            let ceros = v.normal.iter().filter(|c| **c == 0.0).count();
+            assert_eq!(
+                ceros, 2,
+                "normal {:?} debe tener exactamente dos componentes nulas",
+                v.normal
+            );
+        }
+
+        let esperadas = [
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ];
+        for e in esperadas {
+            let existe = vertices
+                .iter()
+                .any(|v| (0..3).all(|i| (v.normal[i] - e[i]).abs() < 1e-6));
+            assert!(existe, "falta la normal {:?}", e);
+        }
+    }
+
+    #[test]
+    fn cubo_triangulos_hacia_fuera() {
+        let (vertices, indices) = generate_cube();
+        for tri in indices.as_chunks::<3>().0 {
+            let n = normal_geometrica(&vertices, tri);
+            let ln = longitud(n);
+            if ln < 1e-9 {
+                continue;
+            }
+
+            let a = vertices[tri[0] as usize].position;
+            let b = vertices[tri[1] as usize].position;
+            let c = vertices[tri[2] as usize].position;
+            let centroide = [
+                (a[0] + b[0] + c[0]) / 3.0,
+                (a[1] + b[1] + c[1]) / 3.0,
+                (a[2] + b[2] + c[2]) / 3.0,
+            ];
+
+            let dot = n[0] * centroide[0] + n[1] * centroide[1] + n[2] * centroide[2];
+            assert!(dot > 0.0, "triángulo {:?} enrollado hacia dentro", tri);
+
+            let nd = vertices[tri[0] as usize].normal;
+            let lnd = longitud(nd);
+            let alineacion = (n[0] * nd[0] + n[1] * nd[1] + n[2] * nd[2]) / (ln * lnd);
+            assert!(
+                alineacion > 0.99,
+                "normal geométrica y declarada divergen en {:?} (dot {})",
+                tri,
+                alineacion
+            );
         }
     }
 

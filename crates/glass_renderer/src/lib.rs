@@ -16,7 +16,7 @@ pub mod watcher;
 pub use asset_cache::{global_asset_cache, register_global_asset_cache, AssetCache, TextureUpload};
 pub use context::{VulkanConfig, VulkanContext};
 pub use mesh::{
-    generate_capsule, generate_cylinder, generate_plane, generate_sphere, GpuMesh, MeshLoader,
+    generate_capsule, generate_cube, generate_cylinder, generate_plane, generate_sphere, GpuMesh, MeshLoader,
     Vertex, PLANE_SEGMENTS,
 };
 pub use mesh::{lod_level_for_distance, lod_suffix, ModelObject, LOD_FAR, LOD_NEAR};

@@ -4044,13 +4044,21 @@ fn lanzar_hub_al_salir() {
             }
         }
 
-        // Primitivas Esfera/Cápsula/Cilindro integradas: mismo
+        // Primitivas Cubo/Esfera/Cápsula/Cilindro integradas: mismo
         // mecanismo y misma regla que el plano — generadas por el
         // renderer, registradas por nombre solo si la clave está
         // libre (un sphere.glb del proyecto ganaría a la integrada).
         // Hasta aquí, los presets de esfera/cápsula/cilindro del
         // editor dibujaban la malla de cubo: no existían generadores.
+        // El cubo entra en la misma lista por una razón distinta: es
+        // el RESPALDO de toda entidad sin modelo y la recolección de
+        // dibujo del frame cuelga de su presencia en la caché. Sin un
+        // generador propio, «cube» solo llegaba si el escaneo de
+        // modelos encontraba un cube.glb; sin él (standalone con
+        // editor, proyectos sin el archivo a mano) el 3D entero
+        // dejaba de dibujarse en silencio (defecto D3).
         for (name, generator) in [
+            ("cube", glass_renderer::generate_cube as fn() -> (Vec<glass_renderer::Vertex>, Vec<u32>)),
             ("sphere", glass_renderer::generate_sphere as fn() -> (Vec<glass_renderer::Vertex>, Vec<u32>)),
             ("capsule", glass_renderer::generate_capsule as fn() -> (Vec<glass_renderer::Vertex>, Vec<u32>)),
             ("cylinder", glass_renderer::generate_cylinder as fn() -> (Vec<glass_renderer::Vertex>, Vec<u32>)),
@@ -6818,7 +6826,22 @@ for name in wanted {
             self.script_host
                 .dispatch_state_event(*entidad, &cambio.state, cambio.entered);
         }
-        if let Some(cube_mesh) = cache.meshes.get("cube") {
+        // La recolección entera cuelga de la malla de respaldo «cube»:
+        // sin ella no hay con qué dibujar las entidades sin modelo.
+        // `preparar_assets` la registra siempre (generador integrado),
+        // así que llegar aquí sin ella es un fallo de arranque, no un
+        // estado válido: se grita una sola vez en el registro en vez
+        // de dejar el 3D en negro en silencio (defecto D3).
+        let cube_mesh_opt = cache.meshes.get("cube");
+        if cube_mesh_opt.is_none() {
+            static AVISO_CUBE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !AVISO_CUBE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                log::error!(
+                    "Render: la malla de respaldo «cube» no está en la caché de assets; el 3D no se dibujará hasta que la precarga la registre."
+                );
+            }
+        }
+        if let Some(cube_mesh) = cube_mesh_opt {
             // Supresión MeshForge (R2): la entidad en edición de malla no
             // se dibuja en la textura de escena (el overlay del viewport
             // la sustituye); la vista de juego la sigue mostrando.
@@ -9187,6 +9210,20 @@ impl ApplicationHandler for GlassEngineApp {
         // Hub, que no usa ningún modelo, aparezca en seguida.
         #[cfg(not(feature = "editor"))]
         self.preparar_assets(&mut renderer, &vk_ctx);
+        // El binario CON editor en modo standalone es un juego, no el
+        // Hub: la precarga diferida nunca se dispara en su flujo (no
+        // hay entrada al editor) y sin ella la primitiva de respaldo
+        // «cube» nunca se registra, con lo que la recolección de
+        // dibujo no dibuja nada (defecto D3: el 3D no pintaba en el
+        // standalone con editor). Se hace aquí, como en el binario
+        // puro, y se marca hecha para que el gate de apertura no la
+        // vuelva a diferir.
+        #[cfg(feature = "editor")]
+        if self.is_standalone {
+            self.preparar_assets(&mut renderer, &vk_ctx);
+            self.precarga_hecha = true;
+            self.precarga_pendiente = false;
+        }
 
         // La ruta del bridge de Blender se fija desde la raíz del MOTOR
         // (la release lo instala en <raíz>/tools/): sin esto, en la build
