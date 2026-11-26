@@ -19,7 +19,10 @@ use crate::RipperError;
 use crate::escena_fisica::fisica_de_entidad;
 use crate::informe::InformeImportacion;
 use crate::EstadoInforme;
-use crate::instancias::{expandir_instancia, ResolutoresInstancia};
+use crate::instancias::{
+    expandir_instancia, AnadidosInstancia, ComponenteAnadido, GameObjectAnadido,
+    ResolutoresInstancia,
+};
 
 /// Resolutores que el importador proporciona a la conversión de escenas.
 pub struct ContextoEscena<'a> {
@@ -45,6 +48,8 @@ pub struct PrefabConvertido {
     /// fileID de Unity (de GameObject o de cualquiera de sus
     /// componentes) → id de la entidad convertida.
     pub entidad_por_fileid: HashMap<i64, u64>,
+    /// fileID del documento de componente → nombre en `components`.
+    pub componente_por_fileid: HashMap<i64, String>,
     pub guid_fuente: String,
 }
 
@@ -85,13 +90,6 @@ impl Avisos {
         self.orden.push(texto);
     }
 
-    /// Aviso que se emite como mucho una vez por archivo, sin conteo.
-    fn unico(&mut self, texto: String) {
-        if !self.cuenta.contains_key(&texto) {
-            self.sumar(texto);
-        }
-    }
-
     fn lineas(&self) -> Vec<String> {
         self.orden
             .iter()
@@ -118,7 +116,46 @@ struct Nucleo {
     planas: usize,
     /// fileID de los objetos planos → entidad.
     por_fileid: HashMap<i64, u64>,
+    /// fileID de cada documento de componente → nombre que escribió en `components`.
+    componente_por_fileid: HashMap<i64, String>,
     avisos: Avisos,
+    /// Resumen por prefab (guid) de las instancias de la escena, para
+    /// el informe de importación; vacío al convertir prefabs.
+    resumen: Vec<(String, ResumenPrefab)>,
+}
+
+/// Resumen por prefab (guid) de las instancias de un archivo, para el
+/// informe de escena.
+struct ResumenPrefab {
+    nombre: String,
+    instancias: usize,
+    entidades: usize,
+    aplicadas: usize,
+}
+
+fn acumular_resumen(
+    resumen: &mut Vec<(String, ResumenPrefab)>,
+    guid: &str,
+    nombre: &str,
+    entidades: usize,
+    aplicadas: usize,
+) {
+    match resumen.iter_mut().find(|(g, _)| g.as_str() == guid) {
+        Some((_, r)) => {
+            r.instancias += 1;
+            r.entidades += entidades;
+            r.aplicadas += aplicadas;
+        }
+        None => resumen.push((
+            guid.to_string(),
+            ResumenPrefab {
+                nombre: nombre.to_string(),
+                instancias: 1,
+                entidades,
+                aplicadas,
+            },
+        )),
+    }
 }
 
 // Conversión de ejes Unity → motor (la misma que `crate::ejes`):
@@ -152,6 +189,42 @@ fn id_ref(v: &Value, clave: &str) -> i64 {
 
 fn guid_ref(v: &Value, clave: &str) -> Option<String> {
     campo(v, clave).and_then(referencia).and_then(|r| r.guid)
+}
+
+/// fileIDs de una lista de `m_Modification` (`m_AddedGameObjects`,
+/// `m_AddedComponents`): referencias `{fileID}` o, en versiones
+/// recientes, entradas con `addedObject: {fileID}`. Sin ceros.
+fn refs_modificacion(m: &Value, clave: &str) -> Vec<i64> {
+    campo(m, clave)
+        .and_then(Value::as_sequence)
+        .map(|s| {
+            s.iter()
+                .filter_map(|x| {
+                    referencia(x)
+                        .filter(|r| r.file_id != 0)
+                        .or_else(|| campo(x, "addedObject").and_then(referencia))
+                })
+                .map(|r| r.file_id)
+                .filter(|&f| f != 0)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Nombre que la conversión escribe en `components` para un documento
+/// de componente (None: Transform/RectTransform o clase sin conversión).
+fn nombre_componente(clase: i32) -> Option<&'static str> {
+    Some(match clase {
+        20 => "Camera",
+        108 => "Light",
+        95 => "Animator",
+        23 | 137 => "MeshRenderer",
+        54 => "RigidBody",
+        64 | 65 | 135 | 136 => "Collider",
+        143 => "CharacterController",
+        114 => "Script",
+        _ => return None,
+    })
 }
 
 fn sin_directorios(ruta: &str) -> &str {
@@ -257,6 +330,7 @@ fn enlazar(entidades: &mut [EntityData], pos: &HashMap<u64, usize>, hijo: u64, p
 struct Estado<'c, 'a> {
     ctx: &'c ContextoEscena<'a>,
     avisos: Avisos,
+    componente_por_fileid: HashMap<i64, String>,
     entidad_de_transform: HashMap<i64, u64>,
     jerarquia: Vec<Jerarquia>,
     submallas: HashMap<String, HashSet<i64>>,
@@ -268,6 +342,7 @@ impl<'c, 'a> Estado<'c, 'a> {
         Estado {
             ctx,
             avisos: Avisos::default(),
+            componente_por_fileid: HashMap::new(),
             entidad_de_transform: HashMap::new(),
             jerarquia: Vec::new(),
             submallas: HashMap::new(),
@@ -309,16 +384,11 @@ impl<'c, 'a> Estado<'c, 'a> {
         let mut filtro: Option<&Value> = None;
         let mut renderer: Option<&DocumentoUnity> = None;
         let mut fisica: Vec<(i32, &Value)> = Vec::new();
+        let mut fisica_ids: Vec<(i32, i64)> = Vec::new();
         for &c in comps {
             let v = &c.valor;
             match c.clase {
                 4 | 224 => {
-                    if c.clase == 224 {
-                        self.avisos.unico(
-                            "RectTransform presente: la UI se convierte como jerarquía; el Canvas va en la fase de UI"
-                                .to_string(),
-                        );
-                    }
                     self.entidad_de_transform.insert(c.file_id, id);
                     if con_transform {
                         self.avisos
@@ -326,6 +396,9 @@ impl<'c, 'a> Estado<'c, 'a> {
                     } else {
                         con_transform = true;
                         e.transform = transform_unity(v);
+                        if c.clase == 224 {
+                            self.aplicar_componente_doc(&mut e, c);
+                        }
                         let hijos = campo(v, "m_Children")
                             .and_then(Value::as_sequence)
                             .map(|s| {
@@ -353,20 +426,25 @@ impl<'c, 'a> Estado<'c, 'a> {
                         renderer = Some(c);
                     }
                 }
-                20 => {
-                    e.camera = Some(self.camara(v, &e.tag));
-                    anadir_componente(&mut e, "Camera");
+                20 | 95 | 108 => {
+                    self.aplicar_componente_doc(&mut e, c);
+                    if let Some(nombre) = nombre_componente(c.clase) {
+                        anadir_componente(&mut e, nombre);
+                        self.componente_por_fileid.insert(c.file_id, nombre.to_string());
+                    }
                 }
-                108 => {
-                    e.light = Some(self.luz(v));
-                    anadir_componente(&mut e, "Light");
+                114 => {
+                    let tenia_script = e.script.is_some();
+                    self.aplicar_componente_doc(&mut e, c);
+                    if !tenia_script && e.script.is_some() {
+                        anadir_componente(&mut e, "Script");
+                        self.componente_por_fileid.insert(c.file_id, "Script".to_string());
+                    }
                 }
-                95 => {
-                    e.animator = Some(self.animator(v));
-                    anadir_componente(&mut e, "Animator");
+                54 | 64 | 65 | 135 | 136 | 143 => {
+                    fisica.push((c.clase, v));
+                    fisica_ids.push((c.clase, c.file_id));
                 }
-                114 => self.monobehaviour(v, &mut e),
-                54 | 64 | 65 | 135 | 136 | 143 => fisica.push((c.clase, v)),
                 _ => {}
             }
         }
@@ -380,6 +458,7 @@ impl<'c, 'a> Estado<'c, 'a> {
         if let Some(r) = renderer {
             e.mesh = Some(self.malla(r, filtro));
             anadir_componente(&mut e, "MeshRenderer");
+            self.componente_por_fileid.insert(r.file_id, "MeshRenderer".to_string());
         }
         if !fisica.is_empty() {
             let ctx = self.ctx;
@@ -391,20 +470,84 @@ impl<'c, 'a> Estado<'c, 'a> {
             }
             if fisica.iter().any(|(c, _)| *c == 54) {
                 anadir_componente(&mut e, "RigidBody");
+                for &(_, fid) in fisica_ids.iter().filter(|(c, _)| *c == 54) {
+                    self.componente_por_fileid.insert(fid, "RigidBody".to_string());
+                }
             }
             if let Some(mut p) = f.physics {
                 p.layer = capa.clamp(0, 31) as u8;
                 if p.has_collider {
                     anadir_componente(&mut e, "Collider");
+                    for &(_, fid) in fisica_ids
+                        .iter()
+                        .filter(|(c, _)| matches!(*c, 64 | 65 | 135 | 136))
+                    {
+                        self.componente_por_fileid.insert(fid, "Collider".to_string());
+                    }
                 }
                 e.physics = Some(p);
             }
             if f.character.is_some() {
                 anadir_componente(&mut e, "CharacterController");
+                for &(_, fid) in fisica_ids.iter().filter(|(c, _)| *c == 143) {
+                    self.componente_por_fileid.insert(fid, "CharacterController".to_string());
+                }
             }
             e.character = f.character;
         }
         e
+    }
+
+    /// Aplica los datos de un documento de componente sobre `e` (directos:
+    /// Camera, Light, Animator, MonoBehaviour, RectTransform; MeshRenderer
+    /// sin MeshFilter; física de un solo documento). No toca `components`:
+    /// el nombre lo pone quien llama (`entidad` o la expansión).
+    fn aplicar_componente_doc(&mut self, e: &mut EntityData, doc: &DocumentoUnity) {
+        let v = &doc.valor;
+        match doc.clase {
+            20 => {
+                let tag = e.tag.clone();
+                e.camera = Some(self.camara(v, &tag));
+            }
+            108 => e.light = Some(self.luz(v)),
+            95 => e.animator = Some(self.animator(v)),
+            114 => {
+                // `monobehaviour` añade "Script"; se deshace si no estaba.
+                let habia = e.components.iter().any(|c| c == "Script");
+                self.monobehaviour(v, e);
+                if !habia {
+                    e.components.retain(|c| c != "Script");
+                }
+            }
+            224 => {
+                let r = e.rect_transform.get_or_insert_with(Default::default);
+                r.anchored_position = vec2(v, "m_AnchoredPosition").unwrap_or(r.anchored_position);
+                r.size_delta = vec2(v, "m_SizeDelta").unwrap_or(r.size_delta);
+                r.anchor_min = vec2(v, "m_AnchorMin").unwrap_or(r.anchor_min);
+                r.anchor_max = vec2(v, "m_AnchorMax").unwrap_or(r.anchor_max);
+                r.pivot = vec2(v, "m_Pivot").unwrap_or(r.pivot);
+            }
+            23 | 137 => e.mesh = Some(self.malla(doc, None)),
+            54 | 64 | 65 | 135 | 136 | 143 => {
+                let ctx = self.ctx;
+                let f = fisica_de_entidad(&[(doc.clase, v)], &|g: Option<&str>| {
+                    g.and_then(|g| (ctx.physmat_de_guid)(g))
+                });
+                for a in f.avisos {
+                    self.avisos.sumar(a);
+                }
+                if let Some(mut p) = f.physics {
+                    if let Some(previa) = &e.physics {
+                        p.layer = previa.layer;
+                    }
+                    e.physics = Some(p);
+                }
+                if f.character.is_some() {
+                    e.character = f.character;
+                }
+            }
+            _ => {}
+        }
     }
 
     fn malla(&mut self, r: &DocumentoUnity, filtro: Option<&Value>) -> MeshData {
@@ -650,6 +793,7 @@ fn ejecutar_nucleo(
     docs: &[DocumentoUnity],
     ctx: &ContextoEscena,
     prefabs: &HashMap<String, PrefabConvertido>,
+    vincular: bool,
 ) -> Nucleo {
     let mut est = Estado::new(ctx);
 
@@ -677,13 +821,48 @@ fn ejecutar_nucleo(
         }
     }
 
+    // Pre-escaneo de añadidos de instancias (m_AddedGameObjects y
+    // m_AddedComponents) de prefabs convertidos: sus entradas salen de
+    // `componentes`; el paso 4 los convierte sobre la expansión.
+    let doc_por_fileid: HashMap<i64, &DocumentoUnity> =
+        docs.iter().map(|d| (d.file_id, d)).collect();
+    let mut added_gos: HashSet<i64> = HashSet::new();
+    let mut added_comps: HashSet<i64> = HashSet::new();
+    for d in docs
+        .iter()
+        .filter(|d| d.clase == 1001 && !d.stripped && d.nombre != "Prefab")
+    {
+        let convertido = guid_ref(&d.valor, "m_SourcePrefab")
+            .is_some_and(|g| prefabs.contains_key(&g));
+        if !convertido {
+            continue;
+        }
+        let Some(m) = campo(&d.valor, "m_Modification") else {
+            continue;
+        };
+        added_gos.extend(refs_modificacion(m, "m_AddedGameObjects"));
+        added_comps.extend(refs_modificacion(m, "m_AddedComponents"));
+    }
+    let mut added_componentes: HashMap<i64, Vec<&DocumentoUnity>> = HashMap::new();
+    for go in &added_gos {
+        if let Some(lista) = componentes.remove(go) {
+            added_componentes.insert(*go, lista);
+        }
+    }
+    for lista in componentes.values_mut() {
+        lista.retain(|c| !added_comps.contains(&c.file_id));
+    }
+
     // 2. Entidades planas, en orden de documento.
     let mut entidades: Vec<EntityData> = Vec::new();
     let mut pos: HashMap<u64, usize> = HashMap::new();
     let mut por_fileid: HashMap<i64, u64> = HashMap::new();
     let mut gos: HashSet<i64> = HashSet::new();
     let mut siguiente_id: u64 = 1;
-    for d in docs.iter().filter(|d| d.clase == 1 && !d.stripped) {
+    for d in docs
+        .iter()
+        .filter(|d| d.clase == 1 && !d.stripped && !added_gos.contains(&d.file_id))
+    {
         let id = siguiente_id;
         siguiente_id += 1;
         let comps = componentes
@@ -746,14 +925,75 @@ fn ejecutar_nucleo(
     let mut raices: Vec<(u64, i64)> = Vec::new();
     let resolver_material = |g: &str| (ctx.rutas)(g).map(|r| nombre_material(&r));
     let resolver_modelo = |g: &str| (ctx.rutas)(g).map(|r| nombre_modelo(&r));
-    let resolutores = ResolutoresInstancia {
-        material: &resolver_material,
-        modelo: &resolver_modelo,
-    };
+    let mut resumen: Vec<(String, ResumenPrefab)> = Vec::new();
     for d in docs.iter().filter(|d| d.clase == 1001 && !d.stripped) {
         if d.nombre == "Prefab" {
-            est.avisos
-                .sumar("instancia de prefab legado (anterior a 2018.3): omitida".to_string());
+            // Instancia legada (anterior a 2018.3): Unity ya serializó la
+            // copia entera como objetos planos (paso 2). No se re-expande;
+            // solo se escribe el vínculo con el prefab de origen.
+            let v = &d.valor;
+            let resuelta = guid_ref(v, "m_ParentPrefab")
+                .and_then(|g| prefabs.get(&g).map(|f| (g, f)));
+            let Some((guid, fuente)) = resuelta.filter(|_| vincular) else {
+                est.avisos
+                    .sumar("instancia de prefab legado (anterior a 2018.3): omitida".to_string());
+                continue;
+            };
+            let nombre = &fuente.prefab.name;
+            let raiz_fid = id_ref(v, "m_RootGameObject");
+            let Some(&raiz) = por_fileid.get(&raiz_fid) else {
+                est.avisos.sumar(format!(
+                    "instancia legada de {nombre}: raíz no resuelta (m_RootGameObject {raiz_fid}), la copia queda plana sin vínculo"
+                ));
+                continue;
+            };
+            let Some(ruta) = (ctx.rutas)(&guid) else {
+                est.avisos.sumar(format!(
+                    "instancia legada de {nombre}: prefab sin ruta importada (guid {guid}), la copia queda plana sin vínculo"
+                ));
+                continue;
+            };
+            let huella = fuente.prefab.huella();
+            // Copia: la raíz y cada GameObject plano cuyo m_PrefabInternal
+            // apunta a este documento «Prefab».
+            let copia: Vec<i64> = std::iter::once(raiz_fid)
+                .chain(
+                    docs.iter()
+                        .filter(|g| {
+                            g.clase == 1
+                                && !g.stripped
+                                && g.file_id != raiz_fid
+                                && id_ref(&g.valor, "m_PrefabInternal") == d.file_id
+                        })
+                        .map(|g| g.file_id),
+                )
+                .collect();
+            let mut vinculadas = 0;
+            for fid in copia {
+                let Some(i) = por_fileid.get(&fid).and_then(|id| pos.get(id)).copied() else {
+                    continue;
+                };
+                let origen = doc_por_fileid
+                    .get(&fid)
+                    .map_or(0, |g| id_ref(&g.valor, "m_PrefabParentObject"));
+                let local = (origen != 0)
+                    .then(|| fuente.entidad_por_fileid.get(&origen).copied())
+                    .flatten();
+                let e = &mut entidades[i];
+                if e.id == raiz {
+                    e.prefab_source = Some(ruta.clone());
+                    e.prefab_hash = Some(huella.clone());
+                }
+                e.prefab_local_id = local;
+                if local.is_none() {
+                    est.avisos.sumar(format!(
+                        "instancia de {nombre}: {} sin objeto de origen en el prefab (m_PrefabParentObject {origen}), prefab_local_id vacío",
+                        e.name
+                    ));
+                }
+                vinculadas += 1;
+            }
+            acumular_resumen(&mut resumen, &guid, nombre, vinculadas, 0);
             continue;
         }
         let v = &d.valor;
@@ -767,8 +1007,155 @@ fn ejecutar_nucleo(
                 .sumar(format!("instancia de prefab no convertido (guid {guid}): omitida"));
             continue;
         };
+        let resolver_componente = |f: i64| {
+            fuente
+                .entidad_por_fileid
+                .get(&f)
+                .zip(fuente.componente_por_fileid.get(&f))
+                .map(|(id, nombre)| (*id, nombre.clone()))
+        };
+        let resolutores = ResolutoresInstancia {
+            material: &resolver_material,
+            modelo: &resolver_modelo,
+            componente_de_fileid: Some(&resolver_componente),
+        };
+        let fuente_ruta = vincular.then(|| (ctx.rutas)(&guid)).flatten();
         let modificacion = campo(v, "m_Modification").unwrap_or(&nulo);
-        let exp = expandir_instancia(fuente, modificacion, &mut siguiente_id, &resolutores);
+        // Añadidos de la instancia: GameObjects nuevos (ids antes de los
+        // clones) y componentes nuevos sobre clones o sobre añadidos.
+        let mut informe_anadidos: Vec<String> = Vec::new();
+        let mut anadidos = AnadidosInstancia::default();
+        let mut id_de_anadido: HashMap<i64, u64> = HashMap::new();
+        let mut objetos: Vec<(EntityData, i64)> = Vec::new();
+        for f in refs_modificacion(modificacion, "m_AddedGameObjects") {
+            let Some(go) = doc_por_fileid
+                .get(&f)
+                .filter(|g| g.clase == 1 && !g.stripped)
+            else {
+                informe_anadidos.push(format!(
+                    "GameObject añadido (fileID {f}) no está en el archivo: omitido"
+                ));
+                continue;
+            };
+            let id = siguiente_id;
+            siguiente_id += 1;
+            let comps: Vec<&DocumentoUnity> = added_componentes
+                .get(&f)
+                .map(|l| {
+                    l.iter()
+                        .copied()
+                        .filter(|c| !added_comps.contains(&c.file_id))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let padre_fid = comps
+                .iter()
+                .find(|c| matches!(c.clase, 4 | 224))
+                .map_or(0, |t| id_ref(&t.valor, "m_Father"));
+            objetos.push((est.entidad(id, &go.valor, &comps), padre_fid));
+            id_de_anadido.insert(f, id);
+            for c in &comps {
+                id_de_anadido.insert(c.file_id, id);
+            }
+        }
+
+        // Id de clon PREVISTO: `expandir_instancia` numera los clones
+        // desde `*siguiente_id` (ya avanzado por los añadidos) en el orden
+        // raíz + `descendant_entities` del asset, así que la entidad del
+        // asset en la posición i (raíz = 0) se clona con `base + i`. Si
+        // instancias.rs cambia ese orden, la comprobación tras la
+        // expansión lo avisa.
+        let base = siguiente_id;
+        let posicion: HashMap<u64, u64> = std::iter::once(&fuente.prefab.root_entity)
+            .chain(&fuente.prefab.descendant_entities)
+            .enumerate()
+            .map(|(i, e)| (e.id, i as u64))
+            .collect();
+        // fileID de escena → (id previsto, fileID de origen en el prefab
+        // si es un objeto del prefab). Añadido → su id; stripped de esta
+        // instancia → clon previsto; 0 o irresoluble → None.
+        let destino = |f: i64| -> Option<(u64, Option<i64>)> {
+            if f == 0 {
+                return None;
+            }
+            if let Some(&id) = id_de_anadido.get(&f) {
+                return Some((id, None));
+            }
+            let s = doc_por_fileid.get(&f)?;
+            if !s.stripped || id_ref(&s.valor, "m_PrefabInstance") != d.file_id {
+                return None;
+            }
+            let origen = id_ref(&s.valor, "m_CorrespondingSourceObject");
+            let asset = fuente.entidad_por_fileid.get(&origen)?;
+            posicion.get(asset).map(|&i| (base + i, Some(origen)))
+        };
+        for (entidad, padre_fid) in objetos {
+            let padre = destino(padre_fid).map(|(id, _)| id);
+            if padre.is_none() && padre_fid != 0 {
+                informe_anadidos.push(format!(
+                    "padre del GameObject añadido {} no resuelto (Transform {padre_fid}): queda en la raíz",
+                    entidad.name
+                ));
+            }
+            anadidos.objetos.push(GameObjectAnadido { entidad, padre });
+        }
+        let mut datos_anadidos: Vec<(&DocumentoUnity, u64, Option<i64>)> = Vec::new();
+        for f in refs_modificacion(modificacion, "m_AddedComponents") {
+            let Some(&doc) = doc_por_fileid.get(&f) else {
+                informe_anadidos.push(format!(
+                    "componente añadido (fileID {f}) no está en el archivo: omitido"
+                ));
+                continue;
+            };
+            let Some(nombre) = nombre_componente(doc.clase) else {
+                informe_anadidos.push(format!(
+                    "componente añadido de ClassID {} (fileID {f}) sin conversión: omitido",
+                    doc.clase
+                ));
+                continue;
+            };
+            let Some((entidad, origen)) = destino(id_ref(&doc.valor, "m_GameObject")) else {
+                informe_anadidos.push(format!(
+                    "componente añadido {nombre} (fileID {f}): GameObject destino no resuelto, omitido"
+                ));
+                continue;
+            };
+            anadidos.componentes.push(ComponenteAnadido {
+                entidad,
+                nombre: nombre.to_string(),
+            });
+            datos_anadidos.push((doc, entidad, origen));
+        }
+
+        let mut exp = expandir_instancia(
+            fuente,
+            modificacion,
+            &mut siguiente_id,
+            &resolutores,
+            fuente_ruta.as_deref(),
+            &anadidos,
+        );
+        exp.informe.extend(informe_anadidos);
+        // Datos de cada componente añadido sobre su entidad en la
+        // expansión (el nombre ya lo puso `expandir_instancia`).
+        for (doc, previsto, origen) in datos_anadidos {
+            let real = origen
+                .and_then(|o| exp.entidad_por_fileid.get(&o).copied())
+                .unwrap_or(previsto);
+            if real != previsto {
+                exp.informe.push(format!(
+                    "componente añadido (fileID {}): clon previsto {previsto}, la expansión dio {real}",
+                    doc.file_id
+                ));
+            }
+            match exp.entidades.iter_mut().find(|e| e.id == real) {
+                Some(e) => est.aplicar_componente_doc(e, doc),
+                None => exp.informe.push(format!(
+                    "componente añadido (fileID {}): entidad {real} fuera de la expansión, datos sin aplicar",
+                    doc.file_id
+                )),
+            }
+        }
         let anclas = stripped_de
             .get(&d.file_id)
             .map(Vec::as_slice)
@@ -783,13 +1170,24 @@ fn ejecutar_nucleo(
             raices.push((raiz.id, id_ref(modificacion, "m_TransformParent")));
         }
         est.avisos.sumar(format!(
-            "instancia de {}: {} entidades, {} modificaciones aplicadas, expandida sin vínculo vivo",
+            "instancia de {}: {} entidades, {} modificaciones aplicadas, expandida {} vínculo vivo",
             fuente.prefab.name,
             exp.entidades.len(),
-            exp.aplicadas
+            exp.aplicadas,
+            if fuente_ruta.is_some() { "con" } else { "sin" }
         ));
+        acumular_resumen(
+            &mut resumen,
+            &guid,
+            &fuente.prefab.name,
+            exp.entidades.len(),
+            exp.aplicadas,
+        );
         for a in exp.avisos {
             est.avisos.sumar(a);
+        }
+        for l in exp.informe {
+            est.avisos.sumar(format!("instancia de {}: {l}", fuente.prefab.name));
         }
         for e in exp.entidades {
             pos.insert(e.id, entidades.len());
@@ -818,6 +1216,16 @@ fn ejecutar_nucleo(
         }
     }
 
+    // Informe por prefab, solo en escenas (no en la conversión de prefabs).
+    if vincular {
+        for (_, r) in &resumen {
+            est.avisos.sumar(format!(
+                "Prefab {}: {} instancia(s), {} entidades, {} modificaciones aplicadas",
+                r.nombre, r.instancias, r.entidades, r.aplicadas
+            ));
+        }
+    }
+
     // 5. Avisos de cierre por archivo.
     for guid in &est.orden_submallas {
         let n = est.submallas.get(guid).map_or(0, HashSet::len);
@@ -837,19 +1245,40 @@ fn ejecutar_nucleo(
         entidades,
         planas,
         por_fileid,
+        componente_por_fileid: est.componente_por_fileid,
         avisos: est.avisos,
+        resumen,
     }
 }
 
+#[cfg(test)]
 fn convertir_escena_interno(
     texto: &str,
     ctx: &ContextoEscena,
     prefabs: &HashMap<String, PrefabConvertido>,
 ) -> (Vec<EntityData>, Vec<String>) {
+    let (entidades, avisos, _) = convertir_escena_con_resumen(texto, ctx, prefabs);
+    (entidades, avisos)
+}
+
+/// Como `convertir_escena_interno`, más el resumen por prefab (guid)
+/// de las instancias de la escena.
+fn convertir_escena_con_resumen(
+    texto: &str,
+    ctx: &ContextoEscena,
+    prefabs: &HashMap<String, PrefabConvertido>,
+) -> (Vec<EntityData>, Vec<String>, Vec<(String, ResumenPrefab)>) {
     let docs = partir_documentos(texto);
-    let n = ejecutar_nucleo(&docs, ctx, prefabs);
+    let n = ejecutar_nucleo(&docs, ctx, prefabs, true);
     let avisos = n.avisos.lineas();
-    (n.entidades, avisos)
+    (n.entidades, avisos, n.resumen)
+}
+
+/// Vector 2D de Unity (`{x, y}`), sin conversión de ejes.
+fn vec2(v: &Value, clave: &str) -> Option<[f32; 2]> {
+    let c = campo(v, clave)?;
+    let eje = |k: &str| campo(c, k).and_then(Value::as_f64).map(|x| x as f32);
+    Some([eje("x")?, eje("y")?])
 }
 
 /// Cabecera de un prefab legado (anterior a 2018.3): documento
@@ -874,7 +1303,7 @@ fn convertir_prefab_interno(
         .first()
         .map(|c| id_ref(&c.valor, "m_RootGameObject"))
         .filter(|&f| f != 0);
-    let mut n = ejecutar_nucleo(&docs, ctx, prefabs);
+    let mut n = ejecutar_nucleo(&docs, ctx, prefabs, false);
     let raices: Vec<usize> = n.entidades[..n.planas]
         .iter()
         .enumerate()
@@ -909,6 +1338,7 @@ fn convertir_prefab_interno(
         PrefabConvertido {
             prefab,
             entidad_por_fileid: n.por_fileid,
+            componente_por_fileid: n.componente_por_fileid,
             guid_fuente: guid.to_string(),
         },
         n.avisos.lineas(),
@@ -979,9 +1409,19 @@ pub fn convertir_escena(
     prefabs: &HashMap<String, PrefabConvertido>,
     informe: &mut InformeImportacion,
 ) -> Result<Vec<EntityData>, RipperError> {
-    let (entidades, avisos) = convertir_escena_interno(texto, ctx, prefabs);
+    let (entidades, avisos, resumen) = convertir_escena_con_resumen(texto, ctx, prefabs);
     let detalle = format!("escena: {} entidades", entidades.len());
     volcar_informe(informe, guid, ruta, &detalle, &avisos);
+    for (guid_prefab, r) in &resumen {
+        informe.acumular_prefab(
+            guid,
+            guid_prefab,
+            &r.nombre,
+            r.instancias,
+            r.entidades,
+            r.aplicadas,
+        );
+    }
     Ok(entidades)
 }
 
@@ -1474,5 +1914,287 @@ GameObject:
     fn prefab_legado_es_error() {
         let texto = "--- !u!1001 &100100000\nPrefab:\n  m_ObjectHideFlags: 1\n";
         assert!(convertir_prefab_interno(G_PREFAB, texto, &ctx(), &HashMap::new()).is_err());
+    }
+
+    fn rutas_con_prefab(g: &str) -> Option<String> {
+        if g == G_PREFAB {
+            Some("Assets/Prefabs/Casa.prefab".to_string())
+        } else {
+            rutas(g)
+        }
+    }
+
+    fn ctx_con_prefab() -> ContextoEscena<'static> {
+        ContextoEscena {
+            rutas: &rutas_con_prefab,
+            clase_de_script: &clases,
+            physmat_de_guid: &sin_physmat,
+            objeto_de_submalla: &sin_objeto,
+        }
+    }
+
+    fn prefabs_casa() -> HashMap<String, PrefabConvertido> {
+        let (conv, _) =
+            convertir_prefab_interno(G_PREFAB, PREFAB, &ctx(), &HashMap::new()).unwrap();
+        let mut prefabs = HashMap::new();
+        prefabs.insert(G_PREFAB.to_string(), conv);
+        prefabs
+    }
+
+    #[test]
+    fn rect_transform_en_base_convierte_valores() {
+        let texto = r#"--- !u!1 &1
+GameObject:
+  m_Component:
+  - component: {fileID: 2}
+  m_Layer: 5
+  m_Name: Panel
+  m_TagString: Untagged
+  m_IsActive: 1
+--- !u!224 &2
+RectTransform:
+  m_GameObject: {fileID: 1}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 1, y: 2, z: 3}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_AnchorMin: {x: 0, y: 0}
+  m_AnchorMax: {x: 1, y: 1}
+  m_AnchoredPosition: {x: 10, y: 20}
+  m_SizeDelta: {x: 100, y: 50}
+  m_Pivot: {x: 0.5, y: 0.5}
+"#;
+        let (ents, _) = convertir_escena_interno(texto, &ctx(), &HashMap::new());
+        assert_eq!(ents.len(), 1);
+        let r = ents[0].rect_transform.as_ref().expect("falta rect_transform");
+        assert_eq!(r.anchor_min, [0.0, 0.0]);
+        assert_eq!(r.anchor_max, [1.0, 1.0]);
+        assert_eq!(r.anchored_position, [10.0, 20.0]);
+        assert_eq!(r.size_delta, [100.0, 50.0]);
+        assert_eq!(r.pivot, [0.5, 0.5]);
+        let p = ents[0].transform.position;
+        assert!(casi(p[0], 1.0) && casi(p[1], 2.0) && casi(p[2], -3.0));
+    }
+
+    #[test]
+    fn vinculo_solo_en_escenas() {
+        let prefabs = prefabs_casa();
+        let huella = prefabs[G_PREFAB].prefab.huella();
+
+        let (como_prefab, _) =
+            convertir_prefab_interno("guid-contenedor", ESCENA, &ctx_con_prefab(), &prefabs)
+                .unwrap();
+        let expandidas = &como_prefab.prefab.descendant_entities;
+        assert_eq!(expandidas.len(), 2);
+        assert!(expandidas.iter().any(|e| e.name == "CasaNueva"));
+        for e in expandidas {
+            assert!(e.prefab_source.is_none(), "{}: {:?}", e.name, e.prefab_source);
+            assert!(e.prefab_hash.is_none(), "{}: {:?}", e.name, e.prefab_hash);
+        }
+
+        let (ents, _) = convertir_escena_interno(ESCENA, &ctx_con_prefab(), &prefabs);
+        assert_eq!(ents.len(), 3);
+        let raiz = ents
+            .iter()
+            .find(|e| e.name == "CasaNueva")
+            .expect("falta la raíz expandida");
+        assert_eq!(raiz.prefab_source.as_deref(), Some("Assets/Prefabs/Casa.prefab"));
+        assert_eq!(raiz.prefab_hash, Some(huella));
+        assert_eq!(raiz.prefab_local_id, Some(1));
+        let puerta = ents.iter().find(|e| e.name == "Puerta").expect("falta Puerta");
+        assert_eq!(puerta.parent, Some(raiz.id));
+        assert_eq!(puerta.prefab_local_id, Some(2));
+    }
+
+    #[test]
+    fn instancia_legada_escribe_vinculo_sin_reexpandir() {
+        let texto = r#"%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &900
+Prefab:
+  m_ObjectHideFlags: 1
+  serializedVersion: 2
+  m_Modification:
+    m_TransformParent: {fileID: 0}
+    m_Modifications: []
+    m_RemovedComponents: []
+  m_ParentPrefab: {fileID: 100100000, guid: 11112222333344445555666677778888, type: 3}
+  m_RootGameObject: {fileID: 7000}
+  m_IsPrefabParent: 0
+--- !u!1 &7000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_PrefabParentObject: {fileID: 100, guid: 11112222333344445555666677778888, type: 3}
+  m_PrefabInternal: {fileID: 900}
+  m_Component:
+  - component: {fileID: 7001}
+  m_Layer: 0
+  m_Name: Casa
+  m_TagString: Untagged
+  m_IsActive: 1
+--- !u!4 &7001
+Transform:
+  m_PrefabParentObject: {fileID: 400, guid: 11112222333344445555666677778888, type: 3}
+  m_PrefabInternal: {fileID: 900}
+  m_GameObject: {fileID: 7000}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 1, y: 2, z: 3}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children:
+  - {fileID: 7011}
+  m_Father: {fileID: 0}
+--- !u!1 &7010
+GameObject:
+  m_ObjectHideFlags: 0
+  m_PrefabParentObject: {fileID: 101, guid: 11112222333344445555666677778888, type: 3}
+  m_PrefabInternal: {fileID: 900}
+  m_Component:
+  - component: {fileID: 7011}
+  m_Layer: 0
+  m_Name: Puerta
+  m_TagString: Untagged
+  m_IsActive: 1
+--- !u!4 &7011
+Transform:
+  m_PrefabParentObject: {fileID: 401, guid: 11112222333344445555666677778888, type: 3}
+  m_PrefabInternal: {fileID: 900}
+  m_GameObject: {fileID: 7010}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 1}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 7001}
+"#;
+        let prefabs = prefabs_casa();
+        let huella = prefabs[G_PREFAB].prefab.huella();
+        let (ents, avisos) = convertir_escena_interno(texto, &ctx_con_prefab(), &prefabs);
+        assert_eq!(ents.len(), 2, "{ents:?}");
+        assert!(
+            !avisos.iter().any(|a| a.contains("omitida") || a.contains("no resuelta") || a.contains("vacío")),
+            "{avisos:?}"
+        );
+        let (casa, puerta) = (&ents[0], &ents[1]);
+        assert_eq!(casa.name, "Casa");
+        assert_eq!(casa.prefab_source.as_deref(), Some("Assets/Prefabs/Casa.prefab"));
+        assert_eq!(casa.prefab_hash, Some(huella));
+        assert_eq!(casa.prefab_local_id, Some(1));
+        assert_eq!(puerta.name, "Puerta");
+        assert_eq!(puerta.prefab_source, None);
+        assert_eq!(puerta.prefab_local_id, Some(2));
+        assert_eq!(casa.parent, None);
+        assert_eq!(casa.children, vec![puerta.id]);
+        assert_eq!(puerta.parent, Some(casa.id));
+    }
+
+    #[test]
+    fn added_gameobject_y_componente_aplicados() {
+        let texto = r#"%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1001 &5000
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    m_TransformParent: {fileID: 0}
+    m_Modifications: []
+    m_RemovedComponents: []
+    m_AddedGameObjects:
+    - {fileID: 8000}
+    m_AddedComponents:
+    - {fileID: 8100}
+  m_SourcePrefab: {fileID: 100100000, guid: 11112222333344445555666677778888, type: 3}
+--- !u!4 &5001 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 400, guid: 11112222333344445555666677778888, type: 3}
+  m_PrefabInstance: {fileID: 5000}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1 &5002 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 100, guid: 11112222333344445555666677778888, type: 3}
+  m_PrefabInstance: {fileID: 5000}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1 &8000
+GameObject:
+  m_Component:
+  - component: {fileID: 8001}
+  m_Layer: 0
+  m_Name: Anadido
+  m_TagString: Untagged
+  m_IsActive: 1
+--- !u!4 &8001
+Transform:
+  m_GameObject: {fileID: 8000}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 1, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 5001}
+--- !u!108 &8100
+Light:
+  m_GameObject: {fileID: 5002}
+  m_Enabled: 1
+  m_Type: 2
+  m_Color: {r: 1, g: 1, b: 1, a: 1}
+  m_Intensity: 3
+  m_Range: 10
+"#;
+        let (ents, avisos) = convertir_escena_interno(texto, &ctx_con_prefab(), &prefabs_casa());
+        assert_eq!(ents.len(), 3, "{ents:?}");
+        let raiz = ents
+            .iter()
+            .find(|e| e.name == "Casa")
+            .expect("falta la raíz expandida");
+        let anadido = ents
+            .iter()
+            .find(|e| e.name == "Anadido")
+            .expect("falta el GameObject añadido");
+        assert_eq!(anadido.parent, Some(raiz.id));
+        assert_eq!(anadido.prefab_local_id, None);
+        assert!(raiz.components.iter().any(|c| c == "Light"), "{:?}", raiz.components);
+        let luz = raiz.light.as_ref().expect("la luz añadida no se aplicó");
+        assert!(casi(luz.intensity, 3.0));
+        assert!(
+            !avisos
+                .iter()
+                .any(|a| a.contains("omitido") || a.contains("no resuelto") || a.contains("no se aplica")),
+            "{avisos:?}"
+        );
+    }
+
+    #[test]
+    fn resumen_llega_a_convertir_escena() {
+        let prefabs = prefabs_casa();
+        let mut informe = InformeImportacion::default();
+        let Ok(ents) = convertir_escena(
+            "99990000aaaabbbbccccddddeeeeffff",
+            "Assets/Scenes/Pueblo.unity",
+            ESCENA,
+            &ctx_con_prefab(),
+            &prefabs,
+            &mut informe,
+        ) else {
+            panic!("convertir_escena falló");
+        };
+        let expandidas = ents.iter().filter(|e| e.name != "Suelo").count();
+        assert_eq!(expandidas, 2);
+        assert_eq!(informe.prefabs.len(), 1);
+        let resumen = format!("{:?}", informe.prefabs);
+        for esperado in [
+            G_PREFAB.to_string(),
+            "\"Casa\"".to_string(),
+            "instancias: 1".to_string(),
+            format!("entidades: {expandidas}"),
+            "aplicadas: 2".to_string(),
+        ] {
+            assert!(resumen.contains(&esperado), "falta {esperado} en {resumen}");
+        }
+        let texto = informe.a_texto();
+        assert!(
+            texto.contains(
+                "Prefab Casa (guid 11112222333344445555666677778888): 1 instancia(s) en 1 escena(s), "
+            ),
+            "{texto}"
+        );
     }
 }

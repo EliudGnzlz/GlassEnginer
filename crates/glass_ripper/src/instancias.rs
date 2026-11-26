@@ -11,6 +11,9 @@ pub struct ResolutoresInstancia<'a> {
     pub material: &'a dyn Fn(&str) -> Option<String>,
     /// guid de malla → nombre para `MeshData.model`.
     pub modelo: &'a dyn Fn(&str) -> Option<String>,
+    /// fileID de componente del prefab → (id de entidad en el asset, nombre
+    /// tal como aparece en `components`). None: los Removed de componente no se aplican.
+    pub componente_de_fileid: Option<&'a dyn Fn(i64) -> Option<(u64, String)>>,
 }
 
 /// Resultado de expandir una instancia de prefab.
@@ -22,6 +25,32 @@ pub struct Expansion {
     pub aplicadas: usize,
     /// Avisos ya agregados.
     pub avisos: Vec<String>,
+    /// Detalle por instancia: modificaciones, Removed aplicados/perdidos con
+    /// motivo y Added aplicados/perdidos.
+    pub informe: Vec<String>,
+}
+
+/// Objeto añadido en la instancia (`m_AddedGameObjects`), ya convertido.
+pub struct GameObjectAnadido {
+    /// Entidad con id de escena asignado por escenas.rs.
+    pub entidad: EntityData,
+    /// Id de escena del clon padre dentro de la instancia; None = raíz.
+    pub padre: Option<u64>,
+}
+
+/// Componente añadido en la instancia (`m_AddedComponents`). Solo el
+/// nombre: los campos de datos los fija escenas.rs.
+pub struct ComponenteAnadido {
+    /// Id de escena del clon.
+    pub entidad: u64,
+    pub nombre: String,
+}
+
+/// Added de una instancia, convertidos por escenas.rs.
+#[derive(Default)]
+pub struct AnadidosInstancia {
+    pub objetos: Vec<GameObjectAnadido>,
+    pub componentes: Vec<ComponenteAnadido>,
 }
 
 #[derive(Default, Clone)]
@@ -39,6 +68,41 @@ impl AjusteTransform {
     }
 }
 
+/// fileID de un elemento de `m_Removed*`, o el motivo por el que no se usa.
+fn destino_removed(item: &Value, guid_fuente: &str) -> Result<i64, String> {
+    if campo(item, "fileID").and_then(Value::as_i64) == Some(0) {
+        return Err("destino fileID 0, sin resolver".into());
+    }
+    let r = referencia(item).ok_or_else(|| "referencia ilegible".to_string())?;
+    if r.file_id == 0 {
+        return Err("destino fileID 0, sin resolver".into());
+    }
+    if matches!(r.guid.as_deref(), Some(g) if g != guid_fuente) {
+        return Err(format!("fileID {}: guid ajeno al prefab fuente", r.file_id));
+    }
+    Ok(r.file_id)
+}
+
+/// Prefijos de `RectTransform` en el orden que usa `campo_rect`.
+const PREFIJOS_RECT: [&str; 5] = [
+    "m_AnchorMin.",
+    "m_AnchorMax.",
+    "m_AnchoredPosition.",
+    "m_SizeDelta.",
+    "m_Pivot.",
+];
+
+/// (índice en `PREFIJOS_RECT`, componente 0 = x / 1 = y) de un propertyPath.
+fn campo_rect(path: &str) -> Option<(usize, usize)> {
+    PREFIJOS_RECT.iter().enumerate().find_map(|(i, prefijo)| {
+        match path.strip_prefix(prefijo)? {
+            "x" => Some((i, 0)),
+            "y" => Some((i, 1)),
+            _ => None,
+        }
+    })
+}
+
 /// Expande una instancia clonando el prefab fuente y aplicando las
 /// modificaciones de Unity que se puedan mapear en v1.
 pub fn expandir_instancia(
@@ -46,6 +110,8 @@ pub fn expandir_instancia(
     modificacion: &Value,
     siguiente_id: &mut u64,
     resolutores: &ResolutoresInstancia,
+    fuente_ruta: Option<&str>,
+    anadidos: &AnadidosInstancia,
 ) -> Expansion {
     let mut refs: Vec<&EntityData> =
         Vec::with_capacity(1 + fuente.prefab.descendant_entities.len());
@@ -61,7 +127,15 @@ pub fn expandir_instancia(
         viejo_a_nuevo.insert(entidad.id, nuevo_id);
         let mut clon = (*entidad).clone();
         clon.id = nuevo_id;
+        // Vínculo heredado del asset fuera; solo esta expansión lo fija.
+        clon.prefab_source = None;
+        clon.prefab_hash = None;
+        clon.prefab_local_id = fuente_ruta.map(|_| entidad.id);
         clones.push(clon);
+    }
+    if let (Some(ruta), Some(raiz)) = (fuente_ruta, clones.first_mut()) {
+        raiz.prefab_source = Some(ruta.to_string());
+        raiz.prefab_hash = Some(fuente.prefab.huella());
     }
 
     for (i, original) in refs.iter().enumerate() {
@@ -167,6 +241,25 @@ pub fn expandir_instancia(
                 }
             } else if path.starts_with("m_LocalEulerAnglesHint.") || path == "m_RootOrder" {
                 // Redundantes con el cuaternión o con el orden de documento.
+            } else if path == "prefabGuid"
+                || path == "m_PrefabStrongID"
+                || path.starts_with("m_Children.")
+            {
+                // Metadatos del prefab o de la jerarquía, sin efecto en la escena.
+            } else if let Some((cual, componente)) = campo_rect(&path) {
+                if let (Some(v), Some(ent)) = (valor.and_then(valor_f32), clones.get_mut(ent_idx))
+                {
+                    let rt = ent.rect_transform.get_or_insert_with(Default::default);
+                    let par = match cual {
+                        0 => &mut rt.anchor_min,
+                        1 => &mut rt.anchor_max,
+                        2 => &mut rt.anchored_position,
+                        3 => &mut rt.size_delta,
+                        _ => &mut rt.pivot,
+                    };
+                    par[componente] = v;
+                    aplicadas += 1;
+                }
             } else if let Some(indice) = indice_material(&path) {
                 if indice == 0 {
                     if let Some(guid) = campo(item, "objectReference")
@@ -246,6 +339,104 @@ pub fn expandir_instancia(
         ent.transform.set_rotation_quat(convertir_cuaternion(rot_unity));
     }
 
+    // Removed: componentes primero, luego GameObjects. Los índices de
+    // `clones` siguen válidos hasta el `retain` final.
+    let mut informe = vec![format!("modificaciones aplicadas: {aplicadas}")];
+    let mut removed_perdidos = 0usize;
+    let mut solo_components = 0usize;
+
+    if let Some(Value::Sequence(lista)) = campo(modificacion, "m_RemovedComponents") {
+        for item in lista {
+            let resultado = destino_removed(item, &fuente.guid_fuente).and_then(
+                |file_id| -> Result<String, String> {
+                    let resolver = resolutores
+                        .componente_de_fileid
+                        .ok_or_else(|| format!("fileID {file_id}: sin resolutor de componente"))?;
+                    let (id_asset, nombre) = resolver(file_id)
+                        .ok_or_else(|| format!("fileID {file_id}: componente sin resolver"))?;
+                    let ent = viejo_a_nuevo
+                        .get(&id_asset)
+                        .and_then(|id| id_a_indice.get(id))
+                        .and_then(|&i| clones.get_mut(i))
+                        .ok_or_else(|| format!("fileID {file_id}: entidad {id_asset} fuera del asset"))?;
+                    let pos = ent
+                        .components
+                        .iter()
+                        .position(|c| *c == nombre)
+                        .ok_or_else(|| format!("{nombre} no presente en {}", ent.name))?;
+                    ent.components.remove(pos);
+                    Ok(format!("{nombre} en {}", ent.name))
+                },
+            );
+            match resultado {
+                Ok(detalle) => {
+                    solo_components += 1;
+                    informe.push(format!("RemovedComponent aplicado: {detalle} (solo components)"));
+                }
+                Err(motivo) => {
+                    removed_perdidos += 1;
+                    informe.push(format!("RemovedComponent no aplicado ({motivo})"));
+                }
+            }
+        }
+    }
+
+    let mut borrar: HashSet<u64> = HashSet::new();
+    if let Some(Value::Sequence(lista)) = campo(modificacion, "m_RemovedGameObjects") {
+        for item in lista {
+            let resultado = destino_removed(item, &fuente.guid_fuente).and_then(
+                |file_id| -> Result<String, String> {
+                    let id = fuente
+                        .entidad_por_fileid
+                        .get(&file_id)
+                        .and_then(|viejo| viejo_a_nuevo.get(viejo))
+                        .copied()
+                        .ok_or_else(|| format!("fileID {file_id}: GameObject sin resolver"))?;
+                    let idx = *id_a_indice
+                        .get(&id)
+                        .ok_or_else(|| format!("fileID {file_id}: clon ausente"))?;
+                    if idx == 0 {
+                        return Err(format!("fileID {file_id}: es la raíz de la instancia"));
+                    }
+                    let nombre = clones.get(idx).map(|e| e.name.clone()).unwrap_or_default();
+                    if borrar.contains(&id) {
+                        return Ok(format!("{nombre} (ya quitado con un ancestro)"));
+                    }
+                    let mut cola = VecDeque::from([id]);
+                    let mut quitadas = 0usize;
+                    while let Some(actual) = cola.pop_front() {
+                        if !borrar.insert(actual) {
+                            continue;
+                        }
+                        quitadas += 1;
+                        if let Some(e) = id_a_indice.get(&actual).and_then(|&i| clones.get(i)) {
+                            cola.extend(e.children.iter().copied());
+                        }
+                    }
+                    let padre = clones.get(idx).and_then(|e| e.parent);
+                    if let Some(p) = padre
+                        .and_then(|p| id_a_indice.get(&p))
+                        .and_then(|&i| clones.get_mut(i))
+                    {
+                        p.children.retain(|h| *h != id);
+                    }
+                    Ok(format!("{nombre} y su subárbol ({quitadas} entidades)"))
+                },
+            );
+            match resultado {
+                Ok(detalle) => informe.push(format!("RemovedGameObject aplicado: {detalle}")),
+                Err(motivo) => {
+                    removed_perdidos += 1;
+                    informe.push(format!("RemovedGameObject no aplicado ({motivo})"));
+                }
+            }
+        }
+    }
+    if !borrar.is_empty() {
+        clones.retain(|e| !borrar.contains(&e.id));
+        entidad_por_fileid.retain(|_, id| !borrar.contains(id));
+    }
+
     let mut avisos = Vec::new();
     if no_resueltas > 0 {
         avisos.push(format!(
@@ -272,16 +463,89 @@ pub fn expandir_instancia(
             "propertyPath sin mapeo: {path} ({veces} veces)"
         ));
     }
+    if removed_perdidos > 0 {
+        avisos.push(format!(
+            "Removed no aplicados: {removed_perdidos} (detalle en informe)"
+        ));
+    }
+    if solo_components > 0 {
+        avisos.push(format!(
+            "RemovedComponents quitados solo de `components`, campo de datos sin tocar (sin mapeo nombre→campo en este módulo): {solo_components}"
+        ));
+    }
 
-    for clave in [
-        "m_RemovedComponents",
-        "m_RemovedGameObjects",
-        "m_AddedGameObjects",
-        "m_AddedComponents",
+    // Added: tras los Removed. Los añadidos no llevan vínculo al prefab.
+    let raiz_id = clones.first().map(|e| e.id);
+    let mut indice_por_id: HashMap<u64, usize> =
+        clones.iter().enumerate().map(|(i, e)| (e.id, i)).collect();
+    let mut anadidos_perdidos = 0usize;
+
+    for obj in &anadidos.objetos {
+        let id = obj.entidad.id;
+        let nombre = obj.entidad.name.clone();
+        let Some(padre_idx) = obj
+            .padre
+            .or(raiz_id)
+            .and_then(|p| indice_por_id.get(&p).copied())
+        else {
+            anadidos_perdidos += 1;
+            informe.push(format!(
+                "m_AddedGameObjects: {nombre} ({id}) perdido: padre {:?} ausente en la instancia",
+                obj.padre
+            ));
+            continue;
+        };
+        let padre_id = clones[padre_idx].id;
+        if !clones[padre_idx].children.contains(&id) {
+            clones[padre_idx].children.push(id);
+        }
+        let mut entidad = obj.entidad.clone();
+        entidad.parent = Some(padre_id);
+        entidad.prefab_local_id = None;
+        indice_por_id.insert(id, clones.len());
+        clones.push(entidad);
+        informe.push(format!(
+            "m_AddedGameObjects: {nombre} ({id}) aplicado bajo {padre_id}"
+        ));
+    }
+
+    for comp in &anadidos.componentes {
+        let destino = indice_por_id
+            .get(&comp.entidad)
+            .copied()
+            .and_then(|i| clones.get_mut(i));
+        let Some(ent) = destino else {
+            anadidos_perdidos += 1;
+            informe.push(format!(
+                "m_AddedComponents: {} perdido: entidad {} ausente en la instancia",
+                comp.nombre, comp.entidad
+            ));
+            continue;
+        };
+        if !ent.components.contains(&comp.nombre) {
+            ent.components.push(comp.nombre.clone());
+        }
+        informe.push(format!(
+            "m_AddedComponents: {} aplicado en entidad {}",
+            comp.nombre, comp.entidad
+        ));
+    }
+
+    if anadidos_perdidos > 0 {
+        avisos.push(format!(
+            "Added no aplicados: {anadidos_perdidos} (detalle en informe)"
+        ));
+    }
+    for (clave, llegados) in [
+        ("m_AddedGameObjects", anadidos.objetos.len()),
+        ("m_AddedComponents", anadidos.componentes.len()),
     ] {
-        let n = contar_lista(modificacion, clave);
-        if n > 0 {
-            avisos.push(format!("{clave}: {n} elementos no aplicados en v1"));
+        let faltan = contar_lista(modificacion, clave).saturating_sub(llegados);
+        if faltan > 0 {
+            avisos.push(format!(
+                "{clave}: {faltan} elementos del YAML sin convertir, no aplicados"
+            ));
+            informe.push(format!("{clave}: {faltan} sin convertir"));
         }
     }
 
@@ -290,6 +554,7 @@ pub fn expandir_instancia(
         entidad_por_fileid,
         aplicadas,
         avisos,
+        informe,
     }
 }
 
@@ -514,6 +779,7 @@ mod tests {
                 descendant_entities: vec![entidad(11, Some(10), Vec::new())],
             },
             entidad_por_fileid: mapa,
+            componente_por_fileid: HashMap::new(),
             guid_fuente: "gfuente".to_string(),
         }
     }
@@ -535,6 +801,7 @@ mod tests {
         let resolutores = ResolutoresInstancia {
             material: &material,
             modelo: &modelo,
+            componente_de_fileid: None,
         };
         let mut siguiente = 5;
         let exp = expandir_instancia(
@@ -542,6 +809,8 @@ mod tests {
             &Value::Null,
             &mut siguiente,
             &resolutores,
+            None,
+            &AnadidosInstancia::default(),
         );
 
         assert_eq!(siguiente, 7);
@@ -562,6 +831,7 @@ mod tests {
         let resolutores = ResolutoresInstancia {
             material: &material,
             modelo: &modelo,
+            componente_de_fileid: None,
         };
         let modv = modificacion(
             r#"
@@ -583,6 +853,8 @@ m_Modifications:
             &modv,
             &mut siguiente,
             &resolutores,
+            None,
+            &AnadidosInstancia::default(),
         );
 
         assert_eq!(exp.aplicadas, 3);
@@ -603,6 +875,7 @@ m_Modifications:
         let resolutores = ResolutoresInstancia {
             material: &material,
             modelo: &modelo,
+            componente_de_fileid: None,
         };
         let modv = modificacion(
             r#"
@@ -624,6 +897,8 @@ m_Modifications:
             &modv,
             &mut siguiente,
             &resolutores,
+            None,
+            &AnadidosInstancia::default(),
         );
 
         assert_eq!(exp.aplicadas, 0);
@@ -641,11 +916,12 @@ m_Modifications:
     }
 
     #[test]
-    fn avisa_lista_removed_components() {
+    fn removed_component_sin_resolutor_queda_en_informe() {
         let (material, modelo) = sin_resolutores();
         let resolutores = ResolutoresInstancia {
             material: &material,
             modelo: &modelo,
+            componente_de_fileid: None,
         };
         let modv = modificacion(
             r#"
@@ -659,11 +935,17 @@ m_RemovedComponents:
             &modv,
             &mut siguiente,
             &resolutores,
+            None,
+            &AnadidosInstancia::default(),
         );
         assert!(exp
             .avisos
             .iter()
-            .any(|a| a.contains("m_RemovedComponents: 1 elementos")));
+            .any(|a| a.contains("Removed no aplicados: 1")));
+        assert!(exp
+            .informe
+            .iter()
+            .any(|a| a.contains("RemovedComponent no aplicado (fileID 123: sin resolutor de componente)")));
     }
 
     #[test]
@@ -701,6 +983,326 @@ m_RemovedComponents:
             dependencias_prefab(texto),
             vec!["aaaa".to_string(), "bbbb".to_string()]
         );
+    }
+
+    const RUTA_CAJA: &str = "assets/prefabs/Caja.prefab.json";
+
+    fn por_defecto_de<T: Default>(_: &T) -> T {
+        T::default()
+    }
+
+    #[test]
+    fn vinculo_escrito_en_expansion() {
+        let (material, modelo) = sin_resolutores();
+        let resolutores = ResolutoresInstancia {
+            material: &material,
+            modelo: &modelo,
+            componente_de_fileid: None,
+        };
+        let fuente = prefab_fabricado();
+        let huella = fuente.prefab.huella();
+
+        let mut siguiente = 1;
+        let exp = expandir_instancia(
+            &fuente,
+            &Value::Null,
+            &mut siguiente,
+            &resolutores,
+            Some(RUTA_CAJA),
+            &AnadidosInstancia::default(),
+        );
+        let raiz = &exp.entidades[0];
+        assert_eq!(raiz.prefab_source.as_deref(), Some(RUTA_CAJA));
+        assert_eq!(raiz.prefab_hash.as_deref(), Some(huella.as_str()));
+        assert_eq!(raiz.prefab_local_id, Some(10));
+        assert_eq!(exp.entidades[1].prefab_local_id, Some(11));
+
+        let mut siguiente = 1;
+        let exp = expandir_instancia(
+            &fuente,
+            &Value::Null,
+            &mut siguiente,
+            &resolutores,
+            None,
+            &AnadidosInstancia::default(),
+        );
+        for e in &exp.entidades {
+            assert_eq!(e.prefab_source, None);
+            assert_eq!(e.prefab_hash, None);
+            assert_eq!(e.prefab_local_id, None);
+        }
+    }
+
+    #[test]
+    fn expansion_sin_modificaciones_iguala_huella() {
+        use glass_core::prefab::huella_subarbol;
+        let (material, modelo) = sin_resolutores();
+        let resolutores = ResolutoresInstancia {
+            material: &material,
+            modelo: &modelo,
+            componente_de_fileid: None,
+        };
+        let fuente = prefab_fabricado();
+        let mut siguiente = 1;
+        let exp = expandir_instancia(
+            &fuente,
+            &Value::Null,
+            &mut siguiente,
+            &resolutores,
+            Some(RUTA_CAJA),
+            &AnadidosInstancia::default(),
+        );
+        let huella = huella_subarbol(&exp.entidades, exp.entidades[0].id, |e| {
+            e.prefab_local_id.unwrap_or(u64::MAX)
+        });
+        assert_eq!(huella, fuente.prefab.huella());
+    }
+
+    #[test]
+    fn expansion_con_modificaciones_difiere_de_huella() {
+        use glass_core::prefab::huella_subarbol;
+        let (material, modelo) = sin_resolutores();
+        let resolutores = ResolutoresInstancia {
+            material: &material,
+            modelo: &modelo,
+            componente_de_fileid: None,
+        };
+        let modv = modificacion(
+            r#"
+m_Modifications:
+- target: {fileID: 100}
+  propertyPath: m_Name
+  value: Renombrada
+"#,
+        );
+        let fuente = prefab_fabricado();
+        let mut siguiente = 1;
+        let exp = expandir_instancia(
+            &fuente,
+            &modv,
+            &mut siguiente,
+            &resolutores,
+            Some(RUTA_CAJA),
+            &AnadidosInstancia::default(),
+        );
+        assert_eq!(exp.aplicadas, 1);
+        let huella = huella_subarbol(&exp.entidades, exp.entidades[0].id, |e| {
+            e.prefab_local_id.unwrap_or(u64::MAX)
+        });
+        assert_ne!(huella, fuente.prefab.huella());
+    }
+
+    #[test]
+    fn removed_component_aplicado_con_resolutor() {
+        let (material, modelo) = sin_resolutores();
+        // El fixture nace sin componentes: se fabrica uno en la raíz.
+        let mut fuente = prefab_fabricado();
+        fuente.prefab.root_entity.components.push("Script".to_string());
+        let componente = |f: i64| -> Option<(u64, String)> {
+            (f == 300).then(|| (10, "Script".to_string()))
+        };
+        let resolutores = ResolutoresInstancia {
+            material: &material,
+            modelo: &modelo,
+            componente_de_fileid: Some(&componente as &dyn Fn(i64) -> Option<(u64, String)>),
+        };
+        let modv = modificacion(
+            r#"
+m_RemovedComponents:
+- {fileID: 300}
+"#,
+        );
+        let mut siguiente = 1;
+        let exp = expandir_instancia(
+            &fuente,
+            &modv,
+            &mut siguiente,
+            &resolutores,
+            None,
+            &AnadidosInstancia::default(),
+        );
+        assert!(!exp.entidades[0].components.contains(&"Script".to_string()));
+        assert!(exp
+            .informe
+            .iter()
+            .any(|a| a.contains("RemovedComponent aplicado")));
+        assert!(!exp
+            .avisos
+            .iter()
+            .any(|a| a.contains("Removed no aplicados")));
+    }
+
+    #[test]
+    fn removed_fileid_cero_no_aplicado() {
+        let (material, modelo) = sin_resolutores();
+        // fileID 0 se rechaza en destino_removed antes de consultar el resolutor.
+        let resolutores = ResolutoresInstancia {
+            material: &material,
+            modelo: &modelo,
+            componente_de_fileid: None,
+        };
+        let modv = modificacion(
+            r#"
+m_RemovedComponents:
+- {fileID: 0}
+"#,
+        );
+        let mut siguiente = 1;
+        let exp = expandir_instancia(
+            &prefab_fabricado(),
+            &modv,
+            &mut siguiente,
+            &resolutores,
+            None,
+            &AnadidosInstancia::default(),
+        );
+        assert!(exp.entidades[0].components.is_empty());
+        assert!(exp.informe.iter().any(|a| a.contains(
+            "RemovedComponent no aplicado (destino fileID 0, sin resolver)"
+        )));
+        assert!(exp
+            .avisos
+            .iter()
+            .any(|a| a.contains("Removed no aplicados: 1")));
+    }
+
+    #[test]
+    fn removed_gameobject_quita_subarbol() {
+        let (material, modelo) = sin_resolutores();
+        let resolutores = ResolutoresInstancia {
+            material: &material,
+            modelo: &modelo,
+            componente_de_fileid: None,
+        };
+        let modv = modificacion(
+            r#"
+m_RemovedGameObjects:
+- {fileID: 200}
+"#,
+        );
+        let mut siguiente = 1;
+        let exp = expandir_instancia(
+            &prefab_fabricado(),
+            &modv,
+            &mut siguiente,
+            &resolutores,
+            Some(RUTA_CAJA),
+            &AnadidosInstancia::default(),
+        );
+        assert_eq!(exp.entidades.len(), 1);
+        assert!(!exp.entidades.iter().any(|e| e.prefab_local_id == Some(11)));
+        assert!(exp.entidades[0].children.is_empty());
+        assert!(!exp.entidad_por_fileid.contains_key(&200));
+        assert!(exp.entidad_por_fileid.contains_key(&100));
+    }
+
+    #[test]
+    fn added_desde_anadidos_sintetico() {
+        let (material, modelo) = sin_resolutores();
+        let resolutores = ResolutoresInstancia {
+            material: &material,
+            modelo: &modelo,
+            componente_de_fileid: None,
+        };
+        let mut siguiente = 1;
+        let previa = expandir_instancia(
+            &prefab_fabricado(),
+            &Value::Null,
+            &mut siguiente,
+            &resolutores,
+            None,
+            &AnadidosInstancia::default(),
+        );
+        let mut nuevo = previa.entidades[1].clone();
+        nuevo.id = 50;
+        nuevo.name = "Anadido".to_string();
+        nuevo.parent = None;
+        nuevo.children.clear();
+        nuevo.prefab_local_id = None;
+        let anadidos = AnadidosInstancia {
+            objetos: vec![GameObjectAnadido {
+                entidad: nuevo,
+                padre: None,
+            }],
+            componentes: vec![ComponenteAnadido {
+                entidad: 1,
+                nombre: "Extra".to_string(),
+            }],
+        };
+        let mut siguiente = 1;
+        let exp = expandir_instancia(
+            &prefab_fabricado(),
+            &Value::Null,
+            &mut siguiente,
+            &resolutores,
+            Some(RUTA_CAJA),
+            &anadidos,
+        );
+        let raiz = &exp.entidades[0];
+        assert_eq!(raiz.id, 1);
+        let anadido = exp
+            .entidades
+            .iter()
+            .find(|e| e.id == 50)
+            .expect("el objeto añadido está en la expansión");
+        assert_eq!(anadido.parent, Some(1));
+        assert_eq!(anadido.prefab_local_id, None);
+        assert!(raiz.children.contains(&50));
+        assert!(raiz.components.iter().any(|c| c == "Extra"));
+        assert!(exp.informe.iter().filter(|a| a.contains("Added")).count() >= 2);
+    }
+
+    #[test]
+    fn rect_transform_por_propertypath() {
+        let (material, modelo) = sin_resolutores();
+        let resolutores = ResolutoresInstancia {
+            material: &material,
+            modelo: &modelo,
+            componente_de_fileid: None,
+        };
+        let modv = modificacion(
+            r#"
+m_Modifications:
+- target: {fileID: 100}
+  propertyPath: m_AnchorMin.x
+  value: "0.25"
+- target: {fileID: 100}
+  propertyPath: m_SizeDelta.y
+  value: "120"
+- target: {fileID: 100}
+  propertyPath: m_Pivot.x
+  value: "0.75"
+- target: {fileID: 100}
+  propertyPath: prefabGuid
+  value: abcd
+- target: {fileID: 100}
+  propertyPath: m_PrefabStrongID
+  value: efgh
+"#,
+        );
+        let mut siguiente = 1;
+        let exp = expandir_instancia(
+            &prefab_fabricado(),
+            &modv,
+            &mut siguiente,
+            &resolutores,
+            None,
+            &AnadidosInstancia::default(),
+        );
+        assert_eq!(exp.aplicadas, 3);
+        let rt = exp.entidades[0]
+            .rect_transform
+            .as_ref()
+            .expect("la raíz recibe rect_transform");
+        let d = por_defecto_de(rt);
+        assert_eq!(rt.anchor_min, [0.25, d.anchor_min[1]]);
+        assert_eq!(rt.size_delta, [d.size_delta[0], 120.0]);
+        assert_eq!(rt.pivot, [0.75, d.pivot[1]]);
+        assert_eq!(rt.anchored_position, d.anchored_position);
+        assert_eq!(rt.anchor_max, d.anchor_max);
+        assert!(!exp.avisos.iter().any(|a| {
+            a.contains("prefabGuid") || a.contains("m_PrefabStrongID")
+        }));
     }
 
     fn normalizar(q: [f32; 4]) -> [f32; 4] {
