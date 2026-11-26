@@ -910,6 +910,11 @@ pub struct GlassRenderer {
     /// pase de vista.
     pub frame_pipeline_binds: std::cell::Cell<u32>,
     pub frame_descriptor_binds: std::cell::Cell<u32>,
+    /// Draws indexados REALES del bucle de mallas en las vistas de
+    /// escena y juego (render instanciado): un ítem suelto cuenta 1 y
+    /// un grupo instanciado cuenta 1, así que este contador baja de N
+    /// a ~grupos cuando la agrupación actúa. Lo resetea render_views.
+    pub frame_draw_calls: std::cell::Cell<u32>,
     /// Pool del que sale el único set global (no se libera nunca).
     pub graph_globals_pool: vk::DescriptorPool,
     /// El set global ya enlazado al buffer; se enlaza en el índice 1 en
@@ -971,6 +976,15 @@ pub struct GlassRenderer {
     point_lights_stride: u64,
     /// Ranuras por objeto pendientes de volcar en `upload_frame_ubos`.
     object_lights_pending: Vec<(u32, PointLightsUbo)>,
+    /// Render instanciado: contenido conocido de cada ranura de
+    /// luces (hash FNV-1a de su UBO y copia para verificar) y su
+    /// ranura canónica — la primera con el mismo contenido. Dos
+    /// objetos con listas de luces idénticas comparten canónica y
+    /// pueden agruparse aunque su ranura propia difiera.
+    slot_hash: Vec<u64>,
+    slot_ubo: Vec<Option<PointLightsUbo>>,
+    slot_canon: Vec<u32>,
+    slot_canon_dirty: bool,
     /// Sets 4 y 5 (lightmap horneado): atlas + UBO de grupos. Mismo
     /// patrón de propiedad que el set 3. Sin bake publicado, el set 4
     /// enlaza una textura 1×1 negra y el UBO está a ceros: el PBR se
@@ -1109,6 +1123,218 @@ fn create_swapchain_framebuffers(
     }
     Ok(framebuffers)
 }
+
+/// Grupo de dibujo instanciado: varios ítems con la misma clave
+/// (malla, material, rango, luces y campos por vista/material de los
+/// push constants) que se dibujan con UNA `cmd_draw_indexed` usando el
+/// buffer de instancias de la vista.
+#[derive(Debug, Clone, Copy)]
+pub struct InstancedGroup {
+    /// Índice del ítem representativo en la lista de la vista: de él
+    /// salen la malla, los sets y los campos por vista/material.
+    pub representative: usize,
+    /// Rango de índices de la malla (compartido por el grupo).
+    pub range: (u32, u32),
+    /// Primera instancia del grupo en el buffer de la vista.
+    pub first_instance: u32,
+    /// Número de instancias del grupo.
+    pub count: u32,
+}
+
+/// Plan de instanciado de una vista para un frame: los grupos, qué
+/// ítems quedan agrupados (esos NO se dibujan por el camino por ítem)
+/// y el contenido del buffer de instancias, en orden de grupo.
+pub struct ViewInstancing {
+    /// VP de la vista recuperada de los propios ítems (ver
+    /// `plan_instancing`).
+    pub vp: [f32; 16],
+    pub groups: Vec<InstancedGroup>,
+    pub grouped: Vec<bool>,
+    pub instances: Vec<InstanceData>,
+}
+
+/// Clave de agrupación: identidad de los buffers de la malla, sets,
+/// rango de índices, ranura de luces y los bits exactos de los campos
+/// por vista/material de los push constants (los que el camino
+/// instanciado sigue empujando una vez por grupo). Los campos por
+/// entidad (model, object_color, lm_params) NO están en la clave: son
+/// los que viajan por instancia.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct InstancedKey {
+    vertex_buffer: u64,
+    index_buffer: u64,
+    tex_set: u64,
+    props_set: u64,
+    light_slot: u32,
+    range: (u32, u32),
+    uniformes: [u32; 24],
+}
+
+impl InstancedKey {
+    fn from_item(item: &MeshDrawItem, canon: &[u32]) -> Self {
+        use ash::vk::Handle;
+        let p = &item.1;
+        let mut uniformes = [0u32; 24];
+        let campos: [&[f32; 4]; 6] = [
+            &p.light_dir,
+            &p.light_color,
+            &p.material_params,
+            &p.camera_pos,
+            &p.emissive,
+            &p.uv_transform,
+        ];
+        for (i, c) in campos.iter().enumerate() {
+            for (j, v) in c.iter().enumerate() {
+                uniformes[i * 4 + j] = v.to_bits();
+            }
+        }
+        Self {
+            vertex_buffer: item.0.vertex_buffer.as_raw(),
+            index_buffer: item.0.index_buffer.as_raw(),
+            tex_set: item.2.as_raw(),
+            props_set: item.5.map_or(0, |s| s.as_raw()),
+            // La ranura entra canonizada: objetos con la misma
+            // lista de luces comparten grupo aunque su ranura
+            // propia difiera (el grupo enlaza la del representante,
+            // de contenido idéntico).
+            light_slot: canon.get(item.6 as usize).copied().unwrap_or(item.6),
+            range: item.4,
+            uniformes,
+        }
+    }
+}
+
+/// Multiplicación de matrices 4×4 en columna mayor (la convención de
+/// los push constants y de GLSL): `r = a · b`.
+fn mat4_mul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
+    let mut r = [0.0f32; 16];
+    for col in 0..4 {
+        for row in 0..4 {
+            let mut s = 0.0f32;
+            for k in 0..4 {
+                s += a[k * 4 + row] * b[col * 4 + k];
+            }
+            r[col * 4 + row] = s;
+        }
+    }
+    r
+}
+
+/// Inversa de una 4×4 en columna mayor por cofactores; `None` si el
+/// determinante es ~0 (modelo degenerado: escala cero o similar). Se
+/// llama una vez por vista y frame (recuperar la VP), así que prima
+/// la claridad sobre la velocidad: elemento (fila, col) = m[col*4+fila]
+/// y la inversa es la adjunta (cofactores traspuestos) entre el det.
+fn mat4_inverse(m: &[f32; 16]) -> Option<[f32; 16]> {
+    let e = |fila: usize, col: usize| m[col * 4 + fila];
+    // Determinante 3×3 del menor (f, c): la matriz sin esa fila/columna.
+    let menor = |f: usize, c: usize| -> f32 {
+        let mut v = [0.0f32; 9];
+        let mut k = 0;
+        for col in 0..4 {
+            if col == c {
+                continue;
+            }
+            for fila in 0..4 {
+                if fila == f {
+                    continue;
+                }
+                v[k] = e(fila, col);
+                k += 1;
+            }
+        }
+        // v está en columna mayor: det de la 3×3 por la primera fila.
+        v[0] * (v[4] * v[8] - v[5] * v[7]) - v[1] * (v[3] * v[8] - v[5] * v[6])
+            + v[2] * (v[3] * v[7] - v[4] * v[6])
+    };
+    let cofactor = |f: usize, c: usize| -> f32 {
+        let signo = if (f + c).is_multiple_of(2) { 1.0 } else { -1.0 };
+        signo * menor(f, c)
+    };
+    let det: f32 = (0..4).map(|c| e(0, c) * cofactor(0, c)).sum();
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let inv_det = 1.0 / det;
+    let mut out = [0.0f32; 16];
+    for col in 0..4 {
+        for fila in 0..4 {
+            // Adjunta: el cofactor traspuesto.
+            out[col * 4 + fila] = cofactor(col, fila) * inv_det;
+        }
+    }
+    Some(out)
+}
+
+/// Construye el plan de instanciado de una vista. Elegibles: solo los
+/// ítems del PBR estándar (`shader_name == None`); los de grafo,
+/// transparentes y contornos quedan fuera y se dibujan por ítem. Un
+/// grupo necesita 2+ ítems con la misma clave; los grupos de 1 se
+/// deshacen (dibujarlos por ítem evita el cambio de pipeline).
+///
+/// La VP de la vista no viaja en `MeshDrawItem` (cada ítem trae su
+/// mvp = VP · model ya compuesto por la app), así que se recupera del
+/// primer ítem con modelo invertible: VP = mvp · model⁻¹. Sin un
+/// ítem así no hay plan y la vista entera va por ítem.
+pub fn plan_instancing(meshes: &[MeshDrawItem], canon: &[u32]) -> Option<ViewInstancing> {
+    let mut vp: Option<[f32; 16]> = None;
+    for item in meshes {
+        if item.3.is_none() {
+            if let Some(inv) = mat4_inverse(&item.1.model) {
+                vp = Some(mat4_mul(&item.1.mvp, &inv));
+                break;
+            }
+        }
+    }
+    let vp = vp?;
+
+    use std::collections::HashMap;
+    let mut indice: HashMap<InstancedKey, usize> = HashMap::new();
+    let mut grupos: Vec<Vec<usize>> = Vec::new();
+    for (i, item) in meshes.iter().enumerate() {
+        if item.3.is_some() {
+            continue;
+        }
+        let key = InstancedKey::from_item(item, canon);
+        match indice.get(&key) {
+            Some(&g) => grupos[g].push(i),
+            None => {
+                indice.insert(key, grupos.len());
+                grupos.push(vec![i]);
+            }
+        }
+    }
+
+    let mut grouped = vec![false; meshes.len()];
+    let mut instances: Vec<InstanceData> = Vec::new();
+    let mut out: Vec<InstancedGroup> = Vec::new();
+    for miembros in grupos {
+        if miembros.len() < 2 {
+            continue;
+        }
+        let first_instance = instances.len() as u32;
+        for &i in &miembros {
+            grouped[i] = true;
+            instances.push(meshes[i].1.instance_data());
+        }
+        out.push(InstancedGroup {
+            representative: miembros[0],
+            range: meshes[miembros[0]].4,
+            first_instance,
+            count: miembros.len() as u32,
+        });
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(ViewInstancing {
+        vp,
+        groups: out,
+        grouped,
+        instances,
+    })
+}
+
 
 impl GlassRenderer {
     pub fn new(context: &VulkanContext, width: u32, height: u32) -> Result<Self, RendererError> {
@@ -1994,6 +2220,7 @@ impl GlassRenderer {
             graph_outline_pipelines_legacy: std::collections::HashMap::new(),
             frame_pipeline_binds: std::cell::Cell::new(0),
             frame_descriptor_binds: std::cell::Cell::new(0),
+            frame_draw_calls: std::cell::Cell::new(0),
             graph_globals_buffer,
             graph_globals_allocation,
             graph_globals_mapped,
@@ -2012,6 +2239,10 @@ impl GlassRenderer {
             point_lights: PointLightsUbo::default(),
             point_lights_stride,
             object_lights_pending: Vec::new(),
+            slot_hash: vec![u64::MAX; POINT_LIGHT_SLOTS as usize],
+            slot_ubo: vec![None; POINT_LIGHT_SLOTS as usize],
+            slot_canon: (0..POINT_LIGHT_SLOTS as u32).collect(),
+            slot_canon_dirty: false,
             lm_tex_layout,
             lm_data_layout,
             lm_pool,
@@ -2214,6 +2445,11 @@ impl GlassRenderer {
         (self.frame_pipeline_binds.get(), self.frame_descriptor_binds.get())
     }
 
+    /// Draws reales del bucle de mallas del último frame (ver el campo).
+    pub fn frame_draw_calls(&self) -> u32 {
+        self.frame_draw_calls.get()
+    }
+
     pub fn set_shadow_frame(&mut self, light_vp: [f32; 16], params: [f32; 4]) {
         self.shadow_vp = light_vp;
         self.shadow_params = params;
@@ -2257,6 +2493,64 @@ impl GlassRenderer {
             return;
         }
         self.object_lights_pending.push((slot, lights));
+    }
+
+    /// Apunta el contenido de una ranura de luces recién volcada
+    /// (render instanciado: la canónica agrupa por contenido).
+    fn registrar_ranura_luz(&mut self, slot: u32, ubo: PointLightsUbo) {
+        let i = slot as usize;
+        if i >= self.slot_hash.len() {
+            return;
+        }
+        let h = {
+            let mut hash: u64 = 0xcbf29ce484222325;
+            for b in bytemuck::bytes_of(&ubo) {
+                hash ^= *b as u64;
+                hash = hash.wrapping_mul(0x100000001b3);
+            }
+            hash
+        };
+        if self.slot_hash[i] != h {
+            self.slot_hash[i] = h;
+            self.slot_ubo[i] = Some(ubo);
+            self.slot_canon_dirty = true;
+        }
+    }
+
+    /// Mapa ranura → ranura canónica (la primera con el mismo
+    /// contenido de luces; una ranura de contenido desconocido es su
+    /// propia canónica). Se reconstruye solo cuando un volcado
+    /// cambia algún contenido; la verificación por bytes descarta
+    /// las colisiones del hash.
+    fn canonical_slot_map(&mut self) -> &[u32] {
+        if self.slot_canon_dirty {
+            self.slot_canon_dirty = false;
+            let mut por_hash: std::collections::HashMap<u64, Vec<u32>> =
+                std::collections::HashMap::new();
+            for slot in 0..POINT_LIGHT_SLOTS as u32 {
+                let i = slot as usize;
+                self.slot_canon[i] = slot;
+                let Some(ubo) = self.slot_ubo[i] else {
+                    continue;
+                };
+                let candidatas = por_hash.entry(self.slot_hash[i]).or_default();
+                let mut canon = slot;
+                for &c in candidatas.iter() {
+                    let igual = self.slot_ubo[c as usize]
+                        .map(|u| bytemuck::bytes_of(&u) == bytemuck::bytes_of(&ubo))
+                        .unwrap_or(false);
+                    if igual {
+                        canon = c;
+                        break;
+                    }
+                }
+                if canon == slot {
+                    candidatas.push(slot);
+                }
+                self.slot_canon[i] = canon;
+            }
+        }
+        &self.slot_canon
     }
 
     /// Paso entre ranuras del buffer de luces, en bytes.
@@ -2995,6 +3289,7 @@ impl GlassRenderer {
             self.point_lights_mapped,
             pl_bytes.len(),
         );
+        self.registrar_ranura_luz(0, self.point_lights);
 
         // Ranuras por objeto pendientes de volcar.
         let pending = std::mem::take(&mut self.object_lights_pending);
@@ -3006,6 +3301,7 @@ impl GlassRenderer {
                     .add((slot as u64 * self.point_lights_stride) as usize),
                 bytes.len(),
             );
+            self.registrar_ranura_luz(slot, ubo);
         }
 
         // UBO de sombras del frame (mismo patrón): la VP fijada por
@@ -3392,6 +3688,10 @@ impl GlassRenderer {
         _fallback_triangle: bool,
         particle_vp: Option<([f32; 16], bool)>,
         es_escena: bool,
+        // Plan de instanciado de la vista (render instanciado): los
+        // ítems agrupados se saltan en el bucle por ítem y se dibujan
+        // tras él, una draw por grupo. None = todo por ítem.
+        instancing: Option<&ViewInstancing>,
     ) {
         unsafe {
             // Con post: el 3D va al objetivo HDR y los pipelines son
@@ -3448,7 +3748,16 @@ impl GlassRenderer {
                 // El pipeline se enlaza por lote: PBR por defecto o el
                 // material de grafo que pida la entidad.
                 let mut bound: *const GraphicsPipeline = std::ptr::null();
-                for (mesh, push_consts, tex_set, shader_name, range, props_set, light_slot) in meshes {
+                for (idx, (mesh, push_consts, tex_set, shader_name, range, props_set, light_slot)) in
+                    meshes.iter().enumerate()
+                {
+                    // Ítem agrupado: lo dibuja el bloque instanciado
+                    // tras este bucle, con su grupo.
+                    if let Some(plan) = instancing {
+                        if plan.grouped[idx] {
+                            continue;
+                        }
+                    }
                     let pipe = self.pipeline_for(shader_name, legacy);
                     if !std::ptr::eq(bound, pipe) {
                         self.device.cmd_bind_pipeline(
@@ -3521,6 +3830,106 @@ impl GlassRenderer {
                     // glTF con varios materiales.
                     self.device
                         .cmd_draw_indexed(cmd, range.1, 1, range.0, 0, 0);
+                    self.frame_draw_calls
+                        .set(self.frame_draw_calls.get() + 1);
+                }
+                // Render instanciado: un draw por grupo con el
+                // pipeline gemelo. Los sets se enlazan como en el
+                // camino por ítem, con los layouts del pipeline
+                // instanciado (idénticos a los del PBR).
+                if let Some(plan) = instancing {
+                    let buffers = if es_escena {
+                        &self.instance_scene
+                    } else {
+                        &self.instance_game
+                    };
+                    if buffers.buffer != vk::Buffer::null() {
+                        let pipe = if legacy {
+                            &self.pbr_pipeline_instanced_legacy
+                        } else {
+                            &self.pbr_pipeline_instanced
+                        };
+                        self.device.cmd_bind_pipeline(
+                            cmd,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            pipe.pipeline,
+                        );
+                        self.frame_pipeline_binds
+                            .set(self.frame_pipeline_binds.get() + 1);
+                        for group in &plan.groups {
+                            let (mesh, push_consts, tex_set, _shader, _range, props_set, light_slot) =
+                                &meshes[group.representative];
+                            if *tex_set != vk::DescriptorSet::null()
+                                && pipe.descriptor_set_layout.is_some()
+                            {
+                                self.device.cmd_bind_descriptor_sets(
+                                    cmd,
+                                    vk::PipelineBindPoint::GRAPHICS,
+                                    pipe.layout,
+                                    0,
+                                    &[*tex_set],
+                                    &[],
+                                );
+                            }
+                            self.bind_graph_globals(cmd, pipe, *props_set);
+                            self.bind_shadow_set(cmd, pipe);
+                            self.bind_point_lights_set(cmd, pipe, *light_slot);
+                            self.bind_lightmap_sets(cmd, pipe);
+                            self.bind_ibl_set(cmd, pipe);
+                            {
+                                let mut desc = 0u32;
+                                if *tex_set != vk::DescriptorSet::null()
+                                    && pipe.descriptor_set_layout.is_some()
+                                {
+                                    desc += 1;
+                                }
+                                if pipe.globals_set_layout.is_some() {
+                                    desc += 1;
+                                }
+                                if pipe.shadow_set_layout.is_some() {
+                                    desc += 1;
+                                }
+                                if pipe.point_lights_set_layout.is_some() {
+                                    desc += 1;
+                                }
+                                if pipe.lm_set_layouts.is_some() {
+                                    desc += 2;
+                                }
+                                self.frame_descriptor_binds
+                                    .set(self.frame_descriptor_binds.get() + desc);
+                            }
+                            let push = InstancedPushConstants::from_item(plan.vp, push_consts);
+                            self.device.cmd_push_constants(
+                                cmd,
+                                pipe.layout,
+                                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                                0,
+                                bytemuck::bytes_of(&push),
+                            );
+                            self.device.cmd_bind_vertex_buffers(
+                                cmd,
+                                0,
+                                &[mesh.vertex_buffer, buffers.buffer],
+                                &[0, 0],
+                            );
+                            self.device.cmd_bind_index_buffer(
+                                cmd,
+                                mesh.index_buffer,
+                                0,
+                                vk::IndexType::UINT32,
+                            );
+                            self.device.cmd_draw_indexed(
+                                cmd,
+                                group.range.1,
+                                group.count,
+                                group.range.0,
+                                0,
+                                group.first_instance,
+                            );
+                            self.frame_draw_calls
+                                .set(self.frame_draw_calls.get() + 1);
+                        }
+                    }
                 }
                 if !portal_draws.is_empty() {
                     let pipe = if legacy {
@@ -3860,6 +4269,7 @@ impl GlassRenderer {
             self.frame_pipeline_binds.set(0);
             self.particle_draws.set(0);
             self.frame_descriptor_binds.set(0);
+            self.frame_draw_calls.set(0);
 
             // Lectura de la query del frame anterior: el fence ya garantizó
             // que ese trabajo terminó, así que WAIT no bloquea. La telemetría
@@ -3911,6 +4321,16 @@ impl GlassRenderer {
             // --------------------------------------------------------------------
             {
                 let legacy = !self.post_enabled;
+                // Render instanciado: plan de la vista y subida del
+                // buffer de instancias antes de grabar el pase (la
+                // subida es &mut: va antes de tomar el objetivo).
+                let scene_instancing = {
+                    let canon = self.canonical_slot_map();
+                    plan_instancing(scene_meshes, canon)
+                };
+                if let Some(plan) = &scene_instancing {
+                    self.set_instance_frame(false, &plan.instances);
+                }
                 let scene_target = if legacy { &self.final_offscreen } else { &self.offscreen };
                 self.record_view_pass(
                     cmd,
@@ -3924,6 +4344,7 @@ impl GlassRenderer {
                     true,
                     particle_vps.map(|(vp, _)| (vp, false)),
                     true,
+                    scene_instancing.as_ref(),
                 );
             }
 
@@ -3932,12 +4353,20 @@ impl GlassRenderer {
             // --------------------------------------------------------------------
             {
                 let legacy = !self.post_enabled;
+                let game_slice = game_meshes.unwrap_or(&[]);
+                let game_instancing = {
+                    let canon = self.canonical_slot_map();
+                    plan_instancing(game_slice, canon)
+                };
+                if let Some(plan) = &game_instancing {
+                    self.set_instance_frame(true, &plan.instances);
+                }
                 let game_target = if legacy { &self.final_game_offscreen } else { &self.game_offscreen };
                 self.record_view_pass(
                     cmd,
                     game_target,
                     [0.02, 0.02, 0.03, 1.0],
-                    game_meshes.unwrap_or(&[]),
+                    game_slice,
                     game_skinned.unwrap_or(&[]),
                     &[],
                     game_portal_draws.unwrap_or(&[]),
@@ -3945,6 +4374,7 @@ impl GlassRenderer {
                     false,
                     particle_vps.map(|(_, vp)| (vp, true)),
                     false,
+                    game_instancing.as_ref(),
                 );
             }
 
@@ -4001,9 +4431,9 @@ impl GlassRenderer {
             // Se clona la referencia al objetivo para no pelear
             // con el préstamo de &self de record_view_pass.
             let target_a = &self.portal_targets[0];
-            self.record_view_pass(cmd, target_a, clear, view_a.0, view_a.1, &[], &[], false, false, None, false);
+            self.record_view_pass(cmd, target_a, clear, view_a.0, view_a.1, &[], &[], false, false, None, false, None);
             let target_b = &self.portal_targets[1];
-            self.record_view_pass(cmd, target_b, clear, view_b.0, view_b.1, &[], &[], false, false, None, false);
+            self.record_view_pass(cmd, target_b, clear, view_b.0, view_b.1, &[], &[], false, false, None, false, None);
 
             self.device.end_command_buffer(cmd)?;
             let command_buffers = [cmd];
@@ -4634,5 +5064,177 @@ mod point_lights_ubo_tests {
         let ubo = PointLightsUbo::default();
         assert_eq!(bytemuck::bytes_of(&ubo).len(), 656);
         assert_eq!(bytemuck::bytes_of(&ubo).len(), POINT_LIGHTS_UBO_SIZE as usize);
+    }
+}
+
+#[cfg(test)]
+mod instancing_tests {
+    use super::*;
+    use ash::vk::Handle;
+
+    fn identidad() -> Vec<u32> {
+        (0..POINT_LIGHT_SLOTS as u32).collect()
+    }
+
+    fn traslacion(x: f32, y: f32, z: f32) -> [f32; 16] {
+        let mut m = IDENTITY_MAT4;
+        m[12] = x;
+        m[13] = y;
+        m[14] = z;
+        m
+    }
+
+    fn item<'a>(
+        mesh: &'a GpuMesh,
+        model: [f32; 16],
+        vp: &[f32; 16],
+    ) -> MeshDrawItem<'a> {
+        let mut push = MeshPushConstants {
+            model,
+            ..Default::default()
+        };
+        push.mvp = mat4_mul(vp, &model);
+        (
+            mesh,
+            push,
+            vk::DescriptorSet::null(),
+            None,
+            (0, 36),
+            None,
+            0,
+        )
+    }
+
+    fn malla_fake(raw: u64) -> GpuMesh {
+        GpuMesh {
+            vertex_buffer: vk::Buffer::from_raw(raw),
+            vertex_allocation: None,
+            index_buffer: vk::Buffer::from_raw(raw + 1),
+            index_allocation: None,
+            index_count: 36,
+            vertex_count: 24,
+        }
+    }
+
+    #[test]
+    fn mat4_inversa_desace_la_multiplicacion() {
+        // TRS: escala (2, 3, 4) + traslación.
+        let mut m = traslacion(5.0, -2.0, 7.0);
+        m[0] = 2.0;
+        m[5] = 3.0;
+        m[10] = 4.0;
+        let inv = mat4_inverse(&m).expect("invertible");
+        let prod = mat4_mul(&m, &inv);
+        for i in 0..16 {
+            assert!(
+                (prod[i] - IDENTITY_MAT4[i]).abs() < 1e-5,
+                "prod[{i}] = {}",
+                prod[i]
+            );
+        }
+    }
+
+    #[test]
+    fn mat4_inversa_degenerada_es_none() {
+        let mut m = IDENTITY_MAT4;
+        m[0] = 0.0; // escala x a cero
+        assert!(mat4_inverse(&m).is_none());
+    }
+
+    #[test]
+    fn plan_agrupa_repetidos_y_recupera_la_vp() {
+        let mesh = malla_fake(0x1000);
+        let vp = traslacion(0.0, 0.0, -10.0);
+        let items = vec![
+            item(&mesh, traslacion(0.0, 0.0, 0.0), &vp),
+            item(&mesh, traslacion(1.0, 0.0, 0.0), &vp),
+            item(&mesh, traslacion(2.0, 0.0, 0.0), &vp),
+        ];
+        let plan = plan_instancing(&items, &identidad()).expect("hay grupo");
+        assert_eq!(plan.groups.len(), 1);
+        assert_eq!(plan.groups[0].count, 3);
+        assert_eq!(plan.groups[0].first_instance, 0);
+        assert_eq!(plan.instances.len(), 3);
+        assert!(plan.grouped.iter().all(|g| *g));
+        for i in 0..16 {
+            assert!((plan.vp[i] - vp[i]).abs() < 1e-5, "vp[{i}]");
+        }
+        // Las instancias conservan el modelo de cada ítem.
+        assert_eq!(plan.instances[1].model[12], 1.0);
+        assert_eq!(plan.instances[2].model[12], 2.0);
+    }
+
+    #[test]
+    fn plan_no_agrupa_distinto_material_ni_shader_ni_solitarios() {
+        let mesh = malla_fake(0x2000);
+        let vp = traslacion(0.0, 0.0, -10.0);
+        let mut distinto_material = item(&mesh, traslacion(9.0, 0.0, 0.0), &vp);
+        distinto_material.1.material_params = [0.9, 0.1, 1.0, 1.0];
+        let mut con_shader = item(&mesh, traslacion(8.0, 0.0, 0.0), &vp);
+        con_shader.3 = Some("material_transparent".to_string());
+        let items = vec![
+            item(&mesh, traslacion(0.0, 0.0, 0.0), &vp),
+            item(&mesh, traslacion(1.0, 0.0, 0.0), &vp),
+            distinto_material,
+            con_shader,
+        ];
+        let plan = plan_instancing(&items, &identidad()).expect("el par idéntico agrupa");
+        assert_eq!(plan.groups.len(), 1);
+        assert_eq!(plan.groups[0].count, 2);
+        assert!(plan.grouped[0] && plan.grouped[1]);
+        assert!(!plan.grouped[2] && !plan.grouped[3]);
+    }
+
+    #[test]
+    fn plan_sin_grupo_devuelve_none() {
+        let mesh = malla_fake(0x3000);
+        let otra = malla_fake(0x4000);
+        let vp = traslacion(0.0, 0.0, -10.0);
+        let items = vec![
+            item(&mesh, traslacion(0.0, 0.0, 0.0), &vp),
+            item(&otra, traslacion(1.0, 0.0, 0.0), &vp),
+        ];
+        assert!(plan_instancing(&items, &identidad()).is_none());
+        assert!(plan_instancing(&[], &identidad()).is_none());
+    }
+
+    #[test]
+    fn plan_agrupa_por_ranura_canonizada() {
+        // Dos objetos con ranuras PROPIAS distintas (3 y 7) pero la
+        // misma lista de luces (canónica 3): agrupan. Con la
+        // identidad no agrupan.
+        let mesh = malla_fake(0x3000);
+        let vp = traslacion(0.0, 0.0, -10.0);
+        let mut items = vec![
+            item(&mesh, traslacion(0.0, 0.0, 0.0), &vp),
+            item(&mesh, traslacion(1.0, 0.0, 0.0), &vp),
+        ];
+        items[0].6 = 3;
+        items[1].6 = 7;
+        assert!(plan_instancing(&items, &identidad()).is_none());
+        let mut canon = identidad();
+        canon[7] = 3;
+        let plan = plan_instancing(&items, &canon).expect("la canónica agrupa");
+        assert_eq!(plan.groups.len(), 1);
+        assert_eq!(plan.groups[0].count, 2);
+    }
+
+    #[test]
+    fn instance_data_extrae_los_campos_por_entidad() {
+        let push = MeshPushConstants {
+            model: traslacion(3.0, 4.0, 5.0),
+            object_color: [0.1, 0.2, 0.3, 0.4],
+            lm_params: [7.0, 2048.0, 0.0, 0.0],
+            ..Default::default()
+        };
+        let d = push.instance_data();
+        assert_eq!(d.model[12], 3.0);
+        assert_eq!(d.object_color, [0.1, 0.2, 0.3, 0.4]);
+        assert_eq!(d.lm_params, [7.0, 2048.0, 0.0, 0.0]);
+        let pc = InstancedPushConstants::from_item(IDENTITY_MAT4, &push);
+        assert_eq!(pc.vp, IDENTITY_MAT4);
+        assert_eq!(pc.material_params, push.material_params);
+        assert_eq!(std::mem::size_of::<InstanceData>(), 96);
+        assert_eq!(std::mem::size_of::<InstancedPushConstants>(), 160);
     }
 }

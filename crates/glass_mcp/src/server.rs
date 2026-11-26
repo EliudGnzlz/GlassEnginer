@@ -2726,7 +2726,8 @@ impl McpServer {
                 let mut datos = json!({
                     "pipeline_binds": stats.pipeline_binds,
                     "descriptor_binds": stats.descriptor_binds,
-                    "forward_draw_calls": stats.game_draw_calls + stats.scene_draw_calls
+                    "forward_draw_calls": stats.game_draw_calls + stats.scene_draw_calls,
+                    "gpu_draw_calls": stats.gpu_draw_calls
                 });
                 if stats.pipeline_binds == 0 && stats.descriptor_binds == 0 {
                     datos["note"] = json!("sin datos: ningún frame renderizado en este proceso");

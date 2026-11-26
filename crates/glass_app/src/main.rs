@@ -7946,6 +7946,7 @@ for name in wanted {
                 outline_draw_calls: stats_outline,
                 pipeline_binds: renderer.frame_bind_counts().0,
                 descriptor_binds: renderer.frame_bind_counts().1,
+                gpu_draw_calls: renderer.frame_draw_calls(),
             });
 
             // ------------------------------------------------------------

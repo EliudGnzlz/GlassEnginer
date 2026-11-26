@@ -33,6 +33,11 @@ pub struct RenderStatsSnapshot {
     /// Enlaces de descriptor set en el bucle de mallas de los pases de
     /// vista del frame (Fase 2S, S6).
     pub descriptor_binds: u32,
+    /// Draws indexados REALES del bucle de mallas (por ítem + por grupo
+    /// instanciado) en las vistas de escena y juego del último frame:
+    /// a diferencia de `game_draw_calls`/`scene_draw_calls` (que cuentan
+    /// lotes/ítems), este baja a ~1 por grupo con el render instanciado.
+    pub gpu_draw_calls: u32,
 }
 
 static STATE: OnceLock<Mutex<RenderStatsSnapshot>> = OnceLock::new();
@@ -74,6 +79,7 @@ mod tests {
             outline_draw_calls: 2,
             pipeline_binds: 11,
             descriptor_binds: 23,
+            gpu_draw_calls: 9,
         };
 
         record_render_stats(stats);
@@ -88,5 +94,6 @@ mod tests {
         assert_eq!(snapshot.outline_draw_calls, 2);
         assert_eq!(snapshot.pipeline_binds, 11);
         assert_eq!(snapshot.descriptor_binds, 23);
+        assert_eq!(snapshot.gpu_draw_calls, 9);
     }
 }
