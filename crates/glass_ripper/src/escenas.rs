@@ -319,6 +319,7 @@ fn entidad_vacia(id: u64) -> EntityData {
         prefab_source: None,
         prefab_hash: None,
         prefab_local_id: None,
+        prefab_overrides: None,
     }
 }
 

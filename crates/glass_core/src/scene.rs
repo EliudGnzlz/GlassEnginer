@@ -1610,6 +1610,10 @@ pub struct EntityData {
     /// Prefab vivo: id de esta entidad dentro del prefab. En todo el subárbol.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefab_local_id: Option<u64>,
+    /// Prefab vivo (Fase D): overrides de esta instancia frente a su asset.
+    /// Solo en la raíz de la instancia.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefab_overrides: Option<crate::prefab::PrefabOverrides>,
 }
 
 impl EntityData {
@@ -1781,6 +1785,7 @@ impl EntityData {
             prefab_source: None,
             prefab_hash: None,
             prefab_local_id: None,
+            prefab_overrides: None,
         }
     }
 }
@@ -2495,6 +2500,7 @@ impl SceneState {
         root_clone.prefab_source = fuente.map(str::to_owned);
         root_clone.prefab_hash = fuente.map(|_| prefab.huella());
         root_clone.prefab_local_id = vinculo.then_some(prefab.root_entity.id);
+        root_clone.prefab_overrides = None;
 
         // Si se emparentó a un padre existente, añadir el nuevo id a sus hijos
         if let Some(pid) = parent_id {
@@ -2549,6 +2555,11 @@ impl SceneState {
 
         let mut avisos = Vec::new();
         for (raiz_id, fuente, guardada) in raices {
+            // Una raíz anidada puede haber desaparecido al re-expandir
+            // la instancia exterior que la contenía en esta misma pasada.
+            if self.get_entity(raiz_id).is_none() {
+                continue;
+            }
             let Some(prefab) = resolver(&fuente) else {
                 avisos.push(format!("#{raiz_id} ({fuente}): vínculo roto"));
                 continue;
@@ -2556,22 +2567,394 @@ impl SceneState {
             let huella_escena = crate::prefab::huella_subarbol(&self.entities, raiz_id, |e| {
                 e.prefab_local_id.unwrap_or(u64::MAX)
             });
-            if guardada.as_deref() != Some(huella_escena.as_str()) {
+            let huella_asset = prefab.huella();
+            if guardada.as_deref() == Some(huella_escena.as_str()) {
+                // Intacta: solo se mueve si el asset cambió.
+                if huella_asset != huella_escena {
+                    self.reexpandir_instancia(raiz_id, &prefab);
+                    if let Some(raiz) = self.get_entity_mut(raiz_id) {
+                        raiz.prefab_hash = Some(huella_asset);
+                        raiz.prefab_overrides = None;
+                    }
+                }
+                continue;
+            }
+            // Modificada: sin diff guardado, comportamiento de la Fase A
+            // (no se pisa jamás en silencio).
+            let overrides = self
+                .get_entity(raiz_id)
+                .and_then(|r| r.prefab_overrides.clone());
+            let Some(overrides) = overrides.filter(|o| !o.esta_vacia()) else {
                 avisos.push(format!(
                     "#{raiz_id} ({fuente}): instancia modificada: no actualizada"
                 ));
                 continue;
-            }
-            let huella_asset = prefab.huella();
-            if huella_asset == huella_escena {
+            };
+            // Con diff y sin deriva del asset, la instancia ya es
+            // asset+diff: re-expandir sería idéntico, no se toca nada.
+            if guardada.as_deref() == Some(huella_asset.as_str()) {
                 continue;
             }
-            self.reexpandir_instancia(raiz_id, &prefab);
-            if let Some(raiz) = self.get_entity_mut(raiz_id) {
-                raiz.prefab_hash = Some(huella_asset);
-            }
+            self.reexpandir_con_overrides(raiz_id, &fuente, &prefab, overrides, &mut avisos);
         }
         avisos
+    }
+
+    /// Prefab vivo (Fase D): recalcula el `prefab_overrides` de cada
+    /// instancia vinculada contra su asset actual. Lo llama el editor al
+    /// guardar la escena: la instancia intacta queda sin diff y la
+    /// modificada guarda el suyo, para que el refresco de la próxima
+    /// carga reaplique los cambios en vez de descartarlos. Con el
+    /// vínculo roto no se toca el diff guardado.
+    pub fn recalcular_overrides_prefab(
+        &mut self,
+        resolver: &dyn Fn(&str) -> Option<crate::prefab::Prefab>,
+    ) {
+        let raices: Vec<(u64, String, Option<String>)> = self
+            .entities
+            .iter()
+            .filter_map(|e| {
+                e.prefab_source
+                    .as_ref()
+                    .map(|f| (e.id, f.clone(), e.prefab_hash.clone()))
+            })
+            .collect();
+        for (raiz_id, fuente, guardada) in raices {
+            let Some(prefab) = resolver(&fuente) else {
+                continue;
+            };
+            let huella = crate::prefab::huella_subarbol(&self.entities, raiz_id, |e| {
+                e.prefab_local_id.unwrap_or(u64::MAX)
+            });
+            let nuevo = if guardada.as_deref() == Some(huella.as_str()) {
+                None
+            } else {
+                match self.calcular_diff_prefab(raiz_id, &prefab) {
+                    Some(d) if !d.esta_vacia() => Some(d),
+                    _ => None,
+                }
+            };
+            if let Some(raiz) = self.get_entity_mut(raiz_id) {
+                raiz.prefab_overrides = nuevo;
+            }
+        }
+    }
+
+    /// Id de escena de la entidad vinculada del subárbol de `raiz_id`
+    /// con ese `prefab_local_id`. Los local_id solo son únicos dentro de
+    /// su instancia, así que la búsqueda va acotada: no entra en las
+    /// instancias anidadas (raíces con `prefab_source`, que son frontera)
+    /// y el local_id de la raíz del asset (`local_raiz`) resuelve a la
+    /// propia raíz de la escena, cuyo local_id puede faltar o diferir.
+    fn id_en_subarbol_prefab(
+        &self,
+        raiz_id: u64,
+        local_id: u64,
+        local_raiz: u64,
+    ) -> Option<u64> {
+        if local_id == local_raiz {
+            return Some(raiz_id);
+        }
+        use std::collections::HashMap;
+        let por_id: HashMap<u64, &EntityData> =
+            self.entities.iter().map(|e| (e.id, e)).collect();
+        let raiz = por_id.get(&raiz_id)?;
+        // Preorden en orden de documento (hijos al revés en la pila):
+        // ante un local_id duplicado por copiar-pegar, el primer
+        // emparejamiento es la entidad vinculada original, no la copia.
+        let mut pila: Vec<&EntityData> = raiz
+            .children
+            .iter()
+            .filter_map(|c| por_id.get(c).copied())
+            .rev()
+            .collect();
+        while let Some(e) = pila.pop() {
+            // Frontera: una instancia anidada no se entra ni se empareja.
+            if e.prefab_source.is_some() {
+                continue;
+            }
+            if e.prefab_local_id == Some(local_id) {
+                return Some(e.id);
+            }
+            pila.extend(
+                e.children
+                    .iter()
+                    .filter_map(|c| por_id.get(c).copied())
+                    .rev(),
+            );
+        }
+        None
+    }
+
+    /// Prefab vivo (Fase D): re-expande la instancia `raiz_id` desde
+    /// `prefab` (que ha derivado respecto a la base del diff) reaplicando
+    /// `overrides`. Las entidades añadidas se despegan antes de expandir y
+    /// se re-pegan después conservando su id de escena; las quitadas se
+    /// borran tras expandir; las propiedades se escriben por
+    /// `prefab_local_id` y las que ya no encajan (la entidad ya no está en
+    /// el asset o el valor no aplica) quedan marcadas huérfanas con aviso,
+    /// sin aplicarse a ciegas. Al final la raíz guarda la huella del asset
+    /// nuevo como base y el diff actualizado.
+    fn reexpandir_con_overrides(
+        &mut self,
+        raiz_id: u64,
+        fuente: &str,
+        prefab: &crate::prefab::Prefab,
+        mut overrides: crate::prefab::PrefabOverrides,
+        avisos: &mut Vec<String>,
+    ) {
+        use std::collections::HashSet;
+
+        // 1. Despegar las raíces añadidas con el mismo criterio que
+        // `calcular_diff_prefab`: recorriendo solo la parte vinculada,
+        // es añadida la entidad sin local_id, la raíz de otra instancia
+        // o la de local_id repetido. Lo que cuelga de una añadida viaja
+        // con ella (no se recorre). «Local desconocido en el asset» NO
+        // es criterio: con el asset nuevo en la mano, esa entidad es un
+        // override que quedará huérfano, no una añadida.
+        let local_raiz = prefab.root_entity.id;
+        let por_id: std::collections::HashMap<u64, &EntityData> =
+            self.entities.iter().map(|e| (e.id, e)).collect();
+        let mut locales_vistos: HashSet<u64> = HashSet::from([local_raiz]);
+        let mut visitadas: HashSet<u64> = HashSet::from([raiz_id]);
+        // (id de escena, id del padre, local_id del padre, nombre, índice entre hermanos)
+        let mut despegadas: Vec<(u64, u64, Option<u64>, String, usize)> = Vec::new();
+        if let Some(raiz) = por_id.get(&raiz_id).copied() {
+            let mut pila: Vec<&EntityData> = vec![raiz];
+            while let Some(e) = pila.pop() {
+                let mut vinculados: Vec<&EntityData> = Vec::new();
+                for (indice, hijo) in e
+                    .children
+                    .iter()
+                    .filter_map(|c| por_id.get(c).copied())
+                    .enumerate()
+                {
+                    if !visitadas.insert(hijo.id) {
+                        continue;
+                    }
+                    let es_anadida = match hijo.prefab_local_id {
+                        None => true,
+                        Some(_) if hijo.prefab_source.is_some() => true,
+                        Some(l) => !locales_vistos.insert(l),
+                    };
+                    if es_anadida {
+                        let padre_local = if e.id == raiz_id {
+                            Some(local_raiz)
+                        } else {
+                            e.prefab_local_id
+                        };
+                        despegadas.push((
+                            hijo.id,
+                            e.id,
+                            padre_local,
+                            hijo.name.clone(),
+                            indice,
+                        ));
+                    } else {
+                        vinculados.push(hijo);
+                    }
+                }
+                pila.extend(vinculados.into_iter().rev());
+            }
+        }
+        for (id, padre_escena, _, _, _) in &despegadas {
+            if let Some(p) = self.get_entity_mut(*padre_escena) {
+                p.children.retain(|c| c != id);
+            }
+            if let Some(e) = self.get_entity_mut(*id) {
+                e.parent = None;
+            }
+        }
+
+        // 2. Re-expandir desde el asset nuevo (las añadidas despegadas ya
+        // no están en el subárbol: sobreviven a la sustitución).
+        self.reexpandir_instancia(raiz_id, prefab);
+
+        // 3. Borrar las quitadas que el asset nuevo vuelve a traer.
+        for local in &overrides.quitadas {
+            let Some(objetivo) = self.id_en_subarbol_prefab(raiz_id, *local, local_raiz) else {
+                continue;
+            };
+            let ids: HashSet<u64> = crate::prefab::recorrer_subarbol(&self.entities, objetivo)
+                .iter()
+                .map(|n| n.e.id)
+                .collect();
+            self.entities.retain(|e| !ids.contains(&e.id));
+            for e in &mut self.entities {
+                e.children.retain(|c| !ids.contains(c));
+            }
+        }
+
+        // 4. Reaplicar las propiedades; la que no encaje queda huérfana.
+        for entrada in &mut overrides.propiedades {
+            let aplicada = self
+                .id_en_subarbol_prefab(raiz_id, entrada.local_id, local_raiz)
+                .and_then(|id| self.get_entity_mut(id))
+                .map(|e| {
+                    crate::prefab::escribir_path(e, &entrada.path, &entrada.valor).is_ok()
+                })
+                .unwrap_or(false);
+            if aplicada {
+                entrada.huerfana = false;
+            } else {
+                entrada.huerfana = true;
+                avisos.push(format!(
+                    "#{raiz_id} ({fuente}): override huérfano en local {} ({}): no aplicado",
+                    entrada.local_id, entrada.path
+                ));
+            }
+        }
+
+        // 5. Re-pegar las añadidas bajo su padre vinculado, en su
+        // posición entre hermanos si cabe; si el padre ya no está en el
+        // asset, quedan sueltas con aviso.
+        for (id, _, padre_local, nombre, indice) in &despegadas {
+            let nuevo_padre =
+                padre_local.and_then(|l| self.id_en_subarbol_prefab(raiz_id, l, local_raiz));
+            match nuevo_padre {
+                Some(p) => {
+                    if let Some(e) = self.get_entity_mut(*id) {
+                        e.parent = Some(p);
+                    }
+                    if let Some(padre) = self.get_entity_mut(p) {
+                        if !padre.children.contains(id) {
+                            let pos = (*indice).min(padre.children.len());
+                            padre.children.insert(pos, *id);
+                        }
+                    }
+                }
+                None => {
+                    avisos.push(format!(
+                        "#{raiz_id} ({fuente}): entidad añadida «{nombre}» sin padre en el asset nuevo: queda suelta"
+                    ));
+                }
+            }
+        }
+
+        // 6. La raíz guarda la nueva base y el diff actualizado. Las
+        // quitadas que el asset nuevo ya no contiene se depuran: ya no
+        // hay nada que quitar (las entradas de añadidas las regenera el
+        // próximo cálculo del diff al guardar).
+        overrides.quitadas.retain(|l| {
+            prefab
+                .descendant_entities
+                .iter()
+                .any(|e| e.id == *l)
+        });
+        if let Some(raiz) = self.get_entity_mut(raiz_id) {
+            raiz.prefab_hash = Some(prefab.huella());
+            raiz.prefab_overrides = Some(overrides);
+        }
+    }
+
+    /// Prefab vivo (Fase D): overrides de la instancia `raiz_id` frente a
+    /// `prefab`. None si la entidad no existe o no es raíz vinculada;
+    /// Some(vacío) si la instancia está intacta. Las entidades se emparejan
+    /// por `prefab_local_id`; la raíz siempre con la raíz del asset.
+    pub fn calcular_diff_prefab(
+        &self,
+        raiz_id: u64,
+        prefab: &crate::prefab::Prefab,
+    ) -> Option<crate::prefab::PrefabOverrides> {
+        use crate::prefab::{
+            paths_comparables, valor_en_path, OverrideAnadida, OverridePropiedad, PrefabOverrides,
+        };
+        use std::collections::{HashMap, HashSet};
+
+        let raiz = self.get_entity(raiz_id)?;
+        raiz.prefab_source.as_ref()?;
+
+        let por_id: HashMap<u64, &EntityData> =
+            self.entities.iter().map(|e| (e.id, e)).collect();
+        let asset_por_id: HashMap<u64, &EntityData> = std::iter::once(&prefab.root_entity)
+            .chain(&prefab.descendant_entities)
+            .map(|e| (e.id, e))
+            .collect();
+        let local_raiz = prefab.root_entity.id;
+
+        // Preorden por la parte vinculada de la instancia. Un hijo sin
+        // local_id (o con uno desconocido o repetido, o raíz de otra
+        // instancia) es una añadida y no se recorre por dentro: lo que
+        // cuelga de él pertenece a esa añadida.
+        let mut parejas: Vec<(u64, &EntityData)> = Vec::new();
+        let mut anadidas: Vec<OverrideAnadida> = Vec::new();
+        let mut visitadas: HashSet<u64> = HashSet::from([raiz_id]);
+        let mut locales_vistos: HashSet<u64> = HashSet::from([local_raiz]);
+        let mut pila: Vec<(u64, &EntityData)> = vec![(local_raiz, raiz)];
+
+        while let Some((local, e)) = pila.pop() {
+            parejas.push((local, e));
+            let mut indice = 0;
+            let mut vinculados: Vec<(u64, &EntityData)> = Vec::new();
+            for hijo in e.children.iter().filter_map(|c| por_id.get(c).copied()) {
+                if !visitadas.insert(hijo.id) {
+                    continue;
+                }
+                // La raíz de una instancia anidada cuenta como añadida
+                // (no se recorre), pero si su local_id existe en el asset
+                // se marca visto: esa entidad del asset está presente en
+                // la escena y no debe acabar en `quitadas` (el refresco
+                // borraría la instancia anidada entera).
+                if hijo.prefab_source.is_some() {
+                    if let Some(l) = hijo.prefab_local_id {
+                        if asset_por_id.contains_key(&l) {
+                            locales_vistos.insert(l);
+                        }
+                    }
+                }
+                let vinculado = match hijo.prefab_local_id {
+                    Some(l)
+                        if hijo.prefab_source.is_none()
+                            && asset_por_id.contains_key(&l)
+                            && locales_vistos.insert(l) =>
+                    {
+                        Some(l)
+                    }
+                    _ => None,
+                };
+                match vinculado {
+                    Some(l) => vinculados.push((l, hijo)),
+                    None => {
+                        anadidas.push(OverrideAnadida {
+                            padre_local_id: Some(local),
+                            nombre: hijo.name.clone(),
+                            indice,
+                        });
+                        indice += 1;
+                    }
+                }
+            }
+            pila.extend(vinculados.into_iter().rev());
+        }
+
+        let mut propiedades: Vec<OverridePropiedad> = Vec::new();
+        for &(local, e) in &parejas {
+            let asset = asset_por_id[&local];
+            for path in paths_comparables(e.id == raiz_id) {
+                let en_escena = valor_en_path(e, path);
+                if valor_en_path(asset, path) != en_escena {
+                    propiedades.push(OverridePropiedad {
+                        local_id: local,
+                        path: path.to_string(),
+                        valor: en_escena.unwrap_or(serde_json::Value::Null),
+                        huerfana: false,
+                    });
+                }
+            }
+        }
+
+        let quitadas: Vec<u64> = prefab
+            .descendant_entities
+            .iter()
+            .map(|e| e.id)
+            .filter(|id| !locales_vistos.contains(id))
+            .collect();
+
+        Some(PrefabOverrides {
+            propiedades,
+            anadidas,
+            quitadas,
+        })
     }
 
     /// Revierte una instancia vinculada a su asset (Fase C): re-expande
@@ -2598,6 +2981,7 @@ impl SceneState {
         let huella = prefab.huella();
         if let Some(raiz) = self.get_entity_mut(raiz_id) {
             raiz.prefab_hash = Some(huella);
+            raiz.prefab_overrides = None;
         }
         Ok(())
     }
@@ -2623,6 +3007,7 @@ impl SceneState {
         for id in ids {
             if let Some(e) = self.get_entity_mut(id) {
                 e.prefab_local_id = None;
+                e.prefab_overrides = None;
                 if id == raiz_id {
                     e.prefab_source = None;
                     e.prefab_hash = None;
@@ -4243,4 +4628,639 @@ const TOL: f32 = 1e-6;
         assert_eq!(guardado["mesh_collider"], serde_json::json!("Convex"));
     }
 
+}
+
+#[cfg(test)]
+mod prefab_diff_tests {
+    use super::*;
+    use crate::prefab::{OverrideAnadida, OverridePropiedad, Prefab, PrefabOverrides};
+
+    const FUENTE: &str = "assets/prefabs/diff_test.prefab.json";
+
+    fn entidad(
+        id: u64,
+        nombre: &str,
+        comps: &[&str],
+        parent: Option<u64>,
+        children: &[u64],
+    ) -> EntityData {
+        let mut e = EntityData::new(
+            id,
+            nombre.into(),
+            comps.iter().map(|c| c.to_string()).collect(),
+        );
+        e.parent = parent;
+        e.children = children.to_vec();
+        e
+    }
+
+    /// Raiz(10) → A(11) → C(13, con malla); Raiz(10) → B(12).
+    fn prefab_fixture() -> Prefab {
+        Prefab {
+            format_version: 1,
+            name: "DiffTest".to_string(),
+            root_entity: entidad(10, "Raiz", &["Transform"], None, &[11, 12]),
+            descendant_entities: vec![
+                entidad(11, "A", &["Transform"], Some(10), &[13]),
+                entidad(12, "B", &["Transform"], Some(10), &[]),
+                entidad(13, "C", &["Transform", "MeshRenderer"], Some(11), &[]),
+            ],
+        }
+    }
+
+    fn instanciar() -> (SceneState, Prefab, u64) {
+        let prefab = prefab_fixture();
+        let mut scene = SceneState::default();
+        let raiz = scene.instantiate_prefab(&prefab, None, None, Some(FUENTE));
+        (scene, prefab, raiz)
+    }
+
+    fn id_de(scene: &SceneState, local: u64) -> u64 {
+        scene
+            .entities
+            .iter()
+            .find(|e| e.prefab_local_id == Some(local))
+            .map(|e| e.id)
+            .expect("local_id presente en la instancia")
+    }
+
+    fn anadir_hijo(scene: &mut SceneState, padre: u64, nombre: &str) -> u64 {
+        let id = scene.next_entity_id;
+        scene.next_entity_id += 1;
+        scene
+            .entities
+            .push(entidad(id, nombre, &["Transform"], Some(padre), &[]));
+        scene.get_entity_mut(padre).unwrap().children.push(id);
+        id
+    }
+
+    #[test]
+    fn diff_sin_cambios_es_vacio() {
+        let (scene, prefab, raiz) = instanciar();
+        let diff = scene.calcular_diff_prefab(raiz, &prefab).expect("raíz vinculada");
+        assert!(diff.esta_vacia());
+    }
+
+    #[test]
+    fn diff_posicion_de_hijo() {
+        let (mut scene, prefab, raiz) = instanciar();
+        let c = id_de(&scene, 13);
+        scene.get_entity_mut(c).unwrap().transform.position = [1.0, 2.0, 3.0];
+
+        let diff = scene.calcular_diff_prefab(raiz, &prefab).unwrap();
+        assert_eq!(diff.propiedades.len(), 1);
+        let p = &diff.propiedades[0];
+        assert_eq!(p.local_id, 13);
+        assert_eq!(p.path, "transform.position");
+        assert_eq!(p.valor, serde_json::json!([1.0, 2.0, 3.0]));
+        assert!(!p.huerfana);
+        assert!(diff.anadidas.is_empty());
+        assert!(diff.quitadas.is_empty());
+    }
+
+    #[test]
+    fn diff_raiz_movida_y_renombrada_es_vacio() {
+        let (mut scene, prefab, raiz) = instanciar();
+        {
+            let r = scene.get_entity_mut(raiz).unwrap();
+            r.transform.position = [5.0, 0.0, -3.0];
+            r.name = "Renombrada".into();
+        }
+        let diff = scene.calcular_diff_prefab(raiz, &prefab).unwrap();
+        assert!(diff.esta_vacia());
+    }
+
+    #[test]
+    fn diff_hijo_anadido_bajo_descendiente() {
+        let (mut scene, prefab, raiz) = instanciar();
+        let a = id_de(&scene, 11);
+        let extra = anadir_hijo(&mut scene, a, "Extra");
+        // La nieta cuelga de una añadida: solo cuenta la raíz del subárbol.
+        anadir_hijo(&mut scene, extra, "Nieta");
+
+        let diff = scene.calcular_diff_prefab(raiz, &prefab).unwrap();
+        assert_eq!(diff.anadidas.len(), 1);
+        let an = &diff.anadidas[0];
+        assert_eq!(an.padre_local_id, Some(11));
+        assert_eq!(an.nombre, "Extra");
+        assert_eq!(an.indice, 0);
+        assert!(diff.propiedades.is_empty());
+        assert!(diff.quitadas.is_empty());
+    }
+
+    #[test]
+    fn diff_hijos_anadidos_bajo_raiz() {
+        let (mut scene, prefab, raiz) = instanciar();
+        anadir_hijo(&mut scene, raiz, "Extra0");
+        anadir_hijo(&mut scene, raiz, "Extra1");
+
+        let diff = scene.calcular_diff_prefab(raiz, &prefab).unwrap();
+        assert_eq!(diff.anadidas.len(), 2);
+        assert!(diff.anadidas.iter().all(|a| a.padre_local_id == Some(10)));
+        assert_eq!(diff.anadidas[0].nombre, "Extra0");
+        assert_eq!(diff.anadidas[0].indice, 0);
+        assert_eq!(diff.anadidas[1].nombre, "Extra1");
+        assert_eq!(diff.anadidas[1].indice, 1);
+    }
+
+    #[test]
+    fn diff_hijo_quitado() {
+        let (mut scene, prefab, raiz) = instanciar();
+        let b = id_de(&scene, 12);
+        scene.entities.retain(|e| e.id != b);
+        scene.get_entity_mut(raiz).unwrap().children.retain(|&c| c != b);
+
+        let diff = scene.calcular_diff_prefab(raiz, &prefab).unwrap();
+        assert_eq!(diff.quitadas, vec![12]);
+        assert!(diff.anadidas.is_empty());
+        assert!(diff.propiedades.is_empty());
+    }
+
+    #[test]
+    fn diff_mesh_de_hijo() {
+        let (mut scene, prefab, raiz) = instanciar();
+        let c = id_de(&scene, 13);
+        scene.get_entity_mut(c).unwrap().mesh = None;
+
+        let diff = scene.calcular_diff_prefab(raiz, &prefab).unwrap();
+        assert_eq!(diff.propiedades.len(), 1);
+        let p = &diff.propiedades[0];
+        assert_eq!(p.local_id, 13);
+        assert_eq!(p.path, "mesh");
+        let esperado = crate::prefab::valor_en_path(scene.get_entity(c).unwrap(), "mesh")
+            .unwrap_or(serde_json::Value::Null);
+        assert_eq!(p.valor, esperado);
+    }
+
+    #[test]
+    fn diff_no_raiz_vinculada_es_none() {
+        let (mut scene, prefab, _raiz) = instanciar();
+        let a = id_de(&scene, 11);
+        assert!(scene.calcular_diff_prefab(a, &prefab).is_none());
+        assert!(scene.calcular_diff_prefab(u64::MAX, &prefab).is_none());
+
+        let suelta = scene.instantiate_prefab(&prefab, None, None, None);
+        assert!(scene.calcular_diff_prefab(suelta, &prefab).is_none());
+    }
+
+    #[test]
+    fn prefab_overrides_round_trip_json() {
+        let mut e = entidad(7, "Inst", &["Transform"], None, &[]);
+        e.prefab_source = Some(FUENTE.into());
+        e.prefab_local_id = Some(10);
+        e.prefab_overrides = Some(PrefabOverrides {
+            propiedades: vec![OverridePropiedad {
+                local_id: 13,
+                path: "transform.position".into(),
+                valor: serde_json::json!([1.0, 2.0, 3.0]),
+                huerfana: false,
+            }],
+            anadidas: vec![OverrideAnadida {
+                padre_local_id: Some(11),
+                nombre: "Extra".into(),
+                indice: 0,
+            }],
+            quitadas: vec![12],
+        });
+
+        let json = serde_json::to_value(&e).unwrap();
+        let vuelta: EntityData = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&vuelta).unwrap(), json);
+
+        let o = vuelta.prefab_overrides.expect("overrides tras round-trip");
+        assert_eq!(o.propiedades.len(), 1);
+        assert_eq!(o.propiedades[0].path, "transform.position");
+        assert_eq!(o.anadidas[0].padre_local_id, Some(11));
+        assert_eq!(o.quitadas, vec![12]);
+    }
+}
+
+#[cfg(test)]
+mod prefab_refresco_diff_tests {
+    use super::*;
+    use crate::prefab::Prefab;
+
+    const FUENTE: &str = "assets/prefabs/refresco_diff.prefab.json";
+
+    fn entidad(
+        id: u64,
+        nombre: &str,
+        comps: &[&str],
+        parent: Option<u64>,
+        children: &[u64],
+    ) -> EntityData {
+        let mut e = EntityData::new(
+            id,
+            nombre.into(),
+            comps.iter().map(|c| c.to_string()).collect(),
+        );
+        e.parent = parent;
+        e.children = children.to_vec();
+        e
+    }
+
+    /// Raiz(10) → A(11) → C(13, con malla); Raiz(10) → B(12).
+    fn prefab_fixture() -> Prefab {
+        Prefab {
+            format_version: 1,
+            name: "RefrescoDiff".to_string(),
+            root_entity: entidad(10, "Raiz", &["Transform"], None, &[11, 12]),
+            descendant_entities: vec![
+                entidad(11, "A", &["Transform"], Some(10), &[13]),
+                entidad(12, "B", &["Transform"], Some(10), &[]),
+                entidad(13, "C", &["Transform", "MeshRenderer"], Some(11), &[]),
+            ],
+        }
+    }
+
+    fn instanciar() -> (SceneState, Prefab, u64) {
+        let prefab = prefab_fixture();
+        let mut scene = SceneState::default();
+        let raiz = scene.instantiate_prefab(&prefab, None, None, Some(FUENTE));
+        (scene, prefab, raiz)
+    }
+
+    fn id_de(scene: &SceneState, local: u64) -> u64 {
+        scene
+            .entities
+            .iter()
+            .find(|e| e.prefab_local_id == Some(local))
+            .map(|e| e.id)
+            .expect("local_id presente en la instancia")
+    }
+
+    fn guardar_diff(scene: &mut SceneState, raiz: u64, prefab: &Prefab) {
+        let diff = scene.calcular_diff_prefab(raiz, prefab).expect("raíz vinculada");
+        assert!(!diff.esta_vacia(), "el test necesita un diff no vacío");
+        scene.get_entity_mut(raiz).unwrap().prefab_overrides = Some(diff);
+    }
+
+    #[test]
+    fn refresco_con_diff_trae_lo_nuevo_y_conserva_lo_propio() {
+        let (mut scene, prefab, raiz) = instanciar();
+        let c = id_de(&scene, 13);
+        scene.get_entity_mut(c).unwrap().transform.position = [1.0, 2.0, 3.0];
+        guardar_diff(&mut scene, raiz, &prefab);
+
+        // El asset deriva: B se renombra y C cambia a un tercer valor.
+        let mut editado = prefab_fixture();
+        editado.descendant_entities[1].name = "B2".to_string();
+        editado.descendant_entities[2].transform.position = [9.0, 9.0, 9.0];
+        let huella_editada = editado.huella();
+
+        let avisos = scene.refrescar_instancias_prefab(&|_| Some(editado.clone()));
+        assert!(avisos.is_empty(), "avisos inesperados: {avisos:?}");
+
+        let c2 = id_de(&scene, 13);
+        assert_eq!(
+            scene.get_entity(c2).unwrap().transform.position,
+            [1.0, 2.0, 3.0],
+            "la instancia conserva SU posición (override reaplicado)"
+        );
+        let b = id_de(&scene, 12);
+        assert_eq!(scene.get_entity(b).unwrap().name, "B2", "llega lo nuevo del asset");
+        assert_eq!(
+            scene.get_entity(raiz).unwrap().prefab_hash.as_deref(),
+            Some(huella_editada.as_str()),
+            "la base del diff pasa a ser el asset nuevo"
+        );
+
+        // Segundo refresco sin deriva: no-op silencioso.
+        let avisos2 = scene.refrescar_instancias_prefab(&|_| Some(editado.clone()));
+        assert!(avisos2.is_empty(), "segundo refresco: {avisos2:?}");
+        assert_eq!(scene.get_entity(c2).unwrap().transform.position, [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn refresco_con_diff_marca_huerfano_y_aplica_el_resto() {
+        let (mut scene, prefab, raiz) = instanciar();
+        let c = id_de(&scene, 13);
+        scene.get_entity_mut(c).unwrap().transform.position = [1.0, 2.0, 3.0];
+        let b = id_de(&scene, 12);
+        scene.get_entity_mut(b).unwrap().name = "BMio".to_string();
+        guardar_diff(&mut scene, raiz, &prefab);
+
+        // El asset nuevo ya no tiene a C.
+        let mut editado = prefab_fixture();
+        editado.root_entity.children = vec![11, 12];
+        editado.descendant_entities[0].children = vec![];
+        editado.descendant_entities.retain(|e| e.id != 13);
+
+        let avisos = scene.refrescar_instancias_prefab(&|_| Some(editado.clone()));
+        assert!(
+            avisos.iter().any(|a| a.contains("huérfano")),
+            "debe avisar del huérfano: {avisos:?}"
+        );
+        let b2 = id_de(&scene, 12);
+        assert_eq!(scene.get_entity(b2).unwrap().name, "BMio", "el resto se aplica");
+        assert!(
+            scene.entities.iter().all(|e| e.prefab_local_id != Some(13)),
+            "C desaparece con el asset"
+        );
+        let raiz_e = scene.get_entity(raiz).unwrap();
+        let ov = raiz_e.prefab_overrides.as_ref().expect("diff conservado");
+        let entrada_c = ov
+            .propiedades
+            .iter()
+            .find(|p| p.local_id == 13)
+            .expect("la entrada de C sigue en el diff");
+        assert!(entrada_c.huerfana, "la entrada de C queda marcada huérfana");
+        let entrada_b = ov
+            .propiedades
+            .iter()
+            .find(|p| p.local_id == 12)
+            .expect("la entrada de B sigue en el diff");
+        assert!(!entrada_b.huerfana);
+    }
+
+    #[test]
+    fn refresco_con_diff_respeta_quitadas() {
+        let (mut scene, prefab, raiz) = instanciar();
+        // La instancia quita a B (local 12).
+        let b = id_de(&scene, 12);
+        scene.entities.retain(|e| e.id != b);
+        scene.get_entity_mut(raiz).unwrap().children.retain(|c| *c != b);
+        guardar_diff(&mut scene, raiz, &prefab);
+
+        // El asset deriva en A; B sigue existiendo en el asset.
+        let mut editado = prefab_fixture();
+        editado.descendant_entities[0].name = "A2".to_string();
+
+        let avisos = scene.refrescar_instancias_prefab(&|_| Some(editado.clone()));
+        assert!(avisos.is_empty(), "avisos inesperados: {avisos:?}");
+        assert!(
+            scene.entities.iter().all(|e| e.prefab_local_id != Some(12)),
+            "la quitada sigue ausente tras el refresco"
+        );
+        let a = id_de(&scene, 11);
+        assert_eq!(scene.get_entity(a).unwrap().name, "A2");
+    }
+
+    #[test]
+    fn refresco_con_diff_preserva_anadidas_con_su_id() {
+        let (mut scene, prefab, raiz) = instanciar();
+        let a = id_de(&scene, 11);
+        let extra = scene.next_entity_id;
+        scene.next_entity_id += 1;
+        scene
+            .entities
+            .push(entidad(extra, "Extra", &["Transform"], Some(a), &[]));
+        scene.get_entity_mut(a).unwrap().children.push(extra);
+        guardar_diff(&mut scene, raiz, &prefab);
+
+        let mut editado = prefab_fixture();
+        editado.descendant_entities[1].name = "B2".to_string();
+
+        let avisos = scene.refrescar_instancias_prefab(&|_| Some(editado.clone()));
+        assert!(avisos.is_empty(), "avisos inesperados: {avisos:?}");
+        let extra_e = scene.get_entity(extra).expect("la añadida sobrevive al refresco");
+        assert_eq!(extra_e.name, "Extra");
+        assert_eq!(extra_e.parent, Some(a), "sigue hija del mismo padre");
+        let b = id_de(&scene, 12);
+        assert_eq!(scene.get_entity(b).unwrap().name, "B2");
+    }
+
+    #[test]
+    fn refresco_sin_diff_no_toca_la_modificada() {
+        let (mut scene, _prefab, _raiz) = instanciar();
+        let c = id_de(&scene, 13);
+        scene.get_entity_mut(c).unwrap().transform.position = [1.0, 2.0, 3.0];
+        // Sin prefab_overrides: comportamiento de la Fase A.
+
+        let mut editado = prefab_fixture();
+        editado.descendant_entities[1].name = "B2".to_string();
+        let avisos = scene.refrescar_instancias_prefab(&|_| Some(editado.clone()));
+        assert!(
+            avisos.iter().any(|a| a.contains("instancia modificada: no actualizada")),
+            "aviso de la Fase A: {avisos:?}"
+        );
+        assert_eq!(scene.get_entity(c).unwrap().transform.position, [1.0, 2.0, 3.0]);
+        let b = id_de(&scene, 12);
+        assert_eq!(scene.get_entity(b).unwrap().name, "B", "no llega lo del asset");
+    }
+}
+
+#[cfg(test)]
+mod prefab_refresco_revision_tests {
+    use super::*;
+    use crate::prefab::Prefab;
+
+    const FUENTE: &str = "assets/prefabs/revision.prefab.json";
+    const INTERNO: &str = "assets/prefabs/interno.prefab.json";
+
+    fn entidad(
+        id: u64,
+        nombre: &str,
+        comps: &[&str],
+        parent: Option<u64>,
+        children: &[u64],
+    ) -> EntityData {
+        let mut e = EntityData::new(
+            id,
+            nombre.into(),
+            comps.iter().map(|c| c.to_string()).collect(),
+        );
+        e.parent = parent;
+        e.children = children.to_vec();
+        e
+    }
+
+    fn prefab_fixture() -> Prefab {
+        Prefab {
+            format_version: 1,
+            name: "Revision".to_string(),
+            root_entity: entidad(10, "Raiz", &["Transform"], None, &[11, 12]),
+            descendant_entities: vec![
+                entidad(11, "A", &["Transform"], Some(10), &[13]),
+                entidad(12, "B", &["Transform"], Some(10), &[]),
+                entidad(13, "C", &["Transform", "MeshRenderer"], Some(11), &[]),
+            ],
+        }
+    }
+
+    fn prefab_interno() -> Prefab {
+        Prefab {
+            format_version: 1,
+            name: "Interno".to_string(),
+            root_entity: entidad(11, "Interno", &["Transform"], None, &[99]),
+            descendant_entities: vec![entidad(99, "InternoHijo", &["Transform"], Some(11), &[])],
+        }
+    }
+
+    fn id_de(scene: &SceneState, local: u64) -> u64 {
+        scene
+            .entities
+            .iter()
+            .find(|e| e.prefab_local_id == Some(local))
+            .map(|e| e.id)
+            .expect("local_id presente")
+    }
+
+    #[test]
+    fn instancia_anidada_sobrevive_al_refresco_con_deriva() {
+        let prefab = prefab_fixture();
+        let interno = prefab_interno();
+        let mut scene = SceneState::default();
+        let raiz = scene.instantiate_prefab(&prefab, None, None, Some(FUENTE));
+
+        // La escena pierde a A (11) y a C (13)...
+        let a = id_de(&scene, 11);
+        let c = id_de(&scene, 13);
+        scene.entities.retain(|e| e.id != a && e.id != c);
+        scene.get_entity_mut(raiz).unwrap().children.retain(|x| *x != a);
+
+        // ...y bajo B cuelga una instancia anidada cuya raíz tiene
+        // local_id 11 (el de A en el asset exterior).
+        let b = id_de(&scene, 12);
+        let in_raiz = scene.next_entity_id;
+        scene.next_entity_id += 1;
+        let in_hijo = scene.next_entity_id;
+        scene.next_entity_id += 1;
+        let mut r = entidad(in_raiz, "Interno", &["Transform"], Some(b), &[in_hijo]);
+        r.prefab_source = Some(INTERNO.to_string());
+        r.prefab_local_id = Some(11);
+        r.prefab_hash = Some(interno.huella());
+        scene.entities.push(r);
+        let mut h = entidad(in_hijo, "InternoHijo", &["Transform"], Some(in_raiz), &[]);
+        h.prefab_local_id = Some(99);
+        scene.entities.push(h);
+        scene.get_entity_mut(b).unwrap().children.push(in_raiz);
+
+        // El diff NO debe contar el 11 como quitada (está presente como
+        // raíz anidada) y SÍ como añadida.
+        let diff = scene.calcular_diff_prefab(raiz, &prefab).expect("raíz vinculada");
+        assert!(
+            !diff.quitadas.contains(&11),
+            "el local de la anidada no es una quitada: {diff:?}"
+        );
+        assert!(diff.quitadas.contains(&13));
+        assert!(
+            diff.anadidas.iter().any(|x| x.nombre == "Interno"),
+            "la anidada cuenta como añadida: {diff:?}"
+        );
+        scene.get_entity_mut(raiz).unwrap().prefab_overrides = Some(diff);
+
+        // El asset exterior deriva (B se renombra) y se refresca todo.
+        let mut editado = prefab_fixture();
+        editado.descendant_entities[1].name = "B2".to_string();
+        let avisos = scene.refrescar_instancias_prefab(&|f: &str| {
+            if f == INTERNO {
+                Some(prefab_interno())
+            } else {
+                Some(editado.clone())
+            }
+        });
+        assert!(avisos.is_empty(), "avisos inesperados: {avisos:?}");
+        let r2 = scene.get_entity(in_raiz).expect("la anidada sobrevive al refresco");
+        let b2 = id_de(&scene, 12);
+        assert_eq!(r2.parent, Some(b2), "la anidada sigue colgando de B");
+        assert_eq!(scene.get_entity(b2).unwrap().name, "B2");
+        assert!(scene.get_entity(in_hijo).is_some(), "el hijo de la anidada viaja con ella");
+        assert!(
+            scene.entities.iter().all(|e| e.prefab_local_id != Some(13)),
+            "la quitada C sigue ausente"
+        );
+    }
+
+    #[test]
+    fn duplicado_por_copiar_pegar_sobrevive_y_no_roba_el_override() {
+        let prefab = prefab_fixture();
+        let mut scene = SceneState::default();
+        let raiz = scene.instantiate_prefab(&prefab, None, None, Some(FUENTE));
+        let a = id_de(&scene, 11);
+        let c = id_de(&scene, 13);
+
+        // Copia de C con el mismo local_id (copiar-pegar en el editor).
+        let copia = scene.next_entity_id;
+        scene.next_entity_id += 1;
+        let mut e = entidad(copia, "CCopia", &["Transform", "MeshRenderer"], Some(a), &[]);
+        e.prefab_local_id = Some(13);
+        scene.entities.push(e);
+        scene.get_entity_mut(a).unwrap().children.push(copia);
+
+        // Se mueve la C original: el override es del local 13.
+        scene.get_entity_mut(c).unwrap().transform.position = [1.0, 2.0, 3.0];
+        let diff = scene.calcular_diff_prefab(raiz, &prefab).expect("raíz vinculada");
+        assert_eq!(diff.propiedades.len(), 1);
+        assert!(
+            diff.anadidas.iter().any(|x| x.nombre == "CCopia"),
+            "la copia cuenta como añadida: {diff:?}"
+        );
+        scene.get_entity_mut(raiz).unwrap().prefab_overrides = Some(diff);
+
+        let mut editado = prefab_fixture();
+        editado.descendant_entities[1].name = "B2".to_string();
+        let avisos = scene.refrescar_instancias_prefab(&|_| Some(editado.clone()));
+        assert!(avisos.is_empty(), "avisos inesperados: {avisos:?}");
+
+        let copia_e = scene.get_entity(copia).expect("la copia sobrevive al refresco");
+        assert_eq!(copia_e.parent, Some(a));
+        assert_eq!(
+            copia_e.transform.position,
+            [0.0, 0.0, 0.0],
+            "la copia NO recibe el override del local 13"
+        );
+        assert_eq!(
+            scene.get_entity(c).unwrap().transform.position,
+            [1.0, 2.0, 3.0],
+            "la vinculada original conserva su override"
+        );
+    }
+}
+
+#[cfg(test)]
+mod prefab_recalculo_tests {
+    use super::*;
+    use crate::prefab::Prefab;
+
+    const FUENTE: &str = "assets/prefabs/recalculo.prefab.json";
+
+    fn entidad(id: u64, nombre: &str, parent: Option<u64>, children: &[u64]) -> EntityData {
+        let mut e = EntityData::new(id, nombre.into(), vec!["Transform".to_string()]);
+        e.parent = parent;
+        e.children = children.to_vec();
+        e
+    }
+
+    fn fixture() -> Prefab {
+        Prefab {
+            format_version: 1,
+            name: "Recalculo".to_string(),
+            root_entity: entidad(10, "Raiz", None, &[11]),
+            descendant_entities: vec![entidad(11, "Hijo", Some(10), &[])],
+        }
+    }
+
+    #[test]
+    fn recalculo_intacta_sin_diff_y_modificada_con_diff() {
+        let prefab = fixture();
+        let mut scene = SceneState::default();
+        let raiz = scene.instantiate_prefab(&prefab, None, None, Some(FUENTE));
+
+        // Intacta: sin diff.
+        scene.recalcular_overrides_prefab(&|_| Some(fixture()));
+        assert!(scene.get_entity(raiz).unwrap().prefab_overrides.is_none());
+
+        // Modificada (posición del hijo): el recálculo guarda el diff.
+        let hijo = scene
+            .entities
+            .iter()
+            .find(|e| e.prefab_local_id == Some(11))
+            .map(|e| e.id)
+            .unwrap();
+        scene.get_entity_mut(hijo).unwrap().transform.position = [3.0, 0.0, 0.0];
+        scene.recalcular_overrides_prefab(&|_| Some(fixture()));
+        let ov = scene
+            .get_entity(raiz)
+            .unwrap()
+            .prefab_overrides
+            .as_ref()
+            .expect("la modificada guarda su diff");
+        assert_eq!(ov.propiedades.len(), 1);
+        assert_eq!(ov.propiedades[0].path, "transform.position");
+
+        // Vínculo roto: el diff guardado no se toca.
+        scene.recalcular_overrides_prefab(&|_| None);
+        assert!(scene.get_entity(raiz).unwrap().prefab_overrides.is_some());
+    }
 }

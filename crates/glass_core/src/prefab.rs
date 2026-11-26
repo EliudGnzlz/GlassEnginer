@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use crate::scene::{EntityData, SceneState};
@@ -100,6 +101,228 @@ impl Prefab {
             |e| e.id,
         )
     }
+
+    /// Todas las entidades del asset: la raíz primero y después los descendientes.
+    fn entidades(&self) -> impl Iterator<Item = &EntityData> {
+        std::iter::once(&self.root_entity).chain(&self.descendant_entities)
+    }
+
+    /// Entidad del asset con ese id local (raíz o descendiente).
+    fn entidad_mut(&mut self, local_id: u64) -> Option<&mut EntityData> {
+        if self.root_entity.id == local_id {
+            return Some(&mut self.root_entity);
+        }
+        self.descendant_entities.iter_mut().find(|e| e.id == local_id)
+    }
+
+    /// Escribe `valor` en `path` de la entidad del asset con id `local_id`.
+    /// Falla si la entidad no existe o si el path no es comparable para ella
+    /// (por ejemplo, `transform.*`, `name`, `tag` o `layer` en la raíz).
+    pub fn aplicar_propiedad(&mut self, local_id: u64, path: &str, valor: &Value) -> Result<(), String> {
+        let es_raiz = local_id == self.root_entity.id;
+        if !paths_comparables(es_raiz).contains(&path) {
+            return Err(format!(
+                "El path `{}` no es aplicable a la entidad #{} del prefab",
+                path, local_id
+            ));
+        }
+        let ent = self
+            .entidad_mut(local_id)
+            .ok_or_else(|| format!("La entidad #{} no existe en el prefab", local_id))?;
+        escribir_path(ent, path, valor)
+    }
+
+    /// Quita del asset la entidad `local_id` y todo su subárbol, y la
+    /// desengancha de los `children` de su padre. Devuelve las entidades
+    /// quitadas en orden de recorrido en anchura (la indicada primero).
+    /// La raíz no se puede eliminar.
+    pub fn eliminar_entidad(&mut self, local_id: u64) -> Result<Vec<EntityData>, String> {
+        if local_id == self.root_entity.id {
+            return Err("No se puede eliminar la raíz del prefab".into());
+        }
+        if !self.descendant_entities.iter().any(|e| e.id == local_id) {
+            return Err(format!("La entidad #{} no existe en el prefab", local_id));
+        }
+        let orden: Vec<u64> = recorrer_subarbol(self.entidades(), local_id)
+            .iter()
+            .map(|n| n.e.id)
+            .collect();
+        let conjunto: HashSet<u64> = orden.iter().copied().collect();
+
+        self.root_entity.children.retain(|c| *c != local_id);
+        for e in &mut self.descendant_entities {
+            e.children.retain(|c| *c != local_id);
+        }
+
+        let (mut quitadas, restantes): (Vec<EntityData>, Vec<EntityData>) =
+            std::mem::take(&mut self.descendant_entities)
+                .into_iter()
+                .partition(|e| conjunto.contains(&e.id));
+        self.descendant_entities = restantes;
+        quitadas.sort_by_key(|e| orden.iter().position(|id| *id == e.id));
+        Ok(quitadas)
+    }
+
+    /// Añade UNA entidad al asset como último hijo de `padre_local_id`
+    /// (`None` = raíz del asset) y devuelve el id local asignado: el
+    /// máximo de los ids del asset + 1.
+    ///
+    /// La entidad entra sin hijos: su `children` se vacía y sus campos de
+    /// vínculo se borran. Para añadir un subárbol hay que llamar sucesivas
+    /// veces, cada una con el id devuelto por la anterior como padre.
+    pub fn anadir_entidad(&mut self, mut entidad: EntityData, padre_local_id: Option<u64>) -> Result<u64, String> {
+        let padre = padre_local_id.unwrap_or(self.root_entity.id);
+        let id = self
+            .entidades()
+            .map(|e| e.id)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or("No quedan ids locales libres en el prefab")?;
+        let padre_ent = self
+            .entidad_mut(padre)
+            .ok_or_else(|| format!("La entidad padre #{} no existe en el prefab", padre))?;
+        padre_ent.children.push(id);
+
+        entidad.id = id;
+        entidad.parent = Some(padre);
+        entidad.children.clear();
+        entidad.prefab_source = None;
+        entidad.prefab_hash = None;
+        entidad.prefab_local_id = None;
+        self.descendant_entities.push(entidad);
+        Ok(id)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Diff de instancia frente al asset
+// ---------------------------------------------------------------------------
+
+/// Valor de una propiedad de una entidad del prefab que la instancia sobrescribe.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OverridePropiedad {
+    /// Id local (en el asset) de la entidad afectada.
+    pub local_id: u64,
+    /// Path de la propiedad (ver `paths_comparables`).
+    pub path: String,
+    /// Valor en la instancia. En los paths de transform es un array de 3 números.
+    pub valor: Value,
+    /// La entidad o el path ya no existen en el asset.
+    #[serde(default)]
+    pub huerfana: bool,
+}
+
+/// Entidad que existe en la instancia y no en el asset.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OverrideAnadida {
+    /// Id local del padre en el asset (`None` si cuelga de la raíz).
+    pub padre_local_id: Option<u64>,
+    pub nombre: String,
+    /// Posición entre las entidades añadidas bajo el mismo padre.
+    pub indice: usize,
+}
+
+/// Diferencias de una instancia respecto a su asset.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PrefabOverrides {
+    #[serde(default)]
+    pub propiedades: Vec<OverridePropiedad>,
+    #[serde(default)]
+    pub anadidas: Vec<OverrideAnadida>,
+    /// Ids locales del asset que no están en la instancia.
+    #[serde(default)]
+    pub quitadas: Vec<u64>,
+}
+
+impl PrefabOverrides {
+    /// `true` si la instancia no difiere en nada del asset.
+    pub fn esta_vacia(&self) -> bool {
+        self.propiedades.is_empty() && self.anadidas.is_empty() && self.quitadas.is_empty()
+    }
+}
+
+/// Paths del transform, que se comparan y escriben de forma tipada.
+const PATHS_TRANSFORM: [&str; 3] = ["transform.position", "transform.rotation", "transform.scale"];
+
+/// Campos de primer nivel que se comparan y escriben por JSON.
+const PATHS_JSON: [&str; 26] = [
+    "name", "active", "tag", "layer", "is_static", "components",
+    "mesh", "script", "script_data", "physics", "character", "audio",
+    "particles", "camera", "light", "light_profile", "fog", "canvas",
+    "rect_transform", "ui_text", "ui_button", "ui_image", "layout_group",
+    "ui_drag", "animator", "portal",
+];
+
+/// Paths que nunca entran en el diff de la raíz, además de `transform.*`.
+const EXCLUIDOS_RAIZ: [&str; 3] = ["name", "tag", "layer"];
+
+/// Paths comparables en orden estable: los campos generales, el transform
+/// y después los componentes. Con `es_raiz` se omiten `transform.*`,
+/// `name`, `tag` y `layer`.
+pub fn paths_comparables(es_raiz: bool) -> Vec<&'static str> {
+    let (generales, componentes) = PATHS_JSON.split_at(6);
+    generales
+        .iter()
+        .chain(PATHS_TRANSFORM.iter())
+        .chain(componentes.iter())
+        .copied()
+        .filter(|p| !es_raiz || !(p.starts_with("transform.") || EXCLUIDOS_RAIZ.contains(p)))
+        .collect()
+}
+
+/// Deserializa `v` al mismo tipo que `_muestra`.
+fn como_tipo_de<T: DeserializeOwned>(_muestra: &T, v: &Value) -> Result<T, serde_json::Error> {
+    serde_json::from_value(v.clone())
+}
+
+/// Valor de `path` en la entidad. El transform se lee tipado (la rotación,
+/// en grados euler, por `rotation()`); el resto, del JSON de primer nivel.
+/// Un campo omitido al serializar (p. ej. un `Option` en `None`) se lee
+/// como `null`. Devuelve `None` si el path no existe.
+pub fn valor_en_path(ent: &EntityData, path: &str) -> Option<Value> {
+    match path {
+        "transform.position" => serde_json::to_value(ent.transform.position).ok(),
+        "transform.rotation" => serde_json::to_value(ent.transform.rotation()).ok(),
+        "transform.scale" => serde_json::to_value(ent.transform.scale).ok(),
+        p if PATHS_JSON.contains(&p) => {
+            let json = serde_json::to_value(ent).ok()?;
+            Some(json.get(p).cloned().unwrap_or(Value::Null))
+        }
+        _ => None,
+    }
+}
+
+/// Escribe `valor` en `path`. El transform se escribe tipado: la rotación
+/// pasa por `set_rotation`, que recalcula el cuaternión. El resto se escribe
+/// serializando la entidad, cambiando la clave y deserializando; el
+/// transform previo se conserva tal cual.
+pub fn escribir_path(ent: &mut EntityData, path: &str, valor: &Value) -> Result<(), String> {
+    let tipo = |e: serde_json::Error| format!("Valor no válido para `{}`: {}", path, e);
+    match path {
+        "transform.position" => {
+            ent.transform.position = serde_json::from_value(valor.clone()).map_err(tipo)?;
+        }
+        "transform.rotation" => {
+            let euler = como_tipo_de(&ent.transform.rotation(), valor).map_err(tipo)?;
+            ent.transform.set_rotation_euler(euler);
+        }
+        "transform.scale" => {
+            ent.transform.scale = serde_json::from_value(valor.clone()).map_err(tipo)?;
+        }
+        p if PATHS_JSON.contains(&p) => {
+            let mut json = serde_json::to_value(&*ent)
+                .map_err(|e| format!("No se pudo serializar la entidad #{}: {}", ent.id, e))?;
+            json.as_object_mut()
+                .ok_or_else(|| format!("La entidad #{} no se serializa como objeto", ent.id))?
+                .insert(p.to_string(), valor.clone());
+            let mut nueva: EntityData = serde_json::from_value(json).map_err(tipo)?;
+            nueva.transform = ent.transform.clone();
+            *ent = nueva;
+        }
+        _ => return Err(format!("El path `{}` no existe", path)),
+    }
+    Ok(())
 }
 
 /// Ruta de un asset de prefab tal como se guarda en `prefab_source`:
@@ -121,7 +344,7 @@ pub fn ruta_fuente_prefab(ruta: &Path) -> String {
 }
 
 /// Nodo de un recorrido en anchura de un subárbol.
-pub(crate) struct Nodo<'a> {
+pub struct Nodo<'a> {
     pub e: &'a EntityData,
     /// Padre dentro del subárbol (`None` en la raíz).
     pub padre: Option<&'a EntityData>,
@@ -131,7 +354,7 @@ pub(crate) struct Nodo<'a> {
 
 /// Recorre en anchura el subárbol que cuelga de `raiz_id`, siguiendo el orden
 /// de `children` y saltando ids que no están en `entidades`.
-pub(crate) fn recorrer_subarbol<'a>(
+pub fn recorrer_subarbol<'a>(
     entidades: impl IntoIterator<Item = &'a EntityData>,
     raiz_id: u64,
 ) -> Vec<Nodo<'a>> {
@@ -272,6 +495,7 @@ fn escribir_canonico(v: &Value, out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_prefab_creation_and_instantiation() {
@@ -506,5 +730,171 @@ mod tests {
         assert_eq!(leida.prefab_source, None);
         assert_eq!(leida.prefab_hash, None);
         assert_eq!(leida.prefab_local_id, None);
+    }
+
+    // ---- Fase D1a: paths, operaciones sobre el asset y serde del diff ----
+
+    /// Prefab con raíz → (hijo → nieto, otro). Devuelve (prefab, raíz, hijo, nieto, otro).
+    fn prefab_de_prueba() -> (Prefab, u64, u64, u64, u64) {
+        let mut scene = SceneState::new();
+        let raiz = scene.create_entity("Raiz".into(), vec!["Transform".into()]);
+        let hijo = scene.create_entity("Hijo".into(), vec!["Transform".into()]);
+        let nieto = scene.create_entity("Nieto".into(), vec!["Transform".into()]);
+        let otro = scene.create_entity("Otro".into(), vec!["Transform".into()]);
+        assert!(scene.reparent(hijo, Some(raiz)));
+        assert!(scene.reparent(nieto, Some(hijo)));
+        assert!(scene.reparent(otro, Some(raiz)));
+        let prefab = Prefab::from_entity(&scene, raiz).unwrap();
+        (prefab, raiz, hijo, nieto, otro)
+    }
+
+    fn descendiente(p: &Prefab, id: u64) -> &EntityData {
+        p.descendant_entities.iter().find(|e| e.id == id).unwrap()
+    }
+
+    fn como_f64(v: &Value) -> Vec<f64> {
+        v.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect()
+    }
+
+    #[test]
+    fn paths_comparables_excluye_lo_de_la_raiz() {
+        let todos = paths_comparables(false);
+        assert_eq!(todos.len(), 29);
+        assert!(todos.contains(&"transform.rotation"));
+        assert!(todos.contains(&"name"));
+        let raiz = paths_comparables(true);
+        assert_eq!(raiz.len(), 23);
+        for p in ["transform.position", "transform.rotation", "transform.scale", "name", "tag", "layer"] {
+            assert!(!raiz.contains(&p));
+        }
+        for p in ["id", "parent", "children", "prefab_source", "prefab_hash", "prefab_local_id", "prefab_overrides", "transform"] {
+            assert!(!todos.contains(&p));
+        }
+    }
+
+    #[test]
+    fn valor_en_path_y_escribir_path_ida_y_vuelta() {
+        let mut e = EntityData::new(1, "E".into(), vec!["Transform".into()]);
+
+        // Posición: tipada.
+        escribir_path(&mut e, "transform.position", &json!([1.0, 2.0, 3.0])).unwrap();
+        assert_eq!(e.transform.position, [1.0, 2.0, 3.0]);
+        assert_eq!(como_f64(&valor_en_path(&e, "transform.position").unwrap()), vec![1.0, 2.0, 3.0]);
+
+        // Rotación: vía set_rotation; rotation() devuelve lo escrito.
+        escribir_path(&mut e, "transform.rotation", &json!([10.0, 20.0, 30.0])).unwrap();
+        let leida = como_f64(&valor_en_path(&e, "transform.rotation").unwrap());
+        for (a, b) in leida.iter().zip([10.0, 20.0, 30.0]) {
+            assert!((a - b).abs() < 1e-4, "rotación {a} != {b}");
+        }
+        // Y sobrevive a una escritura por JSON de otro campo.
+        escribir_path(&mut e, "tag", &json!("Enemigo")).unwrap();
+        assert_eq!(e.tag, "Enemigo");
+        let tras_json = como_f64(&valor_en_path(&e, "transform.rotation").unwrap());
+        assert_eq!(tras_json, leida);
+
+        // Campo por JSON (mesh): se copia de una entidad con MeshRenderer.
+        let mut scene = SceneState::new();
+        let con_mesh = scene.create_entity("M".into(), vec!["Transform".into(), "MeshRenderer".into()]);
+        let mesh = valor_en_path(scene.get_entity(con_mesh).unwrap(), "mesh").unwrap();
+        escribir_path(&mut e, "mesh", &mesh).unwrap();
+        assert_eq!(valor_en_path(&e, "mesh").unwrap(), mesh);
+        assert_eq!(serde_json::to_value(&e.mesh).unwrap(), mesh);
+
+        // Path inexistente o excluido, y tipo que no encaja.
+        assert!(valor_en_path(&e, "no_existe").is_none());
+        assert!(valor_en_path(&e, "id").is_none());
+        assert!(escribir_path(&mut e, "no_existe", &json!(1)).is_err());
+        assert!(escribir_path(&mut e, "children", &json!([])).is_err());
+        assert!(escribir_path(&mut e, "transform.position", &json!("hola")).is_err());
+        assert_eq!(e.transform.position, [1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn aplicar_propiedad_en_descendiente_y_raiz() {
+        let (mut p, raiz, hijo, _, _) = prefab_de_prueba();
+
+        p.aplicar_propiedad(hijo, "tag", &json!("Recogible")).unwrap();
+        assert_eq!(descendiente(&p, hijo).tag, "Recogible");
+        p.aplicar_propiedad(hijo, "transform.scale", &json!([2.0, 2.0, 2.0])).unwrap();
+        assert_eq!(descendiente(&p, hijo).transform.scale, [2.0, 2.0, 2.0]);
+
+        p.aplicar_propiedad(raiz, "active", &json!(false)).unwrap();
+        assert!(!p.root_entity.active);
+
+        // En la raíz, tag y transform no son aplicables.
+        assert!(p.aplicar_propiedad(raiz, "tag", &json!("X")).is_err());
+        assert!(p.aplicar_propiedad(raiz, "transform.position", &json!([0.0, 0.0, 0.0])).is_err());
+        // Id inexistente.
+        assert!(p.aplicar_propiedad(999_999, "tag", &json!("X")).is_err());
+    }
+
+    #[test]
+    fn eliminar_entidad_quita_el_subarbol() {
+        let (mut p, raiz, hijo, nieto, otro) = prefab_de_prueba();
+
+        let quitadas = p.eliminar_entidad(hijo).unwrap();
+        let ids: Vec<u64> = quitadas.iter().map(|e| e.id).collect();
+        assert_eq!(ids, vec![hijo, nieto]);
+        assert_eq!(p.descendant_entities.len(), 1);
+        assert_eq!(p.descendant_entities[0].id, otro);
+        assert!(!p.root_entity.children.contains(&hijo));
+        assert!(p.root_entity.children.contains(&otro));
+
+        assert!(p.eliminar_entidad(raiz).is_err());
+        assert!(p.eliminar_entidad(hijo).is_err());
+    }
+
+    #[test]
+    fn anadir_entidad_asigna_max_mas_uno() {
+        let (mut p, raiz, hijo, nieto, otro) = prefab_de_prueba();
+        let max = [raiz, hijo, nieto, otro].into_iter().max().unwrap();
+
+        let mut nueva = EntityData::new(0, "Nueva".into(), vec!["Transform".into()]);
+        nueva.children.push(12_345);
+        let id = p.anadir_entidad(nueva, Some(hijo)).unwrap();
+        assert_eq!(id, max + 1);
+        let e = descendiente(&p, id);
+        assert_eq!(e.parent, Some(hijo));
+        assert!(e.children.is_empty());
+        assert_eq!(e.name, "Nueva");
+        assert_eq!(descendiente(&p, hijo).children.last(), Some(&id));
+
+        // Sin padre: cuelga de la raíz.
+        let id2 = p
+            .anadir_entidad(EntityData::new(0, "Otra".into(), vec!["Transform".into()]), None)
+            .unwrap();
+        assert_eq!(id2, id + 1);
+        assert_eq!(descendiente(&p, id2).parent, Some(raiz));
+        assert_eq!(p.root_entity.children.last(), Some(&id2));
+
+        // Padre inexistente: error y el asset no cambia.
+        let antes = p.descendant_entities.len();
+        assert!(p
+            .anadir_entidad(EntityData::new(0, "X".into(), vec![]), Some(999_999))
+            .is_err());
+        assert_eq!(p.descendant_entities.len(), antes);
+    }
+
+    #[test]
+    fn prefab_overrides_serde_ida_y_vuelta() {
+        assert!(PrefabOverrides::default().esta_vacia());
+        let o = PrefabOverrides {
+            propiedades: vec![OverridePropiedad {
+                local_id: 3,
+                path: "transform.position".into(),
+                valor: json!([1.0, 2.0, 3.0]),
+                huerfana: false,
+            }],
+            anadidas: vec![OverrideAnadida { padre_local_id: Some(2), nombre: "Extra".into(), indice: 0 }],
+            quitadas: vec![5],
+        };
+        assert!(!o.esta_vacia());
+        let texto = serde_json::to_string(&o).unwrap();
+        let leido: PrefabOverrides = serde_json::from_str(&texto).unwrap();
+        assert_eq!(leido, o);
+        // Un objeto vacío deserializa como diff vacío.
+        let vacio: PrefabOverrides = serde_json::from_str("{}").unwrap();
+        assert!(vacio.esta_vacia());
     }
 }

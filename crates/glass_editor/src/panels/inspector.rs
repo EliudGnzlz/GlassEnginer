@@ -1175,6 +1175,11 @@ pub struct InspectorPanel {
     /// Desenlace de la última reversión de prefab (id de la raíz y
     /// mensaje), para mostrarlo en la sección Prefab del Inspector.
     resultado_revertir_prefab: Option<(u64, String)>,
+    /// Fase D: acción de overrides pedida desde la sección Prefab; la
+    /// ejecuta el handler con acceso a la escena, como el revertir.
+    accion_override_prefab: Option<(u64, AccionOverridePrefab)>,
+    /// Fase D: resultado de la última acción de overrides (id de la raíz, mensaje).
+    resultado_override_prefab: Option<(u64, String)>,
     /// Fuente (ruta relativa al proyecto) del prefab pedido con «📂 Abrir»; la recoge el DockingManager.
     pub pending_abrir_prefab: Option<String>,
     /// Nombres de modelo disponibles (los .glb bajo `assets/`, sin
@@ -1229,6 +1234,8 @@ impl InspectorPanel {
             busqueda_componente: String::new(),
             confirmando_revertir_prefab: None,
             resultado_revertir_prefab: None,
+            accion_override_prefab: None,
+            resultado_override_prefab: None,
             pending_abrir_prefab: None,
             model_names: Vec::new(),
             model_names_for: None,
@@ -1613,6 +1620,109 @@ impl InspectorPanel {
                     if let Some((id, msg)) = &self.resultado_revertir_prefab {
                         if *id == entity.id {
                             ui.label(RichText::new(msg.as_str()).small());
+                        }
+                    }
+                    // Fase D: lista de overrides de la instancia. Solo usa los
+                    // datos del diff; la escena no se recorre aquí (la entidad
+                    // está prestada en mutable).
+                    if let Some(diff) = entity
+                        .prefab_overrides
+                        .as_ref()
+                        .filter(|d| !d.esta_vacia())
+                    {
+                        let total =
+                            diff.propiedades.len() + diff.anadidas.len() + diff.quitadas.len();
+                        let mut accion: Option<AccionOverridePrefab> = None;
+                        egui::CollapsingHeader::new(format!("Overrides ({total})"))
+                            // Id fijo: el texto cambia con N y si no se
+                            // cerraría el desplegable al aplicar/revertir.
+                            .id_salt(("overrides_prefab", entity.id))
+                            .show(ui, |ui| {
+                                for p in &diff.propiedades {
+                                    ui.horizontal(|ui| {
+                                        ui.label(format!("{} · {}", p.local_id, p.path));
+                                        ui.label(
+                                            RichText::new(truncar_texto(&p.valor.to_string(), 24))
+                                                .small()
+                                                .color(Color32::GRAY),
+                                        );
+                                        if p.huerfana {
+                                            ui.label(
+                                                RichText::new("huérfana")
+                                                    .small()
+                                                    .color(Color32::from_rgb(220, 80, 80)),
+                                            );
+                                            if ui.small_button("Limpiar").clicked() {
+                                                accion = Some(AccionOverridePrefab::LimpiarHuerfana {
+                                                    local_id: p.local_id,
+                                                    path: p.path.clone(),
+                                                });
+                                            }
+                                        } else {
+                                            if ui.small_button("Revertir").clicked() {
+                                                accion = Some(AccionOverridePrefab::RevertirPropiedad {
+                                                    local_id: p.local_id,
+                                                    path: p.path.clone(),
+                                                });
+                                            }
+                                            if ui.small_button("Aplicar").clicked() {
+                                                accion = Some(AccionOverridePrefab::AplicarPropiedad {
+                                                    local_id: p.local_id,
+                                                    path: p.path.clone(),
+                                                });
+                                            }
+                                        }
+                                    });
+                                }
+                                for a in &diff.anadidas {
+                                    ui.horizontal(|ui| {
+                                        ui.label(format!("+ {}", a.nombre));
+                                        if ui.small_button("Revertir").clicked() {
+                                            accion = Some(AccionOverridePrefab::RevertirAnadida {
+                                                padre_local_id: a.padre_local_id,
+                                                nombre: a.nombre.clone(),
+                                                indice: a.indice,
+                                            });
+                                        }
+                                        if ui.small_button("Aplicar").clicked() {
+                                            accion = Some(AccionOverridePrefab::AplicarAnadida {
+                                                padre_local_id: a.padre_local_id,
+                                                nombre: a.nombre.clone(),
+                                                indice: a.indice,
+                                            });
+                                        }
+                                    });
+                                }
+                                for &local_id in &diff.quitadas {
+                                    ui.horizontal(|ui| {
+                                        ui.label(format!("− local {local_id}"));
+                                        if ui.small_button("Revertir").clicked() {
+                                            accion = Some(AccionOverridePrefab::RevertirQuitada { local_id });
+                                        }
+                                        if ui.small_button("Aplicar").clicked() {
+                                            accion = Some(AccionOverridePrefab::AplicarQuitada { local_id });
+                                        }
+                                    });
+                                }
+                                ui.separator();
+                                ui.horizontal(|ui| {
+                                    if ui.button("Aplicar todo").clicked() {
+                                        accion = Some(AccionOverridePrefab::AplicarTodo);
+                                    }
+                                    if ui.button("Revertir todo").clicked() {
+                                        accion = Some(AccionOverridePrefab::RevertirTodo);
+                                    }
+                                });
+                            });
+                        if let Some(a) = accion {
+                            self.accion_override_prefab = Some((entity.id, a));
+                        }
+                    }
+                    // Fuera del `if` del diff: el mensaje sigue visible
+                    // cuando la última acción deja la instancia sin overrides.
+                    if let Some((id, mensaje)) = &self.resultado_override_prefab {
+                        if *id == entity.id {
+                            ui.label(RichText::new(mensaje).small().color(Color32::GRAY));
                         }
                     }
                 }
@@ -3044,7 +3154,30 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
             };
             self.resultado_revertir_prefab = Some((id, mensaje));
         }
+
+        // Acción diferida de overrides (Fase D): se ejecuta aquí, con el
+        // préstamo mutable de la entidad ya soltado, igual que el revertir.
+        if let Some((raiz_id, accion)) = self.accion_override_prefab.take() {
+            let raiz_proyecto = assets_root.parent().unwrap_or(assets_root);
+            let mensaje = ejecutar_accion_override(&mut scene, raiz_id, raiz_proyecto, accion);
+            self.resultado_override_prefab = Some((raiz_id, mensaje));
+        }
     }
+}
+
+/// Acción sobre una entrada (o sobre todas) del diff de una instancia de
+/// prefab (Fase D). Se pide desde la UI y se ejecuta en el handler.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AccionOverridePrefab {
+    RevertirPropiedad { local_id: u64, path: String },
+    AplicarPropiedad { local_id: u64, path: String },
+    LimpiarHuerfana { local_id: u64, path: String },
+    RevertirAnadida { padre_local_id: Option<u64>, nombre: String, indice: usize },
+    AplicarAnadida { padre_local_id: Option<u64>, nombre: String, indice: usize },
+    RevertirQuitada { local_id: u64 },
+    AplicarQuitada { local_id: u64 },
+    RevertirTodo,
+    AplicarTodo,
 }
 
 /// Estado de una instancia de prefab frente a su asset (Fase C).
@@ -3060,6 +3193,532 @@ enum EstadoInstanciaPrefab {
 
 /// Estado del vínculo de la entidad `raiz_id`: `None` si no existe o no
 /// es raíz de una instancia de prefab.
+/// Recorre en preorden la parte vinculada de la instancia `raiz_id`, con
+/// el criterio de `SceneState::calcular_diff_prefab`: un hijo está
+/// vinculado si tiene `prefab_local_id`, no es raíz de otra instancia
+/// (frontera) y su local_id no se ha visto antes en el recorrido. El
+/// conjunto de vistos se siembra con el local_id de la raíz. Por cada hijo
+/// NO vinculado (raíz de una añadida) llama a `anadida(padre, padre_es_raiz,
+/// hijo)` y no baja por él. Devuelve local_id → id de escena de las
+/// vinculadas (sin la raíz).
+fn recorrer_vinculadas<'a>(
+    entities: &'a [glass_core::EntityData],
+    raiz_id: u64,
+    mut anadida: impl FnMut(&'a glass_core::EntityData, bool, &'a glass_core::EntityData),
+) -> std::collections::HashMap<u64, u64> {
+    use glass_core::EntityData;
+    use std::collections::{HashMap, HashSet};
+
+    let por_id: HashMap<u64, &'a EntityData> = entities.iter().map(|e| (e.id, e)).collect();
+    let mut mapa = HashMap::new();
+    let Some(raiz) = por_id.get(&raiz_id).copied() else {
+        return mapa;
+    };
+    let mut vistos: HashSet<u64> = raiz.prefab_local_id.into_iter().collect();
+    // Pila de (nodo, padre). Los hijos se apilan en orden inverso para
+    // visitarlos en el orden de `children` (preorden real: el local_id se
+    // marca como visto al visitar el nodo, no al apilarlo).
+    let mut pila: Vec<(&'a EntityData, &'a EntityData)> = raiz
+        .children
+        .iter()
+        .rev()
+        .filter_map(|id| por_id.get(id).map(|h| (*h, raiz)))
+        .collect();
+    while let Some((nodo, padre)) = pila.pop() {
+        let vinculado = nodo.prefab_source.is_none()
+            && nodo.prefab_local_id.is_some_and(|l| vistos.insert(l));
+        if vinculado {
+            if let Some(l) = nodo.prefab_local_id {
+                mapa.insert(l, nodo.id);
+            }
+            pila.extend(
+                nodo.children
+                    .iter()
+                    .rev()
+                    .filter_map(|id| por_id.get(id).map(|h| (*h, nodo))),
+            );
+        } else {
+            anadida(padre, padre.id == raiz_id, nodo);
+        }
+    }
+    mapa
+}
+
+/// Fase D: localiza la raíz de la `indice`-ésima entidad añadida bajo el
+/// padre vinculado `padre_local_id` dentro del subárbol de `raiz_id`:
+/// una añadida es la primera entidad sin vínculo válido de su rama
+/// (sin local_id, raíz de otra instancia o local_id repetido), con el
+/// mismo criterio que `SceneState::calcular_diff_prefab`. Devuelve su
+/// id de escena.
+fn localizar_anadida(
+    entities: &[glass_core::EntityData],
+    raiz_id: u64,
+    padre_local_id: Option<u64>,
+    nombre: &str,
+    indice: usize,
+) -> Option<u64> {
+    let mut cuenta = 0usize;
+    let mut encontrada = None;
+    recorrer_vinculadas(entities, raiz_id, |padre, padre_es_raiz, hijo| {
+        if encontrada.is_some() {
+            return;
+        }
+        // La raíz cuenta con su propio local_id; `None` en el diff también
+        // designa a la raíz (mismo convenio que `Prefab::anadir_entidad`).
+        let casa_padre = padre.prefab_local_id == padre_local_id
+            || (padre_es_raiz && padre_local_id.is_none());
+        if casa_padre && hijo.name == nombre {
+            if cuenta == indice {
+                encontrada = Some(hijo.id);
+            }
+            cuenta += 1;
+        }
+    });
+    encontrada
+}
+
+/// Ids de escena del subárbol completo de `raiz_id` en preorden (incluye
+/// instancias anidadas). Tolera ciclos e ids colgantes.
+fn subarbol_preorden(entities: &[glass_core::EntityData], raiz_id: u64) -> Vec<u64> {
+    use std::collections::{HashMap, HashSet};
+
+    let por_id: HashMap<u64, &glass_core::EntityData> =
+        entities.iter().map(|e| (e.id, e)).collect();
+    let mut orden = Vec::new();
+    let mut vistos = HashSet::new();
+    let mut pila = vec![raiz_id];
+    while let Some(id) = pila.pop() {
+        if !vistos.insert(id) {
+            continue;
+        }
+        let Some(e) = por_id.get(&id) else { continue };
+        orden.push(id);
+        pila.extend(e.children.iter().rev().copied());
+    }
+    orden
+}
+
+/// Entidad del asset con ese id local (la raíz incluida).
+fn entidad_asset(
+    asset: &glass_core::prefab::Prefab,
+    local_id: u64,
+) -> Option<&glass_core::EntityData> {
+    if asset.root_entity.id == local_id {
+        Some(&asset.root_entity)
+    } else {
+        asset.descendant_entities.iter().find(|e| e.id == local_id)
+    }
+}
+
+/// Recorta `texto` a `max` caracteres (no bytes) con elipsis.
+fn truncar_texto(texto: &str, max: usize) -> String {
+    if texto.chars().count() <= max {
+        texto.to_string()
+    } else {
+        let mut s: String = texto.chars().take(max.saturating_sub(1)).collect();
+        s.push('…');
+        s
+    }
+}
+
+/// Ejecuta una acción de overrides sobre la instancia `raiz_id` y devuelve
+/// el mensaje de resultado para el Inspector (Fase D).
+fn ejecutar_accion_override(
+    scene: &mut SceneState,
+    raiz_id: u64,
+    raiz_proyecto: &Path,
+    accion: AccionOverridePrefab,
+) -> String {
+    let Some(fuente) = scene.get_entity(raiz_id).and_then(|e| e.prefab_source.clone()) else {
+        return "La entidad ya no es raíz de una instancia de prefab".to_string();
+    };
+    let Some(asset) = glass_core::prefab::Prefab::cargar_desde_proyecto(raiz_proyecto, &fuente)
+    else {
+        return format!("Vínculo roto: no se pudo cargar {fuente}");
+    };
+    let mut ctx = CtxOverride { scene, raiz_id, raiz_proyecto, fuente, asset };
+
+    use AccionOverridePrefab as A;
+    let resultado: Result<String, String> = match accion {
+        A::RevertirPropiedad { local_id, path } => ctx
+            .revertir_propiedad(local_id, &path)
+            .map(|()| "Override revertido".to_string()),
+        A::AplicarPropiedad { local_id, path } => ctx
+            .aplicar_propiedad(local_id, &path)
+            .map(|()| "Override aplicado al prefab".to_string()),
+        A::LimpiarHuerfana { local_id, path } => {
+            ctx.quitar_propiedad(local_id, &path);
+            Ok("Override huérfano limpiado".to_string())
+        }
+        A::RevertirAnadida { padre_local_id, nombre, indice } => ctx
+            .revertir_anadida(padre_local_id, &nombre, indice)
+            .map(|()| "Override revertido: entidad añadida eliminada".to_string()),
+        A::AplicarAnadida { padre_local_id, nombre, indice } => ctx
+            .aplicar_anadida(padre_local_id, &nombre, indice)
+            .map(|()| "Override aplicado al prefab: entidad añadida".to_string()),
+        A::RevertirQuitada { local_id } => ctx
+            .revertir_quitada(local_id)
+            .map(|()| "Override revertido: entidad restaurada".to_string()),
+        A::AplicarQuitada { local_id } => ctx
+            .aplicar_quitada(local_id)
+            .map(|()| "Override aplicado al prefab: entidad eliminada".to_string()),
+        A::RevertirTodo => ctx.ejecutar_todo(false, "Overrides revertidos"),
+        A::AplicarTodo => ctx.ejecutar_todo(true, "Overrides aplicados al prefab"),
+    };
+    ctx.limpiar_si_vacio();
+    resultado.unwrap_or_else(|e| e)
+}
+
+/// Estado de trabajo de una acción de overrides: la escena, la raíz de la
+/// instancia y el asset cargado (se reutiliza entre pasos de un «todo»).
+struct CtxOverride<'a> {
+    scene: &'a mut SceneState,
+    raiz_id: u64,
+    raiz_proyecto: &'a Path,
+    fuente: String,
+    asset: glass_core::prefab::Prefab,
+}
+
+impl CtxOverride<'_> {
+    /// Id de escena de la entidad vinculada con ese local_id. La raíz del
+    /// asset casa con la raíz de la instancia; el resto se busca en la
+    /// parte vinculada, sin entrar en instancias anidadas.
+    fn id_escena_de_local(&self, local_id: u64) -> Option<u64> {
+        if local_id == self.asset.root_entity.id {
+            return Some(self.raiz_id);
+        }
+        recorrer_vinculadas(&self.scene.entities, self.raiz_id, |_, _, _| {})
+            .get(&local_id)
+            .copied()
+    }
+
+    /// Profundidad de una entidad en el asset (0 = raíz); acotada por si
+    /// el asset trae un ciclo.
+    fn profundidad_asset(&self, local_id: u64) -> usize {
+        let mut d = 0;
+        let mut actual = entidad_asset(&self.asset, local_id);
+        while let Some(p) = actual.and_then(|e| e.parent) {
+            d += 1;
+            if d > 10_000 {
+                break;
+            }
+            actual = entidad_asset(&self.asset, p);
+        }
+        d
+    }
+
+    /// Descarta los cambios en memoria del asset recargándolo de disco,
+    /// para que un fallo a medias no se cuele en un guardado posterior.
+    fn descartar_cambios_asset(&mut self) {
+        if let Some(a) =
+            glass_core::prefab::Prefab::cargar_desde_proyecto(self.raiz_proyecto, &self.fuente)
+        {
+            self.asset = a;
+        }
+    }
+
+    /// Guarda el asset en su ruta real y actualiza el hash de la raíz.
+    fn guardar_asset(&mut self) -> Result<(), String> {
+        let Some(ruta) = glass_core::prefab::Prefab::resolver_ruta(self.raiz_proyecto, &self.fuente)
+        else {
+            self.descartar_cambios_asset();
+            return Err("Vínculo roto: no se encuentra el asset".to_string());
+        };
+        if let Err(e) = self.asset.save_to_file(&ruta) {
+            self.descartar_cambios_asset();
+            return Err(format!("No se pudo guardar el prefab: {e}"));
+        }
+        let huella = self.asset.huella();
+        if let Some(r) = self.scene.get_entity_mut(self.raiz_id) {
+            r.prefab_hash = Some(huella);
+        }
+        Ok(())
+    }
+
+    fn quitar_propiedad(&mut self, local_id: u64, path: &str) {
+        if let Some(d) = self
+            .scene
+            .get_entity_mut(self.raiz_id)
+            .and_then(|r| r.prefab_overrides.as_mut())
+        {
+            d.propiedades.retain(|p| !(p.local_id == local_id && p.path == path));
+        }
+    }
+
+    /// Quita la añadida y corre un puesto las de su grupo (mismo padre y
+    /// nombre) con índice mayor: la entidad deja de contar como añadida.
+    fn quitar_anadida(&mut self, padre: Option<u64>, nombre: &str, indice: usize) {
+        if let Some(d) = self
+            .scene
+            .get_entity_mut(self.raiz_id)
+            .and_then(|r| r.prefab_overrides.as_mut())
+        {
+            d.anadidas.retain(|a| {
+                !(a.padre_local_id == padre && a.nombre == nombre && a.indice == indice)
+            });
+            for a in d.anadidas.iter_mut() {
+                if a.padre_local_id == padre && a.nombre == nombre && a.indice > indice {
+                    a.indice -= 1;
+                }
+            }
+        }
+    }
+
+    fn quitar_quitadas(&mut self, locales: &[u64]) {
+        if let Some(d) = self
+            .scene
+            .get_entity_mut(self.raiz_id)
+            .and_then(|r| r.prefab_overrides.as_mut())
+        {
+            d.quitadas.retain(|l| !locales.contains(l));
+        }
+    }
+
+    fn limpiar_si_vacio(&mut self) {
+        if let Some(r) = self.scene.get_entity_mut(self.raiz_id) {
+            if r.prefab_overrides.as_ref().is_some_and(|d| d.esta_vacia()) {
+                r.prefab_overrides = None;
+            }
+        }
+    }
+
+    fn revertir_propiedad(&mut self, local_id: u64, path: &str) -> Result<(), String> {
+        let origen =
+            entidad_asset(&self.asset, local_id).ok_or("la entidad ya no existe en el prefab")?;
+        let valor = glass_core::prefab::valor_en_path(origen, path)
+            .ok_or_else(|| format!("el prefab no define «{path}»"))?;
+        let destino = self
+            .id_escena_de_local(local_id)
+            .ok_or("la entidad no está en la instancia")?;
+        let entidad = self
+            .scene
+            .get_entity_mut(destino)
+            .ok_or("la entidad no está en la instancia")?;
+        glass_core::prefab::escribir_path(entidad, path, &valor)?;
+        self.quitar_propiedad(local_id, path);
+        Ok(())
+    }
+
+    fn aplicar_propiedad(&mut self, local_id: u64, path: &str) -> Result<(), String> {
+        let valor = self
+            .scene
+            .get_entity(self.raiz_id)
+            .and_then(|r| r.prefab_overrides.as_ref())
+            .and_then(|d| {
+                d.propiedades
+                    .iter()
+                    .find(|p| p.local_id == local_id && p.path == path)
+            })
+            .map(|p| p.valor.clone())
+            .ok_or("el override ya no está en el diff")?;
+        if let Err(e) = self.asset.aplicar_propiedad(local_id, path, &valor) {
+            self.descartar_cambios_asset();
+            return Err(e);
+        }
+        self.guardar_asset()?;
+        self.quitar_propiedad(local_id, path);
+        Ok(())
+    }
+
+    fn revertir_anadida(&mut self, padre: Option<u64>, nombre: &str, indice: usize) -> Result<(), String> {
+        let id = localizar_anadida(&self.scene.entities, self.raiz_id, padre, nombre, indice)
+            .ok_or("no se encuentra la entidad añadida en la escena")?;
+        let borrar: std::collections::HashSet<u64> =
+            subarbol_preorden(&self.scene.entities, id).into_iter().collect();
+        self.scene.entities.retain(|e| !borrar.contains(&e.id));
+        for e in self.scene.entities.iter_mut() {
+            e.children.retain(|c| !borrar.contains(c));
+        }
+        self.quitar_anadida(padre, nombre, indice);
+        Ok(())
+    }
+
+    fn aplicar_anadida(&mut self, padre: Option<u64>, nombre: &str, indice: usize) -> Result<(), String> {
+        let id = localizar_anadida(&self.scene.entities, self.raiz_id, padre, nombre, indice)
+            .ok_or("no se encuentra la entidad añadida en la escena")?;
+        let orden = subarbol_preorden(&self.scene.entities, id);
+        // Copia de los datos antes de tocar el asset; también comprueba que
+        // no haya instancias anidadas, cuyo vínculo se rompería.
+        let mut datos_orden = Vec::with_capacity(orden.len());
+        for eid in &orden {
+            let e = self
+                .scene
+                .get_entity(*eid)
+                .ok_or("el subárbol añadido cambió durante la operación")?;
+            if e.prefab_source.is_some() {
+                return Err("no se puede aplicar una instancia de prefab anidada".to_string());
+            }
+            let mut datos = e.clone();
+            datos.children.clear();
+            datos.prefab_local_id = None;
+            datos_orden.push((*eid, e.parent, datos));
+        }
+        // id de escena → local asignado en el asset.
+        let mut asignados: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+        for (eid, padre_escena, datos) in &datos_orden {
+            let padre_local = if *eid == id {
+                padre
+            } else {
+                match padre_escena.and_then(|p| asignados.get(&p).copied()) {
+                    Some(l) => Some(l),
+                    None => {
+                        self.descartar_cambios_asset();
+                        return Err("subárbol añadido inconsistente".to_string());
+                    }
+                }
+            };
+            match self.asset.anadir_entidad(datos.clone(), padre_local) {
+                Ok(l) => {
+                    asignados.insert(*eid, l);
+                }
+                Err(e) => {
+                    self.descartar_cambios_asset();
+                    return Err(e);
+                }
+            }
+        }
+        self.guardar_asset()?;
+        for (eid, local) in asignados {
+            if let Some(e) = self.scene.get_entity_mut(eid) {
+                e.prefab_local_id = Some(local);
+            }
+        }
+        self.quitar_anadida(padre, nombre, indice);
+        Ok(())
+    }
+
+    fn revertir_quitada(&mut self, local_id: u64) -> Result<(), String> {
+        // Ya restaurada (p. ej. al revertir antes una quitada ancestro).
+        if self.id_escena_de_local(local_id).is_some() {
+            self.quitar_quitadas(&[local_id]);
+            return Ok(());
+        }
+        let mut todas = Vec::with_capacity(1 + self.asset.descendant_entities.len());
+        todas.push(self.asset.root_entity.clone());
+        todas.extend(self.asset.descendant_entities.iter().cloned());
+        let nodos = glass_core::prefab::recorrer_subarbol(&todas, local_id);
+        let primero = nodos.first().ok_or("la entidad ya no existe en el prefab")?;
+        let padre_asset = primero.e.parent.ok_or("la raíz del prefab no se puede restaurar")?;
+        let padre_escena = self
+            .id_escena_de_local(padre_asset)
+            .ok_or("su padre tampoco está en la instancia: revierte antes esa quitada")?;
+
+        // Se construye todo antes de tocar la escena para no dejarla a medias.
+        let mut mapa: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+        mapa.insert(padre_asset, padre_escena);
+        let mut siguiente = self.scene.next_entity_id;
+        let mut nuevas = Vec::with_capacity(nodos.len());
+        let mut locales = Vec::with_capacity(nodos.len());
+        for nodo in &nodos {
+            let mut nueva = nodo.e.clone();
+            let local = nueva.id;
+            // Preorden: el padre ya está en el mapa.
+            let padre = nueva
+                .parent
+                .and_then(|p| mapa.get(&p).copied())
+                .ok_or("subárbol del prefab inconsistente")?;
+            nueva.id = siguiente;
+            siguiente += 1;
+            nueva.parent = Some(padre);
+            nueva.children.clear();
+            nueva.prefab_local_id = Some(local);
+            mapa.insert(local, nueva.id);
+            locales.push(local);
+            nuevas.push(nueva);
+        }
+        self.scene.next_entity_id = siguiente;
+        for nueva in nuevas {
+            if let Some(p) = nueva.parent.and_then(|p| self.scene.get_entity_mut(p)) {
+                p.children.push(nueva.id);
+            }
+            self.scene.entities.push(nueva);
+        }
+        // Las quitadas descendientes quedan restauradas con el subárbol.
+        self.quitar_quitadas(&locales);
+        Ok(())
+    }
+
+    fn aplicar_quitada(&mut self, local_id: u64) -> Result<(), String> {
+        // Si ya no está en el asset la eliminó un ancestro: solo se limpia.
+        if entidad_asset(&self.asset, local_id).is_some() {
+            if let Err(e) = self.asset.eliminar_entidad(local_id) {
+                self.descartar_cambios_asset();
+                return Err(e);
+            }
+            self.guardar_asset()?;
+        }
+        self.quitar_quitadas(&[local_id]);
+        Ok(())
+    }
+
+    /// Aplica o revierte todas las entradas sobre una copia del diff;
+    /// anota los errores y sigue con el resto.
+    fn ejecutar_todo(&mut self, aplicar: bool, ok: &str) -> Result<String, String> {
+        let Some(diff) = self
+            .scene
+            .get_entity(self.raiz_id)
+            .and_then(|r| r.prefab_overrides.clone())
+        else {
+            return Ok("La instancia no tiene overrides".to_string());
+        };
+        let mut errores: Vec<String> = Vec::new();
+
+        for p in &diff.propiedades {
+            let r = if p.huerfana {
+                // Una huérfana no se puede aplicar; al revertir todo se limpia.
+                if !aplicar {
+                    self.quitar_propiedad(p.local_id, &p.path);
+                }
+                Ok(())
+            } else if aplicar {
+                self.aplicar_propiedad(p.local_id, &p.path)
+            } else {
+                self.revertir_propiedad(p.local_id, &p.path)
+            };
+            if let Err(e) = r {
+                errores.push(format!("{} · {}: {e}", p.local_id, p.path));
+            }
+        }
+
+        // Índice descendente: el corrimiento de índices al quitar una
+        // añadida no afecta a las que quedan por procesar.
+        let mut anadidas: Vec<_> = diff.anadidas.iter().collect();
+        anadidas.sort_by_key(|a| std::cmp::Reverse(a.indice));
+        for a in anadidas {
+            let r = if aplicar {
+                self.aplicar_anadida(a.padre_local_id, &a.nombre, a.indice)
+            } else {
+                self.revertir_anadida(a.padre_local_id, &a.nombre, a.indice)
+            };
+            if let Err(e) = r {
+                errores.push(format!("+ {}: {e}", a.nombre));
+            }
+        }
+
+        let mut quitadas = diff.quitadas.clone();
+        if !aplicar {
+            // Padres antes que hijos: el hijo se reinserta bajo su padre.
+            quitadas.sort_by_key(|l| self.profundidad_asset(*l));
+        }
+        for l in quitadas {
+            let r = if aplicar {
+                self.aplicar_quitada(l)
+            } else {
+                self.revertir_quitada(l)
+            };
+            if let Err(e) = r {
+                errores.push(format!("− local {l}: {e}"));
+            }
+        }
+
+        if errores.is_empty() {
+            Ok(ok.to_string())
+        } else {
+            Err(format!("{ok} con errores: {}", errores.join("; ")))
+        }
+    }
+}
+
 fn estado_instancia_prefab(
     scene: &SceneState,
     raiz_id: u64,
@@ -3097,7 +3756,8 @@ mod tests {
     use super::{
         aplicar_acciones_colliders, aplicar_datos, direccion_capsula, direccion_capsula_valida,
         escala_proporcional, estado_instancia_prefab, estado_referencia, extraer_componente,
-        instalar_componente, listar_physmats, ref_de_arrastre, referencias_a_physmat,
+        instalar_componente, listar_physmats, localizar_anadida, ref_de_arrastre,
+        referencias_a_physmat,
         scan_model_names_in, spec_virtual, tamano_convertido, AccionCollider, EstadoInstanciaPrefab,
         EstadoRef, TipoComponente,
     };
@@ -4026,6 +4686,75 @@ mod tests {
         assert_eq!(spec.shape, "Sphere");
         assert!((spec.size[0] - 0.5).abs() < 1e-6);
         assert_eq!(spec.material, "");
+    }
+
+    /// Entidad mínima para los tests de `localizar_anadida`.
+    fn ent_prefab(
+        id: u64,
+        nombre: &str,
+        padre: Option<u64>,
+        hijos: &[u64],
+        local: Option<u64>,
+    ) -> EntityData {
+        let mut e = EntityData::new(id, nombre.to_string(), vec!["Transform".to_string()]);
+        e.parent = padre;
+        e.children = hijos.to_vec();
+        e.prefab_local_id = local;
+        e
+    }
+
+    /// Raíz vinculada (local 0) con un hijo vinculado «Puerta» (local 1),
+    /// dos añadidas «Extra» bajo la raíz y una añadida «Luz» bajo Puerta.
+    fn fixture_anadidas() -> Vec<EntityData> {
+        let mut raiz = ent_prefab(1, "Casa", None, &[2, 3, 4], Some(0));
+        raiz.prefab_source = Some("prefabs/casa.prefab".to_string());
+        vec![
+            raiz,
+            ent_prefab(2, "Puerta", Some(1), &[5], Some(1)),
+            ent_prefab(3, "Extra", Some(1), &[], None),
+            ent_prefab(4, "Extra", Some(1), &[], None),
+            ent_prefab(5, "Luz", Some(2), &[], None),
+        ]
+    }
+
+    #[test]
+    fn localizar_anadida_distingue_por_indice() {
+        let ents = fixture_anadidas();
+        assert_eq!(localizar_anadida(&ents, 1, Some(0), "Extra", 0), Some(3));
+        assert_eq!(localizar_anadida(&ents, 1, Some(0), "Extra", 1), Some(4));
+        assert_eq!(localizar_anadida(&ents, 1, Some(0), "Extra", 2), None);
+        // `None` como padre designa a la raíz.
+        assert_eq!(localizar_anadida(&ents, 1, None, "Extra", 1), Some(4));
+    }
+
+    #[test]
+    fn localizar_anadida_bajo_descendiente() {
+        let ents = fixture_anadidas();
+        assert_eq!(localizar_anadida(&ents, 1, Some(1), "Luz", 0), Some(5));
+        // Mismo nombre, otro padre: no casa.
+        assert_eq!(localizar_anadida(&ents, 1, Some(0), "Luz", 0), None);
+    }
+
+    #[test]
+    fn localizar_anadida_nombre_ausente() {
+        let ents = fixture_anadidas();
+        assert_eq!(localizar_anadida(&ents, 1, Some(0), "Nada", 0), None);
+        // Raíz inexistente.
+        assert_eq!(localizar_anadida(&ents, 99, Some(0), "Extra", 0), None);
+    }
+
+    #[test]
+    fn localizar_anadida_local_repetido_e_instancia_anidada() {
+        let mut ents = fixture_anadidas();
+        ents[0].children.extend([6, 7]);
+        // Local repetido: la segunda «Puerta» (local 1 otra vez) es añadida.
+        ents.push(ent_prefab(6, "Puerta", Some(1), &[], Some(1)));
+        // Raíz de otra instancia: frontera, cuenta como añadida.
+        let mut anidada = ent_prefab(7, "Arbol", Some(1), &[], Some(9));
+        anidada.prefab_source = Some("prefabs/arbol.prefab".to_string());
+        ents.push(anidada);
+        assert_eq!(localizar_anadida(&ents, 1, Some(0), "Puerta", 0), Some(6));
+        assert_eq!(localizar_anadida(&ents, 1, Some(0), "Arbol", 0), Some(7));
     }
 
 }

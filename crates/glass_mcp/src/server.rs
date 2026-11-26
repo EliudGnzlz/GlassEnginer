@@ -470,6 +470,17 @@ impl McpServer {
                             }
                         },
                         {
+                            "name": "glass_prefab_overrides",
+                            "description": "Devuelve el diff de overrides de una instancia de prefab (Fase D): propiedades modificadas con su valor, entidades añadidas y entidades quitadas frente a su asset. Recibe el id de la raíz de la instancia. Es de solo lectura.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "entity_id": { "type": "number" }
+                                },
+                                "required": ["entity_id"]
+                            }
+                        },
+                        {
                             "name": "glass_queue_submit",
                             "description": "Encola un lote de comandos MUTANTES para que el bucle del motor los ejecute en orden (Fase 8), sin esperar: devuelve los command_ids asignados. Las tools de consulta, las de la propia cola y las desconocidas se rechazan sin encolar nada.",
                             "inputSchema": {
@@ -3378,6 +3389,42 @@ impl McpServer {
                 }
             }
 
+            "glass_prefab_overrides" => {
+                let Some(entity_id) = args.get("entity_id").and_then(|n| n.as_u64()) else {
+                    return McpResponse::invalid_params(id, "Field 'entity_id' is required");
+                };
+
+                let (fuente, overrides) = match scene.get_entity(entity_id) {
+                    None => return McpResponse::error(id, -32004, "Entity not found"),
+                    Some(e) => match e.prefab_source.clone() {
+                        Some(f) => (f, e.prefab_overrides.clone()),
+                        None => {
+                            return McpResponse::error(
+                                id,
+                                -32013,
+                                format!(
+                                    "La entidad #{entity_id} no es raíz de una instancia de prefab"
+                                ),
+                            )
+                        }
+                    },
+                };
+
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&json!({
+                                "entity_id": entity_id,
+                                "source": fuente,
+                                "overrides": overrides
+                            })).unwrap_or_default()
+                        }]
+                    }),
+                )
+            }
+
             "glass_queue_submit" => {
                 let Some(lista) = args.get("commands").and_then(|v| v.as_array()) else {
                     return McpResponse::invalid_params(id, "Field 'commands' is required");
@@ -4426,6 +4473,7 @@ mod tests_catchup {
             "glass_prefab_instantiate",
             "glass_prefab_list",
             "glass_prefab_revert",
+            "glass_prefab_overrides",
         ] {
             assert!(resp.contains(tool), "tools/list no declara {tool}");
         }
@@ -4433,6 +4481,7 @@ mod tests_catchup {
         assert!(is_mutating_tool("glass_prefab_instantiate"));
         assert!(is_mutating_tool("glass_prefab_revert"));
         assert!(!is_mutating_tool("glass_prefab_list"));
+        assert!(!is_mutating_tool("glass_prefab_overrides"));
     }
 
     #[test]
@@ -4490,6 +4539,46 @@ mod tests_catchup {
         assert!(resp.contains("32013"), "respuesta inesperada: {resp}");
 
         let resp = llamar(&srv, "glass_prefab_revert", json!({"entity_id": 999_999}));
+        assert!(resp.contains("32004"), "respuesta inesperada: {resp}");
+    }
+
+    #[test]
+    fn prefab_overrides_devuelve_el_diff() {
+        let srv = servidor();
+        let entidad = {
+            let mut sc = srv.scene.lock().unwrap();
+            let id = sc.create_entity("Instancia".to_string(), vec!["Transform".into()]);
+            let e = sc.get_entity_mut(id).unwrap();
+            e.prefab_source = Some("Assets/prefabs/Caja.prefab.json".to_string());
+            e.prefab_overrides = Some(glass_core::prefab::PrefabOverrides {
+                propiedades: vec![glass_core::prefab::OverridePropiedad {
+                    local_id: 6,
+                    path: "transform.position".to_string(),
+                    valor: serde_json::json!([1.0, 2.0, 3.0]),
+                    huerfana: false,
+                }],
+                anadidas: vec![glass_core::prefab::OverrideAnadida {
+                    padre_local_id: Some(5),
+                    nombre: "Extra".to_string(),
+                    indice: 0,
+                }],
+                quitadas: vec![7],
+            });
+            id
+        };
+        let resp = llamar(&srv, "glass_prefab_overrides", json!({"entity_id": entidad}));
+        assert!(!resp.contains("\"error\""), "respuesta inesperada: {resp}");
+        assert!(resp.contains("transform.position"), "respuesta inesperada: {resp}");
+        assert!(resp.contains("Extra"), "respuesta inesperada: {resp}");
+        assert!(resp.contains("Caja.prefab.json"), "respuesta inesperada: {resp}");
+
+        let normal = {
+            let mut sc = srv.scene.lock().unwrap();
+            sc.create_entity("Normal".to_string(), vec!["Transform".into()])
+        };
+        let resp = llamar(&srv, "glass_prefab_overrides", json!({"entity_id": normal}));
+        assert!(resp.contains("32013"), "respuesta inesperada: {resp}");
+        let resp = llamar(&srv, "glass_prefab_overrides", json!({"entity_id": 999_999}));
         assert!(resp.contains("32004"), "respuesta inesperada: {resp}");
     }
 

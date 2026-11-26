@@ -503,10 +503,22 @@ impl EditorDockingLayout {
             Some(_) => None,
         };
         if let Some(ruta) = ruta_directa {
-            let Ok(scene) = scene_state.lock() else {
+            let Ok(mut scene) = scene_state.lock() else {
                 self.status_message = Some(("SceneState bloqueado; no se guardó nada".into(), ahora()));
                 return;
             };
+            // Fase D: el diff de overrides se recalcula contra el asset
+            // actual antes de escribir, para que la escena guardada lo
+            // lleve y el refresco de la próxima carga lo reaplique.
+            let raiz_proyecto = self
+                .project
+                .assets_root
+                .parent()
+                .unwrap_or(&self.project.assets_root)
+                .to_path_buf();
+            scene.recalcular_overrides_prefab(&|fuente| {
+                glass_core::Prefab::cargar_desde_proyecto(&raiz_proyecto, fuente)
+            });
             let mensaje = match scene.save_to_json(&ruta.to_string_lossy()) {
                 Ok(()) => {
                     self.marcar_guardada(&scene);
@@ -531,11 +543,23 @@ impl EditorDockingLayout {
                 return;
             }
         };
-        let Ok(scene) = scene_state.lock() else {
+        let Ok(mut scene) = scene_state.lock() else {
             self.status_message = Some(("SceneState bloqueado; no se guardó nada".into(), ahora()));
             return;
         };
 
+            // Fase D: el diff de overrides se recalcula contra el asset
+            // actual antes de escribir, para que la escena guardada lo
+            // lleve y el refresco de la próxima carga lo reaplique.
+            let raiz_proyecto = self
+                .project
+                .assets_root
+                .parent()
+                .unwrap_or(&self.project.assets_root)
+                .to_path_buf();
+            scene.recalcular_overrides_prefab(&|fuente| {
+                glass_core::Prefab::cargar_desde_proyecto(&raiz_proyecto, fuente)
+            });
         let mensaje = match scene.save_to_json(&path.to_string_lossy()) {
             Ok(()) => {
                 self.marcar_guardada(&scene);

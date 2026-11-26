@@ -8422,12 +8422,25 @@ self.salir_del_proceso = true;
                 // el siguiente intervalo, no en cada frame.
                 self.ultimo_autoguardado = std::time::Instant::now();
                 match scene_state.lock() {
-                    Ok(sc) => match sc.save_to_json(&ruta.to_string_lossy()) {
+                    Ok(mut sc) => {
+                        // Fase D: el autoguardado también recalcula el
+                        // diff de overrides antes de escribir.
+                        let raiz_proyecto = editor_layout
+                            .project
+                            .assets_root
+                            .parent()
+                            .unwrap_or(&editor_layout.project.assets_root)
+                            .to_path_buf();
+                        sc.recalcular_overrides_prefab(&|fuente| {
+                            glass_core::Prefab::cargar_desde_proyecto(&raiz_proyecto, fuente)
+                        });
+                        match sc.save_to_json(&ruta.to_string_lossy()) {
                         Ok(()) => {
                             editor_layout.marcar_guardada(&sc);
                             log::info!("Autoguardado de la escena en {}", ruta.display());
                         }
                         Err(e) => log::warn!("Autoguardado fallido en {}: {e:?}", ruta.display()),
+                        }
                     },
                     Err(_) => log::warn!("Autoguardado omitido: mutex de la escena envenenado."),
                 }
