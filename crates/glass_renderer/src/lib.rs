@@ -34,7 +34,6 @@ pub use skin::{AnimationClip, JointBuffer, SkinData};
 pub use swapchain::SwapchainContext;
 pub use sdf_atlas::SdfAtlas;
 pub use ui::{
-    pack_ui_image_atlas, FontAtlas, UiAtlasKind, UiBatch, UiImageAtlas, UiRenderer, UiSegment,
-    UiVertex,
+    pack_ui_image_atlas, UiAtlasKind, UiBatch, UiImageAtlas, UiRenderer, UiSegment, UiVertex,
 };
 pub use watcher::{fijar_bridge_desde_raiz, ruta_bridge_en_raiz, AssetReloadEvent, AssetWatcher};
