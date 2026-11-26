@@ -12,6 +12,9 @@ pub enum ModoPintado {
     Sombra,
 }
 
+/// Degradado de un segmento: (ángulo, t0, t1, c0, c1).
+pub type Degradado = (f32, f32, f32, [f32; 4], [f32; 4]);
+
 /// Primitiva de pintado lista para rasterizar (solo CPU).
 #[derive(Debug, Clone)]
 pub struct Segmento {
@@ -22,7 +25,7 @@ pub struct Segmento {
     /// Color RGBA con alfa premultiplicado.
     pub color: [f32; 4],
     /// (ángulo, t0, t1, c0, c1) — solo para Degradado.
-    pub degradado: Option<(f32, f32, f32, [f32; 4], [f32; 4])>,
+    pub degradado: Option<Degradado>,
     /// Border radius (4 esquinas), 0 si no hay.
     pub radios: [f32; 4],
     /// (rect de clip [x,y,w,h], softness en px); None = sin recorte.
@@ -236,7 +239,7 @@ pub fn pintar_documento(
                     segs_nodo.push(Segmento {
                         entidad: nc.entidad,
                         modo: ModoPintado::Degradado,
-                        rect: rect.clone(),
+                        rect,
                         color: c0,
                         degradado: Some((angulo, t0, t1, c0, c1)),
                         radios,
@@ -254,7 +257,7 @@ pub fn pintar_documento(
                 segs_nodo.push(Segmento {
                     entidad: nc.entidad,
                     modo: ModoPintado::Color,
-                    rect: rect.clone(),
+                    rect,
                     color: c,
                     degradado: None,
                     radios,
@@ -274,7 +277,7 @@ pub fn pintar_documento(
                 segs_nodo.push(Segmento {
                     entidad: nc.entidad,
                     modo: ModoPintado::Color,
-                    rect: rect.clone(),
+                    rect,
                     color: c,
                     degradado: None,
                     radios,
@@ -295,7 +298,7 @@ pub fn pintar_documento(
                 if !img.sprite.is_empty() {
                     tiene_imagen = true;
                     let tint = premultiplicar(img.color, opacity);
-                    let mut ir = rect.clone();
+                    let mut ir = rect;
                     if img.preserve_aspect {
                         if let Some((sw, sh)) = imagenes.tamano(&img.sprite) {
                             if sw > 0.0 && sh > 0.0 {
@@ -342,7 +345,7 @@ pub fn pintar_documento(
                 segs_nodo.push(Segmento {
                     entidad: nc.entidad,
                     modo: ModoPintado::Texto,
-                    rect: rect.clone(),
+                    rect,
                     color: tc,
                     degradado: None,
                     radios,
@@ -357,13 +360,13 @@ pub fn pintar_documento(
         }
 
         // --- Botón sin graphic propio ---
-        if nd.boton.is_some() && !tiene_fondo && !tiene_imagen && !tiene_texto {
-            let boton = nd.boton.as_ref().unwrap();
+        if !tiene_fondo && !tiene_imagen && !tiene_texto {
+            if let Some(boton) = nd.boton.as_ref() {
             let bc = premultiplicar(boton.target_graphic_color, opacity);
             segs_nodo.push(Segmento {
                 entidad: nc.entidad,
                 modo: ModoPintado::Color,
-                rect: rect.clone(),
+                rect,
                 color: bc,
                 degradado: None,
                 radios,
@@ -374,6 +377,7 @@ pub fn pintar_documento(
                 orden: 0,
                 desenfoque: 0.0,
             });
+            }
         }
 
         if sup {
@@ -443,6 +447,12 @@ fn calcular_clip_para_nodo(
 /// Gestor de invalidación para un documento/sub-Canvas.
 pub struct Pintor {
     sucio: bool,
+}
+
+impl Default for Pintor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Pintor {

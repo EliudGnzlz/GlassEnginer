@@ -285,13 +285,12 @@ fn parse_columnas_grid(valor: &str) -> Option<Vec<TamanoColumna>> {
                 return None;
             }
             out.push(TamanoColumna::Fraccion(x));
-        } else if let Some(v) = parse_px(t) {
+        } else {
+            let v = parse_px(t)?;
             if v < 0.0 {
                 return None;
             }
             out.push(TamanoColumna::Fija(v));
-        } else {
-            return None;
         }
     }
     if out.is_empty() {
@@ -536,18 +535,29 @@ fn fusionar(destino: &mut StyleProps, capa: &StyleProps) {
 
 /// Defecto del tipo: absoluto; con LayoutGroup, flex del grupo.
 fn defecto_tipo(nodo: &NodoDocumento) -> StyleProps {
-    let mut p = StyleProps::default();
-    p.display = Some(Display::Absoluto);
-    if let Some(grupo) = &nodo.layout_group {
-        p.display = Some(Display::Flex);
-        p.flex_direction = Some(grupo.direction.clone());
-        if grupo.spacing > 0.0 {
-            p.gap = Some(grupo.spacing);
-        }
-        p.padding = Some(grupo.padding);
-        p.justify_content = Some(grupo.alignment.clone());
+    let (display, flex_direction, gap, padding, justify_content) =
+        match &nodo.layout_group {
+            Some(grupo) => (
+                Display::Flex,
+                Some(grupo.direction.clone()),
+                if grupo.spacing > 0.0 {
+                    Some(grupo.spacing)
+                } else {
+                    None
+                },
+                Some(grupo.padding),
+                Some(grupo.alignment.clone()),
+            ),
+            None => (Display::Absoluto, None, None, None, None),
+        };
+    StyleProps {
+        display: Some(display),
+        flex_direction,
+        gap,
+        padding,
+        justify_content,
+        ..StyleProps::default()
     }
-    p
 }
 
 /// Capa del componente: texto, tinte de imagen y color del botón.
@@ -609,11 +619,9 @@ fn estilos_validos(p: &StyleProps) -> bool {
     if let Some(v) = p.font_size {
         f(v);
     }
-    for arr in [p.padding, p.border_radius] {
-        if let Some(a) = arr {
-            for v in a {
-                f(v);
-            }
+    for arr in [p.padding, p.border_radius].into_iter().flatten() {
+        for v in arr {
+            f(v);
         }
     }
     if let Some(c) = p.background_color {

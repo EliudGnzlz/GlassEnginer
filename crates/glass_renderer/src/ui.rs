@@ -50,6 +50,9 @@ const SOLID_BLOCK: u32 = 8;
 /// frame pide más, se trunca con aviso en el log (ver `record`).
 const MAX_UI_VERTICES: usize = 16_384;
 
+/// Degradado de un quad: (ángulo, t0, t1, c0, c1).
+pub type Degradado = (f32, f32, f32, [f32; 4], [f32; 4]);
+
 /// Vértice de UI del lote V2 (144 bytes). Todos los canales viajan por
 /// atributo (sin buffers uniformes por dibujo) para permitir batchear
 /// rects con distinto radio/clip/degradado en una sola llamada.
@@ -381,6 +384,10 @@ impl UiBatch {
     /// coordenadas LOCALES al rect (restar su origen), degradado
     /// (ángulo, t0, t1, c0, c1) y desenfoque de sombra. `clip` es
     /// `Some((rect_local, softness))` o `None` (sin recorte).
+    /// Primitiva de lote: un quad con todos los campos V2. Los
+    /// parámetros son 1:1 los campos del vértice; agruparlos en una
+    /// estructura solo añadiría indirección en el camino caliente.
+    #[allow(clippy::too_many_arguments)]
     pub fn push_quad_extendido(
         &mut self,
         rect: [f32; 4],
@@ -389,7 +396,7 @@ impl UiBatch {
         modo: f32,
         radios: [f32; 4],
         clip: Option<([f32; 4], f32)>,
-        degradado: Option<(f32, f32, f32, [f32; 4], [f32; 4])>,
+        degradado: Option<Degradado>,
         desenfoque: f32,
     ) {
         let [x, y, w, h] = rect;
@@ -416,6 +423,9 @@ impl UiBatch {
 
     /// Texto con radios y clip del segmento (mismo maquetado que
     /// `push_text`: origen sup-izq, saltos `\n`, avance por glifo).
+    /// Primitiva de texto: los parámetros son los atributos de la
+    /// pasada de glifos; agruparlos solo añadiría indirección.
+    #[allow(clippy::too_many_arguments)]
     pub fn push_text_extendido(
         &mut self,
         atlas: &FontAtlas,

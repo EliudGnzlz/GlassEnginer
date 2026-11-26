@@ -191,6 +191,12 @@ pub struct RastreadorClic {
     pulsado: Option<u64>,
 }
 
+impl Default for RastreadorClic {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RastreadorClic {
     /// Crea un rastreador sin pulsación activa.
     pub fn new() -> Self {

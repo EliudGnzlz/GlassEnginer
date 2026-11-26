@@ -1324,15 +1324,6 @@ pub fn resolve_ui_rect(rt: &RectTransformData, screen_w: f32, screen_h: f32) -> 
     resolve_ui_rect_in(rt, [0.0, 0.0, screen_w, screen_h])
 }
 
-/// Resuelve los rectángulos EN PÍXELES de todas las entidades UI de
-/// la escena (Fase 5): cada subárbol usa el Canvas Scaler de su
-/// Canvas activo más cercano (escala 1 sin Canvas), compone la
-/// jerarquía (cada hijo contra el rect de su ancestro UI más
-/// cercano) y aplica los layout groups por profundidad ascendente,
-/// iterando hasta punto fijo (máx. 4 pasadas) para que los
-/// descendientes de los hijos de layout se resuelvan contra el rect
-/// impuesto. Las entidades sin `rect_transform` no aparecen.
-
 /// Factor de escala del Canvas Scaler (Fase 5, modo «Scale With
 /// Screen Size» de Unity): interpola logarítmicamente entre el
 /// factor por ancho y el factor por alto según
