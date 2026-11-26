@@ -14,3 +14,4 @@ pub mod derivacion;
 pub mod documento;
 pub mod estilos;
 pub mod migracion;
+pub mod parser;

@@ -13,7 +13,7 @@
 //! - `resolver_estilos` aplica la cascada defecto del tipo → campos
 //!   del componente → `style_extra`, con la pseudo-clase del estado.
 
-use crate::documento::{Documento, NodoDocumento};
+use crate::documento::Documento;
 use crate::estilos::StyleProps;
 
 /// Tamaño del viewport en píxeles físicos (1280×720 en los tests).
@@ -123,15 +123,4 @@ pub fn arrastre_soltar(
     _y: f32,
 ) -> Option<DestinoSoltar> {
     todo!("V2 P4: arrastre")
-}
-
-/// Parser del `style_extra` (P1): declaraciones + bloques de
-/// pseudo-clase, sin selectores.
-pub fn parsear_estilo_extra(_texto: &str) -> EstilosExtra {
-    todo!("V2 P1: parser CSS")
-}
-
-/// Cascada completa de un nodo con un estado dado (P1 + P2).
-pub fn resolver_estilos(_nodo: &NodoDocumento, _estado: &EstadoPseudo) -> StyleProps {
-    todo!("V2 P1: cascada")
 }
