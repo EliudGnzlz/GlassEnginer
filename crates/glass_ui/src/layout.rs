@@ -8,7 +8,7 @@
 
 use crate::api::{DocumentoColocado, EstadoPseudo, MedidaTexto, NodoColocado, RectColocado, Viewport};
 use crate::documento::{Documento, TipoGraphic};
-use crate::estilos::{Dimension, Display, StyleProps};
+use crate::estilos::{Dimension, Display, StyleProps, TamanoColumna};
 use crate::parser::resolver_estilos;
 use glass_core::scene::{canvas_scale_factor, layout_group_rects, resolve_ui_rect_in};
 use std::sync::OnceLock;
@@ -183,6 +183,7 @@ pub fn colocar_documento_con_medidor(
     // P2b: flex — recoloca los hijos de los padres flex en rects_ref
     // (unidades de referencia); el paso 2 aplica estilos y escala.
     aplicar_flex(doc, &mut rects_ref);
+    aplicar_grid(doc, &mut rects_ref);
 
     // Segundo paso: aplicar estilos y convertir a píxeles.
     let estado = EstadoPseudo::default();
@@ -280,7 +281,17 @@ pub fn colocar_documento_con_medidor(
             }
         }
 
-        // NO aplicar min/max ni aspect_ratio aquí (P2c).
+        // P2c: aspect-ratio y límites min/max (el recorte por overflow
+        // es del pintor, P3, no del layout).
+        let (ancho_ref, alto_ref) = limitar_tamano(
+            &estilos,
+            ancho_ref,
+            alto_ref,
+            padre_ref[2],
+            padre_ref[3],
+            estilos.width.is_some(),
+            estilos.height.is_some(),
+        );
 
         // Escalar a píxeles.
         let rect = RectColocado {
@@ -469,12 +480,233 @@ pub fn aplicar_flex(doc: &Documento, rects_ref: &mut [[f32; 4]]) {
     }
 }
 
+/// Aplica layout grid a los padres con `display: grid` (P2c).
+/// Se llama tras `aplicar_flex`, entre el paso 1 (top-down) y el paso 2 (tamaños y escala).
+/// Un padre es flex O grid, nunca los dos, así que el orden entre ambos no altera el resultado.
+fn aplicar_grid(doc: &Documento, rects_ref: &mut [[f32; 4]]) {
+    // Recorrido en orden DFS sobre los índices de `doc.nodos` (mismo orden que el paso 1).
+    for idx in orden_dfs(doc) {
+        let nodo = &doc.nodos[idx];
+        if !nodo.activo {
+            continue;
+        }
+        // Solo padres con hijos directos activos.
+        let hijos_activos: Vec<usize> = nodo
+            .hijos
+            .iter()
+            .copied()
+            .filter(|&h| doc.nodos.get(h).map(|n| n.activo).unwrap_or(false))
+            .collect();
+        if hijos_activos.is_empty() {
+            continue;
+        }
+        let estilos = resolver_estilos(nodo, &EstadoPseudo::default());
+        if estilos.display != Some(Display::Grid) {
+            continue;
+        }
+        let r = rects_ref[idx];
+        // Área interior = rect del padre menos padding [izq, arriba, der, abajo].
+        let pad = estilos.padding.unwrap_or([0.0; 4]);
+        let interior_x = r[0] + pad[0];
+        let interior_y = r[1] + pad[1];
+        let interior_w = (r[2] - pad[0] - pad[2]).max(0.0);
+        let gap = estilos.gap.unwrap_or(0.0).max(0.0);
+
+        // Expansión de la plantilla de columnas.
+        let anchos_col = expandir_columnas(
+            estilos.grid_template_columns.as_deref(),
+            interior_w,
+            gap,
+        );
+        let ncols = anchos_col.len();
+        if ncols == 0 {
+            continue;
+        }
+
+        // Fila por hijo en orden row-major: columna k % ncols, fila k / ncols.
+        // Los hijos inactivos ya fueron filtrados, así que no consumen celda.
+        let mut alto_total_previo = 0.0_f32;
+        let mut inicio = 0usize;
+        while inicio < hijos_activos.len() {
+            let fin = (inicio + ncols).min(hijos_activos.len());
+            let fila = &hijos_activos[inicio..fin];
+            // Alto de la fila = máximo alto (del paso 1) de los hijos de esa fila.
+            let alto_fila = fila
+                .iter()
+                .map(|&h| rects_ref[h][3].max(0.0))
+                .fold(0.0_f32, f32::max);
+            // Posición x acumulada por columna dentro de la fila.
+            let mut x_acum = interior_x;
+            for (col, &h) in fila.iter().enumerate() {
+                let ancho_hijo = rects_ref[h][2];
+                let alto_hijo = rects_ref[h][3];
+                rects_ref[h][0] = x_acum;
+                rects_ref[h][1] = interior_y + alto_total_previo;
+                // El hijo conserva su tamaño del paso 1; no se estira a la celda.
+                rects_ref[h][2] = ancho_hijo;
+                rects_ref[h][3] = alto_hijo;
+                // Avanza el ancho de la columna más el gap.
+                x_acum += anchos_col[col] + gap;
+            }
+            alto_total_previo += alto_fila + gap;
+            inicio = fin;
+        }
+    }
+}
+
+/// Recorre los nodos en orden DFS partiendo del canvas raíz.
+/// Devuelve la lista de índices de `doc.nodos` en ese orden.
+fn orden_dfs(doc: &Documento) -> Vec<usize> {
+    let mut orden = Vec::with_capacity(doc.nodos.len());
+    let mut pila = vec![doc.canvas_raiz];
+    while let Some(idx) = pila.pop() {
+        if idx >= doc.nodos.len() {
+            continue;
+        }
+        orden.push(idx);
+        // Apila los hijos en orden inverso para que se visite el primero primero.
+        for &h in doc.nodos[idx].hijos.iter().rev() {
+            if h < doc.nodos.len() {
+                pila.push(h);
+            }
+        }
+    }
+    orden
+}
+
+/// Expande la plantilla de columnas a anchos en unidades de referencia.
+/// Si no hay plantilla, devuelve una sola columna del ancho interior.
+fn expandir_columnas(
+    plantilla: Option<&[TamanoColumna]>,
+    interior_w: f32,
+    gap: f32,
+) -> Vec<f32> {
+    let some = match plantilla {
+        Some(p) if !p.is_empty() => p,
+        _ => return vec![interior_w.max(0.0)],
+    };
+    // Primera pasada: sumar fijas y localizar un posible Relleno.
+    let mut suma_fijas = 0.0_f32;
+    let mut suma_frac = 0.0_f32;
+    let mut relleno: Option<f32> = None;
+    for col in some {
+        match *col {
+            TamanoColumna::Fija(w) => suma_fijas += w.max(0.0),
+            TamanoColumna::Fraccion(f) => suma_frac += f.max(0.0),
+            TamanoColumna::Relleno(c) => {
+                if relleno.is_none() {
+                    relleno = Some(c.max(0.0));
+                }
+            }
+        }
+    }
+    // Relleno: ncols = max(1, floor((interior_w + gap) / (celda + gap))).
+    if let Some(celda) = relleno {
+        let denom = celda + gap;
+        let n = if denom <= 0.0 {
+            1
+        } else {
+            (((interior_w + gap) / denom).floor() as i64).max(1) as usize
+        };
+        return vec![celda; n];
+    }
+    // Fracciones: parte del espacio restante tras fijas y gaps.
+    let ncols = some.len();
+    let gaps_totales = gap * (ncols.saturating_sub(1) as f32);
+    let restante = (interior_w - suma_fijas - gaps_totales).max(0.0);
+    let mut anchos = Vec::with_capacity(ncols);
+    for col in some {
+        let w = match *col {
+            TamanoColumna::Fija(w) => w.max(0.0),
+            TamanoColumna::Fraccion(f) => {
+                if suma_frac <= 0.0 {
+                    0.0
+                } else {
+                    restante * (f.max(0.0) / suma_frac)
+                }
+            }
+            TamanoColumna::Relleno(_) => 0.0, // ya tratado arriba
+        };
+        anchos.push(w);
+    }
+    anchos
+}
+
+/// Aplica `aspect-ratio` y límites min/max sobre el tamaño en unidades de referencia.
+/// `ancho_fijado`/`alto_fijado` = el estilo width/height estaba presente (Px, % o Auto).
+/// Nunca devuelve NaN ni infinito: si un cálculo sale no finito, conserva la entrada.
+fn limitar_tamano(
+    estilos: &StyleProps,
+    ancho: f32,
+    alto: f32,
+    padre_ancho: f32,
+    padre_alto: f32,
+    ancho_fijado: bool,
+    alto_fijado: bool,
+) -> (f32, f32) {
+    let mut w = ancho;
+    let mut h = alto;
+
+    // 1) aspect-ratio: solo cuando se fija exactamente una de las dos dimensiones.
+    if let Some(ratio) = estilos.aspect_ratio {
+        if ratio.is_finite() && ratio > 0.0 {
+            if ancho_fijado && !alto_fijado {
+                let nh = w / ratio;
+                if nh.is_finite() {
+                    h = nh;
+                }
+            } else if alto_fijado && !ancho_fijado {
+                let nw = h * ratio;
+                if nw.is_finite() {
+                    w = nw;
+                }
+            }
+            // ambos fijados o ninguno: no se toca
+        }
+    }
+
+    // 2) min/max: Px -> valor, Porcentaje -> % del padre, Auto -> sin efecto.
+    // Si min > max, manda el mínimo (se aplica primero con max, luego min).
+    let resolver = |d: Option<Dimension>, base: f32| -> Option<f32> {
+        match d {
+            Some(Dimension::Px(v)) if v.is_finite() => Some(v),
+            Some(Dimension::Porcentaje(p)) if p.is_finite() => {
+                let v = base * (p / 100.0);
+                if v.is_finite() { Some(v) } else { None }
+            }
+            _ => None, // Auto o None
+        }
+    };
+
+    let min_w = resolver(estilos.min_width, padre_ancho);
+    let max_w = resolver(estilos.max_width, padre_ancho);
+    let min_h = resolver(estilos.min_height, padre_alto);
+    let max_h = resolver(estilos.max_height, padre_alto);
+
+    if let Some(mx) = max_w {
+        w = w.min(mx);
+    }
+    if let Some(mn) = min_w {
+        w = w.max(mn);
+    }
+    if let Some(mx) = max_h {
+        h = h.min(mx);
+    }
+    if let Some(mn) = min_h {
+        h = h.max(mn);
+    }
+
+    // Nota: `overflow` no altera el layout; el recorte lo hace el pintor (P3).
+    (w, h)
+}
+
 // ── Tests ──────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::api::Viewport;
+    use crate::documento::{Documento, NodoDocumento};
     use glass_core::scene::{canvas_scale_factor, CanvasData, RectTransformData};
 
     /// Test 1: snapshot contra el fixture generado por el viejo resolver.
@@ -882,4 +1114,209 @@ mod tests {
         assert!(a[0] >= p[0] && b[0] > a[0]);
         assert!(b[0] + b[2] <= p[0] + p[2] + 0.5);
     }
+    // --- P2c: grid + límites (tests escritos a mano) ---
+
+    #[test]
+    fn grid_columnas_fijas_y_1fr() {
+        let doc = Documento {
+            canvas_raiz: 0,
+            nodos: vec![
+                NodoDocumento {
+                    entidad: 1, padre: None, hijos: vec![1, 2, 3],
+                    graphic: TipoGraphic::Ninguno, es_canvas: true, es_canvas_raiz: true,
+                    activo: true,
+                    rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [400.0, 80.0], anchor_min: [0.0, 0.0], anchor_max: [0.0, 0.0], pivot: [0.0, 0.0] },
+                    canvas: Some(CanvasData { render_mode: "ScreenSpaceOverlay".into(), reference_resolution: [400.0, 80.0], match_width_or_height: 0.0 }),
+                    imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                    style_extra: "display: grid; grid-template-columns: 100px 1fr; gap: 10px;".to_string(),
+                    raycast_target: false,
+                },
+                NodoDocumento {
+                    entidad: 2, padre: Some(0), hijos: vec![],
+                    graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
+                    activo: true,
+                    rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [100.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
+                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                    style_extra: String::new(), raycast_target: false,
+                },
+                NodoDocumento {
+                    entidad: 3, padre: Some(0), hijos: vec![],
+                    graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
+                    activo: true,
+                    rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [80.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
+                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                    style_extra: String::new(), raycast_target: false,
+                },
+                NodoDocumento {
+                    entidad: 4, padre: Some(0), hijos: vec![],
+                    graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
+                    activo: true,
+                    rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [60.0, 30.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
+                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                    style_extra: String::new(), raycast_target: false,
+                },
+            ],
+            avisos: vec![],
+        };
+        let col = colocar_documento(&doc, Viewport { ancho: 400.0, alto: 80.0 });
+        // Columnas [100, 290] (restante = 400 - 100 - 10 = 290).
+        let h1 = &col.nodos[1];
+        let h2 = &col.nodos[2];
+        let h3 = &col.nodos[3];
+        assert!((h1.rect.x - 0.0).abs() < 0.5 && (h1.rect.y - 0.0).abs() < 0.5, "h1 pos");
+        assert!((h1.rect.ancho - 100.0).abs() < 0.5 && (h1.rect.alto - 40.0).abs() < 0.5, "h1 tam");
+        assert!((h2.rect.x - 110.0).abs() < 0.5 && (h2.rect.y - 0.0).abs() < 0.5, "h2 pos");
+        assert!((h2.rect.ancho - 80.0).abs() < 0.5 && (h2.rect.alto - 40.0).abs() < 0.5, "h2 tam");
+        // Fila 2: y = alto fila 1 (40) + gap (10) = 50.
+        assert!((h3.rect.x - 0.0).abs() < 0.5 && (h3.rect.y - 50.0).abs() < 0.5, "h3 pos");
+        assert!((h3.rect.ancho - 60.0).abs() < 0.5 && (h3.rect.alto - 30.0).abs() < 0.5, "h3 tam");
+    }
+
+    #[test]
+    fn grid_auto_fill_repite_celdas() {
+        let doc = Documento {
+            canvas_raiz: 0,
+            nodos: vec![
+                NodoDocumento {
+                    entidad: 1, padre: None, hijos: vec![1, 2, 3],
+                    graphic: TipoGraphic::Ninguno, es_canvas: true, es_canvas_raiz: true,
+                    activo: true,
+                    rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [320.0, 80.0], anchor_min: [0.0, 0.0], anchor_max: [0.0, 0.0], pivot: [0.0, 0.0] },
+                    canvas: Some(CanvasData { render_mode: "ScreenSpaceOverlay".into(), reference_resolution: [320.0, 80.0], match_width_or_height: 0.0 }),
+                    imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                    style_extra: "display: grid; grid-template-columns: repeat(auto-fill, 100px); gap: 10px;".to_string(),
+                    raycast_target: false,
+                },
+                NodoDocumento {
+                    entidad: 2, padre: Some(0), hijos: vec![],
+                    graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
+                    activo: true,
+                    rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [100.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
+                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                    style_extra: String::new(), raycast_target: false,
+                },
+                NodoDocumento {
+                    entidad: 3, padre: Some(0), hijos: vec![],
+                    graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
+                    activo: true,
+                    rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [100.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
+                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                    style_extra: String::new(), raycast_target: false,
+                },
+                NodoDocumento {
+                    entidad: 4, padre: Some(0), hijos: vec![],
+                    graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
+                    activo: true,
+                    rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [100.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
+                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                    style_extra: String::new(), raycast_target: false,
+                },
+            ],
+            avisos: vec![],
+        };
+        let col = colocar_documento(&doc, Viewport { ancho: 320.0, alto: 80.0 });
+        // ncols = floor((320 + 10) / 110) = 3 -> x = 0, 110, 220.
+        let esperados_x = [0.0_f32, 110.0, 220.0];
+        for (i, exp_x) in esperados_x.iter().enumerate() {
+            let n = &col.nodos[1 + i];
+            assert!((n.rect.x - exp_x).abs() < 0.5, "x hijo {}", i);
+            assert!((n.rect.y - 0.0).abs() < 0.5, "y hijo {}", i);
+            assert!((n.rect.ancho - 100.0).abs() < 0.5 && (n.rect.alto - 40.0).abs() < 0.5, "tam hijo {}", i);
+        }
+    }
+
+    #[test]
+    fn limites_min_max_y_aspect_ratio() {
+        // Helper local: nodo suelto bajo un canvas de 1000x1000 (escala 1).
+        let nodo_suelto = |entidad: u64, y: f32, style_extra: &str| -> Documento {
+            Documento {
+                canvas_raiz: 0,
+                nodos: vec![
+                    NodoDocumento {
+                        entidad: 1, padre: None, hijos: vec![1],
+                        graphic: TipoGraphic::Ninguno, es_canvas: true, es_canvas_raiz: true,
+                        activo: true,
+                        rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [1000.0, 1000.0], anchor_min: [0.0, 0.0], anchor_max: [0.0, 0.0], pivot: [0.0, 0.0] },
+                        canvas: Some(CanvasData { render_mode: "ScreenSpaceOverlay".into(), reference_resolution: [1000.0, 1000.0], match_width_or_height: 0.0 }),
+                        imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                        style_extra: String::new(), raycast_target: false,
+                    },
+                    NodoDocumento {
+                        entidad, padre: Some(0), hijos: vec![],
+                        graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
+                        activo: true,
+                        rect_transform: RectTransformData { anchored_position: [0.0, y], size_delta: [50.0, 50.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
+                        canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                        style_extra: style_extra.to_string(), raycast_target: false,
+                    },
+                ],
+                avisos: vec![],
+            }
+        };
+        let vp = Viewport { ancho: 1000.0, alto: 1000.0 };
+
+        // (a) width 500px + max-width 200px -> ancho 200.
+        let doc_a = nodo_suelto(2, 0.0, "width: 500px; max-width: 200px;");
+        let col_a = colocar_documento(&doc_a, vp);
+        assert!((col_a.nodos[1].rect.ancho - 200.0).abs() < 0.5, "max-width");
+
+        // (b) width 100px + min-width 300px -> ancho 300.
+        let doc_b = nodo_suelto(2, 0.0, "width: 100px; min-width: 300px;");
+        let col_b = colocar_documento(&doc_b, vp);
+        assert!((col_b.nodos[1].rect.ancho - 300.0).abs() < 0.5, "min-width");
+
+        // (c) width 200px + aspect-ratio 2 con alto Auto -> alto 100.
+        let doc_c = nodo_suelto(2, 0.0, "width: 200px; aspect-ratio: 2;");
+        let col_c = colocar_documento(&doc_c, vp);
+        assert!((col_c.nodos[1].rect.ancho - 200.0).abs() < 0.5, "aspect ancho");
+            assert!((col_c.nodos[1].rect.alto - 100.0).abs() < 0.5, "aspect alto");
+    }
+
+    #[test]
+    fn grid_anidado_dentro_de_flex() {
+        // Canvas 800×600. Hijo flex (fila) centrado de 400×200 con un
+        // hijo grid de 2 hijos; los hijos del grid quedan dentro de su
+        // padre y en orden.
+        let mut intermedio = nodo_flex(
+            2,
+            Some(0),
+            vec![2],
+            [400.0, 200.0],
+            "display: flex; flex-direction: row;",
+            None,
+        );
+        intermedio.rect_transform.anchored_position = [0.0, 0.0];
+        let mut rejilla = nodo_flex(
+            3,
+            Some(1),
+            vec![3, 4],
+            [400.0, 200.0],
+            "display: grid; grid-template-columns: 100px 1fr; gap: 10px;",
+            None,
+        );
+        rejilla.rect_transform.anchored_position = [0.0, 0.0];
+        let doc = crate::documento::Documento {
+            canvas_raiz: 0,
+            nodos: vec![
+                canvas_flex(1, vec![1], 800.0, 600.0),
+                intermedio,
+                rejilla,
+                nodo_flex(4, Some(2), vec![], [100.0, 40.0], "", None),
+                nodo_flex(5, Some(2), vec![], [80.0, 40.0], "", None),
+            ],
+            avisos: vec![],
+        };
+        let colocado = colocar_documento(&doc, Viewport { ancho: 800.0, alto: 600.0 });
+        // El padre flex queda centrado: [200, 200, 400, 200]; el grid
+        // hereda ese rect como padre.
+        let g = rect_de_colocado(&colocado, 3);
+        cerca_rect(g, [200.0, 200.0, 400.0, 200.0]);
+        let a = rect_de_colocado(&colocado, 4);
+        let b = rect_de_colocado(&colocado, 5);
+        cerca_rect(a, [200.0, 200.0, 100.0, 40.0]);
+        cerca_rect(b, [310.0, 200.0, 80.0, 40.0]);
+        assert!(a[0] >= g[0] && b[0] > a[0]);
+        assert!(b[0] + b[2] <= g[0] + g[2] + 0.5);
+    }
+
 }
