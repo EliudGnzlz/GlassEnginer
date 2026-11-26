@@ -6,7 +6,7 @@ use glass_core::TransformFfi;
 use crate::material::{aplicar_material_en_sitio, apply_material, capsule_rotation, MaterialId, MaterialTable};
 use glass_core::physics_material::PhysicsMaterial;
 use rapier3d::na::UnitQuaternion;
-use crate::types::{ContactInfo, 
+use crate::types::{ContactInfo, ContactPointInfo, MAX_PUNTOS_CONTACTO,
     BodyHandle, BodyType, ColliderConfig, ColliderHandle, ColliderShape, ContactEvent,
     ContactKind,
 };
@@ -542,11 +542,39 @@ impl PhysicsWorld {
             }
         };
 
+        // Puntos individuales de TODOS los manifolds del par (lo que
+        // Unity expone en Collision.contacts): mismo transform y
+        // mismo signo de normal que el agregado; tope MAX_PUNTOS_CONTACTO.
+        let mut puntos = [ContactPointInfo::default(); MAX_PUNTOS_CONTACTO];
+        let mut n_puntos: usize = 0;
+        'recolecta: for m in &pair_np.manifolds {
+            let normal_m = [
+                m.data.normal.x * signo,
+                m.data.normal.y * signo,
+                m.data.normal.z * signo,
+            ];
+            for p in &m.points {
+                if n_puntos >= MAX_PUNTOS_CONTACTO {
+                    break 'recolecta;
+                }
+                let w = t + r * p.local_p1.coords;
+                puntos[n_puntos] = ContactPointInfo {
+                    point: [w.x, w.y, w.z],
+                    normal: normal_m,
+                    separation: p.dist,
+                    impulse: p.data.impulse,
+                };
+                n_puntos += 1;
+            }
+        }
+
         Some(ContactInfo {
             point: [sum[0] / n, sum[1] / n, sum[2] / n],
             normal,
             impulse,
             relative_velocity,
+            points: puntos,
+            point_count: n_puntos as u8,
         })
     }
 

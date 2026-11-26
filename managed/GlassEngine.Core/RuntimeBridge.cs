@@ -3091,12 +3091,19 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct ContactInfoFfi
+    private unsafe struct ContactInfoFfi
     {
         public float PointX, PointY, PointZ;
         public float NormalX, NormalY, NormalZ;
         public float Impulse;
         public float RelVelX, RelVelY, RelVelZ;
+
+        // Extensión D5: 8 puntos en línea tras el prefijo histórico,
+        // 8 floats por punto (Point xyz, Normal xyz, Separation,
+        // Impulse): offset 40, 256 bytes. PointCount en offset 296;
+        // tamaño total 300, espejo del ContactInfoFfi de Rust.
+        public fixed float Points[64];
+        public int PointCount;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "DispatchContactEvent")]
@@ -3126,14 +3133,36 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         var normal = UnityEngine.Vector3.zero;
         var relVel = UnityEngine.Vector3.zero;
         float impulso = 0f;
+        ContactPoint[]? puntos = null;
         if (contactPtr != null)
         {
             punto = new UnityEngine.Vector3(contactPtr->PointX, contactPtr->PointY, contactPtr->PointZ);
             normal = new UnityEngine.Vector3(contactPtr->NormalX, contactPtr->NormalY, contactPtr->NormalZ);
             relVel = new UnityEngine.Vector3(contactPtr->RelVelX, contactPtr->RelVelY, contactPtr->RelVelZ);
             impulso = contactPtr->Impulse;
+            // Puntos individuales (D5): los colliders quedan a null
+            // (ver la nota en ContactPoint).
+            int n = contactPtr->PointCount;
+            if (n > 8) n = 8;
+            if (n > 0)
+            {
+                puntos = new ContactPoint[n];
+                for (int i = 0; i < n; i++)
+                {
+                    int b = i * 8;
+                    puntos[i] = new ContactPoint
+                    {
+                        point = new UnityEngine.Vector3(
+                            contactPtr->Points[b], contactPtr->Points[b + 1], contactPtr->Points[b + 2]),
+                        normal = new UnityEngine.Vector3(
+                            contactPtr->Points[b + 3], contactPtr->Points[b + 4], contactPtr->Points[b + 5]),
+                        separation = contactPtr->Points[b + 6],
+                        impulse = contactPtr->Points[b + 7],
+                    };
+                }
+            }
         }
-        var collision = new Collision(otherEntityId, trigger, otherName, punto, normal, impulso, relVel);
+        var collision = new Collision(otherEntityId, trigger, otherName, punto, normal, impulso, relVel, puntos);
         try
         {
             switch (kind)

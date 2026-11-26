@@ -105,3 +105,35 @@ fn la_normal_no_depende_del_orden_de_creacion() {
     assert!(c.normal[1] < -0.9, "normal del suelo {c:?}");
     assert!(c.impulse > 1.0, "impulso estimado del impacto: {c:?}");
 }
+
+#[test]
+fn el_impacto_trae_puntos_individuales() {
+    let mut w = PhysicsWorld::new();
+    suelo(&mut w);
+    caja(&mut w, 3.0);
+
+    let ev = primer(&mut w, 240, |e| matches!(e.kind, ContactKind::Enter) && !e.is_trigger)
+        .expect("no llegó Started no-trigger");
+    let c = ev.contact.expect("Started sin contact");
+
+    // La cara superior del suelo está en y = 0 (centro -0,5, semialtura 0,5).
+    assert!(c.point_count >= 1, "point_count = {}", c.point_count);
+    assert!(
+        (c.point_count as usize) <= glass_physics::MAX_PUNTOS_CONTACTO,
+        "point_count = {}",
+        c.point_count
+    );
+    for (i, p) in c.points[..c.point_count as usize].iter().enumerate() {
+        let len = (p.normal[0].powi(2) + p.normal[1].powi(2) + p.normal[2].powi(2)).sqrt();
+        assert!((len - 1.0).abs() <= 0.01, "punto {i}: |normal| = {len}");
+        assert!(p.separation <= 0.05, "punto {i}: separation = {}", p.separation);
+        assert!(p.point[1].abs() <= 0.15, "punto {i}: y = {} (cara en 0)", p.point[1]);
+        // La normal de cada punto coincide con la agregada del par.
+        assert!(
+            (p.normal[1] - c.normal[1]).abs() <= 0.01,
+            "punto {i}: normal.y {} vs agregada {}",
+            p.normal[1],
+            c.normal[1]
+        );
+    }
+}

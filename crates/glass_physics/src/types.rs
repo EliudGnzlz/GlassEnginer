@@ -247,6 +247,28 @@ pub enum ContactKind {
     Exit,
 }
 
+/// Máximo de puntos individuales por evento de contacto (contrato
+/// FFI compartido con la fachada C#).
+pub const MAX_PUNTOS_CONTACTO: usize = 8;
+
+/// Punto individual de un manifold de contacto: lo que Unity expone
+/// en `Collision.contacts[]`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct ContactPointInfo {
+    /// Posición en mundo (sobre collider1 del par de Rapier).
+    pub point: [f32; 3],
+    /// Normal del manifold al que pertenece el punto, con el mismo
+    /// signo que la normal agregada de `ContactInfo`.
+    pub normal: [f32; 3],
+    /// `dist` de Rapier: positivo si hay hueco, negativo si penetra
+    /// (la misma convención que `ContactPoint.separation` de Unity).
+    pub separation: f32,
+    /// Impulso normal del solver en este punto. En el Enter el solver
+    /// aún no lo ha escrito y puede valer 0; el impulso agregado de
+    /// `ContactInfo` conserva su estimación de respaldo.
+    pub impulse: f32,
+}
+
 /// Evento de contacto entre dos entidades, generado por el mundo físico
 /// desde los CollisionEvent de Rapier. El par va ordenado (a < b); Stay no
 /// es un evento: se deriva comparando `contact_pairs()` entre frames.
@@ -261,6 +283,11 @@ pub struct ContactInfo {
     pub impulse: f32,
     /// Velocidad lineal de `a` menos la de `b`.
     pub relative_velocity: [f32; 3],
+    /// Puntos individuales de todos los manifolds del par; solo son
+    /// válidos los `point_count` primeros.
+    pub points: [ContactPointInfo; MAX_PUNTOS_CONTACTO],
+    /// Cuántos puntos de `points` son válidos (0..=MAX_PUNTOS_CONTACTO).
+    pub point_count: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

@@ -10811,15 +10811,24 @@ fn despachar_eventos_contacto(
         };
         script_host.dispatch_contact_event(event.a, event.b, kind, event.is_trigger, nombre(event.b), event.contact);
         // El despacho espejo invierte la normal y la velocidad relativa:
-        // el impacto se cuenta desde la otra entidad.
-        let espejo = event.contact.map(|c| glass_physics::ContactInfo {
-            normal: [-c.normal[0], -c.normal[1], -c.normal[2]],
-            relative_velocity: [
-                -c.relative_velocity[0],
-                -c.relative_velocity[1],
-                -c.relative_velocity[2],
-            ],
-            ..c
+        // el impacto se cuenta desde la otra entidad. También la normal
+        // de cada punto individual (posición, separation e impulse no
+        // cambian).
+        let espejo = event.contact.map(|c| {
+            let mut puntos = c.points;
+            for p in puntos.iter_mut().take(c.point_count as usize) {
+                p.normal = [-p.normal[0], -p.normal[1], -p.normal[2]];
+            }
+            glass_physics::ContactInfo {
+                normal: [-c.normal[0], -c.normal[1], -c.normal[2]],
+                relative_velocity: [
+                    -c.relative_velocity[0],
+                    -c.relative_velocity[1],
+                    -c.relative_velocity[2],
+                ],
+                points: puntos,
+                ..c
+            }
         });
         script_host.dispatch_contact_event(event.b, event.a, kind, event.is_trigger, nombre(event.a), espejo);
         if event.kind == ContactKind::Enter {

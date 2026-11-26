@@ -333,6 +333,17 @@ type TickAllScriptsFn = unsafe extern "system" fn(f32);
 /// Copia C del impacto para el export managed (punto, normal, impulso,
 /// velocidad relativa). Se pasa por puntero: la firma con 10 floats
 /// sueltos supera la aridad que netcorehost resuelve como FnPtr.
+/// Punto individual del FFI de contacto (32 bytes): espejo de
+/// `glass_physics::ContactPointInfo`.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct ContactPointFfi {
+    point: [f32; 3],
+    normal: [f32; 3],
+    separation: f32,
+    impulse: f32,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct ContactInfoFfi {
@@ -340,7 +351,15 @@ struct ContactInfoFfi {
     normal: [f32; 3],
     impulse: f32,
     relative_velocity: [f32; 3],
+    // Extensión D5: puntos individuales tras el prefijo histórico
+    // (que no se reordena); contrato con la fachada: 8 puntos y el
+    // conteo al final. Tamaño total 300 bytes.
+    points: [ContactPointFfi; glass_physics::MAX_PUNTOS_CONTACTO],
+    point_count: u32,
 }
+
+const _: () = assert!(std::mem::size_of::<ContactPointFfi>() == 32);
+const _: () = assert!(std::mem::size_of::<ContactInfoFfi>() == 300);
 
 /// Export managed de la Fase 1: (entidad, otra entidad, kind, es_trigger,
 /// nombre, puntero al impacto o nulo).
@@ -1215,11 +1234,27 @@ impl ScriptHost {
         match self.contact_event_fn {
             Some(f) => {
                 let name_c = std::ffi::CString::new(other_name).unwrap_or_default();
-                let ffi = contact.map(|c| ContactInfoFfi {
-                    point: c.point,
-                    normal: c.normal,
-                    impulse: c.impulse,
-                    relative_velocity: c.relative_velocity,
+                let ffi = contact.map(|c| {
+                    let mut points = [ContactPointFfi::default();
+                        glass_physics::MAX_PUNTOS_CONTACTO];
+                    let n = (c.point_count as usize)
+                        .min(glass_physics::MAX_PUNTOS_CONTACTO);
+                    for (dst, src) in points.iter_mut().zip(&c.points[..n]) {
+                        *dst = ContactPointFfi {
+                            point: src.point,
+                            normal: src.normal,
+                            separation: src.separation,
+                            impulse: src.impulse,
+                        };
+                    }
+                    ContactInfoFfi {
+                        point: c.point,
+                        normal: c.normal,
+                        impulse: c.impulse,
+                        relative_velocity: c.relative_velocity,
+                        points,
+                        point_count: n as u32,
+                    }
                 });
                 let ptr = ffi
                     .as_ref()
@@ -1411,5 +1446,20 @@ mod tests_fallo_dotnet {
     fn init_failed_no_se_clasifica() {
         let e = ScriptError::InitFailed("otra cosa".into());
         assert_eq!(e.fallo_dotnet(), None);
+    }
+}
+
+#[cfg(test)]
+mod tests_contacto_ffi {
+    use super::*;
+
+    #[test]
+    fn layouts_del_contrato_de_contactos() {
+        assert_eq!(std::mem::size_of::<ContactPointFfi>(), 32);
+        assert_eq!(std::mem::size_of::<ContactInfoFfi>(), 300);
+        assert_eq!(std::mem::offset_of!(ContactInfoFfi, points), 40);
+        assert_eq!(std::mem::offset_of!(ContactInfoFfi, point_count), 296);
+        assert_eq!(std::mem::offset_of!(ContactPointFfi, separation), 24);
+        assert_eq!(std::mem::offset_of!(ContactPointFfi, impulse), 28);
     }
 }
