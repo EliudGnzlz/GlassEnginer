@@ -141,6 +141,88 @@ fn listar_clases_cs(
     salida
 }
 
+/// Clasifica un asset por su nombre de archivo (convenciones del
+/// motor: sufijos .scene.json/.prefab.json/.physmat.json/
+/// .animator.json/.material.json y extensiones conocidas).
+fn tipo_asset(nombre: &str) -> &'static str {
+    let n = nombre.to_lowercase();
+    if n.ends_with(".scene.json") {
+        "scene"
+    } else if n.ends_with(".prefab.json") {
+        "prefab"
+    } else if n.ends_with(".physmat.json") {
+        "physmat"
+    } else if n.ends_with(".animator.json") {
+        "animator"
+    } else if n.ends_with(".material.json") {
+        "material"
+    } else if n.ends_with(".meta.json") {
+        "meta"
+    } else if n.ends_with(".glb") || n.ends_with(".fbx") || n.ends_with(".obj")
+        || n.ends_with(".blend")
+    {
+        "model"
+    } else if n.ends_with(".png") || n.ends_with(".jpg") || n.ends_with(".jpeg")
+        || n.ends_with(".tga") || n.ends_with(".bmp") || n.ends_with(".webp")
+        || n.ends_with(".hdr") || n.ends_with(".exr")
+    {
+        "texture"
+    } else if n.ends_with(".wav") || n.ends_with(".mp3") || n.ends_with(".ogg") {
+        "audio"
+    } else if n.ends_with(".cs") {
+        "script"
+    } else if n.ends_with(".glsl") || n.ends_with(".spv") || n.ends_with(".shader")
+    {
+        "shader"
+    } else {
+        "other"
+    }
+}
+
+/// Recorre recursivamente `base/sub` y devuelve los assets como
+/// (ruta relativa con '/', tipo, bytes), ordenados por ruta. Se
+/// saltan los directorios ocultos. Tope de 2000 entradas.
+fn recolectar_assets(
+    base: &std::path::Path,
+    sub: &str,
+) -> Vec<(String, &'static str, u64)> {
+    let raiz = if sub.is_empty() {
+        base.to_path_buf()
+    } else {
+        base.join(sub)
+    };
+    let mut salida: Vec<(String, &'static str, u64)> = Vec::new();
+    let mut pila: Vec<std::path::PathBuf> = vec![raiz];
+    while let Some(d) = pila.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let ruta = e.path();
+            let nombre = e.file_name().to_string_lossy().to_string();
+            if ruta.is_dir() {
+                if !nombre.starts_with('.') {
+                    pila.push(ruta);
+                }
+                continue;
+            }
+            let Ok(rel) = ruta.strip_prefix(base) else {
+                continue;
+            };
+            let bytes = e.metadata().map(|m| m.len()).unwrap_or(0);
+            salida.push((
+                rel.to_string_lossy().replace('\\', "/"),
+                tipo_asset(&nombre),
+                bytes,
+            ));
+            if salida.len() >= 2000 {
+                salida.sort();
+                return salida;
+            }
+        }
+    }
+    salida.sort();
+    salida
+}
+
 fn referencia_physmat(name: &str) -> Result<String, String> {
     use glass_core::physics_material::{es_referencia_physmat_valida, PhysicsMaterial};
 
@@ -902,6 +984,18 @@ impl McpServer {
                             "name": "glass_scripts_compile",
                             "description": "Compila de verdad la fachada y sus scripts con dotnet build y devuelve success y los errores CS extraídos. Es la compilación que luego carga el motor.",
                             "inputSchema": { "type": "object", "properties": {}, "required": [] }
+                        },
+                        {
+                            "name": "glass_list_assets",
+                            "description": "Lista recursivamente los assets del proyecto con su tipo (scene, prefab, model, texture, material, physmat, animator, audio, script, shader, meta, other) y tamaño. 'path' limita a una subcarpeta y 'type' filtra por tipo.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "path": { "type": "string", "description": "Subcarpeta relativa a la raíz de assets (por defecto la raíz)" },
+                                    "type": { "type": "string", "description": "Filtro por tipo de asset" }
+                                },
+                                "required": []
+                            }
                         },
                         {
                             "name": "glass_prefab_instantiate",
@@ -5880,6 +5974,38 @@ impl McpServer {
                 }
             }
 
+            "glass_list_assets" => {
+                let sub = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                if sub.contains("..") {
+                    return McpResponse::invalid_params(id, "'path' no puede contener '..'");
+                }
+                let tipo_filtro = args.get("type").and_then(|v| v.as_str());
+                let base = carpeta_assets();
+                let todos = recolectar_assets(&base, sub);
+                let filtrados: Vec<_> = todos
+                    .iter()
+                    .filter(|(_, t, _)| tipo_filtro.is_none_or(|f| t == &f))
+                    .collect();
+                let payload = json!({
+                    "root": base.to_string_lossy(),
+                    "path": sub,
+                    "count": filtrados.len(),
+                    "assets": filtrados
+                        .iter()
+                        .map(|(rel, t, b)| json!({ "path": rel, "type": t, "size": b }))
+                        .collect::<Vec<_>>(),
+                });
+                McpResponse::success(
+                    id,
+                    json!({
+                        "content": [{
+                            "type": "text",
+                            "text": serde_json::to_string_pretty(&payload).unwrap_or_default()
+                        }]
+                    }),
+                )
+            }
+
             _ => McpResponse::method_not_found(id, name),
         }
     }
@@ -6819,6 +6945,30 @@ fn entity_set_duplicate_find() {
         let r = llamar(&srv, "glass_scripts_compile", json!({}));
         assert!(r.contains("-32004"), "{r}");
         std::env::remove_var("GLASS_FACADE_CSPROJ");
+    }
+
+    #[test]
+    fn recolectar_assets_clasifica_y_ordena() {
+        let dir = std::env::temp_dir().join(format!(
+            "glass_mcp_assets_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Modelos")).unwrap();
+        std::fs::write(dir.join("Modelos/serpiente.glb"), b"12345").unwrap();
+        std::fs::write(dir.join("escena.scene.json"), b"{}").unwrap();
+        std::fs::write(dir.join("foto.png"), b"x").unwrap();
+        std::fs::write(dir.join("notas.txt"), b"hola").unwrap();
+        let r = recolectar_assets(&dir, "");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(r.len(), 4, "{r:?}");
+        assert_eq!(r[0].0, "Modelos/serpiente.glb");
+        assert_eq!(r[0].1, "model");
+        assert_eq!(r[0].2, 5);
+        assert!(r.iter().any(|(p, t, _)| p == "escena.scene.json" && *t == "scene"));
+        assert!(r.iter().any(|(p, t, _)| p == "foto.png" && *t == "texture"));
+        assert!(r.iter().any(|(p, t, _)| p == "notas.txt" && *t == "other"));
+        assert!(!is_mutating_tool("glass_list_assets"));
     }
 
     #[test]
