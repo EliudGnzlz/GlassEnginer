@@ -39,11 +39,11 @@ const FONT_TTF: &[u8] = include_bytes!("../../../assets/fonts/DejaVuSans.ttf");
 /// Tamaño al que se rasterizan los glifos en el atlas. El texto se escala
 /// al dibujar (`font_size / ATLAS_RASTER_PX`), así que un atlas basta para
 /// todos los tamaños de fuente de la UI.
-const ATLAS_RASTER_PX: f32 = 64.0;
-const ATLAS_W: u32 = 1024;
-const ATLAS_H: u32 = 1024;
+pub(crate) const ATLAS_RASTER_PX: f32 = 64.0;
+pub(crate) const ATLAS_W: u32 = 1024;
+pub(crate) const ATLAS_H: u32 = 1024;
 /// Bloque opaco reservado en la esquina del atlas para los sólidos.
-const SOLID_BLOCK: u32 = 8;
+pub(crate) const SOLID_BLOCK: u32 = 8;
 
 /// Capacidad fija del buffer de vértices de UI (vértices). Un HUD típico
 /// usa unos cientos de quads; 16.384 vértices son ~2.700 quads. Si un

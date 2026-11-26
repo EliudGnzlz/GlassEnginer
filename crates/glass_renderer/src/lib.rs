@@ -11,6 +11,7 @@ pub mod shadow;
 pub mod skin;
 pub mod swapchain;
 pub mod ui;
+pub mod sdf_atlas;
 pub mod watcher;
 
 pub use asset_cache::{global_asset_cache, register_global_asset_cache, AssetCache, TextureUpload};
