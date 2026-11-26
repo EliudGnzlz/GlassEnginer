@@ -27,8 +27,8 @@ pub struct Segmento {
     pub radios: [f32; 4],
     /// (rect de clip [x,y,w,h], softness en px); None = sin recorte.
     pub clip: Option<([f32; 4], f32)>,
-    /// (texto, font_size, align) — solo para Texto.
-    pub texto: Option<(String, f32, String)>,
+    /// (texto, font_size, align, font) — solo para Texto.
+    pub texto: Option<(String, f32, String, String)>,
     /// Ruta del sprite — solo para Imagen.
     pub sprite: Option<String>,
     /// Pertenece a capa superior (override_sorting).
@@ -347,7 +347,7 @@ pub fn pintar_documento(
                     degradado: None,
                     radios,
                     clip: clip_val,
-                    texto: Some((txt.text.clone(), fs, txt.align.clone())),
+                    texto: Some((txt.text.clone(), fs, txt.align.clone(), txt.font.clone())),
                     sprite: None,
                     capa_superior: sup,
                     orden: 0,

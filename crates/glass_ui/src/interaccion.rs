@@ -237,6 +237,11 @@ impl RastreadorClic {
         self.pulsado
     }
 
+    /// Cancela un gesto a medias (p. ej. al cambiar de escena).
+    pub fn cancelar(&mut self) {
+        self.pulsado = None;
+    }
+
     /// Busca la acción de clic del nodo o de su ancestro más cercano con botón
     /// interactable.
     fn accion_boton(doc: &Documento, mut idx: usize) -> Option<String> {

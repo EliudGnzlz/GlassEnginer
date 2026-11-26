@@ -1,9 +1,7 @@
-// P4 conectará este conversor a la ruta de render (hoy solo lo usan los
-// tests); hasta entonces, el dead_code es esperado, no un error.
-#![allow(dead_code)]
-
-use glass_renderer::ui::{FontAtlas, UiBatch, MODO_COLOR, MODO_IMAGEN, MODO_SOMBRA};
-use glass_ui::pintor::{ModoPintado, Segmento};
+use crate::canvas_ui;
+use glass_core::scene::SceneState;
+use glass_renderer::ui::{FontAtlas, UiAtlasKind, UiBatch, UiSegment, MODO_COLOR, MODO_IMAGEN, MODO_SOMBRA};
+use glass_ui::pintor::{MedidaImagen, ModoPintado, Segmento};
 
 /// Calcula el clip en coordenadas locales al quad, restando el origen del rect.
 fn clip_local(
@@ -110,8 +108,10 @@ pub fn push_segmento(
         }
         ModoPintado::Texto => {
             // Obtener datos de texto; si no hay o el texto está vacío → omitir
-            let (texto, font_size, align) = match &seg.texto {
-                Some((t, fs, a)) if !t.is_empty() => (t.as_str(), *fs, a.as_str()),
+            // El nombre de fuente viaja en la tupla, pero el atlas lo
+            // resuelve el llamador y llega aquí como `atlas_fuente`.
+            let (texto, font_size, align, _font) = match &seg.texto {
+                Some((t, fs, a, f)) if !t.is_empty() => (t.as_str(), *fs, a.as_str(), f.as_str()),
                 _ => return false,
             };
             // Medir ancho del texto para alineación
@@ -140,6 +140,70 @@ pub fn push_segmento(
             true
         }
     }
+}
+
+/// Adaptador de `MedidaImagen` sobre el mapa de sprites de la escena.
+struct MedidaEscena<'a> {
+    imagenes: &'a canvas_ui::UiSceneImages,
+}
+
+impl MedidaImagen for MedidaEscena<'_> {
+    fn tamano(&self, sprite: &str) -> Option<(f32, f32)> {
+        self.imagenes
+            .get(sprite)
+            .map(|e| (e.pixel_size.0 as f32, e.pixel_size.1 as f32))
+    }
+}
+
+/// Devuelve el lote del último segmento si ya es del mismo atlas;
+/// si no, crea un segmento nuevo y devuelve su lote.
+fn segmento_mut(segs: &mut Vec<UiSegment>, kind: UiAtlasKind) -> &mut UiBatch {
+    let mismo = matches!(segs.last(), Some(s) if s.atlas == kind);
+    if !mismo {
+        segs.push(UiSegment { batch: UiBatch::default(), atlas: kind });
+    }
+    &mut segs.last_mut().expect("segmento recién creado").batch
+}
+
+/// Construye los segmentos de dibujo V2 en orden de pintor, agrupados
+/// por atlas. Sin documento (escena sin Canvas) devuelve un vec vacío.
+pub fn build_canvas_batch_v2(
+    scene: &SceneState,
+    fonts: &canvas_ui::UiFonts<'_>,
+    images: &canvas_ui::UiSceneImages,
+    screen_w: f32,
+    screen_h: f32,
+) -> Vec<UiSegment> {
+    use glass_ui::api::{colocar_documento, Viewport};
+    use glass_ui::derivacion::derivar_documentos;
+    use glass_ui::pintor::pintar_documento;
+
+    let docs = derivar_documentos(scene);
+    let Some(doc) = docs.into_iter().next() else {
+        return Vec::new();
+    };
+    let colocado = colocar_documento(
+        &doc,
+        Viewport { ancho: screen_w, alto: screen_h },
+    );
+    let medida = MedidaEscena { imagenes: images };
+    let segmentos = pintar_documento(&doc, &colocado, &medida);
+    let uv_imagen = |s: &str| images.get(s).map(|e| e.uv);
+
+    let mut segs: Vec<UiSegment> = Vec::new();
+    for seg in &segmentos {
+        let (atlas, kind) = match seg.modo {
+            ModoPintado::Texto => {
+                let font = seg.texto.as_ref().map(|t| t.3.as_str()).unwrap_or("default");
+                fonts.resolve(font)
+            }
+            ModoPintado::Imagen => (fonts.default, UiAtlasKind::Image),
+            _ => (fonts.default, UiAtlasKind::Font),
+        };
+        let lote = segmento_mut(&mut segs, kind);
+        push_segmento(lote, atlas, seg, &uv_imagen);
+    }
+    segs
 }
 
 #[cfg(test)]
@@ -194,7 +258,7 @@ mod tests {
             degradado: None,
             radios: [0.0; 4],
             clip: None,
-            texto: Some((texto.to_string(), font_size, align.to_string())),
+            texto: Some((texto.to_string(), font_size, align.to_string(), "default".to_string())),
             sprite: None,
             capa_superior: false,
             orden: 0,
@@ -329,5 +393,98 @@ mod tests {
             assert_eq!(v.pack1[1], MODO_SOMBRA, "modo debe ser MODO_SOMBRA");
             assert_eq!(v.pack2[1], 8.0, "desenfoque debe ser 8.0");
         }
+    }
+
+    // --- build_canvas_batch_v2 (V2): port de los tests del lote viejo ---
+
+    fn canvas_raiz() -> glass_core::EntityData {
+        use glass_core::{CanvasData, EntityData, RectTransformData};
+        let mut canvas = EntityData::new(1, "Canvas".to_string(), Vec::new());
+        canvas.children = vec![2, 3];
+        canvas.active = true;
+        canvas.canvas = Some(CanvasData {
+            render_mode: "ScreenSpaceOverlay".to_string(),
+            reference_resolution: [800.0, 600.0],
+            match_width_or_height: 0.5,
+        });
+        canvas.rect_transform = Some(RectTransformData {
+            anchored_position: [0.0, 0.0],
+            size_delta: [0.0, 0.0],
+            anchor_min: [0.0, 0.0],
+            anchor_max: [1.0, 1.0],
+            pivot: [0.5, 0.5],
+        });
+        canvas
+    }
+
+    fn imagenes(uv: [f32; 4], pixel_size: (u32, u32)) -> canvas_ui::UiSceneImages {
+        let mut m = canvas_ui::UiSceneImages::new();
+        m.insert(
+            "sprite.png".to_string(),
+            canvas_ui::UiImageEntry { uv, pixel_size },
+        );
+        m
+    }
+
+    #[test]
+    fn lote_v2_imagen_y_luego_boton() {
+        use glass_core::{EntityData, RectTransformData};
+        let mut scene = SceneState::default();
+        let mut e_img = EntityData::new(2, "imagen".to_string(), Vec::new());
+        e_img.active = true;
+        e_img.parent = Some(1);
+        e_img.rect_transform = Some(RectTransformData {
+            anchored_position: [0.0, 0.0],
+            size_delta: [200.0, 100.0],
+            anchor_min: [0.5, 0.5],
+            anchor_max: [0.5, 0.5],
+            pivot: [0.5, 0.5],
+        });
+        e_img.ui_image = Some(glass_core::UIImageData {
+            sprite: "sprite.png".to_string(),
+            ..Default::default()
+        });
+        let mut e_btn = EntityData::new(3, "boton".to_string(), Vec::new());
+        e_btn.active = true;
+        e_btn.parent = Some(1);
+        e_btn.rect_transform = Some(RectTransformData {
+            anchored_position: [0.0, 0.0],
+            size_delta: [220.0, 56.0],
+            anchor_min: [0.5, 0.5],
+            anchor_max: [0.5, 0.5],
+            pivot: [0.5, 0.5],
+        });
+        e_btn.ui_button = Some(glass_core::UIButtonData::default());
+        e_btn.ui_text = Some(glass_core::UITextData {
+            text: "OK".to_string(),
+            font_size: 16.0,
+            ..Default::default()
+        });
+        scene.replace_entities(vec![canvas_raiz(), e_img, e_btn]);
+
+        let imgs = imagenes([0.0, 0.0, 0.5, 0.5], (200, 100));
+        let font = atlas();
+        let fonts = canvas_ui::UiFonts { default: &font, named: &std::collections::HashMap::new() };
+        let segs = build_canvas_batch_v2(&scene, &fonts, &imgs, 800.0, 600.0);
+        // La cascada V2 pinta el fondo del componente antes que su
+        // contenido: fondo blanco de la imagen, la imagen, fondo azul
+        // del botón + su texto (mismo atlas Font, un solo segmento).
+        assert_eq!(segs.len(), 3, "fondo imagen + imagen + fondo botón y texto");
+        assert_eq!(segs[0].atlas, UiAtlasKind::Font);
+        assert_eq!(segs[1].atlas, UiAtlasKind::Image);
+        assert_eq!(segs[2].atlas, UiAtlasKind::Font);
+        assert_eq!(segs[0].batch.vertex_count(), 6);
+        assert_eq!(segs[1].batch.vertex_count(), 6);
+        assert_eq!(segs[2].batch.vertex_count(), 18);
+    }
+
+    #[test]
+    fn lote_v2_sin_canvas_devuelve_vacio() {
+        let scene = SceneState::default();
+        let imgs = canvas_ui::UiSceneImages::new();
+        let font = atlas();
+        let fonts = canvas_ui::UiFonts { default: &font, named: &std::collections::HashMap::new() };
+        let segs = build_canvas_batch_v2(&scene, &fonts, &imgs, 800.0, 600.0);
+        assert!(segs.is_empty());
     }
 }

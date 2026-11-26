@@ -2147,8 +2147,8 @@ struct GlassEngineApp {
     /// winit en `window_event` y consumido por frame en `render_frame`.
     mouse: mouse_input::MouseState,
     /// Gesto de clic sobre botones del Canvas en curso (solo standalone).
-    button_click_tracker: canvas_ui::ButtonClickTracker,
-    ui_drag_session: Option<canvas_ui::DragSession>,
+    rastreador_clic: glass_ui::api::RastreadorClic,
+    ui_drag_session: Option<glass_ui::api::SesionArrastre>,
     /// Buffers de matrices de articulación por entidad con piel (bloque de
     /// skinning): uno por entidad viva, creado perezosamente en el bucle
     /// de dibujo con la capacidad de la piel de su modelo y reescrito cada
@@ -2632,7 +2632,7 @@ impl GlassEngineApp {
             },
             pad_state: PadState::default(),
             mouse: mouse_input::MouseState::new(),
-            button_click_tracker: canvas_ui::ButtonClickTracker::new(),
+            rastreador_clic: glass_ui::api::RastreadorClic::new(),
             ui_drag_session: None,
             skin_joint_buffers: std::collections::HashMap::new(),
             sistema_luces: luces_objeto::SistemaAsignacion::nueva(),
@@ -4531,7 +4531,7 @@ for stem in &referenciados {
 
                 // 0b. Gestos del Canvas a medias fuera: el botón memorizado
                 // y la sesión de arrastre pertenecen a la escena anterior.
-                self.button_click_tracker.cancel();
+                self.rastreador_clic.cancelar();
                 self.ui_drag_session = None;
 
                 // 1. Fuera las instancias de la escena anterior.
@@ -5663,23 +5663,40 @@ let resueltos = if body.has_collider {
             // handler tocaba la escena y el riesgo era latente.
             let mut completed_click: Option<canvas_ui::CanvasButtonClick> = None;
             if let Ok(scene) = self.scene_state.lock() {
-                if mouse_down_edge && self.ui_drag_session.is_none() {
-                    self.button_click_tracker.press(
-                        &scene,
-                        mouse_render_x,
-                        mouse_render_y,
-                        off_w,
-                        off_h,
-                    );
-                }
-                if mouse_up_edge {
-                    completed_click = self.button_click_tracker.release(
-                        &scene,
-                        mouse_render_x,
-                        mouse_render_y,
-                        off_w,
-                        off_h,
-                    );
+                let docs = glass_ui::derivacion::derivar_documentos(&scene);
+                let doc = docs.into_iter().next();
+                let colocado = doc.as_ref().map(|d| {
+                    glass_ui::api::colocar_documento(
+                        d,
+                        glass_ui::api::Viewport { ancho: off_w, alto: off_h },
+                    )
+                });
+                if let (Some(doc), Some(colocado)) = (doc.as_ref(), colocado.as_ref()) {
+                    if mouse_down_edge && self.ui_drag_session.is_none() {
+                        self.rastreador_clic
+                            .pulsar(doc, colocado, mouse_render_x, mouse_render_y);
+                    }
+                    if mouse_up_edge {
+                        let pulsado = self.rastreador_clic.pulsado();
+                        if let Some(accion) = self.rastreador_clic.soltar(
+                            doc,
+                            colocado,
+                            mouse_render_x,
+                            mouse_render_y,
+                        ) {
+                            let nombre = pulsado
+                                .and_then(|id| {
+                                    doc.nodos.iter().find(|n| n.entidad == id)
+                                })
+                                .map(|n| n.nombre.clone())
+                                .unwrap_or_default();
+                            completed_click = Some(canvas_ui::CanvasButtonClick {
+                                entity_id: pulsado.unwrap_or(0),
+                                entity_name: nombre,
+                                action: accion,
+                            });
+                        }
+                    }
                 }
             }
             if let Some(click) = completed_click {
@@ -5706,20 +5723,31 @@ let resueltos = if body.has_collider {
             let mut drag_calls: Vec<(u64, String)> = Vec::new();
             if mouse_down_edge && self.ui_drag_session.is_none() {
                 if let Ok(scene) = self.scene_state.lock() {
-                    if let Some(session) = canvas_ui::drag_press(
-                        &scene,
-                        mouse_render_x,
-                        mouse_render_y,
-                        off_w,
-                        off_h,
-                    ) {
+                    let docs = glass_ui::derivacion::derivar_documentos(&scene);
+                    let doc = docs.into_iter().next();
+                    let colocado = doc.as_ref().map(|d| {
+                        glass_ui::api::colocar_documento(
+                            d,
+                            glass_ui::api::Viewport { ancho: off_w, alto: off_h },
+                        )
+                    });
+                    let session = match (doc.as_ref(), colocado.as_ref()) {
+                        (Some(doc), Some(colocado)) => glass_ui::api::arrastre_pulsar(
+                            doc,
+                            colocado,
+                            mouse_render_x,
+                            mouse_render_y,
+                        ),
+                        _ => None,
+                    };
+                    if let Some(session) = session {
                         DRAG_CURRENT.store(
-                            session.entity_id,
+                            session.entidad,
                             std::sync::atomic::Ordering::Relaxed,
                         );
                         DROP_TARGET_CURRENT.store(0, std::sync::atomic::Ordering::Relaxed);
-                        if !session.begin_action.is_empty() {
-                            drag_calls.push((session.entity_id, session.begin_action.clone()));
+                        if !session.accion_inicio.is_empty() {
+                            drag_calls.push((session.entidad, session.accion_inicio.clone()));
                         }
                         self.ui_drag_session = Some(session);
                     }
@@ -5729,7 +5757,7 @@ let resueltos = if body.has_collider {
                 if self.mouse.left_held {
                     let (id, nueva) = {
                         let s = self.ui_drag_session.as_ref().expect("presente");
-                        (s.entity_id, s.follow(mouse_render_x, mouse_render_y))
+                        (s.entidad, s.follow(mouse_render_x, mouse_render_y))
                     };
                     if let Ok(mut scene) = self.scene_state.lock() {
                         if let Some(ent) = scene.entities.iter_mut().find(|e| e.id == id) {
@@ -5742,28 +5770,39 @@ let resueltos = if body.has_collider {
                 if mouse_up_edge {
                     let session = self.ui_drag_session.take().expect("presente");
                     if let Ok(mut scene) = self.scene_state.lock() {
-                        match canvas_ui::drag_drop_target(
-                            &scene,
-                            session.entity_id,
-                            mouse_render_x,
-                            mouse_render_y,
-                            off_w,
-                            off_h,
-                        ) {
+                        let docs = glass_ui::derivacion::derivar_documentos(&scene);
+                        let doc = docs.into_iter().next();
+                        let colocado = doc.as_ref().map(|d| {
+                            glass_ui::api::colocar_documento(
+                                d,
+                                glass_ui::api::Viewport { ancho: off_w, alto: off_h },
+                            )
+                        });
+                        let destino = match (doc.as_ref(), colocado.as_ref()) {
+                            (Some(doc), Some(colocado)) => glass_ui::api::arrastre_soltar(
+                                doc,
+                                colocado,
+                                session.entidad,
+                                mouse_render_x,
+                                mouse_render_y,
+                            ),
+                            _ => None,
+                        };
+                        match destino {
                             Some(hit) => {
                                 DROP_TARGET_CURRENT.store(
-                                    hit.entity_id,
+                                    hit.entidad,
                                     std::sync::atomic::Ordering::Relaxed,
                                 );
                                 if let Some(ent) =
-                                    scene.entities.iter_mut().find(|e| e.id == session.entity_id)
+                                    scene.entities.iter_mut().find(|e| e.id == session.entidad)
                                 {
                                     if let Some(rt) = ent.rect_transform.as_mut() {
-                                        rt.anchored_position = hit.anchored;
+                                        rt.anchored_position = hit.anclado;
                                     }
                                 }
-                                if !hit.drop_action.is_empty() {
-                                    drag_calls.push((hit.entity_id, hit.drop_action.clone()));
+                                if !hit.accion_soltar.is_empty() {
+                                    drag_calls.push((hit.entidad, hit.accion_soltar.clone()));
                                 }
                             }
                             None => {
@@ -5772,17 +5811,17 @@ let resueltos = if body.has_collider {
                                     std::sync::atomic::Ordering::Relaxed,
                                 );
                                 if let Some(ent) =
-                                    scene.entities.iter_mut().find(|e| e.id == session.entity_id)
+                                    scene.entities.iter_mut().find(|e| e.id == session.entidad)
                                 {
                                     if let Some(rt) = ent.rect_transform.as_mut() {
-                                        rt.anchored_position = session.start_anchored();
+                                        rt.anchored_position = session.anclado_inicial();
                                     }
                                 }
                             }
                         }
                     }
-                    if !session.end_action.is_empty() {
-                        drag_calls.push((session.entity_id, session.end_action.clone()));
+                    if !session.accion_fin.is_empty() {
+                        drag_calls.push((session.entidad, session.accion_fin.clone()));
                     }
                 }
             }
@@ -8166,7 +8205,7 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 }
                 let font = renderer.ui_font();
                 match self.scene_state.lock() {
-                    Ok(scene) => canvas_ui::build_canvas_batch(
+                    Ok(scene) => crate::ui_v2::build_canvas_batch_v2(
                         &scene,
                         &canvas_ui::UiFonts {
                             default: font,
