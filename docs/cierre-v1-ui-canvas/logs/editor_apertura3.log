@@ -1,0 +1,114 @@
+[2026-11-26T12:01:55Z INFO  glass_app] Registro de la sesión en /home/hatch/GlassEnginer/glass.log
+[2026-11-26T12:01:55Z INFO  glass_app] Sonda de GPU: resultado en caché correcto; no se repite.
+[2026-11-26T12:01:55Z INFO  glass_app] Forzando backend X11/XWayland en Winit para máxima compatibilidad con Vulkan y NVIDIA...
+[2026-11-26T12:01:55Z WARN  winit::platform_impl::linux::x11::xdisplay] error setting XSETTINGS; Xft options won't reload automatically
+[2026-11-26T12:01:55Z INFO  glass_app] Manejador de señal instalado para 15
+[2026-11-26T12:01:55Z INFO  glass_app] Manejador de señal instalado para 2
+[2026-11-26T12:01:55Z INFO  glass_app] Manejador de señal instalado para 1
+[2026-11-26T12:01:55Z INFO  glass_app] SceneManager: raíz '/home/hatch/workspace/GlassEnginer' con 80 escena(s) disponibles.
+ALSA lib confmisc.c:855:(parse_card) cannot find card '0'
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_card_inum returned error: No such file or directory
+ALSA lib confmisc.c:422:(snd_func_concat) error evaluating strings
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_concat returned error: No such file or directory
+ALSA lib confmisc.c:1342:(snd_func_refer) error evaluating name
+ALSA lib conf.c:5208:(_snd_config_evaluate) function snd_func_refer returned error: No such file or directory
+ALSA lib conf.c:5731:(snd_config_expand) Evaluate error: No such file or directory
+ALSA lib pcm.c:2721:(snd_pcm_open_noupdate) Unknown PCM default
+[2026-11-26T12:01:55Z WARN  glass_audio::manager] glass_audio: Dispositivo de audio hardware no disponible (Fallo al inicializar CPAL AudioManager: DefaultStreamConfigError(DeviceNotAvailable)). Usando NullBackend headless.
+[2026-11-26T12:01:55Z INFO  glass_audio::manager] glass_audio: Hilo de audio desacoplado iniciado.
+[2026-11-26T12:01:55Z INFO  glass_physics::world] Física: pool paralelo con 3 hilo(s).
+[2026-11-26T12:01:56Z INFO  glass_app] Audio: 13 clips .wav cargados desde assets/audio/
+[2026-11-26T12:01:56Z INFO  glass_app] Input v2: subsistema de mandos (gilrs) listo.
+[2026-11-26T12:01:56Z INFO  glass_app] Iniciando GlassEngine (Hito 6: Pipeline de Blender y Recarga en Caliente)...
+[2026-11-26T12:01:56Z INFO  glass_app] MCP en vivo: hilo stdio sirviendo la escena del editor.
+[2026-11-26T12:01:56Z WARN  winit::platform_impl::linux::x11::util::randr] XRandR reported that the display's 0mm in size, which is certifiably insane
+[2026-11-26T12:01:56Z INFO  winit::platform_impl::linux::x11::window] Guessed window scale factor: 1
+[2026-11-26T12:01:56Z INFO  glass_renderer::context] Cargando punto de entrada Vulkan (ash::Entry)...
+[2026-11-26T12:01:56Z WARN  glass_renderer::context] Capa de validación solicitada pero no disponible en el sistema.
+[2026-11-26T12:01:56Z INFO  glass_renderer::context] Creando ash::Instance de Vulkan...
+[2026-11-26T12:01:56Z INFO  glass_renderer::context] Creando VkSurfaceKHR para la ventana nativa...
+[2026-11-26T12:01:56Z INFO  glass_renderer::context] Enumerando dispositivos físicos Vulkan...
+[2026-11-26T12:01:56Z INFO  glass_renderer::context] GPU enumerada: 'llvmpipe (LLVM 20.1.2, 256 bits)' | Tipo: CPU | Vendor: 0x10005 | Driver: 104865800 (0x06402008) | VRAM local: 7934 MB | candidata (score 1079)
+[2026-11-26T12:01:56Z INFO  glass_renderer::context] GPU seleccionada: 'llvmpipe (LLVM 20.1.2, 256 bits)' | Tipo: CPU | Vendor: 0x10005 | Driver: 104865800 (0x06402008) | Score: 1079
+[2026-11-26T12:01:56Z INFO  glass_renderer::context] Push constants: 256 bytes requeridos / 256 disponibles.
+[2026-11-26T12:01:56Z INFO  glass_renderer::context] Compresión BC de texturas: activada
+[2026-11-26T12:01:56Z INFO  glass_renderer::context] Creando ash::Device lógico...
+[2026-11-26T12:01:56Z INFO  glass_renderer::context] Contexto Vulkan inicializado con éxito.
+[2026-11-26T12:01:56Z INFO  glass_renderer::swapchain] Creando Swapchain: 1280x720 | Formato: B8G8R8A8_SRGB | Modo: MAILBOX
+[2026-11-26T12:01:56Z INFO  glass_renderer::offscreen] OffscreenTarget creado: 1280x720 | Color: R16G16B16A16_SFLOAT | Depth: D32_SFLOAT
+[2026-11-26T12:01:56Z INFO  glass_renderer::offscreen] OffscreenTarget creado: 1280x720 | Color: R16G16B16A16_SFLOAT | Depth: D32_SFLOAT
+[2026-11-26T12:01:56Z INFO  glass_renderer::offscreen] OffscreenTarget creado: 1280x720 | Color: R8G8B8A8_UNORM | Depth: D32_SFLOAT
+[2026-11-26T12:01:56Z INFO  glass_renderer::offscreen] OffscreenTarget creado: 1280x720 | Color: R8G8B8A8_UNORM | Depth: D32_SFLOAT
+[2026-11-26T12:01:56Z INFO  glass_renderer::pipeline] GraphicsPipeline creado exitosamente con depth-testing.
+[2026-11-26T12:01:56Z INFO  glass_renderer::pipeline] GraphicsPipeline creado exitosamente con depth-testing.
+[2026-11-26T12:01:56Z INFO  glass_renderer::pipeline] Pipeline CON PIEL creada (SkinnedVertex + SSBO de articulaciones)
+[2026-11-26T12:01:56Z INFO  glass_renderer::pipeline] Pipeline CON PIEL creada (SkinnedVertex + SSBO de articulaciones)
+[2026-11-26T12:01:56Z INFO  glass_renderer::offscreen] OffscreenTarget creado: 1024x1024 | Color: R16G16B16A16_SFLOAT | Depth: D32_SFLOAT
+[2026-11-26T12:01:56Z INFO  glass_renderer::offscreen] OffscreenTarget creado: 1024x1024 | Color: R16G16B16A16_SFLOAT | Depth: D32_SFLOAT
+[2026-11-26T12:01:56Z INFO  glass_renderer::ui] UiRenderer inicializado: atlas de fuente 1024x1024 (191 glifos), pipeline 2D listo
+[2026-11-26T12:01:56Z INFO  glass_renderer::renderer] GlassRenderer inicializado con éxito con soporte de Swapchain, PBR y Viewports Offscreen independientes (Scene & Game).
+[2026-11-26T12:01:56Z INFO  glass_app] Texturas Offscreen vinculadas exitosamente con egui::TextureId: Scene User(0), Game User(1)
+[2026-11-26T12:01:56Z INFO  glass_app] main: Iniciando AssetWatcher...
+[2026-11-26T12:01:56Z INFO  glass_renderer::watcher] AssetWatcher iniciado en "/home/hatch/workspace/GlassEnginer/assets"
+[2026-11-26T12:01:56Z INFO  glass_app] main: AssetWatcher listo.
+[2026-11-26T12:01:56Z INFO  glass_app] main: Renderizando frame offscreen inicial...
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Cargando hostfxr para .NET CoreCLR...
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Inicializando runtime CoreCLR desde: /home/hatch/workspace/GlassEnginer/managed/GlassEngine.Core/bin/Debug/net8.0/GlassEngine.Core.runtimeconfig.json
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Resolviendo delegados [UnmanagedCallersOnly] en GlassEngine.Core...
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core RuntimeBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# Audio FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core AudioBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# Particles FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core ParticleBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# Physics FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core PhysicsBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# Input FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core InputBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# InputAxes FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core InputAxesBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# ScriptParams FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core ScriptParamsBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# Scene FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core SceneBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# Animation FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core AnimationBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# Animator FSM FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core AnimatorFsmBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# Light FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core LightBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# LightProps FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core LightPropsBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# UI dinámica FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core UiBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# Interaction FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core InteractionBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# InteractionBox FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core InteractionBoxBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# Spawn FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core SpawnBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# Prefab FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core PrefabBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# Fog FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core FogBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Vinculando callbacks Rust <-> C# CameraFov FFI...
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] GlassEngine.Core CameraFovBridge inicializado exitosamente desde Rust.
+[2026-11-26T12:01:56Z INFO  glass_scripting::host] Host de Scripting .NET CoreCLR inicializado exitosamente.
+[2026-11-26T12:01:56Z INFO  glass_app] main: ScriptHost C# (.NET CoreCLR) inicializado exitosamente.
+[2026-11-26T12:01:56Z INFO  glass_app] Manejador de señal instalado para 15
+[2026-11-26T12:01:56Z INFO  glass_app] Manejador de señal instalado para 2
+[2026-11-26T12:01:56Z INFO  glass_app] Manejador de señal instalado para 1
+[2026-11-26T12:01:56Z INFO  glass_app] Cargando escena solicitada desde archivo: /home/hatch/workspace/goals/glassenginer-second-agent-work/hidden_files/ui_v1_fisico/run1/escenas/EscenaMigracion.scene.json
+[2026-11-26T12:01:56Z INFO  glass_app::canvas_ui] Migración UI aplicada (1 entidades creadas, 2 avisos)
+[2026-11-26T12:01:56Z WARN  glass_app::canvas_ui] Migración UI: Entidad 'HUD Canvas': modo de render 'Inventado' no válido; se corrige a ScreenSpaceOverlay
+[2026-11-26T12:01:56Z WARN  glass_app::canvas_ui] Migración UI: Entidad 'Start Button Test': se separa el texto en una entidad hija
+[2026-11-26T12:01:56Z INFO  glass_physics::world] Física: pool paralelo con 3 hilo(s).
+[2026-11-26T12:01:56Z INFO  glass_app] Física reconstruida: 5 cuerpo(s), 5 collider(s).
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] [PlayerController] PlayerController: Awake en entidad #9
+[2026-11-26T12:01:56Z INFO  glass_scripting::bindings] [C#] Instancia de script C# 'PlayerController' creada con handle 1 para entidad 9.
+[2026-11-26T12:01:56Z INFO  glass_app] Script 'GlassEngine.Core.Scripts.PlayerController' instanciado para entidad 9 (handle 1).
+[2026-11-26T12:01:56Z INFO  glass_app] Input v2: 8 ejes cargados de assets/input_axes.json
+XIO:  fatal IO error 2 (No such file or directory) on X server ":99"
+      after 38458 requests (234 known processed) with 0 events remaining.
+[2026-11-26T12:08:55Z ERROR arboard::platform::linux::x11] Worker thread errored with: Unknown error while interacting with the clipboard: The X11 server closed the connection
+[2026-11-26T12:08:55Z INFO  glass_app] MCP en vivo: stdio cerrado (EOF o error de lectura); el editor sigue en marcha sin canal MCP.

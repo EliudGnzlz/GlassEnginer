@@ -1,0 +1,4 @@
+72b62705ad0f50957cc0fcc2bf2c168b7e89642c4dc5efbef05ccdcde887c1a9  /home/hatch/workspace/goals/glassenginer-second-agent-work/hidden_files/ui_v1_fisico/run1/escenas/EscenaMigracion.scene.json
+062e4b3b7b9d4932c96b3e6cc632beb499785b71bb74d19ef9cdbcbf461d7a30  /home/hatch/workspace/goals/glassenginer-second-agent-work/hidden_files/ui_v1_fisico/run1/escenas/original_referencia.json
+72b62705ad0f50957cc0fcc2bf2c168b7e89642c4dc5efbef05ccdcde887c1a9  /home/hatch/workspace/buzon-wt/buzon/harness/fixtures/ui_v1_fisico/escenas/EscenaMigracion.scene.json
+062e4b3b7b9d4932c96b3e6cc632beb499785b71bb74d19ef9cdbcbf461d7a30  /home/hatch/workspace/buzon-wt/buzon/harness/fixtures/ui_v1_fisico/escenas/original_referencia.json
