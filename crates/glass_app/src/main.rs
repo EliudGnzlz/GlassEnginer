@@ -180,6 +180,27 @@ fn material_resuelto(
     (material, referencia.to_string())
 }
 
+/// Proyecto al que pertenece una escena por su ruta: se sube desde la
+/// carpeta de la escena hasta encontrar la marca de proyecto
+/// (`project.glass` o `project.json`); sin marca, vale la heurística de
+/// carpetas de assets que ya usa el sistema de prefabs. La raíz sale
+/// canonizada para poder compararla con la del gestor de escenas.
+#[cfg(feature = "editor")]
+fn proyecto_de_una_escena(scene_path: &str) -> Option<std::path::PathBuf> {
+    let ruta = std::path::Path::new(scene_path);
+    let mut dir = ruta.parent();
+    let mut encontrada = None;
+    while let Some(d) = dir {
+        if d.join("project.glass").is_file() || d.join("project.json").is_file() {
+            encontrada = Some(d.to_path_buf());
+            break;
+        }
+        dir = d.parent();
+    }
+    let raiz = encontrada.or_else(|| crate::prefabs_vivos::raiz_desde_ruta_escena(scene_path))?;
+    Some(proyecto_lock::raiz_canonica(&raiz).unwrap_or(raiz))
+}
+
 /// Librería de materiales físicos anclada a la carpeta Assets del
 /// proyecto vigente (C3). Sin proyecto abierto, la raíz es "." y las
 /// referencias simplemente no resuelven (caen al legado/defecto).
@@ -3382,6 +3403,12 @@ impl GlassEngineApp {
     /// de scripts y física.
     #[cfg(feature = "editor")]
     pub fn open_scene_file(&mut self, scene_path: &str) -> bool {
+        // La escena manda sobre el ancla: si pertenece a otro proyecto,
+        // el gestor y la librería de materiales físicos se reanclan a
+        // ESE proyecto antes de cargar (defecto S19).
+        if let Some(raiz) = proyecto_de_una_escena(scene_path) {
+            self.reanclar_al_proyecto(&raiz);
+        }
         let cargada = match self.scene_state.lock() {
             Ok(mut sc) => match sc.load_from_json(scene_path) {
                 Ok(()) => {
@@ -3635,6 +3662,11 @@ fn lanzar_hub_al_salir() {
                     candidatas.into_iter().next()
                 })
         });
+        // El ancla se mueve ANTES de cargar la escena: su bootstrap de
+        // física resuelve los .physmat.json contra la librería, y con el
+        // ancla de arranque (el directorio de lanzamiento) el material
+        // del proyecto no carga (defecto S19).
+        self.reanclar_al_proyecto(path);
         // 3) Cargar la escena; si no hay o falla, escena vacía.
         let cargada = match &escena {
             Some(ruta) => self.open_scene_file(&ruta.to_string_lossy()),
@@ -3662,24 +3694,14 @@ fn lanzar_hub_al_salir() {
             self.lock_proyecto = Some(lock);
         }
         self.raiz_proyecto_actual = Some(path.to_path_buf());
-        // Reancla las escenas al proyecto: si no, las cargas por nombre usan el directorio de arranque.
-        match self.scene_manager.lock() {
-            Ok(mut m) => {
-                *m = SceneManager::new(path);
-                log::info!(
-                    "Gestor de escenas reanclado a {}: {} escenas disponibles",
-                    path.display(),
-                    m.available_scenes().len()
-                );
-            }
-            Err(_) => log::error!(
-                "SceneManager: candado envenenado al abrir el proyecto; las escenas quedan ancladas a la raíz anterior."
-            ),
-        }
+        // El gestor y la librería de materiales físicos ya se reanclaron
+        // a este proyecto ANTES de cargar la escena (ver reanclar_al_proyecto
+        // más arriba): las cargas por nombre y los .physmat.json de la
+        // escena inicial resuelven contra el proyecto, no contra el
+        // directorio de arranque.
         self.vigilar_assets(&raiz_assets);
         self.editor_layout.prefab_en_edicion = None;
         self.editor_layout.project.set_assets_root(raiz_assets);
-        self.refrescar_physmat_lib();
         // Los materiales que fallaron contra las raíces del proyecto
         // anterior merecen un nuevo intento contra las del recién abierto.
         self.materiales_failed.clear();
@@ -4440,6 +4462,41 @@ for stem in &referenciados {
         let nueva = biblioteca_physmat(&self.scene_manager);
         let mut lib = self.physmat_lib.lock().unwrap_or_else(|e| e.into_inner());
         *lib = nueva;
+    }
+
+    /// Reancla el gestor de escenas y la librería de materiales físicos
+    /// al proyecto `raiz` (defecto S19). El ancla de arranque sale del
+    /// directorio de lanzamiento (`AssetVfs::locate` desde el cwd): sin
+    /// este reanclaje ANTES de cargar la escena, abrir la escena de otro
+    /// proyecto —lanzando el editor desde la raíz del repo, p. ej.—
+    /// resolvía sus `.physmat.json` contra los assets del directorio de
+    /// arranque y el material no cargaba (caía al legado/defecto). Si el
+    /// gestor ya apunta a `raiz`, no hace nada.
+    #[cfg(feature = "editor")]
+    fn reanclar_al_proyecto(&mut self, raiz: &std::path::Path) {
+        let raiz = proyecto_lock::raiz_canonica(raiz).unwrap_or_else(|_| raiz.to_path_buf());
+        let ya_anclado = self
+            .scene_manager
+            .lock()
+            .map(|m| m.vfs().root() == raiz.as_path())
+            .unwrap_or(false);
+        if ya_anclado {
+            return;
+        }
+        match self.scene_manager.lock() {
+            Ok(mut m) => {
+                *m = SceneManager::new(&raiz);
+                log::info!(
+                    "Gestor de escenas reanclado a {}: {} escenas disponibles",
+                    raiz.display(),
+                    m.available_scenes().len()
+                );
+            }
+            Err(_) => log::error!(
+                "SceneManager: candado envenenado al reanclar; las escenas quedan ancladas a la raíz anterior."
+            ),
+        }
+        self.refrescar_physmat_lib();
     }
 
     /// Aplica la carga de escena pendiente, si la hay, al final del frame.
@@ -9225,16 +9282,22 @@ impl ApplicationHandler for GlassEngineApp {
             || self.is_standalone_test;
 
         if !is_test_run {
-            if let Some(ref scene_file) = self.scene_to_load {
+            if let Some(scene_file) = self.scene_to_load.clone() {
                 log::info!("Cargando escena solicitada desde archivo: {}", scene_file);
+                // El ancla sigue a la escena, no al directorio de
+                // lanzamiento (defecto S19).
+                #[cfg(feature = "editor")]
+                if let Some(raiz) = proyecto_de_una_escena(&scene_file) {
+                    self.reanclar_al_proyecto(&raiz);
+                }
                 let cargada = match self.scene_state.lock() {
-                    Ok(mut sc) => match sc.load_from_json(scene_file) {
+                    Ok(mut sc) => match sc.load_from_json(&scene_file) {
                         Ok(()) => {
                             crate::canvas_ui::migrar_ui_escena_cargada(
                                 &mut sc,
                                 Some(scene_file.as_str()),
                             );
-                            let raiz = crate::prefabs_vivos::raiz_desde_ruta_escena(scene_file);
+                            let raiz = crate::prefabs_vivos::raiz_desde_ruta_escena(&scene_file);
                             crate::prefabs_vivos::refrescar_prefabs_escena_cargada(
                                 &mut sc,
                                 raiz.as_deref(),
