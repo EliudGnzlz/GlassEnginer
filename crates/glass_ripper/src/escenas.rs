@@ -26,8 +26,11 @@ use crate::instancias::{
 
 /// Resolutores que el importador proporciona a la conversión de escenas.
 pub struct ContextoEscena<'a> {
-    /// GUID → ruta importada del asset (p. ej. "Assets/Models/X.glb",
-    /// "Assets/Materiales/M.material.json", "Assets/Prefabs/P.prefab").
+    /// GUID → ruta importada del asset, relativa a `Assets/` (p. ej.
+    /// "Models/X.glb", "Materiales/M.material.json",
+    /// "Prefabs/P.prefab.json"); la forma relativa al proyecto
+    /// ("Assets/...") solo la construye `fuente_proyecto` para
+    /// `prefab_source`.
     pub rutas: &'a dyn Fn(&str) -> Option<String>,
     /// GUID de un .cs → class_name a guardar (el del script ya
     /// convertido por U4); None = no convertido (cuarentena/editor).
@@ -251,6 +254,21 @@ fn nombre_material(ruta: &str) -> String {
     let base = sin_directorios(ruta);
     let base = base.strip_suffix(".json").unwrap_or(base);
     base.strip_suffix(".material").unwrap_or(base).to_string()
+}
+
+/// Ruta del plan → `prefab_source` (relativa al PROYECTO, ver
+/// `ruta_fuente_prefab` en glass_core): el plan da rutas relativas a
+/// `Assets/` (p. ej. "Prefabs/Casa.prefab.json"), así que se antepone
+/// el componente si falta; si ya lo trae, se deja tal cual. Sin el
+/// componente, el resolver del editor no encuentra el asset y el
+/// vínculo nace roto (cazado en el test físico de FiringRange).
+fn fuente_proyecto(ruta: &str) -> String {
+    let primero = ruta.split('/').next().unwrap_or("");
+    if primero.eq_ignore_ascii_case("assets") {
+        ruta.to_string()
+    } else {
+        format!("Assets/{ruta}")
+    }
 }
 
 /// "Assets/Anim/Jugador.controller.json" → "Jugador".
@@ -1019,7 +1037,10 @@ fn ejecutar_nucleo(
             modelo: &resolver_modelo,
             componente_de_fileid: Some(&resolver_componente),
         };
-        let fuente_ruta = vincular.then(|| (ctx.rutas)(&guid)).flatten();
+        let fuente_ruta = vincular
+            .then(|| (ctx.rutas)(&guid))
+            .flatten()
+            .map(|r| fuente_proyecto(&r));
         let modificacion = campo(v, "m_Modification").unwrap_or(&nulo);
         // Añadidos de la instancia: GameObjects nuevos (ids antes de los
         // clones) y componentes nuevos sobre clones o sobre añadidos.
@@ -2005,6 +2026,54 @@ RectTransform:
         let puerta = ents.iter().find(|e| e.name == "Puerta").expect("falta Puerta");
         assert_eq!(puerta.parent, Some(raiz.id));
         assert_eq!(puerta.prefab_local_id, Some(2));
+    }
+
+    #[test]
+    fn fuente_proyecto_antepone_assets_si_falta() {
+        assert_eq!(
+            fuente_proyecto("Prefabs/Casa.prefab.json"),
+            "Assets/Prefabs/Casa.prefab.json"
+        );
+        assert_eq!(
+            fuente_proyecto("Assets/Prefabs/Casa.prefab.json"),
+            "Assets/Prefabs/Casa.prefab.json"
+        );
+        assert_eq!(
+            fuente_proyecto("assets/Prefabs/Casa.prefab.json"),
+            "assets/Prefabs/Casa.prefab.json"
+        );
+    }
+
+    #[test]
+    fn vinculo_con_ruta_de_plan_corta() {
+        // El plan de producción da rutas relativas a `Assets/` (sin el
+        // componente, porque `espejo` lo quita): la fuente escrita debe
+        // ser igualmente la relativa al proyecto. Antes del arreglo, la
+        // instancia nacía con "Prefabs/..." y el editor la dejaba como
+        // vínculo roto.
+        fn rutas_cortas(g: &str) -> Option<String> {
+            if g == G_PREFAB {
+                Some("Prefabs/Casa.prefab.json".to_string())
+            } else {
+                rutas(g)
+            }
+        }
+        let ctx_corto = ContextoEscena {
+            rutas: &rutas_cortas,
+            clase_de_script: &clases,
+            physmat_de_guid: &sin_physmat,
+            objeto_de_submalla: &sin_objeto,
+        };
+        let prefabs = prefabs_casa();
+        let (ents, _) = convertir_escena_interno(ESCENA, &ctx_corto, &prefabs);
+        let raiz = ents
+            .iter()
+            .find(|e| e.name == "CasaNueva")
+            .expect("falta la raíz expandida");
+        assert_eq!(
+            raiz.prefab_source.as_deref(),
+            Some("Assets/Prefabs/Casa.prefab.json")
+        );
     }
 
     #[test]
