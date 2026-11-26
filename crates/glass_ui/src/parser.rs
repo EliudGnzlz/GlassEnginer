@@ -22,7 +22,7 @@
 
 use crate::api::{EstadoPseudo, EstilosExtra};
 use crate::documento::NodoDocumento;
-use crate::estilos::{Dimension, Display, Sombra, StyleProps};
+use crate::estilos::{Dimension, Display, Sombra, StyleProps, TamanoColumna};
 
 /// Parte `texto` en `sep` sin partir dentro de paréntesis.
 fn dividir_nivel_superior(texto: &str, sep: char) -> Vec<&str> {
@@ -263,6 +263,44 @@ fn parse_gradiente(valor: &str) -> Option<(f32, Vec<[f32; 4]>)> {
     Some((angulo, paradas))
 }
 
+/// `grid-template-columns`: `100px 1fr`, `repeat(auto-fill, 100px)`.
+/// Los tokens se parten sin romper dentro de paréntesis.
+fn parse_columnas_grid(valor: &str) -> Option<Vec<TamanoColumna>> {
+    let mut out = Vec::new();
+    for token in dividir_nivel_superior(valor, ' ') {
+        let t = token.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let bajo = t.to_ascii_lowercase();
+        if let Some(inner) = bajo.strip_prefix("repeat(auto-fill,").and_then(|s| s.strip_suffix(')')) {
+            let n = parse_px(inner.trim())?;
+            if n <= 0.0 {
+                return None;
+            }
+            out.push(TamanoColumna::Relleno(n));
+        } else if let Some(n) = bajo.strip_suffix("fr") {
+            let x: f32 = n.trim().parse().ok()?;
+            if !x.is_finite() || x <= 0.0 {
+                return None;
+            }
+            out.push(TamanoColumna::Fraccion(x));
+        } else if let Some(v) = parse_px(t) {
+            if v < 0.0 {
+                return None;
+            }
+            out.push(TamanoColumna::Fija(v));
+        } else {
+            return None;
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
 /// `dx dy blur color` (desplazamientos con signo, blur >= 0).
 fn parse_sombra(valor: &str) -> Option<Sombra> {
     let partes = dividir_nivel_superior(valor, ' ');
@@ -405,6 +443,10 @@ fn aplicar_declaracion(props: &mut StyleProps, avisos: &mut Vec<String>, prop: &
             Some(v) if v >= 0.0 => props.font_size = Some(v),
             _ => aviso_invalido(avisos, prop, valor),
         },
+        "grid-template-columns" => match parse_columnas_grid(valor) {
+            Some(c) => props.grid_template_columns = Some(c),
+            None => aviso_invalido(avisos, prop, valor),
+        },
         _ => avisos.push(format!("propiedad desconocida: '{prop}'")),
     }
 }
@@ -478,6 +520,7 @@ fn fusionar(destino: &mut StyleProps, capa: &StyleProps) {
     fusionar_campo!(destino, capa, overflow);
     fusionar_campo!(destino, capa, color);
     fusionar_campo!(destino, capa, font_size);
+    fusionar_campo!(destino, capa, grid_template_columns);
 }
 
 /// Defecto del tipo: absoluto; con LayoutGroup, flex del grupo.
@@ -586,6 +629,15 @@ fn estilos_validos(p: &StyleProps) -> bool {
         f(s.desenfoque);
         for v in s.color {
             f(v);
+        }
+    }
+    if let Some(cols) = &p.grid_template_columns {
+        for c in cols {
+            match c {
+                TamanoColumna::Fija(v) | TamanoColumna::Fraccion(v) | TamanoColumna::Relleno(v) => {
+                    f(*v);
+                }
+            }
         }
     }
     let mut dim = |d: Option<Dimension>| match d {
