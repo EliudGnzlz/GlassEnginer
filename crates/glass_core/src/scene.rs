@@ -6548,6 +6548,63 @@ mod g5_demo_values {
             "intensidad autorada del Sol debe ser 1.0, es {intensity}"
         );
     }
+
+    /// G5 Plat3D: migración SIN cambio de look. Las escenas de
+    /// producto de Plat3D llevan escritos los valores equivalentes a
+    /// los que el motor aplicaba por defecto (ambiente LEGACY y
+    /// exposición 1,5): su aspecto está validado y este pin impide
+    /// que una edición futura lo mueva sin querer.
+    #[test]
+    fn g5_plat3d_valores() {
+        let escenas: [(&str, &str); 5] = [
+            ("Plat3D_L1", include_str!("../../../assets/scenes/Plat3D_L1.scene.json")),
+            ("Plat3D_L2", include_str!("../../../assets/scenes/Plat3D_L2.scene.json")),
+            ("Plat3D_L3", include_str!("../../../assets/scenes/Plat3D_L3.scene.json")),
+            ("Plat3D_Menu", include_str!("../../../assets/scenes/Plat3D_Menu.scene.json")),
+            (
+                "Plat3D_Victory",
+                include_str!("../../../assets/scenes/Plat3D_Victory.scene.json"),
+            ),
+        ];
+        for (nombre, data) in escenas {
+            let entities: Vec<EntityData> = serde_json::from_str(data)
+                .unwrap_or_else(|e| panic!("JSON inválido en {nombre}.scene.json: {e}"));
+
+            let post = resolve_post(&entities);
+            assert!(
+                (post.exposure - LEGACY_POST_EXPOSURE).abs() < 1e-6,
+                "{nombre}: exposure debe ser {LEGACY_POST_EXPOSURE}, es {}",
+                post.exposure
+            );
+
+            let ambient = resolve_ambient(&entities);
+            assert_eq!(ambient.sky, LEGACY_AMBIENT_SKY, "{nombre}: sky debe ser el LEGACY");
+            assert_eq!(
+                ambient.equator, LEGACY_AMBIENT_EQUATOR,
+                "{nombre}: equator debe ser el LEGACY"
+            );
+            assert_eq!(
+                ambient.ground, LEGACY_AMBIENT_GROUND,
+                "{nombre}: ground debe ser el LEGACY"
+            );
+            assert_eq!(
+                ambient.intensity,
+                Some(LEGACY_AMBIENT_INTENSITY_LIT),
+                "{nombre}: ambient intensity debe ser {LEGACY_AMBIENT_INTENSITY_LIT}"
+            );
+
+            let sol = entities
+                .iter()
+                .filter_map(|e| e.light.as_ref())
+                .find(|l| l.light_type == "Directional")
+                .unwrap_or_else(|| panic!("{nombre}: sin luz direccional"));
+            assert!(
+                (sol.intensity - 1.0).abs() < 1e-6,
+                "{nombre}: la luz direccional debe valer 1.0, es {}",
+                sol.intensity
+            );
+        }
+    }
 }
 
 #[cfg(test)]
