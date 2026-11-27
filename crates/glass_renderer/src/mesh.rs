@@ -911,7 +911,8 @@ pub fn downsample_rgba(rgba: &[u8], width: u32, height: u32) -> (Vec<u8>, u32, u
 }
 
 /// Bytes de un nivel en el formato dado: para BC, bloques de 4x4
-/// (BC1: 8 bytes/bloque; BC3: 16).
+/// (BC1: 8 bytes/bloque; BC3/BC5/BC7: 16). G4a: BC5 y BC7 se añaden aquí
+/// porque el loader KTX2 valida sus niveles con esta función.
 pub fn texture_level_bytes(width: u32, height: u32, format: vk::Format) -> u64 {
     match format {
         vk::Format::BC1_RGB_SRGB_BLOCK | vk::Format::BC1_RGBA_SRGB_BLOCK => {
@@ -919,12 +920,17 @@ pub fn texture_level_bytes(width: u32, height: u32, format: vk::Format) -> u64 {
             let bh = height.div_ceil(4) as u64;
             bw * bh * 8
         }
-        vk::Format::BC3_SRGB_BLOCK => {
+        vk::Format::BC3_SRGB_BLOCK
+        | vk::Format::BC7_SRGB_BLOCK
+        | vk::Format::BC7_UNORM_BLOCK
+        | vk::Format::BC5_UNORM_BLOCK => {
             let bw = width.div_ceil(4) as u64;
             let bh = height.div_ceil(4) as u64;
             bw * bh * 16
         }
-        // Respaldo RGBA8 (ruta clásica).
+        // Respaldo RGBA8 (ruta clásica). INVARIANTE: todo formato BC que
+        // se añada a `map_format` (ktx2_loader) debe listarse arriba; si
+        // no, caería aquí y devolvería w*h*4 en silencio.
         _ => width as u64 * height as u64 * 4,
     }
 }
@@ -1915,6 +1921,38 @@ impl MeshLoader {
         command_pool: vk::CommandPool,
     ) -> Result<GpuTexture, String> {
         let (format, data, levels) = prepare_bc_upload(img);
+        Self::upload_compressed_levels(
+            device,
+            allocator,
+            img.width,
+            img.height,
+            format,
+            &data,
+            &levels,
+            queue,
+            command_pool,
+        )
+    }
+
+    /// Sube a VRAM una cadena de niveles ya comprimidos (BC1/BC3/BC7/BC5)
+    /// con los bytes concatenados y sus offsets/dimensiones por nivel.
+    /// Es la ruta común de la compresión en CPU y del loader KTX2 (G4a).
+    /// Los 9 parámetros son la textura descompuesta (dispositivo, formato,
+    /// datos, niveles) más el contexto de subida, en la misma línea que
+    /// las demás `upload_*`; agruparlos en un struct añadiría indirección
+    /// para una única ruta interna.
+    #[allow(clippy::too_many_arguments)]
+    pub fn upload_compressed_levels(
+        device: &ash::Device,
+        allocator: &mut Allocator,
+        width: u32,
+        height: u32,
+        format: vk::Format,
+        data: &[u8],
+        levels: &[(u64, u32, u32)],
+        queue: vk::Queue,
+        command_pool: vk::CommandPool,
+    ) -> Result<GpuTexture, String> {
         let mip_levels = levels.len() as u32;
         let total_bytes = data.len() as u64;
         unsafe {
@@ -1935,7 +1973,7 @@ impl MeshLoader {
             let image_info = vk::ImageCreateInfo::default()
                 .image_type(vk::ImageType::TYPE_2D)
                 .format(format)
-                .extent(vk::Extent3D { width: img.width, height: img.height, depth: 1 })
+                .extent(vk::Extent3D { width, height, depth: 1 })
                 .mip_levels(mip_levels)
                 .array_layers(1)
                 .samples(vk::SampleCountFlags::TYPE_1)
@@ -2066,8 +2104,8 @@ impl MeshLoader {
                 image,
                 allocation: Some(allocation),
                 image_view,
-                width: img.width,
-                height: img.height,
+                width,
+                height,
                 format,
                 mip_levels,
                 vram_bytes: total_bytes,
@@ -2231,6 +2269,12 @@ mod tests {
         assert_eq!(texture_level_bytes(4, 4, bc1), 8);
         // 5x5 -> ceil(5/4)=2 bloques por eje = 4 bloques * 8 bytes.
         assert_eq!(texture_level_bytes(5, 5, bc1), 32);
+        // G4a: BC7 y BC5 son 16 bytes por bloque 4x4, como BC3.
+        assert_eq!(texture_level_bytes(256, 256, vk::Format::BC7_SRGB_BLOCK), 65536);
+        assert_eq!(texture_level_bytes(256, 256, vk::Format::BC7_UNORM_BLOCK), 65536);
+        assert_eq!(texture_level_bytes(256, 256, vk::Format::BC5_UNORM_BLOCK), 65536);
+        assert_eq!(texture_level_bytes(4, 4, vk::Format::BC7_SRGB_BLOCK), 16);
+        assert_eq!(texture_level_bytes(5, 5, vk::Format::BC5_UNORM_BLOCK), 64);
     }
 
     #[test]

@@ -2,6 +2,8 @@
 
 pub mod asset_cache;
 pub mod context;
+pub mod ktx2_loader;
+pub mod ktx2_writer;
 pub mod mesh;
 pub mod offscreen;
 pub mod post;

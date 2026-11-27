@@ -25,6 +25,9 @@ log.workspace = true
 thiserror.workspace = true
 raw-window-handle.workspace = true
 texpresso = "2.0"
+# G4a (KTX2): parser del contenedor KTX2 (Khronos). Lo usan el escritor
+# (verificación por re-parseo en tests) y el loader (lectura real).
+ktx2 = "0.5.0"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
