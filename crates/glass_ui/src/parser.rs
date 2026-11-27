@@ -153,6 +153,31 @@ fn srgb_a_lineal(c: f32) -> f32 {
     }
 }
 
+/// Lineal (0..1) → sRGB (0..1): inversa de `srgb_a_lineal`. La usa el
+/// editor para escribir de vuelta en CSS un color que el parser ya
+/// convirtió a lineal.
+pub fn lineal_a_srgb(c: f32) -> f32 {
+    if c <= 0.0031308 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// Un color lineal (como los que devuelve `parse_color`) a texto CSS:
+/// `#rrggbb` si es opaco, `rgba(r, g, b, a)` si no. Los canales se
+/// escriben en sRGB, que es lo que el parser espera leer (Q4a).
+pub fn color_a_css(c: [f32; 4]) -> String {
+    let r = (lineal_a_srgb(c[0].clamp(0.0, 1.0)) * 255.0).round() as u8;
+    let g = (lineal_a_srgb(c[1].clamp(0.0, 1.0)) * 255.0).round() as u8;
+    let b = (lineal_a_srgb(c[2].clamp(0.0, 1.0)) * 255.0).round() as u8;
+    if (c[3] - 1.0).abs() < 0.001 {
+        format!("#{r:02x}{g:02x}{b:02x}")
+    } else {
+        format!("rgba({}, {}, {}, {:.2})", r, g, b, c[3].clamp(0.0, 1.0))
+    }
+}
+
 fn parse_color(valor: &str) -> Option<[f32; 4]> {
     let v = valor.trim();
     if let Some(hex) = v.strip_prefix('#') {
@@ -1041,6 +1066,16 @@ mod pruebas {
         let (angulo, paradas) = extra.base.background_gradient.unwrap();
         assert_eq!(angulo, 0.0);
         assert_eq!(paradas.len(), 2);
+    }
+
+    #[test]
+    fn color_a_css_redondea_a_hex() {
+        let extra = parsear_estilo_extra("background-color: #1ed760;");
+        let c = extra.base.background_color.unwrap();
+        assert_eq!(color_a_css(c), "#1ed760");
+        let extra2 = parsear_estilo_extra("color: rgba(255, 0, 0, 0.5);");
+        let c2 = extra2.base.color.unwrap();
+        assert!(color_a_css(c2).starts_with("rgba(255, 0, 0, 0.5"));
     }
 
 }
