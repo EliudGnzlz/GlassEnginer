@@ -8,6 +8,7 @@
 //! Diseño: `~/workspace/glass-engine/diseno_importacion_unity.md`.
 
 pub mod compilacion;
+pub mod compresor_texturas;
 pub mod convertidor;
 pub mod documentos;
 pub mod ejes;
@@ -16,6 +17,7 @@ pub mod escenas;
 pub mod entorno;
 pub mod escritor;
 pub mod fisico;
+pub mod glb_ktx2;
 pub mod importador;
 pub mod informe;
 pub mod instancias;
@@ -26,6 +28,10 @@ pub mod paquete;
 pub mod registro;
 pub mod scripts;
 pub mod texturas;
+pub mod texturas_ktx2;
+
+#[cfg(test)]
+mod importador_ktx2_tests;
 
 use serde::{Deserialize, Serialize};
 

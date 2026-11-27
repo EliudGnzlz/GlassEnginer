@@ -6874,11 +6874,13 @@ for name in wanted {
                                         Ok(img) => {
                                             let rgba = img.to_rgba8();
                                             let (w, h) = rgba.dimensions();
-                                            let data = glass_renderer::mesh::GltfImageData {
-                                                width: w,
-                                                height: h,
-                                                rgba: rgba.into_raw(),
-                                            };
+                                            let data = glass_renderer::mesh::ImagenModelo::Rgba(
+                                                glass_renderer::mesh::GltfImageData {
+                                                    width: w,
+                                                    height: h,
+                                                    rgba: rgba.into_raw(),
+                                                },
+                                            );
                                             if let Some(layout) =
                                                 renderer.pbr_pipeline.descriptor_set_layout
                                             {

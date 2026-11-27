@@ -1923,11 +1923,11 @@ impl GlassRenderer {
             let default_tex = crate::mesh::MeshLoader::upload_texture_to_gpu(
                 &device,
                 &mut allocator.lock().unwrap(),
-                &crate::mesh::GltfImageData {
+                &crate::mesh::ImagenModelo::Rgba(crate::mesh::GltfImageData {
                     width: 1,
                     height: 1,
                     rgba: vec![0, 0, 0, 255],
-                },
+                }),
                 context.graphics_queue,
                 command_pool,
             )
@@ -2649,11 +2649,11 @@ impl GlassRenderer {
         let tex = crate::mesh::MeshLoader::upload_texture_to_gpu(
             &self.device,
             &mut self.allocator.lock().unwrap(),
-            &crate::mesh::GltfImageData {
+            &crate::mesh::ImagenModelo::Rgba(crate::mesh::GltfImageData {
                 width: size,
                 height: size,
                 rgba: rgba.to_vec(),
-            },
+            }),
             queue,
             self.command_pool,
         )?;

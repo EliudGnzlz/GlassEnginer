@@ -141,6 +141,8 @@ pub fn parse_ktx2(bytes: &[u8]) -> Result<Ktx2Texture, String> {
 
 /// Sube a VRAM un .ktx2 con niveles BC. Sin BC activo devuelve `Err` para
 /// que el llamador caiga a la ruta RGBA8.
+/// Envoltorio fino: parsea los bytes KTX2 y delega en la subida de una
+/// textura ya parseada.
 pub fn upload_texture_to_gpu_ktx2(
     device: &ash::Device,
     allocator: &mut Allocator,
@@ -149,13 +151,24 @@ pub fn upload_texture_to_gpu_ktx2(
     command_pool: vk::CommandPool,
 ) -> Result<GpuTexture, String> {
     let tex = parse_ktx2(bytes)?;
+    upload_texture_to_gpu_ktx2_parsed(device, allocator, &tex, queue, command_pool)
+}
 
+/// Sube un KTX2 ya parseado (p. ej. una imagen de un .glb). Es el cuerpo
+/// anterior de upload_texture_to_gpu_ktx2 sin el parseo. La puerta BC se
+/// mantiene aquí con el mismo mensaje de error.
+pub fn upload_texture_to_gpu_ktx2_parsed(
+    device: &ash::Device,
+    allocator: &mut Allocator,
+    tex: &Ktx2Texture,
+    queue: vk::Queue,
+    command_pool: vk::CommandPool,
+) -> Result<GpuTexture, String> {
     if !texture_bc_enabled() {
         return Err(
-            "la GPU no soporta compresión BC; el llamador debe caer a la ruta RGBA8".to_string(),
+            "la GPU no soporta compresión BC; el llamador debe caer a la ruta RGBA8".into(),
         );
     }
-
     MeshLoader::upload_compressed_levels(
         device,
         allocator,

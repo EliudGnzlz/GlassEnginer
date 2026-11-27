@@ -4,6 +4,8 @@ use gpu_allocator::MemoryLocation;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use crate::ktx2_loader::{parse_ktx2, Ktx2Texture};
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Vertex {
@@ -108,6 +110,46 @@ pub struct GltfImageData {
     pub rgba: Vec<u8>,
 }
 
+/// Una imagen de un modelo: RGBA8 decodificada (vía actual) o KTX2 crudo
+/// con sus niveles ya comprimidos (vía G4b).
+pub enum ImagenModelo {
+    Rgba(GltfImageData),
+    Ktx2(Ktx2Texture),
+}
+
+// Debug y Clone se implementan a mano para no depender de qué derives
+// tenga Ktx2Texture (ktx2_loader.rs no se toca).
+impl Clone for ImagenModelo {
+    fn clone(&self) -> Self {
+        match self {
+            ImagenModelo::Rgba(img) => ImagenModelo::Rgba(img.clone()),
+            ImagenModelo::Ktx2(tex) => ImagenModelo::Ktx2(Ktx2Texture {
+                format: tex.format,
+                width: tex.width,
+                height: tex.height,
+                data: tex.data.clone(),
+                levels: tex.levels.clone(),
+            }),
+        }
+    }
+}
+
+impl std::fmt::Debug for ImagenModelo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ImagenModelo::Rgba(img) => f.debug_tuple("Rgba").field(img).finish(),
+            ImagenModelo::Ktx2(tex) => f
+                .debug_struct("Ktx2")
+                .field("format", &tex.format)
+                .field("width", &tex.width)
+                .field("height", &tex.height)
+                .field("data_len", &tex.data.len())
+                .field("levels", &tex.levels)
+                .finish(),
+        }
+    }
+}
+
 /// Rango de índices que ocupa una primitiva dentro de `LoadedModel::indices`,
 /// junto con el material que declara. Es lo que permite dibujar cada
 /// primitiva con SU material en vez del principal de todo el modelo.
@@ -128,7 +170,7 @@ pub struct LoadedModel {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
     pub materials: Vec<GltfMaterial>,
-    pub images: Vec<GltfImageData>,
+    pub images: Vec<ImagenModelo>,
     /// Material de cada primitiva, en el orden en que se fusionó la
     /// geometría (`None` = la primitiva no declara material).
     pub primitive_materials: Vec<Option<usize>>,
@@ -273,80 +315,251 @@ impl LoadedModel {
     }
 }
 
-/// Convierte los píxeles que devuelve la crate `gltf` a RGBA8.
-fn image_to_rgba(data: &gltf::image::Data) -> Vec<u8> {
-    use gltf::image::Format;
-    let count = (data.width * data.height) as usize;
-    let mut out = Vec::with_capacity(count * 4);
-    match data.format {
-        Format::R8G8B8A8 => out.extend_from_slice(&data.pixels),
-        Format::R8G8B8 => {
-            for px in data.pixels.as_chunks::<3>().0 {
+/// Decodifica una URI `data:` (`data:[<tipo>][;base64],<datos>`) con la
+/// misma regla que el crate `gltf` (`Scheme::read`): se toma lo que sigue a
+/// `;base64,` si lo hay y si no el resto entero, y se decodifica en base64.
+/// Cualquier otra URI devuelve `None`: sin directorio base no se puede
+/// resolver un fichero externo (igual que `import_slice`, que se llamaba
+/// con base `None`).
+fn decodificar_data_uri(uri: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let resto = uri.strip_prefix("data:")?;
+    let carga = match resto.split_once(";base64,") {
+        Some((_, carga)) => carga,
+        None => resto,
+    };
+    base64::engine::general_purpose::STANDARD
+        .decode(carga)
+        .ok()
+}
+
+/// Construye los buffers del .glb a mano desde el chunk BIN, replicando lo
+/// que hace `gltf::import_slice`: blob completo para `Source::Bin`, URIs
+/// `data:` decodificadas en base64, comprobación de longitud declarada y
+/// relleno con ceros a múltiplo de 4. Las URIs relativas o `file:` siguen
+/// sin resolverse (sin directorio base, igual que `import_slice`). El
+/// resultado es el mismo `Vec<gltf::buffer::Data>` que consumen
+/// merge_primitive, parse_skin y parse_animations.
+fn construir_buffers(
+    document: &gltf::Document,
+    blob: &[u8],
+) -> Result<Vec<gltf::buffer::Data>, String> {
+    document
+        .buffers()
+        .map(|buffer| {
+            let mut datos = match buffer.source() {
+                gltf::buffer::Source::Uri(uri) => decodificar_data_uri(uri).ok_or_else(|| {
+                    format!(
+                        "buffer {}: solo se admiten URIs data: en .glb (la URI '{}' no se puede resolver sin directorio base)",
+                        buffer.index(),
+                        uri
+                    )
+                })?,
+                gltf::buffer::Source::Bin => {
+                    if blob.len() < buffer.length() {
+                        return Err(format!(
+                            "buffer {}: el chunk BIN tiene {} bytes y el buffer declara {}",
+                            buffer.index(),
+                            blob.len(),
+                            buffer.length()
+                        ));
+                    }
+                    blob.to_vec()
+                }
+            };
+            if datos.len() < buffer.length() {
+                return Err(format!(
+                    "buffer {}: los datos tienen {} bytes y el buffer declara {}",
+                    buffer.index(),
+                    datos.len(),
+                    buffer.length()
+                ));
+            }
+            while datos.len() % 4 != 0 {
+                datos.push(0);
+            }
+            Ok(gltf::buffer::Data(datos))
+        })
+        .collect()
+}
+
+/// Recorta los bytes de un bufferView del buffer al que apunta
+/// (`view.buffer()`): el BIN para el buffer 0 de un .glb normal, o los bytes
+/// decodificados de una URI `data:` para los demás. `buffers` es el vector
+/// que construyó `construir_buffers`, en orden de índice.
+fn recortar_vista<'a>(
+    view: &gltf::buffer::View,
+    buffers: &'a [gltf::buffer::Data],
+) -> Result<&'a [u8], String> {
+    let datos = &buffers
+        .get(view.buffer().index())
+        .ok_or_else(|| format!("bufferView {}: buffer {} inexistente", view.index(), view.buffer().index()))?
+        .0;
+    let inicio = view.offset();
+    let fin = inicio
+        .checked_add(view.length())
+        .ok_or_else(|| format!("bufferView {}: desbordamiento de rango", view.index()))?;
+    datos.get(inicio..fin).ok_or_else(|| {
+        format!(
+            "bufferView {} fuera del buffer {} ({}..{} de {} bytes)",
+            view.index(),
+            view.buffer().index(),
+            inicio,
+            fin,
+            datos.len()
+        )
+    })
+}
+
+/// Convierte una imagen decodificada por el crate `image` a RGBA8 con las
+/// reglas de la vía RGBA anterior (las que aplicaba el loader con
+/// `gltf::import_slice`): R8 → gris, R8G8 → (R, G, 0, 255),
+/// R8G8B8 → RGB + 255, R8G8B8A8 directo, 16 bits → v / 257,
+/// 32F → clamp(0, 1) * 255. Devuelve (ancho, alto, rgba).
+fn dynamic_image_to_rgba(imagen: image::DynamicImage) -> (u32, u32, Vec<u8>) {
+    use image::DynamicImage as D;
+    let de16 = |v: u16| (v / 257) as u8;
+    let de32 = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u8;
+    match imagen {
+        D::ImageRgba8(b) => (b.width(), b.height(), b.into_raw()),
+        D::ImageRgb8(b) => {
+            let mut out = Vec::with_capacity((b.width() * b.height()) as usize * 4);
+            for px in b.as_raw().chunks_exact(3) {
                 out.extend_from_slice(&[px[0], px[1], px[2], 255]);
             }
+            (b.width(), b.height(), out)
         }
-        Format::R8G8 => {
-            for px in data.pixels.as_chunks::<2>().0 {
+        D::ImageLumaA8(b) => {
+            let mut out = Vec::with_capacity((b.width() * b.height()) as usize * 4);
+            for px in b.as_raw().chunks_exact(2) {
                 out.extend_from_slice(&[px[0], px[1], 0, 255]);
             }
+            (b.width(), b.height(), out)
         }
-        Format::R8 => {
-            for &v in &data.pixels {
+        D::ImageLuma8(b) => {
+            let mut out = Vec::with_capacity((b.width() * b.height()) as usize * 4);
+            for &v in b.as_raw() {
                 out.extend_from_slice(&[v, v, v, 255]);
             }
+            (b.width(), b.height(), out)
         }
-        Format::R16G16B16A16 => {
-            for px in data.pixels.as_chunks::<8>().0 {
-                for c in 0..4 {
-                    let v = u16::from_le_bytes([px[c * 2], px[c * 2 + 1]]);
-                    out.push((v / 257) as u8);
-                }
+        D::ImageRgba16(b) => {
+            let mut out = Vec::with_capacity((b.width() * b.height()) as usize * 4);
+            for px in b.as_raw().chunks_exact(4) {
+                out.extend_from_slice(&[de16(px[0]), de16(px[1]), de16(px[2]), de16(px[3])]);
             }
+            (b.width(), b.height(), out)
         }
-        Format::R16G16B16 => {
-            for px in data.pixels.as_chunks::<6>().0 {
-                for c in 0..3 {
-                    let v = u16::from_le_bytes([px[c * 2], px[c * 2 + 1]]);
-                    out.push((v / 257) as u8);
-                }
-                out.push(255);
+        D::ImageRgb16(b) => {
+            let mut out = Vec::with_capacity((b.width() * b.height()) as usize * 4);
+            for px in b.as_raw().chunks_exact(3) {
+                out.extend_from_slice(&[de16(px[0]), de16(px[1]), de16(px[2]), 255]);
             }
+            (b.width(), b.height(), out)
         }
-        Format::R16G16 => {
-            for px in data.pixels.as_chunks::<4>().0 {
-                for c in 0..2 {
-                    let v = u16::from_le_bytes([px[c * 2], px[c * 2 + 1]]);
-                    out.push((v / 257) as u8);
-                }
-                out.extend_from_slice(&[0, 255]);
+        D::ImageLumaA16(b) => {
+            let mut out = Vec::with_capacity((b.width() * b.height()) as usize * 4);
+            for px in b.as_raw().chunks_exact(2) {
+                out.extend_from_slice(&[de16(px[0]), de16(px[1]), 0, 255]);
             }
+            (b.width(), b.height(), out)
         }
-        Format::R16 => {
-            for px in data.pixels.as_chunks::<2>().0 {
-                let v = u16::from_le_bytes([px[0], px[1]]);
-                let b = (v / 257) as u8;
-                out.extend_from_slice(&[b, b, b, 255]);
+        D::ImageLuma16(b) => {
+            let mut out = Vec::with_capacity((b.width() * b.height()) as usize * 4);
+            for &v in b.as_raw() {
+                let g = de16(v);
+                out.extend_from_slice(&[g, g, g, 255]);
             }
+            (b.width(), b.height(), out)
         }
-        Format::R32G32B32A32FLOAT => {
-            for px in data.pixels.as_chunks::<16>().0 {
-                for c in 0..4 {
-                    let v = f32::from_le_bytes([px[c * 4], px[c * 4 + 1], px[c * 4 + 2], px[c * 4 + 3]]);
-                    out.push((v.clamp(0.0, 1.0) * 255.0) as u8);
-                }
+        D::ImageRgba32F(b) => {
+            let mut out = Vec::with_capacity((b.width() * b.height()) as usize * 4);
+            for px in b.as_raw().chunks_exact(4) {
+                out.extend_from_slice(&[de32(px[0]), de32(px[1]), de32(px[2]), de32(px[3])]);
             }
+            (b.width(), b.height(), out)
         }
-        Format::R32G32B32FLOAT => {
-            for px in data.pixels.as_chunks::<12>().0 {
-                for c in 0..3 {
-                    let v = f32::from_le_bytes([px[c * 4], px[c * 4 + 1], px[c * 4 + 2], px[c * 4 + 3]]);
-                    out.push((v.clamp(0.0, 1.0) * 255.0) as u8);
-                }
-                out.push(255);
+        D::ImageRgb32F(b) => {
+            let mut out = Vec::with_capacity((b.width() * b.height()) as usize * 4);
+            for px in b.as_raw().chunks_exact(3) {
+                out.extend_from_slice(&[de32(px[0]), de32(px[1]), de32(px[2]), 255]);
             }
+            (b.width(), b.height(), out)
+        }
+        // DynamicImage es non_exhaustive: cualquier variante futura se
+        // convierte con la conversión genérica del crate `image`.
+        otra => {
+            let b = otra.to_rgba8();
+            (b.width(), b.height(), b.into_raw())
         }
     }
-    out
+}
+
+/// Lee las imágenes del documento SIN decodificar con el crate gltf, en orden
+/// de índice (el mismo que usaba import_slice):
+/// - bufferView con mimeType "image/ktx2" → parse_ktx2 → ImagenModelo::Ktx2.
+/// - bufferView PNG/JPEG → crate `image` → RGBA8 → ImagenModelo::Rgba.
+/// - URI → Err (un .glb debe llevar sus imágenes en el chunk BIN).
+/// - Otro mimeType → Err con el mime.
+/// Un KTX2 que no parsea hace fallar la carga del modelo entero: es mejor un
+/// error claro que un modelo a medias.
+/// Decodifica los bytes de UNA imagen según su mimeType: KTX2 → parseado
+/// tal cual; PNG/JPEG → RGBA8 con las reglas de `dynamic_image_to_rgba`.
+/// Sin mimeType (solo posible en imágenes con URI) → error claro.
+fn decodificar_imagen(
+    indice: usize,
+    mime_type: Option<&str>,
+    bytes: &[u8],
+) -> Result<ImagenModelo, String> {
+    match mime_type {
+        Some("image/ktx2") => parse_ktx2(bytes)
+            .map(ImagenModelo::Ktx2)
+            .map_err(|e| format!("imagen {}: KTX2 inválido: {}", indice, e)),
+        Some("image/png") | Some("image/jpeg") => {
+            let mime = mime_type.unwrap();
+            let decodificada = image::load_from_memory(bytes).map_err(|e| {
+                format!("imagen {}: no se pudo decodificar {}: {}", indice, mime, e)
+            })?;
+            let (width, height, rgba) = dynamic_image_to_rgba(decodificada);
+            Ok(ImagenModelo::Rgba(GltfImageData { width, height, rgba }))
+        }
+        Some(otro) => Err(format!(
+            "imagen {}: mimeType '{}' no soportado (se admiten image/png, image/jpeg e image/ktx2)",
+            indice, otro
+        )),
+        None => Err(format!(
+            "imagen {}: sin mimeType; se admiten image/png, image/jpeg e image/ktx2",
+            indice
+        )),
+    }
+}
+
+fn cargar_imagenes(
+    document: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+) -> Result<Vec<ImagenModelo>, String> {
+    document
+        .images()
+        .map(|imagen| {
+            let indice = imagen.index();
+            match imagen.source() {
+                gltf::image::Source::Uri { uri, mime_type } => {
+                    let bytes = decodificar_data_uri(uri).ok_or_else(|| {
+                        format!(
+                            "imagen {}: solo se admiten URIs data: en .glb (la URI '{}' no se puede resolver sin directorio base)",
+                            indice, uri
+                        )
+                    })?;
+                    decodificar_imagen(indice, mime_type, &bytes)
+                }
+                gltf::image::Source::View { view, mime_type } => {
+                    let bytes = recortar_vista(&view, buffers)
+                        .map_err(|e| format!("imagen {}: {}", indice, e))?;
+                    decodificar_imagen(indice, Some(mime_type), bytes)
+                }
+            }
+        })
+        .collect()
 }
 
 /// Extrae la piel de un documento glTF: el grafo de nodos (padres y TRS de
@@ -1213,8 +1426,18 @@ impl MeshLoader {
     /// descartaba materiales e imágenes (`_images`) y todo se dibujaba con
     /// color plano y metallic/roughness fijos.
     pub fn load_model_from_glb_bytes(bytes: &[u8]) -> Result<LoadedModel, String> {
-        let (document, buffers, images) =
-            gltf::import_slice(bytes).map_err(|e| format!("Error importando glTF: {}", e))?;
+        // Carga en dos fases. import_slice decodifica las imágenes de forma
+        // ansiosa y solo acepta PNG/JPEG, así que una imagen KTX2 rompería
+        // el modelo entero. Por eso se parsea el documento sin imágenes y
+        // luego se resuelven buffers e imágenes a mano.
+        let gltf = gltf::Gltf::from_slice(bytes)
+            .map_err(|e| format!("Error importando glTF: {:?}", e))?;
+        let document = gltf.document;
+        let blob_propio = gltf.blob;
+        let blob: &[u8] = blob_propio
+            .as_deref()
+            .ok_or("El archivo glTF no trae chunk BIN (no es un .glb)")?;
+        let buffers: Vec<gltf::buffer::Data> = construir_buffers(&document, blob)?;
 
         let materials: Vec<GltfMaterial> = document
             .materials()
@@ -1232,14 +1455,7 @@ impl MeshLoader {
             })
             .collect();
 
-        let images: Vec<GltfImageData> = images
-            .iter()
-            .map(|img| GltfImageData {
-                width: img.width,
-                height: img.height,
-                rgba: image_to_rgba(img),
-            })
-            .collect();
+        let images: Vec<ImagenModelo> = cargar_imagenes(&document, &buffers)?;
 
         // Piel (si la hay) ANTES de la geometría: el bucle de primitivas
         // necesita saber si debe leer JOINTS_0/WEIGHTS_0. Un error aquí
@@ -1650,10 +1866,28 @@ impl MeshLoader {
     pub fn upload_texture_to_gpu(
         device: &ash::Device,
         allocator: &mut Allocator,
-        img: &GltfImageData,
+        img: &ImagenModelo,
         queue: vk::Queue,
         command_pool: vk::CommandPool,
     ) -> Result<GpuTexture, String> {
+        // Despacho por variante. KTX2 sube sus niveles ya comprimidos (sin
+        // texpresso ni descompresión). RGBA sigue la vía actual sin cambios.
+        let img: &GltfImageData = match img {
+            ImagenModelo::Ktx2(tex) => {
+                return crate::ktx2_loader::upload_texture_to_gpu_ktx2_parsed(
+                    device,
+                    allocator,
+                    tex,
+                    queue,
+                    command_pool,
+                );
+            }
+            ImagenModelo::Rgba(img) => img,
+        };
+        let size = img.rgba.len() as u64;
+        if size == 0 || img.width == 0 || img.height == 0 {
+            return Err("Textura vacía".into());
+        }
         let size = img.rgba.len() as u64;
         if size == 0 || img.width == 0 || img.height == 0 {
             return Err("Textura vacía".into());
@@ -2736,7 +2970,9 @@ mod tests {
         let glb = build_test_glb(true);
         let model = MeshLoader::load_model_from_glb_bytes(&glb).expect("importar glb con textura");
         assert_eq!(model.images.len(), 1);
-        let img = &model.images[0];
+        let ImagenModelo::Rgba(img) = &model.images[0] else {
+            panic!("se esperaba ImagenModelo::Rgba");
+        };
         assert_eq!((img.width, img.height), (2, 2));
         assert_eq!(img.rgba.len(), 2 * 2 * 4);
         assert_eq!(&img.rgba[0..4], &[255, 0, 0, 255]);
@@ -3085,5 +3321,410 @@ mod tests {
             err.contains("articulaciones"),
             "el error debe explicar el límite, llegó: {err}"
         );
+    }
+
+    /// KTX2 BC7 sRGB 4x4 de un nivel, construido según la especificación
+    /// Khronos KTX 2.0: cabecera, índice, un nivel, DFD básico y el bloque.
+    fn ktx2_bc7_4x4(bloque: [u8; 16]) -> Vec<u8> {
+        const DFD_OFFSET: u32 = 104;
+        const DFD_LEN: u32 = 44;
+        const NIVEL_OFFSET: u64 = 160; // alineado a lcm(16, 4)
+        let mut v: Vec<u8> = Vec::new();
+        v.extend_from_slice(&[0xAB, b'K', b'T', b'X', b' ', b'2', b'0', 0xBB, 0x0D, 0x0A, 0x1A, 0x0A]);
+        let formato = ash::vk::Format::BC7_SRGB_BLOCK.as_raw() as u32;
+        for x in [formato, 1, 4, 4, 0, 0, 1, 1, 0] {
+            // vkFormat, typeSize, ancho, alto, profundidad, capas, caras, niveles, supercompresión
+            v.extend_from_slice(&x.to_le_bytes());
+        }
+        for x in [DFD_OFFSET, DFD_LEN, 0, 0] {
+            // dfdByteOffset, dfdByteLength, kvdByteOffset, kvdByteLength
+            v.extend_from_slice(&x.to_le_bytes());
+        }
+        v.extend_from_slice(&0u64.to_le_bytes()); // sgdByteOffset
+        v.extend_from_slice(&0u64.to_le_bytes()); // sgdByteLength
+        v.extend_from_slice(&NIVEL_OFFSET.to_le_bytes());
+        v.extend_from_slice(&16u64.to_le_bytes());
+        v.extend_from_slice(&16u64.to_le_bytes());
+        assert_eq!(v.len(), DFD_OFFSET as usize);
+        // DFD: tamaño total + bloque básico (24 B) + 1 muestra (16 B).
+        v.extend_from_slice(&DFD_LEN.to_le_bytes());
+        v.extend_from_slice(&0u32.to_le_bytes()); // vendorId 0, descriptorType 0
+        v.extend_from_slice(&2u16.to_le_bytes()); // versionNumber
+        v.extend_from_slice(&40u16.to_le_bytes()); // descriptorBlockSize
+        v.extend_from_slice(&[135, 1, 2, 0]); // modelo BC7, BT709, sRGB, flags
+        v.extend_from_slice(&[3, 3, 0, 0]); // texelBlockDimension (4x4 - 1)
+        v.extend_from_slice(&[16, 0, 0, 0, 0, 0, 0, 0]); // bytesPlane
+        v.extend_from_slice(&0u16.to_le_bytes()); // bitOffset
+        v.extend_from_slice(&[127, 0]); // bitLength, channelType
+        v.extend_from_slice(&[0, 0, 0, 0]); // samplePosition
+        v.extend_from_slice(&0u32.to_le_bytes()); // sampleLower
+        v.extend_from_slice(&u32::MAX.to_le_bytes()); // sampleUpper
+        v.resize(NIVEL_OFFSET as usize, 0);
+        v.extend_from_slice(&bloque);
+        v
+    }
+
+    /// .glb mínimo de la sonda: un triángulo con índices, materials[0] con
+    /// baseColorTexture 0 y la imagen descrita por `imagen_json`. Si
+    /// `imagen_bytes` es Some, esos bytes van al BIN en @44 como bufferView 2.
+    /// BIN: posiciones (36 B) @0, índices (6 B) @36, 2 B de relleno, imagen @44.
+    fn glb_minimo(imagen_json: &str, imagen_bytes: Option<&[u8]>) -> Vec<u8> {
+        let mut bin: Vec<u8> = Vec::new();
+        for f in [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
+            bin.extend_from_slice(&f.to_le_bytes());
+        }
+        for i in [0u16, 1, 2] {
+            bin.extend_from_slice(&i.to_le_bytes());
+        }
+        bin.extend_from_slice(&[0, 0]);
+        let vista_imagen = match imagen_bytes {
+            Some(b) => {
+                bin.extend_from_slice(b);
+                format!(r#",{{"buffer":0,"byteOffset":44,"byteLength":{}}}"#, b.len())
+            }
+            None => String::new(),
+        };
+        let longitud_buffer = bin.len();
+        while bin.len() % 4 != 0 {
+            bin.push(0);
+        }
+        let json = format!(
+            concat!(
+                r#"{{"asset":{{"version":"2.0"}},"#,
+                r#""buffers":[{{"byteLength":{}}}],"#,
+                r#""bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":36,"target":34962}},"#,
+                r#"{{"buffer":0,"byteOffset":36,"byteLength":6,"target":34963}}{}],"#,
+                r#""accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}},"#,
+                r#"{{"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}}],"#,
+                r#""materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}}}}}}],"#,
+                r#""meshes":[{{"primitives":[{{"attributes":{{"POSITION":0}},"indices":1,"material":0}}]}}],"#,
+                r#""nodes":[{{"mesh":0}}],"scenes":[{{"nodes":[0]}}],"scene":0,"#,
+                r#""images":[{}],"textures":[{{"source":0}}]}}"#
+            ),
+            longitud_buffer, vista_imagen, imagen_json
+        );
+        let mut json = json.into_bytes();
+        while json.len() % 4 != 0 {
+            json.push(b' ');
+        }
+        let total = 12 + 8 + json.len() + 8 + bin.len();
+        let mut glb: Vec<u8> = Vec::with_capacity(total);
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total as u32).to_le_bytes());
+        glb.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        glb.extend_from_slice(&0x4E4F_534Au32.to_le_bytes()); // "JSON"
+        glb.extend_from_slice(&json);
+        glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        glb.extend_from_slice(&0x004E_4942u32.to_le_bytes()); // "BIN\0"
+        glb.extend_from_slice(&bin);
+        glb
+    }
+
+    fn glb_ktx2(ktx2: &[u8]) -> Vec<u8> {
+        glb_minimo(r#"{"bufferView":2,"mimeType":"image/ktx2"}"#, Some(ktx2))
+    }
+
+    #[test]
+    fn glb_ktx2_carga_como_ktx2() {
+        let glb = glb_ktx2(&ktx2_bc7_4x4([0xAB; 16]));
+        let modelo = match MeshLoader::load_model_from_glb_bytes(&glb) {
+            Ok(m) => m,
+            Err(e) => panic!("el .glb con KTX2 debía cargar: {}", e),
+        };
+        assert_eq!(modelo.images.len(), 1);
+        let ImagenModelo::Ktx2(tex) = &modelo.images[0] else {
+            panic!("se esperaba ImagenModelo::Ktx2, llegó {:?}", modelo.images[0]);
+        };
+        assert_eq!(tex.format, ash::vk::Format::BC7_SRGB_BLOCK);
+        assert_eq!(tex.width, 4);
+        assert_eq!(tex.height, 4);
+        assert_eq!(tex.levels.len(), 1);
+    }
+
+    #[test]
+    fn glb_png_sigue_si_rgba() {
+        let modelo = match MeshLoader::load_model_from_glb_bytes(&build_test_glb(true)) {
+            Ok(m) => m,
+            Err(e) => panic!("el .glb PNG debía cargar: {}", e),
+        };
+        assert_eq!(modelo.images.len(), 1);
+        let ImagenModelo::Rgba(img) = &modelo.images[0] else {
+            panic!("se esperaba ImagenModelo::Rgba");
+        };
+        assert_eq!((img.width, img.height), (2, 2));
+        assert_eq!(img.rgba.len(), 16);
+        for px in img.rgba.chunks_exact(4) {
+            assert_eq!(px, &[255, 0, 0, 255]);
+        }
+        assert_eq!(modelo.materials[0].base_color_image, Some(0));
+    }
+
+    #[test]
+    fn glb_ktx2_roto_falla_claro() {
+        let mut ktx2 = ktx2_bc7_4x4([0xAB; 16]);
+        ktx2[1] = b'X'; // rompe el identificador «KTX 20»
+        match MeshLoader::load_model_from_glb_bytes(&glb_ktx2(&ktx2)) {
+            Ok(_) => panic!("un KTX2 corrupto debía hacer fallar la carga"),
+            Err(e) => assert!(e.contains("KTX2"), "mensaje sin 'KTX2': {}", e),
+        }
+    }
+
+    #[test]
+    fn glb_imagen_uri_rechazada() {
+        let glb = glb_minimo(r#"{"uri":"textura.png","mimeType":"image/png"}"#, None);
+        match MeshLoader::load_model_from_glb_bytes(&glb) {
+            Ok(_) => panic!("una imagen con URI debía rechazarse"),
+            Err(e) => assert!(e.contains("URI"), "mensaje sin 'URI': {}", e),
+        }
+    }
+
+    #[test]
+    fn subida_ktx2_desde_modelo_lavapipe() {
+        // Misma creación de dispositivo que `subida_ktx2_4x4_bc1_lavapipe`
+        // (ktx2_loader.rs): instancia, físico con GRAPHICS + BC, device con
+        // texture_compression_bc, allocator y command pool.
+        let entry = unsafe { ash::Entry::load() }.expect("cargar Vulkan");
+        let app_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
+        let create_info = vk::InstanceCreateInfo::default().application_info(&app_info);
+        let instance = unsafe { entry.create_instance(&create_info, None) }.expect("instancia");
+        let fisicos = unsafe { instance.enumerate_physical_devices() }.expect("GPUs");
+        let mut elegido: Option<(vk::PhysicalDevice, u32)> = None;
+        for pd in &fisicos {
+            let feats = unsafe { instance.get_physical_device_features(*pd) };
+            if feats.texture_compression_bc != vk::TRUE {
+                continue;
+            }
+            let qfams = unsafe { instance.get_physical_device_queue_family_properties(*pd) };
+            if let Some((idx, _)) = qfams
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p.queue_flags.contains(vk::QueueFlags::GRAPHICS))
+            {
+                elegido = Some((*pd, idx as u32));
+                break;
+            }
+        }
+        let (fisico, graphics_family) = elegido
+            .expect("ningún dispositivo con GRAPHICS + textureCompressionBC (lavapipe)");
+        let queue_priorities = [1.0f32];
+        let queue_create_info = vk::DeviceQueueCreateInfo::default()
+            .queue_family_index(graphics_family)
+            .queue_priorities(&queue_priorities);
+        let device_features = vk::PhysicalDeviceFeatures {
+            texture_compression_bc: vk::TRUE,
+            ..Default::default()
+        };
+        let device_create_info = vk::DeviceCreateInfo::default()
+            .queue_create_infos(std::slice::from_ref(&queue_create_info))
+            .enabled_features(&device_features);
+        let device = unsafe { instance.create_device(fisico, &device_create_info, None) }
+            .expect("dispositivo");
+        let queue = unsafe { device.get_device_queue(graphics_family, 0) };
+        let mut allocator = Allocator::new(&gpu_allocator::vulkan::AllocatorCreateDesc {
+            instance: instance.clone(),
+            device: device.clone(),
+            physical_device: fisico,
+            debug_settings: Default::default(),
+            buffer_device_address: false,
+            allocation_sizes: Default::default(),
+        })
+        .expect("allocator");
+        let pool_info = vk::CommandPoolCreateInfo::default()
+            .queue_family_index(graphics_family)
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+        let command_pool = unsafe { device.create_command_pool(&pool_info, None) }
+            .expect("command pool");
+
+        crate::mesh::set_texture_bc_enabled(true);
+
+        let glb = glb_ktx2(&ktx2_bc7_4x4([0xAB; 16]));
+        let modelo =
+            MeshLoader::load_model_from_glb_bytes(&glb).expect("el .glb con KTX2 debía cargar");
+        let mut tex = MeshLoader::upload_texture_to_gpu(
+            &device,
+            &mut allocator,
+            &modelo.images[0],
+            queue,
+            command_pool,
+        )
+        .expect("subida KTX2 desde el modelo");
+        assert_eq!(tex.width, 4);
+        assert_eq!(tex.height, 4);
+        assert_eq!(tex.format, vk::Format::BC7_SRGB_BLOCK);
+        assert_eq!(tex.mip_levels, 1);
+        tex.destroy(&device, &mut allocator);
+        unsafe {
+            device.destroy_command_pool(command_pool, None);
+        }
+    }
+
+    fn png_rojo(lado: u32) -> Vec<u8> {
+        let img = image::RgbaImage::from_pixel(lado, lado, image::Rgba([255, 0, 0, 255]));
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .expect("codificar PNG de prueba");
+        bytes
+    }
+
+    fn jpeg_rojo(lado: u32) -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(lado, lado, image::Rgb([255, 0, 0]));
+        let mut bytes = Vec::new();
+        let mut codificador =
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 100);
+        codificador
+            .encode_image(&image::DynamicImage::ImageRgb8(img))
+            .expect("codificar JPEG de prueba");
+        bytes
+    }
+
+    fn png_16bits_rojo() -> Vec<u8> {
+        let img: image::ImageBuffer<image::Rgba<u16>, Vec<u16>> =
+            image::ImageBuffer::from_pixel(2, 2, image::Rgba([0x8080, 0, 0, 0xFFFF]));
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba16(img)
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .expect("codificar PNG 16 bits");
+        bytes
+    }
+
+    /// .glb mínimo con DOS imágenes: la 0 en bufferView 2 (PNG) y la 1 con
+    /// URI relativa (sin bufferView). Misma geometría que `glb_minimo`.
+    fn glb_mixta_uri(png: &[u8]) -> Vec<u8> {
+        let mut bin: Vec<u8> = Vec::new();
+        for f in [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
+            bin.extend_from_slice(&f.to_le_bytes());
+        }
+        for i in [0u16, 1, 2] {
+            bin.extend_from_slice(&i.to_le_bytes());
+        }
+        bin.extend_from_slice(&[0, 0]);
+        bin.extend_from_slice(png);
+        let longitud_buffer = bin.len();
+        while bin.len() % 4 != 0 {
+            bin.push(0);
+        }
+        let json = format!(
+            concat!(
+                r#"{{"asset":{{"version":"2.0"}},"#,
+                r#""buffers":[{{"byteLength":{}}}],"#,
+                r#""bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":36,"target":34962}},"#,
+                r#"{{"buffer":0,"byteOffset":36,"byteLength":6,"target":34963}},"#,
+                r#"{{"buffer":0,"byteOffset":44,"byteLength":{}}}],"#,
+                r#""accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}},"#,
+                r#"{{"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}}],"#,
+                r#""materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}}}}}}],"#,
+                r#""meshes":[{{"primitives":[{{"attributes":{{"POSITION":0}},"indices":1,"material":0}}]}}],"#,
+                r#""nodes":[{{"mesh":0}}],"scenes":[{{"nodes":[0]}}],"scene":0,"#,
+                r#""images":[{{"bufferView":2,"mimeType":"image/png"}},{{"uri":"textura.png","mimeType":"image/png"}}],"#,
+                r#""textures":[{{"source":0}},{{"source":1}}]}}"#
+            ),
+            longitud_buffer,
+            png.len()
+        );
+        let mut json = json.into_bytes();
+        while json.len() % 4 != 0 {
+            json.push(b' ');
+        }
+        let total = 12 + 8 + json.len() + 8 + bin.len();
+        let mut glb: Vec<u8> = Vec::with_capacity(total);
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&(total as u32).to_le_bytes());
+        glb.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        glb.extend_from_slice(&0x4E4F_534Au32.to_le_bytes()); // "JSON"
+        glb.extend_from_slice(&json);
+        glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        glb.extend_from_slice(&0x004E_4942u32.to_le_bytes()); // "BIN\0"
+        glb.extend_from_slice(&bin);
+        glb
+    }
+
+    #[test]
+    fn decodificar_data_uri_acepta_data_y_rechaza_relativas() {
+        use base64::Engine;
+        let png = png_rojo(2);
+        let uri = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&png)
+        );
+        assert_eq!(decodificar_data_uri(&uri).as_deref(), Some(png.as_slice()));
+        assert!(decodificar_data_uri("textura.png").is_none());
+        assert!(decodificar_data_uri("file:///tmp/textura.png").is_none());
+        assert!(decodificar_data_uri("data:image/png;base64,!!!no-base64!!!").is_none());
+    }
+
+    #[test]
+    fn glb_imagen_data_uri_carga() {
+        use base64::Engine;
+        let png = png_rojo(2);
+        let uri = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&png)
+        );
+        let glb = glb_minimo(
+            &format!(r#"{{"uri":"{}","mimeType":"image/png"}}"#, uri),
+            None,
+        );
+        let modelo = MeshLoader::load_model_from_glb_bytes(&glb)
+            .expect("la imagen data: debía cargar");
+        assert_eq!(modelo.images.len(), 1);
+        let ImagenModelo::Rgba(img) = &modelo.images[0] else {
+            panic!("se esperaba ImagenModelo::Rgba");
+        };
+        assert_eq!((img.width, img.height), (2, 2));
+        assert_eq!(&img.rgba[0..4], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn glb_imagen_mixta_uri_rechazada() {
+        // Imagen 0 válida (PNG en el BIN) + imagen 1 con URI relativa: la
+        // carga entera falla con un mensaje claro, como hacía import_slice
+        // (sin directorio base no se puede resolver la URI).
+        let glb = glb_mixta_uri(&png_rojo(2));
+        match MeshLoader::load_model_from_glb_bytes(&glb) {
+            Ok(_) => panic!("una imagen con URI relativa debía rechazar el modelo"),
+            Err(e) => assert!(e.contains("URI"), "mensaje sin 'URI': {}", e),
+        }
+    }
+
+    #[test]
+    fn glb_jpeg_carga_como_rgba() {
+        let glb = glb_minimo(
+            r#"{"bufferView":2,"mimeType":"image/jpeg"}"#,
+            Some(&jpeg_rojo(8)),
+        );
+        let modelo = MeshLoader::load_model_from_glb_bytes(&glb)
+            .expect("el .glb con JPEG debía cargar");
+        assert_eq!(modelo.images.len(), 1);
+        let ImagenModelo::Rgba(img) = &modelo.images[0] else {
+            panic!("se esperaba ImagenModelo::Rgba");
+        };
+        assert_eq!((img.width, img.height), (8, 8));
+        // JPEG es con pérdidas: se comprueba el rojo dominante, no el valor exacto.
+        for px in img.rgba.chunks_exact(4) {
+            assert!(px[0] > 200, "rojo JPEG demasiado bajo: {px:?}");
+            assert!(px[1] < 60, "verde JPEG demasiado alto: {px:?}");
+            assert!(px[2] < 60, "azul JPEG demasiado alto: {px:?}");
+            assert_eq!(px[3], 255);
+        }
+    }
+
+    #[test]
+    fn glb_png_16bits_regla_257() {
+        // 0x8080 / 257 = 128 exacto: la regla de 16 bits de la vía RGBA
+        // anterior debe dar [128, 0, 0, 255], no [128, 0, 0, 255] por otra vía.
+        let glb = glb_minimo(
+            r#"{"bufferView":2,"mimeType":"image/png"}"#,
+            Some(&png_16bits_rojo()),
+        );
+        let modelo = MeshLoader::load_model_from_glb_bytes(&glb)
+            .expect("el .glb con PNG 16 bits debía cargar");
+        let ImagenModelo::Rgba(img) = &modelo.images[0] else {
+            panic!("se esperaba ImagenModelo::Rgba");
+        };
+        assert_eq!((img.width, img.height), (2, 2));
+        assert_eq!(&img.rgba[0..4], &[128, 0, 0, 255]);
     }
 }

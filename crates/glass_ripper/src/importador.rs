@@ -302,7 +302,8 @@ impl<'v> Importador<'v> {
         }
     }
 
-    /// Fase b: texturas a PNG.
+    /// Fase b: texturas a PNG, y su `.ktx2` al lado. Un fallo del KTX2 queda
+    /// como aviso en la línea del PNG y nunca convierte la textura en NoConvertido.
     fn fase_texturas(&mut self) {
         for i in self.indices(Tipo::Textura) {
             let e = &self.lectura.entradas[i];
@@ -313,7 +314,24 @@ impl<'v> Importador<'v> {
             };
             let ext = extension(ruta);
             match convertir_textura(ruta, &ext, bytes, self.metas.get(&e.guid)) {
-                Ok((png, avisos)) => self.salida.escribir(&e.guid, ruta, destino, &png, None, &avisos),
+                Ok((png, mut avisos)) => {
+                    let ktx2 = match crate::texturas_ktx2::comprimir_textura_importada(
+                        &png,
+                        self.metas.get(&e.guid),
+                    ) {
+                        Ok((ktx2, _formato)) => Some(ktx2),
+                        Err(m) => {
+                            avisos.push(format!("KTX2 no generado: {m}"));
+                            None
+                        }
+                    };
+                    self.salida.escribir(&e.guid, ruta, destino, &png, None, &avisos);
+                    if let Some(ktx2) = ktx2 {
+                        let destino_ktx2 = std::path::Path::new(destino).with_extension("ktx2");
+                        let destino_ktx2 = destino_ktx2.to_string_lossy();
+                        self.salida.escribir_informado(&e.guid, ruta, &destino_ktx2, &ktx2);
+                    }
+                }
                 Err(err) => self.salida.linea(
                     &e.guid,
                     Some(ruta),
@@ -407,7 +425,8 @@ impl<'v> Importador<'v> {
         }
     }
 
-    /// Fase e: modelos FBX a GLB a través de un directorio temporal.
+    /// Fase de modelos: FBX a .glb y reescritura de sus imágenes a KTX2. La
+    /// reescritura nunca falla el modelo; sus problemas llegan como avisos.
     fn fase_modelos(&mut self) {
         let indices = self.indices(Tipo::Modelo);
         if indices.is_empty() {
@@ -430,7 +449,11 @@ impl<'v> Importador<'v> {
                 continue;
             }
             match convertir_fbx(&scratch, &e.guid, bytes, self.metas.get(&e.guid)) {
-                Ok((glb, avisos)) => self.salida.escribir(&e.guid, ruta, destino, &glb, None, &avisos),
+                Ok((glb, mut avisos)) => {
+                    let (glb, avisos_ktx2) = crate::glb_ktx2::reescribir_imagenes_ktx2(&glb);
+                    avisos.extend(avisos_ktx2);
+                    self.salida.escribir(&e.guid, ruta, destino, &glb, None, &avisos);
+                }
                 Err(m) => self.salida.linea(&e.guid, Some(ruta), EstadoInforme::NoConvertido, &m),
             }
         }

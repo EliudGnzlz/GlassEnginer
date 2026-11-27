@@ -1,4 +1,4 @@
-use crate::mesh::{GltfImageData, GltfMaterial, GpuMesh, GpuTexture, MeshLoader, PrimitiveRange};
+use crate::mesh::{GltfImageData, GltfMaterial, GpuMesh, GpuTexture, ImagenModelo, MeshLoader, PrimitiveRange};
 use ash::vk;
 use gpu_allocator::vulkan::Allocator;
 use std::collections::{HashMap, HashSet};
@@ -42,7 +42,7 @@ pub struct AssetCache {
     /// Material principal (primera primitiva) de cada modelo, si lo tiene.
     pub primary_materials: HashMap<String, GltfMaterial>,
     /// Imágenes decodificadas (RGBA8) de cada modelo, para subir a GPU.
-    pub images: HashMap<String, Vec<GltfImageData>>,
+    pub images: HashMap<String, Vec<ImagenModelo>>,
     /// Rangos de índices por primitiva de cada modelo, por la misma clave
     /// que `meshes`: el bucle de dibujo emite un lote por primitiva, cada
     /// uno con su material y su textura.
@@ -228,7 +228,7 @@ impl AssetCache {
         name: impl Into<String>,
         materials: Vec<GltfMaterial>,
         primary_material: Option<GltfMaterial>,
-        images: Vec<GltfImageData>,
+        images: Vec<ImagenModelo>,
         primitive_ranges: Vec<PrimitiveRange>,
         objects: Vec<crate::mesh::ModelObject>,
     ) {
@@ -340,7 +340,7 @@ impl AssetCache {
             return;
         }
         self.ensure_descriptor_infra(device);
-        let white = GltfImageData { width: 1, height: 1, rgba: vec![255, 255, 255, 255] };
+        let white = ImagenModelo::Rgba(GltfImageData { width: 1, height: 1, rgba: vec![255, 255, 255, 255] });
         match MeshLoader::upload_texture_to_gpu(device, allocator, &white, queue, command_pool) {
             Ok(tex) => {
                 let view = tex.image_view;
@@ -365,7 +365,7 @@ impl AssetCache {
         upload: TextureUpload,
         name: impl Into<String>,
         image_index: usize,
-        img: &GltfImageData,
+        img: &ImagenModelo,
     ) {
         let TextureUpload { queue, command_pool, set_layout } = upload;
         let key = name.into();
