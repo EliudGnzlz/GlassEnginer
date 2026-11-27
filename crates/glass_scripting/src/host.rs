@@ -44,6 +44,9 @@ struct AudioBridgeCallbacks {
     // Añadidos AL FINAL (auditoría C6): play 2D/3D con bus.
     play_2d_on_bus: *const c_void,
     play_3d_on_bus: *const c_void,
+    // Añadidos AL FINAL: pausa y reanudación por fuente.
+    pause: *const c_void,
+    resume: *const c_void,
 }
 
 type InitParticleBridgeFn = unsafe extern "system" fn(
@@ -523,6 +526,8 @@ impl ScriptHost {
                 stop: glass_audio::glass_audio_stop as *const c_void,
                 play_2d_on_bus: glass_audio::glass_audio_play_2d_on_bus as *const c_void,
                 play_3d_on_bus: glass_audio::glass_audio_play_3d_on_bus as *const c_void,
+                pause: glass_audio::glass_audio_pause as *const c_void,
+                resume: glass_audio::glass_audio_resume as *const c_void,
             };
             unsafe {
                 init_audio_fn(&audio_callbacks as *const AudioBridgeCallbacks);

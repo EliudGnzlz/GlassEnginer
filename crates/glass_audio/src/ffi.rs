@@ -187,3 +187,24 @@ pub unsafe extern "C" fn glass_audio_stop(handle: SoundHandle) {
         sys.stop(handle);
     }
 }
+
+
+/// # Safety
+/// No dereferencia punteros: forma parte de la superficie FFI
+/// (por eso es `unsafe extern`) y admite cualquier `handle`.
+#[no_mangle]
+pub unsafe extern "C" fn glass_audio_pause(handle: SoundHandle) {
+    if let Some(sys) = get_global_audio_system() {
+        sys.pause(handle);
+    }
+}
+
+/// # Safety
+/// No dereferencia punteros: forma parte de la superficie FFI
+/// (por eso es `unsafe extern`) y admite cualquier `handle`.
+#[no_mangle]
+pub unsafe extern "C" fn glass_audio_resume(handle: SoundHandle) {
+    if let Some(sys) = get_global_audio_system() {
+        sys.resume(handle);
+    }
+}

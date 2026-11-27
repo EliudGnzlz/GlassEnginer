@@ -31,6 +31,10 @@ pub trait AudioBackend: Send {
     fn set_source_position(&mut self, handle: SoundHandle, position: [f32; 3]);
     fn set_listener_transform(&mut self, position: [f32; 3], orientation: [f32; 4]);
     fn stop(&mut self, handle: SoundHandle);
+    /// Pausa la fuente sin retirarla de las fuentes activas.
+    fn pause(&mut self, handle: SoundHandle);
+    /// Reanuda una fuente pausada.
+    fn resume(&mut self, handle: SoundHandle);
     fn stop_all(&mut self);
     fn set_bus_volume(&mut self, bus: BusId, volume: f32);
     fn duck_bus(&mut self, bus: BusId, amount: f32, duration_secs: f32, now: f64);
@@ -244,6 +248,25 @@ impl AudioBackend for KiraBackend {
         }
     }
 
+    fn pause(&mut self, handle: SoundHandle) {
+        // No se retira de los mapas: la fuente sigue activa.
+        if let Some(sound_handle) = self.active_2d.get_mut(&handle) {
+            sound_handle.pause(Tween::default());
+        }
+        if let Some(src) = self.active_3d.get_mut(&handle) {
+            src.sound.pause(Tween::default());
+        }
+    }
+
+    fn resume(&mut self, handle: SoundHandle) {
+        if let Some(sound_handle) = self.active_2d.get_mut(&handle) {
+            sound_handle.resume(Tween::default());
+        }
+        if let Some(src) = self.active_3d.get_mut(&handle) {
+            src.sound.resume(Tween::default());
+        }
+    }
+
     fn stop_all(&mut self) {
         for (_, mut sound_handle) in self.active_2d.drain() {
             sound_handle.stop(Tween::default());
@@ -307,6 +330,7 @@ pub struct NullBackend {
     listener_rot: [f32; 4],
     mixer: BusMixer,
     occluded: HashMap<SoundHandle, bool>,
+    paused: std::collections::HashSet<SoundHandle>,
 }
 
 impl Default for NullBackend {
@@ -324,7 +348,12 @@ impl NullBackend {
             listener_rot: [0.0, 0.0, 0.0, 1.0],
             mixer: BusMixer::new(),
             occluded: HashMap::new(),
+            paused: std::collections::HashSet::new(),
         }
+    }
+
+    pub fn is_paused(&self, handle: SoundHandle) -> bool {
+        self.paused.contains(&handle)
     }
 }
 
@@ -360,11 +389,23 @@ impl AudioBackend for NullBackend {
     fn stop(&mut self, handle: SoundHandle) {
         self.active_sources.remove(&handle);
         self.occluded.remove(&handle);
+        self.paused.remove(&handle);
     }
 
     fn stop_all(&mut self) {
         self.active_sources.clear();
         self.occluded.clear();
+        self.paused.clear();
+    }
+
+    fn pause(&mut self, handle: SoundHandle) {
+        if self.active_sources.contains_key(&handle) {
+            self.paused.insert(handle);
+        }
+    }
+
+    fn resume(&mut self, handle: SoundHandle) {
+        self.paused.remove(&handle);
     }
 
     fn set_bus_volume(&mut self, bus: BusId, volume: f32) {
@@ -380,4 +421,46 @@ impl AudioBackend for NullBackend {
     }
 
     fn tick(&mut self, _now: f64) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pausa_marca_sin_retirar() {
+        let mut backend = NullBackend::new();
+        assert!(backend.play_2d("x", 1.0, 1.0, false, BusId::Master, 7));
+        backend.pause(7);
+        assert!(backend.is_paused(7));
+        assert!(backend.active_sources.contains_key(&7));
+    }
+
+    #[test]
+    fn reanudar_desmarca() {
+        let mut backend = NullBackend::new();
+        assert!(backend.play_2d("x", 1.0, 1.0, false, BusId::Master, 7));
+        backend.pause(7);
+        assert!(backend.is_paused(7));
+        backend.resume(7);
+        assert!(!backend.is_paused(7));
+    }
+
+    #[test]
+    fn pausa_de_inexistente_no_marca() {
+        let mut backend = NullBackend::new();
+        backend.pause(99);
+        assert!(!backend.is_paused(99));
+    }
+
+    #[test]
+    fn stop_retira_la_pausa() {
+        let mut backend = NullBackend::new();
+        assert!(backend.play_2d("x", 1.0, 1.0, false, BusId::Master, 7));
+        backend.pause(7);
+        assert!(backend.is_paused(7));
+        backend.stop(7);
+        assert!(!backend.is_paused(7));
+        assert!(!backend.active_sources.contains_key(&7));
+    }
 }

@@ -38,6 +38,14 @@ pub enum AudioCommand {
     Stop {
         handle: SoundHandle,
     },
+    /// Pausa una fuente sin retirarla; se reanuda con `Resume`.
+    Pause {
+        handle: SoundHandle,
+    },
+    /// Reanuda una fuente pausada con `Pause`.
+    Resume {
+        handle: SoundHandle,
+    },
     SetBusVolume {
         bus: BusId,
         volume: f32,

@@ -89,6 +89,12 @@ impl AudioSystem {
                             AudioCommand::SetListenerTransform { position, orientation } => {
                                 backend.set_listener_transform(position, orientation);
                             }
+                            AudioCommand::Pause { handle } => {
+                                backend.pause(handle);
+                            }
+                            AudioCommand::Resume { handle } => {
+                                backend.resume(handle);
+                            }
                             AudioCommand::Stop { handle } => {
                                 backend.stop(handle);
                             }
@@ -201,6 +207,16 @@ impl AudioSystem {
         if let Ok(mut sources) = self.sources.lock() {
             sources.remove(&handle);
         }
+    }
+
+    /// Pausa la fuente. Sigue registrada en `sources`: pausar no la retira.
+    pub fn pause(&self, handle: SoundHandle) {
+        self.command_queue.push(AudioCommand::Pause { handle });
+    }
+
+    /// Reanuda una fuente pausada.
+    pub fn resume(&self, handle: SoundHandle) {
+        self.command_queue.push(AudioCommand::Resume { handle });
     }
 
     pub fn stop_all(&self) {
