@@ -7024,13 +7024,23 @@ for name in wanted {
             // proyectar en el mapa. Sin luz activa no hay pase de
             // sombras: no entra ningún caster.
             let shadow_active = light_color[0] + light_color[1] + light_color[2] > 0.0 || light_dir[3] > 0.1;
+            // Ajustes de sombra de la escena activa (dato de escena,
+            // Sombras): se resuelven una vez por frame y los reutiliza la
+            // publicación de más abajo, así el VP y los parámetros no
+            // pueden discrepar. La lectura va con su propio cerrojo corto:
+            // en este punto no hay ningún cerrojo de escena tomado.
+            let ajustes_sombra = self
+                .scene_state
+                .lock()
+                .map(|s| s.shadow_settings())
+                .unwrap_or_else(|_| glass_core::scene::ResolvedShadow::legacy());
             let vp_shadow_pre = if shadow_active {
                 let sc = eye_game_opt.unwrap_or(eye_scene);
                 Some(glass_core::directional_shadow_vp(
                     [sc[0], sc[1], sc[2]],
                     [light_dir[0], light_dir[1], light_dir[2]],
-                    glass_renderer::shadow::SHADOW_ORTHO_HALF,
-                    glass_renderer::shadow::SHADOW_MAP_SIZE,
+                    ajustes_sombra.half_extent,
+                    ajustes_sombra.map_size,
                     glass_renderer::shadow::SHADOW_BACK,
                     glass_renderer::shadow::SHADOW_FRONT,
                 ))
@@ -8242,11 +8252,30 @@ for name in wanted {
                 // El VP ya se calculó antes de la recolección (es el
                 // frustum con el que se filtraron los casters): aquí
                 // solo se publica.
+                // El mapa sigue al map_size resuelto (Sombras): recrearlo
+                // aquí es seguro porque el pase de sombras de este frame
+                // aún no se ha grabado, y el renderer espera al device en
+                // reposo dentro de la llamada. La guardia es el tamaño
+                // actual: se dispara una vez por cambio, no cada frame.
+                if renderer.shadow.size != ajustes_sombra.map_size {
+                    if let Err(e) = renderer.set_shadow_map_size(ajustes_sombra.map_size) {
+                        eprintln!(
+                            "[sombra] no se pudo recrear el mapa a {}: {e:?}",
+                            ajustes_sombra.map_size
+                        );
+                    }
+                }
                 if let Some(vp) = vp_shadow_pre {
+                    // Los mismos ajustes que alimentaron el VP: el paso de
+                    // téxel en UV y el bias de normal se calculan para la
+                    // caja y el mapa activos, no para los históricos.
                     renderer.set_shadow_frame(vp, [
-                        1.0 / glass_renderer::shadow::SHADOW_MAP_SIZE as f32,
+                        1.0 / ajustes_sombra.map_size as f32,
                         glass_renderer::shadow::SHADOW_DEPTH_BIAS,
-                        glass_renderer::shadow::bias_normal_mundo(),
+                        glass_renderer::shadow::bias_normal_mundo_para(
+                            ajustes_sombra.half_extent,
+                            ajustes_sombra.map_size,
+                        ),
                         1.0,
                     ]);
                 } else {

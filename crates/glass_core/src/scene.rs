@@ -927,6 +927,107 @@ impl Default for AmbientComponent {
     }
 }
 
+// ── Sombras · caja de sombra como dato de escena ─────────────────────
+
+/// Caja de sombra del sol como dato de escena (Sombras): semiextensión de la
+/// proyección ortográfica en metros de mundo y lado del mapa en téxeles.
+/// La porta cualquier entidad (la de ajustes, p. ej. «Ambiente»); gana la
+/// primera activa. Sin portador, la escena se comporta EXACTAMENTE como
+/// antes de existir este componente (25 m / 2048).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ShadowComponent {
+    pub half_extent: f32,
+    pub map_size: u32,
+}
+
+impl Default for ShadowComponent {
+    fn default() -> Self {
+        Self { half_extent: SHADOW_DEFAULT_HALF_EXTENT, map_size: SHADOW_DEFAULT_MAP_SIZE }
+    }
+}
+
+/// Semiextensión histórica de la caja de sombra del sol (metros de mundo).
+pub const SHADOW_DEFAULT_HALF_EXTENT: f32 = 25.0;
+/// Lado histórico del mapa de sombras del sol (téxeles).
+pub const SHADOW_DEFAULT_MAP_SIZE: u32 = 2048;
+/// Lados de mapa que el renderer sabe recrear; `map_size` se ajusta al más
+/// cercano de esta lista.
+pub const SHADOW_MAP_SIZES: [u32; 3] = [1024, 2048, 4096];
+
+/// Origen de los ajustes de sombra resueltos.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShadowSource {
+    /// Ninguna entidad activa declara `ShadowComponent`: defaults históricos.
+    Legacy,
+    /// La primera entidad activa con `ShadowComponent` aporta los ajustes.
+    Explicit,
+}
+
+/// Caja de sombra efectiva de la escena (Sombras).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ResolvedShadow {
+    pub half_extent: f32,
+    pub map_size: u32,
+    pub source: ShadowSource,
+    /// Portadores activos con componente que NO ganaron (diagnóstico).
+    pub extra_carriers: usize,
+}
+
+impl ResolvedShadow {
+    /// Comportamiento previo al componente: 25 m / 2048.
+    pub fn legacy() -> Self {
+        Self {
+            half_extent: SHADOW_DEFAULT_HALF_EXTENT,
+            map_size: SHADOW_DEFAULT_MAP_SIZE,
+            source: ShadowSource::Legacy,
+            extra_carriers: 0,
+        }
+    }
+}
+
+/// Sanea la semiextensión: no finita o ≤ 0 → default histórico; el resto,
+/// recortado al rango que el renderer admite ([5, 120] m).
+fn sanitize_half_extent(v: f32) -> f32 {
+    if !v.is_finite() || v <= 0.0 {
+        SHADOW_DEFAULT_HALF_EXTENT
+    } else {
+        v.clamp(5.0, 120.0)
+    }
+}
+
+/// Sanea el lado del mapa: 0 (o cualquier basura) → default histórico; el
+/// resto, al valor admitido más cercano (empates → el mayor).
+fn sanitize_map_size(v: u32) -> u32 {
+    if v == 0 {
+        return SHADOW_DEFAULT_MAP_SIZE;
+    }
+    let mut best = SHADOW_MAP_SIZES[0];
+    for &cand in &SHADOW_MAP_SIZES[1..] {
+        let d = cand.abs_diff(v);
+        let d_best = best.abs_diff(v);
+        if d < d_best || (d == d_best && cand > best) {
+            best = cand;
+        }
+    }
+    best
+}
+
+/// Resuelve la caja de sombra efectiva (Sombras): gana la primera entidad activa
+/// con `ShadowComponent`; sin portador, `legacy()`. Aplica el mismo saneo que
+/// el resto de datos de escena para que una escena mal escrita no rompa el
+/// render.
+pub fn resolve_shadow(entities: &[EntityData]) -> ResolvedShadow {
+    let carriers: Vec<&ShadowComponent> = entities.iter().filter(|e| e.active).filter_map(|e| e.shadow.as_ref()).collect();
+    let Some(first) = carriers.first().copied() else { return ResolvedShadow::legacy(); };
+    ResolvedShadow {
+        half_extent: sanitize_half_extent(first.half_extent),
+        map_size: sanitize_map_size(first.map_size),
+        source: ShadowSource::Explicit,
+        extra_carriers: carriers.len() - 1,
+    }
+}
+
 /// Origen de los valores de ambiente resueltos para una escena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AmbientSource {
@@ -1955,6 +2056,10 @@ pub struct EntityData {
     /// anteriores no traen el campo.
     #[serde(default)]
     pub post: Option<PostComponent>,
+    /// Caja de sombra del sol (Sombras). `#[serde(default)]`: las escenas
+    /// anteriores no traen el campo y resuelven a 25 m / 2048.
+    #[serde(default)]
+    pub shadow: Option<ShadowComponent>,
     pub canvas: Option<CanvasData>,
     pub rect_transform: Option<RectTransformData>,
     pub ui_text: Option<UITextData>,
@@ -2157,6 +2262,7 @@ impl EntityData {
             fog: None,
             ambient: None,
             post: None,
+            shadow: None,
             canvas,
             rect_transform,
             ui_text,
@@ -2913,6 +3019,17 @@ impl SceneState {
             .iter()
             .find(|e| e.active && e.ambient.is_some())
             .map(|e| e.name.clone())
+    }
+
+    /// Caja de sombra efectiva de la escena (Sombras): ver `resolve_shadow`.
+    pub fn shadow_settings(&self) -> ResolvedShadow {
+        resolve_shadow(&self.entities)
+    }
+
+    /// Nombre de la entidad que aporta la caja de sombra efectiva (la
+    /// primera activa con el componente), si alguna lo declara.
+    pub fn shadow_carrier_name(&self) -> Option<String> {
+        self.entities.iter().find(|e| e.active && e.shadow.is_some()).map(|e| e.name.clone())
     }
 
     /// Post efectivo de la escena (G2): ver `resolve_post`.
@@ -6926,5 +7043,133 @@ mod migrate_ambient_tests {
             assert_eq!(amb.ground, LEGACY_AMBIENT_GROUND);
         }
         println!("verificadas {} escenas", paths.len());
+    }
+}
+
+#[cfg(test)]
+mod shadow_tests {
+    use super::*;
+
+    /// Constructor de apoyo de los tests: entidad con nombre, estado
+    /// activo y el componente de sombra dado.
+    fn entidad(nombre: &str, active: bool, shadow: Option<ShadowComponent>) -> EntityData {
+        let mut e = EntityData::new(0, nombre.to_string(), vec!["Transform".to_string()]);
+        e.active = active;
+        e.shadow = shadow;
+        e
+    }
+
+    #[test]
+    fn default_del_componente_es_el_historico() {
+        assert_eq!(
+            ShadowComponent::default(),
+            ShadowComponent { half_extent: SHADOW_DEFAULT_HALF_EXTENT, map_size: SHADOW_DEFAULT_MAP_SIZE }
+        );
+    }
+
+    #[test]
+    fn sombra_sin_portador_es_legacy() {
+        let r = resolve_shadow(&[]);
+        assert_eq!(r.half_extent, 25.0);
+        assert_eq!(r.map_size, 2048);
+        assert_eq!(r.source, ShadowSource::Legacy);
+        assert_eq!(r.extra_carriers, 0);
+
+        // Ni las entidades sin componente ni las inactivas cambian eso.
+        let r = resolve_shadow(&[entidad("Suelo", true, None), entidad("Ambiente", false, None)]);
+        assert_eq!(r, ResolvedShadow::legacy());
+    }
+
+    #[test]
+    fn sombra_con_portador_usa_sus_valores() {
+        let e = entidad("Ambiente", true, Some(ShadowComponent { half_extent: 40.0, map_size: 4096 }));
+        let r = resolve_shadow(&[e]);
+        assert_eq!(
+            r,
+            ResolvedShadow { half_extent: 40.0, map_size: 4096, source: ShadowSource::Explicit, extra_carriers: 0 }
+        );
+    }
+
+    #[test]
+    fn half_extent_fuera_de_rango_se_recorta() {
+        let e = entidad("Ambiente", true, Some(ShadowComponent { half_extent: 500.0, map_size: 2048 }));
+        assert_eq!(resolve_shadow(&[e]).half_extent, 120.0);
+    }
+
+    #[test]
+    fn half_extent_no_finito_cae_al_default() {
+        let e = entidad("Ambiente", true, Some(ShadowComponent { half_extent: f32::NAN, map_size: 2048 }));
+        assert_eq!(resolve_shadow(&[e]).half_extent, 25.0);
+    }
+
+    #[test]
+    fn map_size_se_ajusta_al_permitido_mas_cercano() {
+        // 3000 está a 952 de 2048 y a 1096 de 4096; 3500 al revés.
+        let casos = [(3000u32, 2048u32), (3500, 4096), (0, 2048), (1, 1024), (1024, 1024), (1536, 2048), (100_000, 4096)];
+        for (entrada, esperado) in casos {
+            let e = entidad("Ambiente", true, Some(ShadowComponent { half_extent: 25.0, map_size: entrada }));
+            assert_eq!(resolve_shadow(&[e]).map_size, esperado, "map_size de entrada {entrada}");
+        }
+    }
+
+    #[test]
+    fn portador_inactivo_se_ignora() {
+        let inactivo = entidad("Ambiente viejo", false, Some(ShadowComponent { half_extent: 40.0, map_size: 4096 }));
+        assert_eq!(resolve_shadow(std::slice::from_ref(&inactivo)), ResolvedShadow::legacy());
+
+        let activo = entidad("Ambiente", true, Some(ShadowComponent { half_extent: 30.0, map_size: 1024 }));
+        let r = resolve_shadow(&[inactivo, activo]);
+        assert_eq!((r.half_extent, r.map_size), (30.0, 1024));
+        assert_eq!(r.extra_carriers, 0);
+    }
+
+    #[test]
+    fn dos_portadores_gana_el_primero() {
+        let a = entidad("Ambiente", true, Some(ShadowComponent { half_extent: 40.0, map_size: 1024 }));
+        let b = entidad("Ambiente Secundario", true, Some(ShadowComponent { half_extent: 60.0, map_size: 4096 }));
+        let r = resolve_shadow(&[a, b]);
+        assert_eq!((r.half_extent, r.map_size), (40.0, 1024));
+        assert_eq!(r.source, ShadowSource::Explicit);
+        assert_eq!(r.extra_carriers, 1);
+    }
+}
+
+#[cfg(test)]
+mod sombras_dato_escena {
+    use super::*;
+
+    /// Pin del bloque de sombras: las escenas autoradas llevan la caja
+    /// como dato en su entidad de ajustes y resuelven a esos valores;
+    /// una escena sin autorar resuelve a los históricos (25 m / 2048).
+    fn resuelta(archivo: &str) -> ResolvedShadow {
+        let entities: Vec<EntityData> = serde_json::from_str(archivo)
+            .unwrap_or_else(|e| panic!("JSON inválido: {e}"));
+        resolve_shadow(&entities)
+    }
+
+    #[test]
+    fn escenas_autoradas_resuelven_a_su_caja() {
+        let casos: [(&str, f32, u32); 9] = [
+            (include_str!("../../../assets/scenes/DemoFpsPolygon.scene.json"), 40.0, 4096),
+            (include_str!("../../../assets/scenes/DemoVerif.scene.json"), 40.0, 4096),
+            (include_str!("../../../assets/scenes/Plat3D_L1.scene.json"), 20.0, 2048),
+            (include_str!("../../../assets/scenes/Plat3D_L2.scene.json"), 20.0, 2048),
+            (include_str!("../../../assets/scenes/Plat3D_L3.scene.json"), 20.0, 2048),
+            (include_str!("../../../assets/scenes/Plat3D_Menu.scene.json"), 12.0, 2048),
+            (include_str!("../../../assets/scenes/Plat3D_Victory.scene.json"), 12.0, 2048),
+            (include_str!("../../../assets/scenes/DayNightTest.scene.json"), 12.0, 2048),
+            (include_str!("../../../assets/scenes/Fase9Escaparate.scene.json"), 20.0, 2048),
+        ];
+        for (archivo, half, size) in casos {
+            let r = resuelta(archivo);
+            assert_eq!(r.source, ShadowSource::Explicit);
+            assert_eq!((r.half_extent, r.map_size), (half, size));
+        }
+    }
+
+    #[test]
+    fn escena_sin_autorar_resuelve_legacy() {
+        let r = resuelta(include_str!("../../../assets/scenes/AnimFsmTest.scene.json"));
+        assert_eq!(r, ResolvedShadow::legacy());
     }
 }

@@ -61,10 +61,25 @@ layout(set = 3, binding = 0, std140) uniform PointLights {
 // Atlas de sombras puntuales (Fase 2): 4 cubos compartidos; el índice
 // de cubo de cada luz va en u_point_lights.shadow[i].x (-1 = sin sombra).
 layout(set = 2, binding = 2) uniform samplerCubeArray u_point_shadow_cubes;
+// Un tap del PCF de la luz puntual. d llega sin normalizar y con módulo =
+// distancia a la luz (el sampler de cubo normaliza por su cuenta); compara
+// a mano contra la profundidad NDC del fragmento porque el atlas es un
+// samplerCubeArray normal, no de comparación. Devuelve 1.0 si el tap
+// ilumina y 0.0 si está en sombra.
+float point_tap(int cube, vec3 d, float current, float bias) {
+    float sampled = texture(u_point_shadow_cubes, vec4(d, cube)).r;
+    return (current - bias <= sampled) ? 1.0 : 0.0;
+}
 
 // Factor de sombra de la luz puntual i para el fragmento: compara la
 // profundidad NDC del fragmento en la proyección del cubo (90°, cerca
-// en shadow.w, lejos en shadow.y) contra la guardada en el atlas.
+// en shadow.w, lejos en shadow.y) contra la guardada en el atlas, con un
+// PCF de 5 taps (centro + 4 diagonales sobre el plano tangente) que suaviza
+// el borde de la sombra en ~1 téxel de la cara. El desplazamiento de cada
+// tap escala con dist porque la huella del téxel y el error de profundidad
+// crecen con la distancia: un desplazamiento fijo en el plano tangente
+// subtendería un ángulo distinto en cada fragmento y el PCF se cerraría
+// (o se abriría) con la distancia a la luz.
 float point_shadow_factor(int i) {
     vec4 sh = u_point_lights.shadow[i];
     if (sh.x < -0.5) return 1.0;
@@ -72,12 +87,30 @@ float point_shadow_factor(int i) {
     float dist = length(dir);
     if (dist > sh.y || dist < 0.0001) return 1.0;
     float current = sh.y * (dist - sh.w) / ((sh.y - sh.w) * dist);
-    float sampled = texture(u_point_shadow_cubes, vec4(dir, int(sh.x + 0.5))).r;
-    return (current - sh.z > sampled) ? 0.0 : 1.0;
+    int cube = int(sh.x + 0.5);
+    // Base ortonormal alrededor de la dirección al fragmento: la tangente
+    // se apoya en Y salvo que la dirección sea casi vertical (producto
+    // vectorial degenerado), donde se apoya en X.
+    vec3 ndir = dir / dist;
+    vec3 up = abs(ndir.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tang = normalize(cross(ndir, up));
+    vec3 bitang = cross(ndir, tang);
+    // ~1 téxel de la cara de 512x512 (POINT_SHADOW_SIZE en Rust): al sumar
+    // (off * dist) a dir, cuyo módulo es dist, el desplazamiento angular
+    // equivale al de ese número de téxeles en la cara dominante.
+    const float off = 2.0 / 512.0;
+    float s = 0.0;
+    s += point_tap(cube, dir, current, sh.z);
+    s += point_tap(cube, dir + ( tang + bitang) * (off * dist), current, sh.z);
+    s += point_tap(cube, dir + ( tang - bitang) * (off * dist), current, sh.z);
+    s += point_tap(cube, dir + (-tang + bitang) * (off * dist), current, sh.z);
+    s += point_tap(cube, dir + (-tang - bitang) * (off * dist), current, sh.z);
+    return s / 5.0;
 }
 
-
-// Factor de luz (1 = a pleno sol, 0 = en sombra) con PCF 3x3. La sombra
+// Factor de luz (1 = a pleno sol, 0 = en sombra) con PCF 5x5 (25 taps). La
+// penumbra resultante abarca ~2 téxeles del mapa, de modo que el borde de la
+// sombra sale suave, al estilo de las sombras suaves de URP. La sombra
 // se desvanece junto al borde de la caja ortográfica para que nada
 // aparezca/desaparezca de golpe al cruzar el límite, y todo fragmento
 // fuera de la caja (o tras el plano lejano de la luz) queda a pleno sol.
@@ -100,12 +133,12 @@ float shadow_factor(vec3 world_pos, vec3 n) {
     float ref = proj.z - u_shadow.shadow_params.y;
     float texel = u_shadow.shadow_params.x;
     float s = 0.0;
-    for (int x = -1; x <= 1; x++) {
-        for (int y = -1; y <= 1; y++) {
+    for (int x = -2; x <= 2; x++) {
+        for (int y = -2; y <= 2; y++) {
             s += texture(shadow_map, vec3(uv + vec2(float(x), float(y)) * texel, ref));
         }
     }
-    return mix(1.0, s / 9.0, fade);
+    return mix(1.0, s / 25.0, fade);
 }
 
 const float PI = 3.14159265359;

@@ -37247,6 +37247,10 @@
     0.002709
    ],
    "intensity": 1.0
+  },
+  "shadow": {
+   "half_extent": 40.0,
+   "map_size": 4096
   }
  },
  {

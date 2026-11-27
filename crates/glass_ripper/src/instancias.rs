@@ -752,6 +752,7 @@ mod tests {
             fog: None,
             ambient: None,
             post: None,
+            shadow: None,
             canvas: None,
             rect_transform: None,
             ui_text: None,

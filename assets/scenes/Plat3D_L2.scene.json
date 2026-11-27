@@ -4151,7 +4151,7 @@
   "ui_text": null,
   "tag": "Untagged",
   "id": 137,
-  "name": "N\u00facleo Luminoso",
+  "name": "Núcleo Luminoso",
   "components": [
    "Transform",
    "MeshRenderer"
@@ -4238,6 +4238,10 @@
     0.2475
    ],
    "intensity": 0.25
+  },
+  "shadow": {
+   "half_extent": 20.0,
+   "map_size": 2048
   }
  },
  {

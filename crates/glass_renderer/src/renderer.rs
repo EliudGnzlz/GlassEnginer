@@ -2479,6 +2479,24 @@ impl GlassRenderer {
         self.shadow_params = params;
     }
 
+    /// Recrea el mapa de sombras del sol al tamaño pedido (el `map_size`
+    /// resuelto de la escena activa). Espera al device en reposo y delega
+    /// en `ShadowResources::resize`, que solo toca imagen, vista,
+    /// asignación, framebuffer y el binding 1 del set. Si el tamaño ya
+    /// coincide, no hace nada.
+    pub fn set_shadow_map_size(&mut self, size: u32) -> Result<(), crate::offscreen::OffscreenError> {
+        if self.shadow.size == size {
+            return Ok(());
+        }
+        unsafe {
+            self.device
+                .device_wait_idle()
+                .map_err(crate::offscreen::OffscreenError::Driver)?;
+        }
+        let mut allocator = self.allocator.lock().unwrap();
+        self.shadow.resize(&self.device, &mut allocator, size)
+    }
+
     /// Enlaza el set 2 en un dibujo: el set real de sombras en el PBR
     /// (su shader lo declara) y el de RELLENO en los grafos (su shader
     /// no lo declara, pero su layout tiene la misma forma y el enlace

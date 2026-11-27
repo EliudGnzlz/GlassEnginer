@@ -2,7 +2,7 @@
  {
   "id": 1,
   "active": true,
-  "name": "C\u00e1mara",
+  "name": "Cámara",
   "tag": "MainCamera",
   "layer": "Default",
   "is_static": false,
@@ -3130,6 +3130,10 @@
     0.2475
    ],
    "intensity": 0.25
+  },
+  "shadow": {
+   "half_extent": 20.0,
+   "map_size": 2048
   }
  },
  {

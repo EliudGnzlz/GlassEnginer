@@ -50,10 +50,22 @@ pub const SHADOW_NORMAL_BIAS: f32 = 3.0;
 /// Lado de un téxel del mapa de sombras en metros de mundo (≈ 0,0244 m).
 pub const SHADOW_TEXEL_WORLD: f32 = 2.0 * SHADOW_ORTHO_HALF / SHADOW_MAP_SIZE as f32;
 
-/// Sesgo de normal en metros de mundo que viaja en `shadow_params.z`.
-/// El shader le aplica después el factor de ángulo.
+/// Lado de un téxel en metros de mundo para una caja y un mapa dados.
+pub fn texel_world(half_extent: f32, map_size: u32) -> f32 {
+    2.0 * half_extent / map_size as f32
+}
+
+/// Sesgo de normal en metros de mundo para una caja y un mapa dados.
+/// Es lo que viaja en `shadow_params.z`: el shader le aplica después el
+/// factor de ángulo.
+pub fn bias_normal_mundo_para(half_extent: f32, map_size: u32) -> f32 {
+    SHADOW_NORMAL_BIAS * texel_world(half_extent, map_size)
+}
+
+/// Sesgo de normal con la caja histórica (25 m / 2048). Se conserva para no
+/// romper a los llamantes que aún no tienen los ajustes de escena a mano.
 pub fn bias_normal_mundo() -> f32 {
-    SHADOW_NORMAL_BIAS * SHADOW_TEXEL_WORLD
+    bias_normal_mundo_para(SHADOW_ORTHO_HALF, SHADOW_MAP_SIZE)
 }
 
 /// Contenido del UBO de frame del set 2: la VP de la luz y
@@ -556,6 +568,115 @@ impl ShadowResources {
     }
 }
 
+impl ShadowResources {
+    /// Recrea el mapa de sombras al tamaño pedido, conservando render pass,
+    /// layouts, UBO y el descriptor set de sombras puntuales. Solo se
+    /// destruyen y recrean imagen, vista, asignación y framebuffer; después
+    /// se reescribe el binding 1 del set (imagen + sampler de comparación).
+    ///
+    /// El llamante garantiza que el device está en reposo
+    /// (`device_wait_idle`) antes de llamar: aquí no se sincroniza nada.
+    /// Si falla a mitad, el estado queda inconsistente y el error debe
+    /// tratarse como fatal.
+    pub fn resize(&mut self, device: &ash::Device, allocator: &mut Allocator, new_size: u32) -> Result<(), OffscreenError> {
+        if new_size == self.size {
+            return Ok(());
+        }
+
+        // 1) Fuera lo que cuelga del descriptor set y del render pass.
+        //    El framebuffer referencia la vista, y la vista, la imagen.
+        unsafe {
+            device.destroy_framebuffer(self.framebuffer, None);
+            device.destroy_image_view(self.view, None);
+            device.destroy_image(self.image, None);
+        }
+        // La memoria respaldaba la imagen recién destruida: se libera después.
+        if let Some(allocation) = self.allocation.take() {
+            allocator.free(allocation)?;
+        }
+
+        // 2) Imagen nueva: mismos formato, uso y tiling que en `new()`.
+        let extent = vk::Extent2D { width: new_size, height: new_size };
+        let image_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(vk::Format::D32_SFLOAT)
+            .extent(vk::Extent3D { width: extent.width, height: extent.height, depth: 1 })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+        let image = unsafe { device.create_image(&image_info, None)? };
+
+        let requirements = unsafe { device.get_image_memory_requirements(image) };
+        let allocation = allocator.allocate(&AllocationCreateDesc {
+            name: "shadow_map",
+            requirements,
+            location: MemoryLocation::GpuOnly,
+            linear: false,
+            allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+        })?;
+        unsafe { device.bind_image_memory(image, allocation.memory(), allocation.offset())? };
+
+        let view = unsafe {
+            device.create_image_view(
+                &vk::ImageViewCreateInfo::default()
+                    .image(image)
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(vk::Format::D32_SFLOAT)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::DEPTH,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    }),
+                None,
+            )?
+        };
+
+        let framebuffer = unsafe {
+            device.create_framebuffer(
+                &vk::FramebufferCreateInfo::default()
+                    .render_pass(self.render_pass)
+                    .attachments(&[view])
+                    .width(extent.width)
+                    .height(extent.height)
+                    .layers(1),
+                None,
+            )?
+        };
+
+        // 3) Binding 1: exactamente la misma image_info que escribe `new()`,
+        //    con la vista nueva y el sampler de comparación ya existente.
+        let descriptor = [vk::DescriptorImageInfo::default()
+            .image_view(view)
+            .image_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL)
+            .sampler(self.sampler)];
+        unsafe {
+            device.update_descriptor_sets(
+                &[vk::WriteDescriptorSet::default()
+                    .dst_set(self.set)
+                    .dst_binding(1)
+                    .dst_array_element(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&descriptor)],
+                &[],
+            );
+        }
+
+        self.image = image;
+        self.allocation = Some(allocation);
+        self.view = view;
+        self.framebuffer = framebuffer;
+        self.size = new_size;
+
+        Ok(())
+    }
+}
+
 /// Tamaño de cada cara del atlas de sombras puntuales.
 pub const POINT_SHADOW_SIZE: u32 = 512;
 /// Cubos del atlas (luces puntuales con sombra simultáneas).
@@ -876,5 +997,23 @@ mod tests {
         // Banda deliberada del arreglo: entre 5 y 10 cm de mundo.
         let b = bias_normal_mundo();
         assert!((0.05..=0.10).contains(&b), "bias de normal fuera de banda: {b}");
+    }
+
+    #[test]
+    fn texel_world_escala_con_la_caja() {
+        let t = texel_world(25.0, 2048);
+        assert!((t - 0.0244140625).abs() < 1e-6, "téxel inesperado: {t}");
+    }
+
+    #[test]
+    fn bias_normal_para_escala_con_la_caja() {
+        let esperado = 3.0 * 80.0 / 4096.0;
+        assert!((bias_normal_mundo_para(40.0, 4096) - esperado).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bias_normal_por_defecto_no_cambia() {
+        assert_eq!(bias_normal_mundo(), bias_normal_mundo_para(SHADOW_ORTHO_HALF, SHADOW_MAP_SIZE));
+        assert!((bias_normal_mundo() - SHADOW_NORMAL_BIAS * SHADOW_TEXEL_WORLD).abs() < 1e-6);
     }
 }
