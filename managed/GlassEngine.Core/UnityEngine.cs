@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using GlassEngine.Core;
+using GlassEngine.Core.Hosting;
 using GlassEngine.Core.Interop;
 using InteropVector3 = GlassEngine.Core.Interop.Vector3;
 using InteropQuaternion = GlassEngine.Core.Interop.Quaternion;
@@ -349,6 +350,151 @@ namespace UnityEngine
             return res;
         }
 
+        // --- Búsqueda de objetos en escena (C2) ---
+        // v1: solo se indexan las instancias ENVUELTAS, es decir, los scripts
+        // MonoBehaviour vivos de MonoBehaviourRegistry. Los componentes nativos
+        // (Transform, etc.) no están indexados: para esos tipos el resultado es
+        // null o un array vacío.
+        // Por defecto se excluyen las instancias cuyo gameObject no está activo
+        // (activeInHierarchy); includeInactive=true las incluye.
+        // La búsqueda lee el registro tal cual. No despierta a nadie ni toca el
+        // ciclo de vida. Nunca lanza: un tipo nulo o una entrada incompleta dan
+        // null o vacío. Los arrays devueltos son siempre copias nuevas, nunca null.
+
+        /// <summary>
+        /// Núcleo común: recorre el registro en orden de creación y filtra por tipo
+        /// y actividad. Si soloPrimero es true, corta en la primera coincidencia.
+        /// </summary>
+        private static System.Collections.Generic.List<Object> RecogerEnvueltos(
+            System.Type? type, bool includeInactive, bool soloPrimero)
+        {
+            var resultado = new System.Collections.Generic.List<Object>();
+            if (type is null) return resultado;
+
+            foreach (var host in MonoBehaviourRegistry.All)
+            {
+                var w = host?.Wrapped;
+                if (w is null) continue;
+                if (!type.IsInstanceOfType(w)) continue;
+
+                if (!includeInactive)
+                {
+                    var go = w.gameObject;
+                    if (go is null || !go.activeInHierarchy) continue;
+                }
+
+                resultado.Add(w);
+                if (soloPrimero) break;
+            }
+            return resultado;
+        }
+
+        private static Object? PrimeroEnvuelto(System.Type? type, bool includeInactive)
+        {
+            var lista = RecogerEnvueltos(type, includeInactive, soloPrimero: true);
+            return lista.Count > 0 ? lista[0] : null;
+        }
+
+        /// <summary>Copia tipada de la lista (array nuevo, nunca null).</summary>
+        private static T[] CopiaTipada<T>(System.Collections.Generic.List<Object> lista) where T : Object
+        {
+            var arr = new T[lista.Count];
+            for (int i = 0; i < lista.Count; i++) arr[i] = (T)lista[i];
+            return arr;
+        }
+
+        /// <summary>
+        /// Ordena por EntityId del GameObject. Los empates (varios scripts en el
+        /// mismo GameObject) conservan el orden de creación. Las instancias sin
+        /// gameObject van al final.
+        /// </summary>
+        private static void OrdenarPorEntityId(System.Collections.Generic.List<Object> lista)
+        {
+            var claves = new (ulong id, int orden, Object obj)[lista.Count];
+            for (int i = 0; i < lista.Count; i++)
+            {
+                ulong id = ulong.MaxValue;
+                if (lista[i] is MonoBehaviour mb && mb.gameObject is not null)
+                    id = mb.gameObject.EntityId;
+                claves[i] = (id, i, lista[i]);
+            }
+
+            System.Array.Sort(claves, (a, b) =>
+            {
+                int c = a.id.CompareTo(b.id);
+                return c != 0 ? c : a.orden.CompareTo(b.orden);
+            });
+
+            for (int i = 0; i < claves.Length; i++) lista[i] = claves[i].obj;
+        }
+
+        // FindObjectOfType: primera instancia en orden de creación, o null.
+
+        public static T FindObjectOfType<T>() where T : Object
+            => (T)PrimeroEnvuelto(typeof(T), false)!;
+
+        public static T FindObjectOfType<T>(bool includeInactive) where T : Object
+            => (T)PrimeroEnvuelto(typeof(T), includeInactive)!;
+
+        public static Object? FindObjectOfType(System.Type type)
+            => PrimeroEnvuelto(type, false);
+
+        public static Object? FindObjectOfType(System.Type type, bool includeInactive)
+            => PrimeroEnvuelto(type, includeInactive);
+
+        // FindObjectsOfType: todas en orden de creación (array vacío si no hay).
+
+        public static T[] FindObjectsOfType<T>() where T : Object
+            => CopiaTipada<T>(RecogerEnvueltos(typeof(T), false, soloPrimero: false));
+
+        public static T[] FindObjectsOfType<T>(bool includeInactive) where T : Object
+            => CopiaTipada<T>(RecogerEnvueltos(typeof(T), includeInactive, soloPrimero: false));
+
+        public static Object[] FindObjectsOfType(System.Type type)
+            => RecogerEnvueltos(type, false, soloPrimero: false).ToArray();
+
+        public static Object[] FindObjectsOfType(System.Type type, bool includeInactive)
+            => RecogerEnvueltos(type, includeInactive, soloPrimero: false).ToArray();
+
+        // FindFirstObjectByType / FindAnyObjectByType: en v1 equivalen a FindObjectOfType.
+
+        public static T FindFirstObjectByType<T>() where T : Object
+            => FindObjectOfType<T>(false);
+
+        public static T FindFirstObjectByType<T>(bool includeInactive) where T : Object
+            => FindObjectOfType<T>(includeInactive);
+
+        public static Object? FindFirstObjectByType(System.Type type)
+            => FindObjectOfType(type, false);
+
+        public static Object? FindFirstObjectByType(System.Type type, bool includeInactive)
+            => FindObjectOfType(type, includeInactive);
+
+        public static T FindAnyObjectByType<T>() where T : Object
+            => FindObjectOfType<T>(false);
+
+        public static T FindAnyObjectByType<T>(bool includeInactive) where T : Object
+            => FindObjectOfType<T>(includeInactive);
+
+        public static Object? FindAnyObjectByType(System.Type type)
+            => FindObjectOfType(type, false);
+
+        public static Object? FindAnyObjectByType(System.Type type, bool includeInactive)
+            => FindObjectOfType(type, includeInactive);
+
+        // FindObjectsByType: None = orden de creación; InstanceID = por EntityId.
+        // Un valor de sortMode desconocido se trata como None.
+
+        public static T[] FindObjectsByType<T>(FindObjectsSortMode sortMode) where T : Object
+            => FindObjectsByType<T>(false, sortMode);
+
+        public static T[] FindObjectsByType<T>(bool includeInactive, FindObjectsSortMode sortMode) where T : Object
+        {
+            var lista = RecogerEnvueltos(typeof(T), includeInactive, soloPrimero: false);
+            if (sortMode == FindObjectsSortMode.InstanceID) OrdenarPorEntityId(lista);
+            return CopiaTipada<T>(lista);
+        }
+
         /// <summary>
         /// Destruye de verdad (bloque de instanciación): si el objeto
         /// envuelve una entidad del motor (EntityId != 0), la entidad
@@ -374,6 +520,16 @@ namespace UnityEngine
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Orden de los resultados de FindObjectsByType.
+    /// None = orden de creación; InstanceID = orden por EntityId del GameObject.
+    /// </summary>
+    public enum FindObjectsSortMode
+    {
+        None,
+        InstanceID
     }
 
     /// <summary>
@@ -533,6 +689,63 @@ namespace UnityEngine
 
         private readonly List<Component> _components = new();
         private static readonly Dictionary<ulong, GameObject> _entityMap = new();
+
+        // --- Búsqueda de GameObjects (C2) ---
+        // Solo se consideran wrappers ACTIVOS (activeInHierarchy), como en Unity.
+        // Comparación de name y tag exacta (ordinal). Find no interpreta rutas con '/'.
+        // Para que el resultado sea determinista ante un Dictionary sin orden
+        // garantizado, se elige o se ordena por EntityId ascendente.
+        // Nunca lanza: name o tag nulos dan null o un array vacío.
+
+        private static GameObject? PrimeroActivo(System.Func<GameObject, bool> criterio)
+        {
+            GameObject? mejor = null;
+            ulong mejorId = 0;
+            foreach (var par in _entityMap)
+            {
+                var go = par.Value;
+                if (go is null || !go.activeInHierarchy) continue;
+                if (!criterio(go)) continue;
+                if (mejor is null || par.Key < mejorId)
+                {
+                    mejor = go;
+                    mejorId = par.Key;
+                }
+            }
+            return mejor;
+        }
+
+        public static GameObject? Find(string name)
+        {
+            if (name is null) return null;
+            return PrimeroActivo(go => string.Equals(go.name, name, System.StringComparison.Ordinal));
+        }
+
+        public static GameObject? FindWithTag(string tag)
+        {
+            if (tag is null) return null;
+            return PrimeroActivo(go => string.Equals(go.tag, tag, System.StringComparison.Ordinal));
+        }
+
+        public static GameObject[] FindGameObjectsWithTag(string tag)
+        {
+            if (tag is null) return System.Array.Empty<GameObject>();
+
+            var encontrados = new System.Collections.Generic.List<(ulong id, GameObject go)>();
+            foreach (var par in _entityMap)
+            {
+                var go = par.Value;
+                if (go is null || !go.activeInHierarchy) continue;
+                if (!string.Equals(go.tag, tag, System.StringComparison.Ordinal)) continue;
+                encontrados.Add((par.Key, go));
+            }
+
+            encontrados.Sort((a, b) => a.id.CompareTo(b.id));
+
+            var arr = new GameObject[encontrados.Count];
+            for (int i = 0; i < arr.Length; i++) arr[i] = encontrados[i].go;
+            return arr;
+        }
 
         public GameObject(string name = "GameObject", ulong entityId = 0)
         {
