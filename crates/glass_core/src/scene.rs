@@ -6605,6 +6605,76 @@ mod g5_demo_values {
             );
         }
     }
+
+    /// G5 Fase9Escaparate: look NUEVO completo. A diferencia de
+    /// Plat3D (que conserva su look), el escaparate pasa al ambiente
+    /// URP de referencia con intensidad 1,0 y a exposición 1,0. El sol
+    /// (0,45) y las puntuales (1,2 / 1,2 / 1,4) NO se tocan: este pin
+    /// fija tanto lo que cambia como lo que queda intacto.
+    #[test]
+    fn g5_fase9_valores() {
+        let data = include_str!("../../../assets/scenes/Fase9Escaparate.scene.json");
+        let entities: Vec<EntityData> = serde_json::from_str(data)
+            .unwrap_or_else(|e| panic!("JSON inválido en Fase9Escaparate.scene.json: {e}"));
+
+        let ambient = resolve_ambient(&entities);
+        assert_eq!(ambient.sky, URP_AMBIENT_SKY, "sky debe ser el valor URP de referencia");
+        assert_eq!(
+            ambient.equator, URP_AMBIENT_EQUATOR,
+            "equator debe ser el valor URP de referencia"
+        );
+        assert_eq!(
+            ambient.ground, URP_AMBIENT_GROUND,
+            "ground debe ser el valor URP de referencia"
+        );
+        assert_eq!(
+            ambient.intensity,
+            Some(URP_AMBIENT_INTENSITY),
+            "ambient intensity debe ser {}",
+            URP_AMBIENT_INTENSITY
+        );
+
+        let post = resolve_post(&entities);
+        assert!(
+            (post.exposure - 1.0).abs() < 1e-6,
+            "exposure debe ser 1.0, es {}",
+            post.exposure
+        );
+        assert!(
+            (post.intensity - LEGACY_POST_INTENSITY).abs() < 1e-6,
+            "post intensity no se toca: debe ser {LEGACY_POST_INTENSITY}, es {}",
+            post.intensity
+        );
+        assert!(
+            (post.vignette - LEGACY_POST_VIGNETTE).abs() < 1e-6,
+            "vignette no se toca: debe ser {LEGACY_POST_VIGNETTE}, es {}",
+            post.vignette
+        );
+
+        let sol = entities
+            .iter()
+            .filter_map(|e| e.light.as_ref())
+            .find(|l| l.light_type == "Directional")
+            .expect("Fase9Escaparate: sin luz direccional");
+        assert!(
+            (sol.intensity - 0.45).abs() < 1e-6,
+            "el sol no se toca: debe valer 0.45, es {}",
+            sol.intensity
+        );
+
+        let mut puntuales: Vec<f32> = entities
+            .iter()
+            .filter_map(|e| e.light.as_ref())
+            .filter(|l| l.light_type == "Point")
+            .map(|l| l.intensity)
+            .collect();
+        puntuales.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(
+            puntuales,
+            vec![1.2, 1.2, 1.4],
+            "las puntuales no se tocan: deben ser 1.2, 1.2 y 1.4"
+        );
+    }
 }
 
 #[cfg(test)]
