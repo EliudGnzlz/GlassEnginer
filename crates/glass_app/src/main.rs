@@ -2806,6 +2806,7 @@ impl GlassEngineApp {
             move_speed: 3.8,
             jump_velocity: 7.2,
             auto_demo: false,
+        campos: Default::default(),
         });
         p.audio = Some(glass_core::AudioSourceData {
             clip_name: "beep_880".into(),
@@ -2943,6 +2944,7 @@ impl GlassEngineApp {
                     move_speed: 3.8,
                     jump_velocity: 7.2,
                     auto_demo: false,
+                campos: Default::default(),
                 });
                 p.audio = Some(glass_core::AudioSourceData {
                     clip_name: "beep_880".into(),
@@ -5586,12 +5588,24 @@ let resueltos = if body.has_collider {
                     // ignoran en silencio.
                     if let Ok(scene) = self.scene_state.lock() {
                         if let Some(e) = scene.entities.iter().find(|e| e.id == *entity_id) {
-                            let sobre = serde_json::json!({
+                            let mut sobre = serde_json::json!({
                                 "v": 1,
                                 "name": e.name,
                                 "tag": e.tag,
                                 "active": e.active,
                             });
+                            // C0b: los campos serializados del script,
+                            // si la escena los trae.
+                            if let Some(sd) = &e.script_data {
+                                if !sd.campos.is_empty() {
+                                    sobre["fields"] = serde_json::Value::Object(
+                                        sd.campos
+                                            .iter()
+                                            .map(|(k, v)| (k.clone(), v.clone()))
+                                            .collect(),
+                                    );
+                                }
+                            }
                             let _ = self.script_host.apply_script_data(handle, &sobre.to_string());
                         }
                     }

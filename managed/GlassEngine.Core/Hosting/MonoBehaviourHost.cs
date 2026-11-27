@@ -40,7 +40,6 @@ internal sealed class MonoBehaviourHost : GlassBehaviour
     private static readonly Dictionary<(string Type, string Method, string Exception), ErrorStat> s_errors = new();
     private static readonly HashSet<string> s_warnedOnce = new();
     // Una vez por proceso: ResetAll no lo reinicia a propósito.
-    private static bool s_fieldsNoticeLogged;
     private static float s_frameDeltaTime = 1f / 60f;
 
     private readonly Type _type;
@@ -216,7 +215,7 @@ internal sealed class MonoBehaviourHost : GlassBehaviour
 
     /// <summary>
     /// Aplica el sobre de ApplyScriptData (D16): nombre, tag y estado
-    /// activo. Los "fields" son de C0b: se ignoran con un aviso único.
+    /// activo, y también los "fields" sobre el MonoBehaviour envuelto (C0b).
     /// </summary>
     internal int ApplyScriptData(ReadOnlySpan<byte> jsonUtf8)
     {
@@ -228,7 +227,7 @@ internal sealed class MonoBehaviourHost : GlassBehaviour
         string? name = null;
         string? tag = null;
         bool? active = null;
-        bool hasFields;
+        JsonElement? fields = null;
         try
         {
             var reader = new Utf8JsonReader(jsonUtf8);
@@ -250,7 +249,8 @@ internal sealed class MonoBehaviourHost : GlassBehaviour
                 else if (a.ValueKind == JsonValueKind.False)
                     active = false;
             }
-            hasFields = root.TryGetProperty("fields", out JsonElement f) && f.ValueKind != JsonValueKind.Null;
+            if (root.TryGetProperty("fields", out JsonElement f) && f.ValueKind == JsonValueKind.Object)
+                fields = f.Clone();
         }
         catch (JsonException)
         {
@@ -258,12 +258,8 @@ internal sealed class MonoBehaviourHost : GlassBehaviour
         }
 
         Wrapped.gameObject.ApplyHostInit(name, tag, active);
-
-        if (hasFields && !s_fieldsNoticeLogged)
-        {
-            s_fieldsNoticeLogged = true;
-            LogWarn("campos serializados: pendientes de C0b");
-        }
+        if (fields.HasValue)
+            SerializedFields.Apply(Wrapped, fields.Value, WarnOnce);
         return 0;
     }
 

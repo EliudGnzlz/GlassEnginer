@@ -194,6 +194,46 @@ fn guid_ref(v: &Value, clave: &str) -> Option<String> {
     campo(v, clave).and_then(referencia).and_then(|r| r.guid)
 }
 
+/// Convierte un valor YAML de Unity a JSON (C0b, campos serializados).
+/// Devuelve `None` si el valor es o contiene una referencia a un objeto
+/// de Unity (`{fileID: ...}`): es un puntero a otro objeto, no un valor,
+/// y v1 no lo transporta (el llamador avisa por campo).
+fn valor_json(v: &Value) -> Option<serde_json::Value> {
+    match v {
+        Value::Null => Some(serde_json::Value::Null),
+        Value::Bool(b) => Some(serde_json::Value::Bool(*b)),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(serde_json::json!(i))
+            } else if let Some(u) = n.as_u64() {
+                Some(serde_json::json!(u))
+            } else {
+                n.as_f64().map(|f| serde_json::json!(f))
+            }
+        }
+        Value::String(s) => Some(serde_json::Value::String(s.clone())),
+        Value::Sequence(seq) => {
+            let mut salida = Vec::with_capacity(seq.len());
+            for item in seq {
+                salida.push(valor_json(item)?);
+            }
+            Some(serde_json::Value::Array(salida))
+        }
+        Value::Mapping(m) => {
+            if m.keys().any(|k| k.as_str() == Some("fileID")) {
+                return None;
+            }
+            let mut salida = serde_json::Map::new();
+            for (k, val) in m {
+                let k = k.as_str()?;
+                salida.insert(k.to_string(), valor_json(val)?);
+            }
+            Some(serde_json::Value::Object(salida))
+        }
+        Value::Tagged(t) => valor_json(&t.value),
+    }
+}
+
 /// fileIDs de una lista de `m_Modification` (`m_AddedGameObjects`,
 /// `m_AddedComponents`): referencias `{fileID}` o, en versiones
 /// recientes, entradas con `addedObject: {fileID}`. Sin ceros.
@@ -777,16 +817,29 @@ impl<'c, 'a> Estado<'c, 'a> {
             ));
             return;
         }
+        // C0b: los campos serializados del script ya tienen hueco
+        // (ScriptComponentData.campos) y viajan a la escena convertida.
+        // Solo quedan fuera las referencias a objetos de Unity
+        // ({fileID: ...}), que v1 no transporta: un aviso por campo.
+        let mut campos = std::collections::BTreeMap::new();
         if let Some(m) = v.as_mapping() {
-            for (k, _) in m {
+            for (k, valor) in m {
                 let Some(k) = k.as_str() else { continue };
                 if CLAVES_ESTANDAR.contains(&k)
                     || matches!(k, "move_speed" | "jump_velocity" | "auto_demo")
                 {
                     continue;
                 }
-                self.avisos
-                    .sumar(format!("campo serializado sin hueco en script_data: {k}"));
+                match valor_json(valor) {
+                    Some(j) => {
+                        campos.insert(k.to_string(), j);
+                    }
+                    None => {
+                        self.avisos.sumar(format!(
+                            "campo serializado con referencia a objeto (fuera de C0b v1): {k}"
+                        ));
+                    }
+                }
             }
         }
         let base = ScriptComponentData::default();
@@ -800,6 +853,7 @@ impl<'c, 'a> Estado<'c, 'a> {
                 base.auto_demo
             },
             class_name: clase,
+            campos,
         };
         e.script = Some(corto);
         e.script_data = Some(datos);
@@ -2266,9 +2320,9 @@ MonoBehaviour:
         assert_eq!(datos.class_name, "Juego.Jugador");
         assert!(casi(datos.move_speed, 3.0));
         assert!(ents[0].components.iter().any(|c| c == "Script"));
-        assert!(avisos
-            .iter()
-            .any(|a| a.contains("sin hueco en script_data: vida")));
+        // C0b: `vida: 10` ya no se pierde ni avisa «sin hueco»: viaja en campos.
+        assert_eq!(datos.campos.get("vida"), Some(&serde_json::json!(10)));
+        assert!(!avisos.iter().any(|a| a.contains("sin hueco en script_data")));
         assert!(ents[1].script.is_none());
         assert!(!ents[1].components.iter().any(|c| c == "Script"));
         assert!(avisos.iter().any(|a| a.contains("script no convertido")));

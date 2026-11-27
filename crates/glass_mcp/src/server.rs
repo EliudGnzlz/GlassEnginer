@@ -3095,6 +3095,7 @@ impl McpServer {
                         move_speed: 3.8,
                         jump_velocity: 7.2,
                         auto_demo: false,
+                    campos: Default::default(),
                     });
                     p.audio = Some(glass_core::AudioSourceData {
                         clip_name: "beep_880".into(),

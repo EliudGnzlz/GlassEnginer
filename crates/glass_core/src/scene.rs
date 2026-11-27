@@ -552,6 +552,13 @@ pub struct ScriptComponentData {
     pub jump_velocity: f32,
     #[serde(default)]
     pub auto_demo: bool,
+    /// Campos serializados del script (C0b): nombre → valor JSON tal como
+    /// venía en la escena de Unity (escalares, vectores como objetos
+    /// `{x, y, z}`, listas anidadas). Las referencias a objetos de Unity
+    /// no se transportan en v1. Vacío en escenas anteriores a C0b o sin
+    /// campos; con `skip_serializing_if` las escenas viejas no cambian.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub campos: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 fn default_move_speed() -> f32 {
@@ -569,6 +576,7 @@ impl Default for ScriptComponentData {
             move_speed: 3.8,
             jump_velocity: 7.2,
             auto_demo: false,
+            campos: Default::default(),
         }
     }
 }
