@@ -34,6 +34,16 @@ pub struct Sombra {
     pub color: [f32; 4],
 }
 
+/// Tamaño de una columna de grid (V2): fija en px de referencia,
+/// fracción del espacio libre (`1fr`) o repetición automática
+/// (`repeat(auto-fill, 100px)` → tantas columnas de 100 px como quepan).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TamanoColumna {
+    Fija(f32),
+    Fraccion(f32),
+    Relleno(f32),
+}
+
 /// El conjunto cerrado de propiedades del núcleo bueno. La cascada
 /// (defecto del tipo → campos del componente → style_extra) se
 /// resuelve campo a campo en V2; en V1 el tipo existe y la
@@ -74,5 +84,13 @@ pub struct StyleProps {
     /// Color del texto (en nodos con Graphic de texto).
     pub color: Option<[f32; 4]>,
     pub font_size: Option<f32>,
+    /// Columnas del grid (`grid-template-columns`): lista de tamaños
+    /// en el orden de la plantilla; `Relleno` se expande en el layout.
+    pub grid_template_columns: Option<Vec<TamanoColumna>>,
+    /// Orden de pintado dentro de la capa superior (`sort-order`).
+    pub sort_order: Option<i32>,
+    /// `true` = el nodo se pinta en la capa superior del documento,
+    /// sin heredar el clip del padre (`override-sorting`).
+    pub override_sorting: Option<bool>,
 }
 

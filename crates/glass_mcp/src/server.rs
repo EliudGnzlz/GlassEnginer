@@ -3432,7 +3432,21 @@ impl McpServer {
             "glass_ui_tree" => {
                 let width = args.get("width").and_then(|v| v.as_f64()).unwrap_or(1280.0) as f32;
                 let height = args.get("height").and_then(|v| v.as_f64()).unwrap_or(720.0) as f32;
-                let rects = glass_core::resolve_scene_ui_rects(&scene, width, height);
+                // V2: los rects se leen del documento colocado, no del
+                // viejo resolutor de glass_core.
+                let rects = {
+                    let docs = glass_ui::derivacion::derivar_documentos(&scene);
+                    match docs.into_iter().next() {
+                        Some(doc) => {
+                            let colocado = glass_ui::api::colocar_documento(
+                                &doc,
+                                glass_ui::api::Viewport { ancho: width, alto: height },
+                            );
+                            glass_ui::api::rects_colocados(&doc, &colocado)
+                        }
+                        None => std::collections::HashMap::new(),
+                    }
+                };
                 let scale = scene
                     .entities
                     .iter()
@@ -6624,6 +6638,52 @@ mod tests_catchup {
             tool, args
         );
         srv.handle_json(&req).unwrap_or_default()
+    }
+
+    #[test]
+    fn glass_ui_tree_lee_documento_colocado() {
+        // Integración P4c: la tool `glass_ui_tree` sobre la escena viva
+        // devuelve los rects del documento colocado V2 (no del viejo
+        // resolutor): se comparan contra el fixture congelado en V1.
+        let srv = servidor();
+        let json = std::fs::read_to_string("../../assets/scenes/CanvasUiTest.scene.json")
+            .expect("leer la escena de ejemplo");
+        let (version, entities) = crate::scene::parsear_escena(&json).expect("parsear la escena");
+        {
+            let mut sc = srv.scene.lock().unwrap();
+            sc.ui_schema_version = version;
+            sc.replace_entities(entities);
+        }
+        let resp = llamar(&srv, "glass_ui_tree", json!({ "width": 1280.0, "height": 720.0 }));
+        let v: serde_json::Value = serde_json::from_str(&resp).expect("respuesta JSON válida");
+        let texto = v["result"]["content"][0]["text"]
+            .as_str()
+            .expect("content[0].text");
+        let arbol: serde_json::Value = serde_json::from_str(texto).expect("árbol JSON válido");
+        let elementos = arbol["elements"].as_array().expect("array elements");
+        let fixture = std::fs::read_to_string(
+            "../../crates/glass_ui/tests/fixtures/rects_canvasuitest_1280x720.json",
+        )
+        .expect("leer el fixture congelado");
+        let esperado: serde_json::Value =
+            serde_json::from_str(&fixture).expect("fixture JSON válido");
+        let esperado = esperado.as_object().expect("objeto fixture");
+        assert_eq!(elementos.len(), esperado.len(), "nº de elementos");
+        for el in elementos {
+            let id = el["entity_id"].as_u64().expect("entity_id");
+            let rect = el["rect"].as_array().expect("rect array");
+            let esp = esperado
+                .get(&id.to_string())
+                .expect("entidad en el fixture");
+            for i in 0..4 {
+                let got = rect[i].as_f64().expect("número");
+                let want = esp[i].as_f64().expect("número");
+                assert!(
+                    (got - want).abs() < 0.5,
+                    "entidad {id} coord {i}: {got} vs {want}"
+                );
+            }
+        }
     }
 
     #[test]

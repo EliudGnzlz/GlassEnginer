@@ -1395,3 +1395,127 @@ mod prefab_variantes_tests {
         assert!(!serde_json::to_string(&anadida_escena).unwrap().contains("subarbol"));
     }
 }
+
+/// Congelación de formato al empezar P4 (V2 UI/Canvas): la interfaz de
+/// instancia de prefab vigente en `main` al arrancar P4 (Fase E cerrada,
+/// `c420f42`). Si el formato cambia después, es un paquete nuevo, no
+/// retrabajo de V2. Campos: `prefab_source`, `prefab_hash`,
+/// `prefab_local_id`, `prefab_overrides` (Fase D: propiedades/anadidas/
+/// quitadas) en la instancia de la escena; `variant_of` y
+/// `variant_overrides` en el asset `.prefab.json` (Fase E); instancias
+/// anidadas con vínculo vivo, con frontera en la huella.
+#[cfg(test)]
+mod congelacion_p4_tests {
+    use super::*;
+    use crate::scene::SceneState;
+    use serde_json::json;
+
+    fn escena_con_instancia() -> (SceneState, u64, u64) {
+        let mut escena = SceneState::new();
+        let raiz = escena.create_entity("Raiz".into(), vec!["Transform".into()]);
+        let hijo = escena.create_entity("Hijo".into(), vec!["Transform".into()]);
+        assert!(escena.reparent(hijo, Some(raiz)));
+        (escena, raiz, hijo)
+    }
+
+    #[test]
+    fn instancia_actual_ida_y_vuelta() {
+        let (mut escena, raiz, hijo) = escena_con_instancia();
+        // Instancia con los cuatro campos de vínculo + diff de Fase D.
+        let entidad = escena.get_entity_mut(raiz).unwrap();
+        entidad.prefab_source = Some("prefabs/base.prefab".into());
+        entidad.prefab_hash = Some("abc123".into());
+        entidad.prefab_local_id = Some(7);
+        entidad.prefab_overrides = Some(PrefabOverrides {
+            propiedades: vec![OverridePropiedad {
+                local_id: hijo,
+                path: "transform.position".into(),
+                valor: json!([1.0, 2.0, 3.0]),
+                huerfana: false,
+            }],
+            anadidas: vec![],
+            quitadas: vec![99],
+        });
+        let texto = serde_json::to_string(escena.get_entity(raiz).unwrap()).unwrap();
+        let leida: EntityData = serde_json::from_str(&texto).unwrap();
+        assert_eq!(leida.prefab_source.as_deref(), Some("prefabs/base.prefab"));
+        assert_eq!(leida.prefab_hash.as_deref(), Some("abc123"));
+        assert_eq!(leida.prefab_local_id, Some(7));
+        let diff = leida.prefab_overrides.clone().unwrap();
+        assert_eq!(diff.propiedades.len(), 1);
+        assert_eq!(diff.propiedades[0].local_id, hijo);
+        assert_eq!(diff.quitadas, vec![99]);
+        // Ida y vuelta estable: serializar lo leído da los mismos campos.
+        let texto2 = serde_json::to_string(&leida).unwrap();
+        let leida2: EntityData = serde_json::from_str(&texto2).unwrap();
+        assert_eq!(leida2.prefab_source, leida.prefab_source);
+        assert_eq!(leida2.prefab_overrides, leida.prefab_overrides);
+    }
+
+    #[test]
+    fn frontera_anidada_no_entra_en_huella() {
+        let (mut escena, raiz, hijo) = escena_con_instancia();
+        let nieto = escena.create_entity("Nieto".into(), vec!["Transform".into()]);
+        assert!(escena.reparent(nieto, Some(hijo)));
+        // El hijo es raíz de una instancia anidada con vínculo vivo.
+        escena.get_entity_mut(hijo).unwrap().prefab_source =
+            Some("prefabs/interior.prefab".into());
+        let asset = Prefab::from_entity(&escena, raiz).unwrap();
+        let huella_antes = asset.huella();
+        // Cambiar el subárbol anidado (el nieto) NO cambia la huella exterior.
+        let mut escena2 = escena.clone();
+        escena2.get_entity_mut(nieto).unwrap().name = "NietoCambiado".into();
+        let asset2 = Prefab::from_entity(&escena2, raiz).unwrap();
+        assert_eq!(asset2.huella(), huella_antes);
+        // Cambiar la propia raíz anidada (su fila sí cuenta) SÍ la cambia.
+        let mut escena3 = escena.clone();
+        escena3.get_entity_mut(hijo).unwrap().name = "HijoCambiado".into();
+        let asset3 = Prefab::from_entity(&escena3, raiz).unwrap();
+        assert_ne!(asset3.huella(), huella_antes);
+    }
+
+    #[test]
+    fn variante_resuelve_base_y_ciclo_se_rechaza() {
+        let dir = std::env::temp_dir().join(format!(
+            "glass_core_congelacion_p4_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (escena, raiz, hijo) = escena_con_instancia();
+        let base = Prefab::from_entity(&escena, raiz).unwrap();
+        base.save_to_file(dir.join("base.prefab.json")).unwrap();
+        // Variante que mueve al hijo: se resuelve base + diff.
+        let mut variante = Prefab::from_entity(&escena, raiz).unwrap();
+        variante.name = "Variante".into();
+        variante.variant_of = Some("base.prefab.json".into());
+        variante.variant_overrides = Some(PrefabOverrides {
+            propiedades: vec![OverridePropiedad {
+                local_id: hijo,
+                path: "transform.position".into(),
+                valor: json!([9.0, 8.0, 7.0]),
+                huerfana: false,
+            }],
+            anadidas: vec![],
+            quitadas: vec![],
+        });
+        variante.save_to_file(dir.join("variante.prefab.json")).unwrap();
+        let resuelta = Prefab::cargar_desde_proyecto(&dir, "variante.prefab.json").unwrap();
+        assert_eq!(resuelta.name, "Variante");
+        assert!(resuelta.variant_overrides.is_none());
+        let hijo_resuelto = resuelta
+            .descendant_entities
+            .iter()
+            .find(|e| e.id == hijo)
+            .unwrap();
+        assert_eq!(hijo_resuelto.transform.position, [9.0, 8.0, 7.0]);
+        // Ciclo: una variante que apunta a sí misma no se resuelve.
+        let mut ciclo = Prefab::from_entity(&escena, raiz).unwrap();
+        ciclo.variant_of = Some("ciclo.prefab.json".into());
+        ciclo.save_to_file(dir.join("ciclo.prefab.json")).unwrap();
+        assert!(Prefab::cargar_desde_proyecto(&dir, "ciclo.prefab.json").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

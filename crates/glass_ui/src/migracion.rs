@@ -133,6 +133,53 @@ pub fn migrar_prefab(prefab: &mut glass_core::Prefab) -> InformeMigracion {
     informe
 }
 
+
+/// Fase UI/Canvas (V1, entrada de la app): tras cargar una escena cuyo
+/// esquema de UI es anterior al actual, la migra EN MEMORIA y sube su
+/// versión. Solo el editor escribe además la copia de seguridad
+/// `<escena>.pre-ui.bak` (una sola vez, antes de tocar nada, y solo si
+/// se conoce la ruta): el runtime migra sin escribir en disco y el
+/// archivo original solo cambia cuando el usuario guarda la escena.
+/// Sin migración pendiente, no hace nada. `escribir_copia` la decide
+/// quien llama (la app pasa `cfg!(feature = "editor")`): este crate
+/// no tiene feature de editor y no puede decidirlo solo.
+pub fn migrar_escena_cargada(
+    scene: &mut glass_core::scene::SceneState,
+    ruta: Option<&str>,
+    escribir_copia: bool,
+) {
+    if !necesita_migracion(scene.ui_schema_version) {
+        return;
+    }
+    if escribir_copia {
+        if let Some(ruta) = ruta {
+            match escribir_copia_pre_ui(Path::new(ruta)) {
+                Ok(true) => {
+                    log::info!("Migración UI: copia previa de '{ruta}' guardada (.pre-ui.bak)")
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    log::warn!("Migración UI: sin copia previa de '{ruta}': {e}")
+                }
+            }
+        }
+    }
+    let mut siguiente_id = scene.next_entity_id;
+    let informe = migrar_entidades(&mut scene.entities, &mut siguiente_id);
+    if siguiente_id > scene.next_entity_id {
+        scene.next_entity_id = siguiente_id;
+    }
+    scene.ui_schema_version = glass_core::scene::UI_SCHEMA_VERSION_ACTUAL;
+    log::info!(
+        "Migración UI aplicada ({} entidades creadas, {} avisos)",
+        informe.entidades_creadas,
+        informe.avisos.len()
+    );
+    for aviso in &informe.avisos {
+        log::warn!("Migración UI: {aviso}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

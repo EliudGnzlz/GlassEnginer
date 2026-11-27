@@ -1981,14 +1981,26 @@ impl ViewportPanel {
     /// Renderiza elementos de Canvas UI superpuestos en la vista de juego (Screen Space Overlay)
     fn render_in_game_canvas_ui(ui: &mut Ui, game_rect: egui::Rect, scene_state: &Arc<Mutex<SceneState>>, playing: bool) {
         if let Ok(scene) = scene_state.lock() {
-            // Auditoría C7: la vista previa usa el MISMO resolvedor
-            // que el runtime (`resolve_scene_ui_rects` con el tamaño
-            // del viewport como pantalla): jerarquía, anclas con
+            // Auditoría C7: la vista previa usa el MISMO documento
+            // colocado que el runtime (V2): jerarquía, anclas con
             // estirado, layout groups y escala de canvas coinciden
-            // con lo que se verá en juego. Antes había una fórmula
-            // propia simplificada (solo anchor_min, sin padres) que
-            // podía enseñar otra cosa.
-            let rects = glass_core::resolve_scene_ui_rects(&scene, game_rect.width(), game_rect.height());
+            // con lo que se verá en juego.
+            let rects = {
+                let docs = glass_ui::derivacion::derivar_documentos(&scene);
+                match docs.into_iter().next() {
+                    Some(doc) => {
+                        let colocado = glass_ui::api::colocar_documento(
+                            &doc,
+                            glass_ui::api::Viewport {
+                                ancho: game_rect.width(),
+                                alto: game_rect.height(),
+                            },
+                        );
+                        glass_ui::api::rects_colocados(&doc, &colocado)
+                    }
+                    None => std::collections::HashMap::new(),
+                }
+            };
             for ent in &scene.entities {
                 if !ent.active { continue; }
                 if ent.rect_transform.is_some() {

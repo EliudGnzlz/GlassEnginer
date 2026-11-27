@@ -9,7 +9,12 @@
 //! Camera/World. Diseño: `diseno_fase_ui_canvas.md` en la raíz del
 //! proyecto de documentación del motor.
 
+pub mod api;
 pub mod derivacion;
 pub mod documento;
 pub mod estilos;
+pub mod interaccion;
+pub mod layout;
+pub mod pintor;
 pub mod migracion;
+pub mod parser;

@@ -36,7 +36,7 @@ pub use prefab::Prefab;
 pub use physics_material::PhysicsMaterial;
 pub use project::ProjectSettings;
 pub use scene::{
-    canvas_scale_factor, layout_group_rects, resolve_scene_ui_rects, resolve_ui_rect,
+    canvas_scale_factor, layout_group_rects, resolve_ui_rect,
     resolve_ui_rect_in, spec_por_defecto, AudioSourceData, CameraData, CanvasData, CharacterData,
     ColliderSpec, EntityData,
     LayoutGroupData, LightData, LightProfileData, MaterialData, MeshColliderMode, MeshData,
