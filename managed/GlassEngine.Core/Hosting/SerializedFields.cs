@@ -108,7 +108,7 @@ internal static class SerializedFields
         {
             foreach (FieldInfo campo in nivel.GetFields(Instancia | BindingFlags.DeclaredOnly))
             {
-                if (campo.IsInitOnly || campo.IsNotSerialized)
+                if (campo.IsInitOnly || campo.IsDefined(typeof(NonSerializedAttribute), inherit: false))
                     continue;
                 if (campo.IsPublic || campo.IsDefined(typeof(SerializeField), inherit: false))
                     yield return campo;

@@ -527,6 +527,10 @@ namespace UnityEngine
         public string tag { get; set; } = "Untagged";
         public bool activeSelf { get; private set; } = true;
 
+        // v1: sin propagación de actividad por la jerarquía de padres,
+        // activeInHierarchy equivale a activeSelf.
+        public bool activeInHierarchy => activeSelf;
+
         private readonly List<Component> _components = new();
         private static readonly Dictionary<ulong, GameObject> _entityMap = new();
 
@@ -739,21 +743,169 @@ namespace UnityEngine
     }
 
     public class MonoBehaviour : Behaviour
-    {
-        public virtual void Awake() { }
-        public virtual void Start() { }
-        public virtual void Update() { }
-        public virtual void FixedUpdate() { }
-        public virtual void LateUpdate() { }
-        public virtual void OnDestroy() { }
+        {
+            public virtual void Awake() { }
+            public virtual void Start() { }
+            public virtual void Update() { }
+            public virtual void FixedUpdate() { }
+            public virtual void LateUpdate() { }
+            public virtual void OnDestroy() { }
 
-        /// <summary>Huésped que ticka a este script (null si no está alojado).</summary>
-        internal GlassEngine.Core.Hosting.MonoBehaviourHost? Host { get; set; }
+            /// <summary>Huésped que ticka a este script (null si no está alojado).</summary>
+            internal GlassEngine.Core.Hosting.MonoBehaviourHost? Host { get; set; }
 
-        internal override void OnEnabledChanged(bool value) => Host?.NotifyEnabledChanged(value);
-    }
+            internal override void OnEnabledChanged(bool value) => Host?.NotifyEnabledChanged(value);
 
-    // ==========================================
+            // ------------------------------------------
+            // Corrutinas (§4). enabled = false no las detiene, como en Unity;
+            // OnDestroy y SetActive(false) hacen StopAll desde el huésped.
+            // Los StartCoroutine devuelven null si no se puede arrancar, pero se
+            // anotan no anulables como en Unity.
+            // ------------------------------------------
+
+            public Coroutine StartCoroutine(System.Collections.IEnumerator routine)
+            {
+                if (routine is null)
+                {
+                    Debug.LogError("StartCoroutine: routine is null");
+                    return null!;
+                }
+
+                var host = HostParaCorrutinas();
+                if (host is null)
+                    return null!;
+
+                return host.Coroutines.Start(routine, null)!;
+            }
+
+            public Coroutine StartCoroutine(string methodName) => StartCoroutine(methodName, null);
+
+            public Coroutine StartCoroutine(string methodName, object? value)
+            {
+                if (string.IsNullOrEmpty(methodName))
+                {
+                    Debug.LogError("StartCoroutine: methodName is null or empty");
+                    return null!;
+                }
+
+                // Se comprueba antes de invocar: con el objeto inactivo no corre nada.
+                var host = HostParaCorrutinas();
+                if (host is null)
+                    return null!;
+
+                var metodo = BuscarCorrutinaPorNombre(methodName, value);
+                if (metodo is null)
+                {
+                    Debug.LogError($"Coroutine '{methodName}' couldn't be started");
+                    return null!;
+                }
+
+                System.Collections.IEnumerator? rutina;
+                try
+                {
+                    object?[]? args = metodo.GetParameters().Length == 0 ? null : new[] { value };
+                    rutina = metodo.Invoke(this, args) as System.Collections.IEnumerator;
+                }
+                catch (System.Exception ex)
+                {
+                    // Ninguna excepción cruza la FFI: un método no iterador puede lanzar al invocarse.
+                    var real = (ex as System.Reflection.TargetInvocationException)?.InnerException ?? ex;
+                    Debug.LogError($"Coroutine '{methodName}' couldn't be started:\n{real}");
+                    return null!;
+                }
+
+                if (rutina is null)
+                {
+                    Debug.LogError($"Coroutine '{methodName}' couldn't be started");
+                    return null!;
+                }
+
+                return host.Coroutines.Start(rutina, methodName)!;
+            }
+
+            /// <summary>Para la rutina cuyo Root es este enumerador (solo las de este script).</summary>
+            public void StopCoroutine(System.Collections.IEnumerator routine)
+            {
+                if (routine is null)
+                    return;
+                Host?.Coroutines.StopByRoot(routine);
+            }
+
+            /// <summary>Para la rutina de este handle si pertenece a este script.</summary>
+            public void StopCoroutine(Coroutine routine)
+            {
+                if (routine is null)
+                    return;
+                Host?.Coroutines.Stop(routine);
+            }
+
+            /// <summary>Para solo las rutinas arrancadas con StartCoroutine(string), como en Unity.</summary>
+            public void StopCoroutine(string methodName)
+            {
+                if (methodName is null)
+                    return;
+                Host?.Coroutines.StopByName(methodName);
+            }
+
+            public void StopAllCoroutines() => Host?.Coroutines.StopAll();
+
+            /// <summary>Host válido para arrancar corrutinas; loguea y devuelve null si no lo hay.</summary>
+            private GlassEngine.Core.Hosting.MonoBehaviourHost? HostParaCorrutinas()
+            {
+                var host = Host;
+                if (host is null)
+                {
+                    Debug.LogError(
+                        $"Coroutine couldn't be started because the script '{GetType().Name}' is not hosted by the engine");
+                    return null;
+                }
+
+                if (!gameObject.activeInHierarchy)
+                {
+                    Debug.LogError(
+                        $"Coroutine couldn't be started because the game object '{gameObject.name}' is inactive!");
+                    return null;
+                }
+
+                return host;
+            }
+
+            /// <summary>
+            /// Método de instancia (de cualquier visibilidad, en la clase o sus
+            /// bases) que devuelve IEnumerator y tiene 0 parámetros, o 1 si el
+            /// valor no es nulo y su tipo es asignable. Con valor se prefiere el
+            /// de 1 parámetro.
+            /// </summary>
+            private System.Reflection.MethodInfo? BuscarCorrutinaPorNombre(string nombre, object? valor)
+            {
+                const System.Reflection.BindingFlags flags =
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.DeclaredOnly;
+
+                System.Reflection.MethodInfo? sinParametros = null;
+                for (var tipo = GetType(); tipo is not null && tipo != typeof(MonoBehaviour); tipo = tipo.BaseType)
+                {
+                    foreach (var m in tipo.GetMethods(flags))
+                    {
+                        if (m.Name != nombre ||
+                            m.IsGenericMethodDefinition ||
+                            m.ReturnType != typeof(System.Collections.IEnumerator))
+                            continue;
+
+                        var ps = m.GetParameters();
+                        if (ps.Length == 0)
+                            sinParametros ??= m;
+                        else if (ps.Length == 1 && valor is not null && ps[0].ParameterType.IsInstanceOfType(valor))
+                            return m;
+                    }
+                }
+
+                return sinParametros;
+            }
+        }
+
     // COMPONENTES DE FÍSICA Y AUDIO COMPATIBLES
     // ==========================================
 
