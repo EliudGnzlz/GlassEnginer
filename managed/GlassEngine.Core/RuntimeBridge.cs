@@ -36,6 +36,8 @@ public static class RuntimeBridge
     private static SetAudioSourcePositionDelegate? _setAudioSourcePos;
     private static SetListenerTransformDelegate? _setListenerTransform;
     private static StopAudioDelegate? _stopAudio;
+    private static PauseAudioDelegate? _pauseAudio;
+    private static ResumeAudioDelegate? _resumeAudio;
     private static PlayAudio2DOnBusDelegate? _playAudio2DOnBus;
     private static PlayAudio3DOnBusDelegate? _playAudio3DOnBus;
 
@@ -260,6 +262,9 @@ public static class RuntimeBridge
         // Añadidos AL FINAL (auditoría C6): play con bus.
         public IntPtr Play2DOnBus;
         public IntPtr Play3DOnBus;
+        // Añadidos AL FINAL: pausa y reanudación por fuente.
+        public IntPtr Pause;
+        public IntPtr Resume;
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitAudioBridge")]
@@ -280,6 +285,12 @@ public static class RuntimeBridge
             _playAudio2DOnBus = Marshal.GetDelegateForFunctionPointer<PlayAudio2DOnBusDelegate>(callbacks->Play2DOnBus);
         if (callbacks->Play3DOnBus != IntPtr.Zero)
             _playAudio3DOnBus = Marshal.GetDelegateForFunctionPointer<PlayAudio3DOnBusDelegate>(callbacks->Play3DOnBus);
+
+        if (callbacks->Pause != IntPtr.Zero)
+            _pauseAudio = Marshal.GetDelegateForFunctionPointer<PauseAudioDelegate>(callbacks->Pause);
+
+        if (callbacks->Resume != IntPtr.Zero)
+            _resumeAudio = Marshal.GetDelegateForFunctionPointer<ResumeAudioDelegate>(callbacks->Resume);
 
         Log(2, "GlassEngine.Core AudioBridge inicializado exitosamente desde Rust.");
     }
@@ -357,6 +368,16 @@ public static class RuntimeBridge
     public static void StopAudio(ulong handle)
     {
         _stopAudio?.Invoke(handle);
+    }
+
+    public static void PauseAudio(ulong handle)
+    {
+        _pauseAudio?.Invoke(handle);
+    }
+
+    public static void ResumeAudio(ulong handle)
+    {
+        _resumeAudio?.Invoke(handle);
     }
 
     [UnmanagedCallersOnly(EntryPoint = "InitParticleBridge")]

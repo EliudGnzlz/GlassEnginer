@@ -23,4 +23,6 @@ public delegate void SetAudioSourcePositionDelegate(ulong handle, float posX, fl
 public delegate void SetListenerTransformDelegate(float posX, float posY, float posZ, float rotX, float rotY, float rotZ, float rotW);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-public delegate void StopAudioDelegate(ulong handle);
+    public delegate void StopAudioDelegate(ulong handle);
+    public delegate void PauseAudioDelegate(ulong handle);
+    public delegate void ResumeAudioDelegate(ulong handle);

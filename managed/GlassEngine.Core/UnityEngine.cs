@@ -1163,11 +1163,53 @@ namespace UnityEngine
         public float pitch { get; set; } = 1.0f;
         public bool loop { get; set; } = false;
 
+        private ulong _handle;
+        private bool _paused;
+
+        public bool isPlaying => _handle != 0 && !_paused;
+
         public void Play()
         {
+            // En esta v1 del motor no hay reanudación desde el punto de reinicio:
+            // volver a llamar a Play() sobre una fuente ya activa la detiene y
+            // la arranca de nuevo desde el principio, como Unity al re-disparar Play.
+            if (_handle != 0)
+            {
+                Stop();
+            }
+
             if (!string.IsNullOrEmpty(clip))
             {
-                RuntimeBridge.PlayAudio3D(clip, transform.position, volume, pitch, loop);
+                _handle = RuntimeBridge.PlayAudio3D(clip, transform.position, volume, pitch, loop);
+                _paused = false;
+            }
+        }
+
+        public void Pause()
+        {
+            if (_handle != 0 && !_paused)
+            {
+                RuntimeBridge.PauseAudio(_handle);
+                _paused = true;
+            }
+        }
+
+        public void UnPause()
+        {
+            if (_handle != 0 && _paused)
+            {
+                RuntimeBridge.ResumeAudio(_handle);
+                _paused = false;
+            }
+        }
+
+        public void Stop()
+        {
+            if (_handle != 0)
+            {
+                RuntimeBridge.StopAudio(_handle);
+                _handle = 0;
+                _paused = false;
             }
         }
 
@@ -1176,7 +1218,6 @@ namespace UnityEngine
             RuntimeBridge.PlayAudio3D(clipName, position, volume, 1.0f, false);
         }
     }
-
     /// <summary>
     /// Reproductor de animaciones con piel (bloque de skinning), espejo
     /// mínimo del <c>Animator</c> de Unity. La pose la evalúa el motor en
