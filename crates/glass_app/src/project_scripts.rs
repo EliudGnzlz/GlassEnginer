@@ -152,7 +152,7 @@ fn texto_csproj(raices_assets: &[PathBuf], fachada_csproj: &Path) -> String {
     for raiz in raices_assets {
         let r = escapar_xml(&escapar_msbuild(&ruta_msbuild(raiz)));
         compile.push_str(&format!(
-            "    <Compile Include=\"{r}/**/*.cs\" Exclude=\"{r}/**/Editor/**/*.cs;{r}/**/bin/**/*.cs;{r}/**/obj/**/*.cs\" />\n"
+            "    <Compile Include=\"{r}/**/*.cs\" Exclude=\"{r}/**/Editor/**/*.cs;{r}/**/bin/**/*.cs;{r}/**/obj/**/*.cs;{r}/**/Incompatibles/**/*.cs\" />\n"
         ));
     }
     let fachada = escapar_xml(&escapar_msbuild(&ruta_msbuild(fachada_csproj)));
@@ -356,6 +356,7 @@ mod tests {
             assert!(texto.contains(&format!("{r}/**/Editor/**/*.cs")));
             assert!(texto.contains(&format!("{r}/**/bin/**/*.cs")));
             assert!(texto.contains(&format!("{r}/**/obj/**/*.cs")));
+            assert!(texto.contains(&format!("{r}/**/Incompatibles/**/*.cs")));
         }
         assert!(texto.contains(&format!(
             "<ProjectReference Include=\"{}\"",
