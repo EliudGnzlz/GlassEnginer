@@ -2198,7 +2198,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
                 self.viewport.render_scene_tab(ui, self.scene_texture_id, self.game_texture_id, self.selected_entity_id, self.scene_state, mesh);
             }
             EditorTab::GameView => {
-                self.viewport.render_game_tab(ui, self.game_texture_id, self.scene_state);
+                self.viewport.render_game_tab(ui, self.game_texture_id, self.selected_entity_id, self.scene_state);
             }
             EditorTab::Inspector => {
                 // Modo del Inspector (E2): manda la última selección que
