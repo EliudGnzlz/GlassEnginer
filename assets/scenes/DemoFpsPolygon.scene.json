@@ -74,7 +74,7 @@
     0.98,
     0.92
    ],
-   "intensity": 0.45,
+   "intensity": 1.0,
    "light_type": "Directional",
    "range": 10.0,
    "cast_shadow": true
@@ -37232,21 +37232,21 @@
   "light_profile": null,
   "ambient": {
    "sky": [
-    0.82,
-    0.88,
-    1.0
+    0.03697,
+    0.04215,
+    0.05455
    ],
    "equator": [
-    0.522,
-    0.52925,
-    0.561875
+    0.01233,
+    0.01435,
+    0.01593
    ],
    "ground": [
-    0.279,
-    0.261,
-    0.2475
+    0.003671,
+    0.003335,
+    0.002709
    ],
-   "intensity": 0.25
+   "intensity": 1.0
   }
  },
  {
@@ -37300,7 +37300,7 @@
   "light_profile": null,
   "ambient": null,
   "post": {
-   "exposure": 1.5,
+   "exposure": 1.0,
    "intensity": 0.3,
    "vignette": 0.22
   }

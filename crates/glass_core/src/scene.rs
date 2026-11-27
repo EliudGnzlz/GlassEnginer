@@ -6497,6 +6497,59 @@ mod g1_ambient_tests {
     }
 }
 
+// G5: valores re-autorados de la Demo FPS Polygon (look URP). El test
+// carga la escena real y afirma los valores de diseño; si alguien los
+// toca a mano en el JSON, esto lo caza.
+#[cfg(test)]
+mod g5_demo_values {
+    use super::*;
+
+    #[test]
+    fn g5_demo_values() {
+        let data = include_str!("../../../assets/scenes/DemoFpsPolygon.scene.json");
+        let entities: Vec<EntityData> = serde_json::from_str(data)
+            .unwrap_or_else(|e| panic!("JSON inválido en DemoFpsPolygon.scene.json: {e}"));
+
+        let post = resolve_post(&entities);
+        assert!(
+            (post.exposure - 1.0).abs() < 1e-6,
+            "exposure debe ser 1.0, es {}",
+            post.exposure
+        );
+
+        let ambient = resolve_ambient(&entities);
+        assert_eq!(ambient.sky, URP_AMBIENT_SKY, "sky debe ser el valor URP de referencia");
+        assert_eq!(
+            ambient.equator, URP_AMBIENT_EQUATOR,
+            "equator debe ser el valor URP de referencia"
+        );
+        assert_eq!(
+            ambient.ground, URP_AMBIENT_GROUND,
+            "ground debe ser el valor URP de referencia"
+        );
+        assert_eq!(
+            ambient.intensity,
+            Some(URP_AMBIENT_INTENSITY),
+            "ambient intensity debe ser {}",
+            URP_AMBIENT_INTENSITY
+        );
+
+        let sol = entities
+            .iter()
+            .find(|e| e.id == 2)
+            .expect("no se encontró la entidad Sol (id 2)");
+        let intensity = sol
+            .light
+            .as_ref()
+            .expect("la entidad Sol no tiene light")
+            .intensity;
+        assert!(
+            (intensity - 1.0).abs() < 1e-6,
+            "intensidad autorada del Sol debe ser 1.0, es {intensity}"
+        );
+    }
+}
+
 #[cfg(test)]
 mod g2_post_tests {
     use super::*;
