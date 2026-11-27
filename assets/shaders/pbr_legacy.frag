@@ -83,7 +83,13 @@ float point_shadow_factor(int i) {
 // fuera de la caja (o tras el plano lejano de la luz) queda a pleno sol.
 float shadow_factor(vec3 world_pos, vec3 n) {
     if (u_shadow.shadow_params.w < 0.5) return 1.0;
-    vec3 sp = world_pos + n * u_shadow.shadow_params.z;
+    // El desplazamiento crece a incidencia rasante (donde nace el acne) y
+    // se queda en un suelo del 70 % a incidencia perpendicular, tipo URP
+    // (el suelo garantiza que el desplazamiento nunca baja del valor
+    // constante anterior, 0,05 m, que ya era seguro a mediodía).
+    float ndotl = clamp(dot(n, u_push.light_dir.xyz), 0.0, 1.0);
+    float factor_angulo = max(1.0 - ndotl, 0.7);
+    vec3 sp = world_pos + n * (u_shadow.shadow_params.z * factor_angulo);
     vec4 lc = u_shadow.light_vp * vec4(sp, 1.0);
     vec3 proj = lc.xyz / lc.w;
     if (proj.z < 0.0 || proj.z > 1.0) return 1.0;

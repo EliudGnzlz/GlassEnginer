@@ -42,9 +42,19 @@ pub const SHADOW_FRONT: f32 = 60.0;
 /// Sesgo de profundidad (en profundidad normalizada [0,1]) que el
 /// fragmento resta a la referencia antes de comparar.
 pub const SHADOW_DEPTH_BIAS: f32 = 0.0015;
-/// Sesgo de normal (metros de mundo): la posición de muestreo se
-/// desplaza a lo largo de la normal antes de proyectar.
-pub const SHADOW_NORMAL_BIAS: f32 = 0.05;
+/// Sesgo de normal en téxeles del mapa de sombras. El desplazamiento de
+/// mundo efectivo es `bias × téxel de mundo × factor de ángulo` (tipo
+/// URP): 3,0 téxeles ≈ 0,073 m a incidencia rasante. El valor anterior,
+/// 0,05 m constantes, se quedaba corto justo ahí y producía el acne.
+pub const SHADOW_NORMAL_BIAS: f32 = 3.0;
+/// Lado de un téxel del mapa de sombras en metros de mundo (≈ 0,0244 m).
+pub const SHADOW_TEXEL_WORLD: f32 = 2.0 * SHADOW_ORTHO_HALF / SHADOW_MAP_SIZE as f32;
+
+/// Sesgo de normal en metros de mundo que viaja en `shadow_params.z`.
+/// El shader le aplica después el factor de ángulo.
+pub fn bias_normal_mundo() -> f32 {
+    SHADOW_NORMAL_BIAS * SHADOW_TEXEL_WORLD
+}
 
 /// Contenido del UBO de frame del set 2: la VP de la luz y
 /// `params = (1/tamaño, bias de profundidad, bias de normal, activo)`.
@@ -335,7 +345,7 @@ impl ShadowResources {
             // primera VP (params.w = 0 → el shader devuelve 1,0).
             let initial = ShadowUbo {
                 light_vp: [0.0; 16],
-                params: [1.0 / size as f32, SHADOW_DEPTH_BIAS, SHADOW_NORMAL_BIAS, 0.0],
+                params: [1.0 / size as f32, SHADOW_DEPTH_BIAS, bias_normal_mundo(), 0.0],
                 fog_color_dist: [0.0; 4],
                 fog_far_mode: [0.0; 4],
                 ambient_sky: [
@@ -851,5 +861,20 @@ mod point_shadow_face_tests {
                 "cara {k}: el punto detrás de su eje no debe estar dentro del frustum"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bias_normal_escalado_por_texel() {
+        // 50 m / 2048 téxeles ≈ 0,0244 m por téxel.
+        assert!((SHADOW_TEXEL_WORLD - 0.0244).abs() < 1e-4);
+        assert_eq!(bias_normal_mundo(), SHADOW_NORMAL_BIAS * SHADOW_TEXEL_WORLD);
+        // Banda deliberada del arreglo: entre 5 y 10 cm de mundo.
+        let b = bias_normal_mundo();
+        assert!((0.05..=0.10).contains(&b), "bias de normal fuera de banda: {b}");
     }
 }

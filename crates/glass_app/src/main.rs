@@ -8234,7 +8234,7 @@ for name in wanted {
                     renderer.set_shadow_frame(vp, [
                         1.0 / glass_renderer::shadow::SHADOW_MAP_SIZE as f32,
                         glass_renderer::shadow::SHADOW_DEPTH_BIAS,
-                        glass_renderer::shadow::SHADOW_NORMAL_BIAS,
+                        glass_renderer::shadow::bias_normal_mundo(),
                         1.0,
                     ]);
                 } else {

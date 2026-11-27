@@ -2203,7 +2203,7 @@ impl GlassRenderer {
             shadow_params: [
                 1.0 / crate::shadow::SHADOW_MAP_SIZE as f32,
                 crate::shadow::SHADOW_DEPTH_BIAS,
-                crate::shadow::SHADOW_NORMAL_BIAS,
+                crate::shadow::bias_normal_mundo(),
                 0.0,
             ],
             fog_color_dist: [0.0; 4],
