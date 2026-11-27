@@ -1007,6 +1007,10 @@ impl EditorDockingLayout {
                         sc.next_entity_id = 1;
                         sc.create_entity("Main Camera".into(), vec!["Transform".into(), "Camera".into()]);
                         sc.create_entity("Directional Light".into(), vec!["Transform".into(), "Light".into()]);
+                        let amb_id = sc.create_entity("Ambiente".into(), vec!["Transform".into(), "Ambiente".into()]);
+                        if let Some(e) = sc.entities.iter_mut().find(|e| e.id == amb_id) {
+                            e.ambient = Some(glass_core::scene::AmbientComponent::default());
+                        }
                         self.undo_history.reset(&sc.entities, sc.next_entity_id);
                     }
                     self.status_message = Some(("Nueva escena inicializada".into(), std::time::Instant::now()));

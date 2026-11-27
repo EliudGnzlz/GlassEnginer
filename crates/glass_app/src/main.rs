@@ -6533,6 +6533,21 @@ let resueltos = if body.has_collider {
                     None
                 };
 
+                // G1: ambiente resuelto de la escena. En modo
+                // explícito la intensidad es la de la escena en ambas
+                // ramas; en legado, los literales de siempre.
+                let amb = scene.ambient_settings();
+                let (amb_intensity_lit, amb_intensity_unlit) = match amb.source {
+                    glass_core::scene::AmbientSource::Explicit => {
+                        let i = amb.intensity.unwrap_or(1.0);
+                        (i, i)
+                    }
+                    glass_core::scene::AmbientSource::Legacy => (
+                        glass_core::scene::LEGACY_AMBIENT_INTENSITY_LIT,
+                        glass_core::scene::LEGACY_AMBIENT_INTENSITY_UNLIT,
+                    ),
+                };
+
                 let (ld, lc) = if let Some(light_ent) = scene.main_light() {
                     let rot = light_ent.transform.rotation();
                     // L (hacia la fuente) = columna 2 de la matriz de la luz:
@@ -6550,9 +6565,9 @@ let resueltos = if body.has_collider {
                         ldata.color[1] * ldata.intensity,
                         ldata.color[2] * ldata.intensity,
                     ];
-                    ([norm[0], norm[1], norm[2], 0.25], [col[0], col[1], col[2], 1.0])
+                    ([norm[0], norm[1], norm[2], amb_intensity_lit], [col[0], col[1], col[2], 1.0])
                 } else {
-                    ([0.0, 1.0, 0.0, 0.06], [0.0, 0.0, 0.0, 0.0])
+                    ([0.0, 1.0, 0.0, amb_intensity_unlit], [0.0, 0.0, 0.0, 0.0])
                 };
 
                 (vp_g, ld, lc, eye_g)
@@ -6585,6 +6600,21 @@ let resueltos = if body.has_collider {
                     let p = perspective_matrix(45.0_f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
                     Some(matmul(&p, &v))
                 };
+                // G1: ambiente resuelto de la escena. En modo
+                // explícito la intensidad es la de la escena en ambas
+                // ramas; en legado, los literales de siempre.
+                let amb = scene.ambient_settings();
+                let (amb_intensity_lit, amb_intensity_unlit) = match amb.source {
+                    glass_core::scene::AmbientSource::Explicit => {
+                        let i = amb.intensity.unwrap_or(1.0);
+                        (i, i)
+                    }
+                    glass_core::scene::AmbientSource::Legacy => (
+                        glass_core::scene::LEGACY_AMBIENT_INTENSITY_LIT,
+                        glass_core::scene::LEGACY_AMBIENT_INTENSITY_UNLIT,
+                    ),
+                };
+
                 let (ld, lc) = if let Some(light_ent) = scene.main_light() {
                     let rot = light_ent.transform.rotation();
                     // L (hacia la fuente) = columna 2 de la matriz de la luz:
@@ -6602,9 +6632,9 @@ let resueltos = if body.has_collider {
                         ldata.color[1] * ldata.intensity,
                         ldata.color[2] * ldata.intensity,
                     ];
-                    ([norm[0], norm[1], norm[2], 0.25], [col[0], col[1], col[2], 1.0])
+                    ([norm[0], norm[1], norm[2], amb_intensity_lit], [col[0], col[1], col[2], 1.0])
                 } else {
-                    ([0.0, 1.0, 0.0, 0.06], [0.0, 0.0, 0.0, 0.0])
+                    ([0.0, 1.0, 0.0, amb_intensity_unlit], [0.0, 0.0, 0.0, 0.0])
                 };
                 (vp_g, ld, lc, eye_c)
             } else {
@@ -6615,6 +6645,16 @@ let resueltos = if body.has_collider {
             let eye_final = eye_g.unwrap_or([3.5, 3.2, 9.5, 1.0]);
             (vp_g.unwrap(), vp_g, ld, lc, eye_final, eye_g)
         };
+
+        // G1: publicación de los colores del ambiente en el camino
+        // común (editor y standalone). La intensidad ya viaja en
+        // light_dir.w desde las ramas cfg de arriba; los colores van
+        // al UBO de frame con set_ambient. Sin portador, la resolución
+        // devuelve los colores heredados y nada cambia.
+        if let Ok(scene) = self.scene_state.lock() {
+            let amb = scene.ambient_settings();
+            renderer.set_ambient(amb.sky, amb.equator, amb.ground);
+        }
 
         // El canal w de light_color está reservado en el PBR (no lo lee) y
         // los materiales de grafo lo leen como tiempo en segundos: se
@@ -8280,11 +8320,37 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 // Niebla de la escena (Fase 2): la publica la primera
                 // entidad con FogData; sin ella, niebla desactivada.
                 match self.scene_state.lock() {
-                    Ok(scene) => match scene.fog_settings() {
-                        Some(fog) => renderer.set_fog(fog.color, fog.near, fog.far, true),
-                        None => renderer.set_fog([0.0, 0.0, 0.0], 0.0, 1.0, false),
-                    },
-                    Err(_) => renderer.set_fog([0.0, 0.0, 0.0], 0.0, 1.0, false),
+                    Ok(scene) => {
+                        match scene.fog_settings() {
+                            Some(fog) => renderer.set_fog(fog.color, fog.near, fog.far, true),
+                            None => renderer.set_fog([0.0, 0.0, 0.0], 0.0, 1.0, false),
+                        }
+                        // Ambiente de escena (G1): lo publica la
+                        // resolución de la escena; sin portador son
+                        // los colores heredados.
+                        let amb = scene.ambient_settings();
+                        renderer.set_ambient(amb.sky, amb.equator, amb.ground);
+                        if amb.extra_carriers > 0 {
+                            static WARNED: std::sync::atomic::AtomicBool =
+                                std::sync::atomic::AtomicBool::new(false);
+                            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                log::warn!(
+                                    "La escena tiene {} entidad(es) adicionales con ambiente; \
+                                     se usa el de '{}'.",
+                                    amb.extra_carriers,
+                                    scene.ambient_carrier_name().unwrap_or_default()
+                                );
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        renderer.set_fog([0.0, 0.0, 0.0], 0.0, 1.0, false);
+                        renderer.set_ambient(
+                            glass_core::scene::LEGACY_AMBIENT_SKY,
+                            glass_core::scene::LEGACY_AMBIENT_EQUATOR,
+                            glass_core::scene::LEGACY_AMBIENT_GROUND,
+                        );
+                    }
                 }
 
                 // Telemetría de iluminación (Fase 2S) para glass_render_lighting_debug.

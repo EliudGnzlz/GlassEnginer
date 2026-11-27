@@ -871,6 +871,12 @@ pub struct GlassRenderer {
     /// sombra; la publica la app con set_fog antes de render_views.
     fog_color_dist: [f32; 4],
     fog_far_mode: [f32; 4],
+    /// Ambiente de escena del frame (G1): colores lineales del
+    /// gradient; los publica la app con set_ambient. Arrancan en los
+    /// valores heredados para que sin app el render sea el de siempre.
+    ambient_sky: [f32; 4],
+    ambient_equator: [f32; 4],
+    ambient_ground: [f32; 4],
     /// Atlas de cubos de las sombras puntuales (Fase 2).
     point_shadows: crate::shadow::PointShadowResources,
     /// Luces con sombra del frame, en orden de ranura del UBO.
@@ -2202,6 +2208,24 @@ impl GlassRenderer {
             ],
             fog_color_dist: [0.0; 4],
             fog_far_mode: [0.0; 4],
+            ambient_sky: [
+                glass_core::scene::LEGACY_AMBIENT_SKY[0],
+                glass_core::scene::LEGACY_AMBIENT_SKY[1],
+                glass_core::scene::LEGACY_AMBIENT_SKY[2],
+                0.0,
+            ],
+            ambient_equator: [
+                glass_core::scene::LEGACY_AMBIENT_EQUATOR[0],
+                glass_core::scene::LEGACY_AMBIENT_EQUATOR[1],
+                glass_core::scene::LEGACY_AMBIENT_EQUATOR[2],
+                0.0,
+            ],
+            ambient_ground: [
+                glass_core::scene::LEGACY_AMBIENT_GROUND[0],
+                glass_core::scene::LEGACY_AMBIENT_GROUND[1],
+                glass_core::scene::LEGACY_AMBIENT_GROUND[2],
+                0.0,
+            ],
             joints_pool,
             custom_pipelines: std::collections::HashMap::from([(
                 "material_transparent".to_string(),
@@ -2564,6 +2588,15 @@ impl GlassRenderer {
     pub fn set_fog(&mut self, color: [f32; 3], near: f32, far: f32, enabled: bool) {
         self.fog_color_dist = [color[0], color[1], color[2], near];
         self.fog_far_mode = [far, if enabled { 1.0 } else { 0.0 }, 0.0, 0.0];
+    }
+
+    /// Publica el ambiente de escena del frame (G1): los tres colores
+    /// lineales del gradient. Viaja en el UBO de frame (set 2) junto a
+    /// la sombra y la niebla; la intensidad va en light_dir.w.
+    pub fn set_ambient(&mut self, sky: [f32; 3], equator: [f32; 3], ground: [f32; 3]) {
+        self.ambient_sky = [sky[0], sky[1], sky[2], 0.0];
+        self.ambient_equator = [equator[0], equator[1], equator[2], 0.0];
+        self.ambient_ground = [ground[0], ground[1], ground[2], 0.0];
     }
 
 /// Publica las luces puntuales con sombra del frame (Fase 2), en el
@@ -3317,6 +3350,9 @@ impl GlassRenderer {
             params: shadow_params,
             fog_color_dist: self.fog_color_dist,
             fog_far_mode: self.fog_far_mode,
+            ambient_sky: self.ambient_sky,
+            ambient_equator: self.ambient_equator,
+            ambient_ground: self.ambient_ground,
         });
             shadow_params
         }

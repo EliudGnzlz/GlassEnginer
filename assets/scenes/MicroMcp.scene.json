@@ -1,1 +1,315 @@
-[{"id": 1, "name": "Camara", "tag": "Untagged", "layer": "Default", "is_static": false, "active": true, "parent": null, "children": [], "transform": {"position": [11.0, 7.5, 17.0], "rotation": [-16.0, 30.0, 0.0], "scale": [1, 1, 1]}, "components": ["Transform", "Camera"], "mesh": null, "camera": {"fov": 60, "near_clip": 0.1, "far_clip": 300, "is_main": true}, "light": null, "physics": null, "script": null, "script_data": null, "audio": null, "canvas": null, "rect_transform": null, "ui_text": null, "ui_button": null, "ui_image": null, "ui_drag": null, "portal": null, "animator": null, "fog": {"color": [0.62, 0.7, 0.82], "near": 40.0, "far": 160.0}}, {"active": true, "animator": null, "audio": null, "camera": null, "canvas": null, "children": [], "is_static": false, "layer": "Default", "light": {"color": [1.0, 0.98, 0.92], "intensity": 0.45, "light_type": "Directional", "range": 10.0, "cast_shadow": true}, "mesh": null, "parent": null, "physics": null, "rect_transform": null, "script": null, "script_data": null, "ui_button": null, "ui_text": null, "tag": "Untagged", "id": 2, "name": "Sol", "components": ["Transform", "Light"], "transform": {"position": [0.0, 3.0, 0.0], "rotation": [-50, 30, 0], "scale": [1.0, 1.0, 1.0]}}, {"active": true, "animator": null, "audio": null, "camera": null, "canvas": null, "children": [], "is_static": true, "layer": "Default", "light": null, "mesh": {"color": [0.45, 0.48, 0.52], "model": "cube", "shader": "pbr.vert.spv", "wireframe": false}, "parent": null, "physics": {"body_type": "Static", "mass": 1.0, "friction": 0.7, "restitution": 0.05, "box_extents": [30.0, 0.5, 35.0], "linear_velocity": [0, 0, 0]}, "rect_transform": null, "script": null, "script_data": null, "ui_button": null, "ui_text": null, "tag": "Untagged", "id": 3, "name": "Suelo", "components": ["Transform", "MeshRenderer", "StaticCollider", "Physics"], "transform": {"position": [0.0, -0.5, -2.0], "rotation": [0.0, 0.0, 0.0], "scale": [60.0, 1.0, 70.0]}}, {"id": 50, "name": "Bot", "tag": "Untagged", "layer": "Default", "is_static": false, "active": true, "parent": null, "children": [], "components": ["Transform", "MeshRenderer", "Animator"], "transform": {"position": [0.0, 0.0, -3.0], "rotation": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]}, "mesh": {"color": [1.0, 1.0, 1.0], "wireframe": false, "shader": "pbr.vert.spv", "model": "xbot_demo"}, "script": null, "script_data": null, "physics": null, "audio": null, "camera": null, "light": null, "animator": {"clip": "Idle", "controller": "polygon_locomocion", "playing": true, "speed": 1.0}, "portal": null, "canvas": null, "rect_transform": null, "ui_text": null, "ui_button": null, "ui_image": null, "ui_drag": null, "fog": null, "light_profile": null}]
+[
+ {
+  "id": 1,
+  "name": "Camara",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "transform": {
+   "position": [
+    11.0,
+    7.5,
+    17.0
+   ],
+   "rotation": [
+    -16.0,
+    30.0,
+    0.0
+   ],
+   "scale": [
+    1,
+    1,
+    1
+   ]
+  },
+  "components": [
+   "Transform",
+   "Camera"
+  ],
+  "mesh": null,
+  "camera": {
+   "fov": 60,
+   "near_clip": 0.1,
+   "far_clip": 300,
+   "is_main": true
+  },
+  "light": null,
+  "physics": null,
+  "script": null,
+  "script_data": null,
+  "audio": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "portal": null,
+  "animator": null,
+  "fog": {
+   "color": [
+    0.62,
+    0.7,
+    0.82
+   ],
+   "near": 40.0,
+   "far": 160.0
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": false,
+  "layer": "Default",
+  "light": {
+   "color": [
+    1.0,
+    0.98,
+    0.92
+   ],
+   "intensity": 0.45,
+   "light_type": "Directional",
+   "range": 10.0,
+   "cast_shadow": true
+  },
+  "mesh": null,
+  "parent": null,
+  "physics": null,
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 2,
+  "name": "Sol",
+  "components": [
+   "Transform",
+   "Light"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    3.0,
+    0.0
+   ],
+   "rotation": [
+    -50,
+    30,
+    0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "is_static": true,
+  "layer": "Default",
+  "light": null,
+  "mesh": {
+   "color": [
+    0.45,
+    0.48,
+    0.52
+   ],
+   "model": "cube",
+   "shader": "pbr.vert.spv",
+   "wireframe": false
+  },
+  "parent": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 1.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    30.0,
+    0.5,
+    35.0
+   ],
+   "linear_velocity": [
+    0,
+    0,
+    0
+   ]
+  },
+  "rect_transform": null,
+  "script": null,
+  "script_data": null,
+  "ui_button": null,
+  "ui_text": null,
+  "tag": "Untagged",
+  "id": 3,
+  "name": "Suelo",
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider",
+   "Physics"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    -0.5,
+    -2.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    60.0,
+    1.0,
+    70.0
+   ]
+  }
+ },
+ {
+  "id": 50,
+  "name": "Bot",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "Animator"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    -3.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": {
+   "color": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv",
+   "model": "xbot_demo"
+  },
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "animator": {
+   "clip": "Idle",
+   "controller": "polygon_locomocion",
+   "playing": true,
+   "speed": 1.0
+  },
+  "portal": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "fog": null,
+  "light_profile": null
+ },
+ {
+  "id": 51,
+  "name": "Ambiente",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "components": [
+   "Transform",
+   "Ambiente"
+  ],
+  "mesh": null,
+  "camera": null,
+  "light": null,
+  "physics": null,
+  "script": null,
+  "script_data": null,
+  "audio": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "portal": null,
+  "animator": null,
+  "fog": null,
+  "character": null,
+  "particles": null,
+  "light_profile": null,
+  "ambient": {
+   "sky": [
+    0.82,
+    0.88,
+    1.0
+   ],
+   "equator": [
+    0.522,
+    0.52925,
+    0.561875
+   ],
+   "ground": [
+    0.279,
+    0.261,
+    0.2475
+   ],
+   "intensity": 0.25
+  }
+ }
+]

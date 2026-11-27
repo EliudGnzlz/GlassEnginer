@@ -1,745 +1,811 @@
 [
-  {
-    "id": 1,
-    "active": true,
-    "name": "Main Camera",
-    "tag": "MainCamera",
-    "layer": "Default",
-    "is_static": false,
-    "components": [
-      "Transform",
-      "Camera"
-    ],
-    "transform": {
-      "position": [
-        3.5,
-        3.2,
-        9.5
-      ],
-      "rotation": [
-        -10.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ]
-    },
-    "mesh": null,
-    "script": null,
-    "script_data": null,
-    "physics": null,
-    "audio": null,
-    "camera": {
-      "fov": 60.0,
-      "near_clip": 0.1,
-      "far_clip": 1000.0,
-      "is_main": true
-    },
-    "light": null,
-    "canvas": null,
-    "rect_transform": null,
-    "ui_text": null,
-    "ui_button": null,
-    "parent": null,
-    "children": []
+ {
+  "id": 1,
+  "active": true,
+  "name": "Main Camera",
+  "tag": "MainCamera",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "Camera"
+  ],
+  "transform": {
+   "position": [
+    3.5,
+    3.2,
+    9.5
+   ],
+   "rotation": [
+    -10.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
   },
-  {
-    "id": 2,
-    "active": true,
-    "name": "Directional Light",
-    "tag": "Untagged",
-    "layer": "Default",
-    "is_static": false,
-    "components": [
-      "Transform",
-      "Light"
-    ],
-    "transform": {
-      "position": [
-        0.0,
-        10.0,
-        0.0
-      ],
-      "rotation": [
-        -50.0,
-        30.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ]
-    },
-    "mesh": null,
-    "script": null,
-    "script_data": null,
-    "physics": null,
-    "audio": null,
-    "camera": null,
-    "light": {
-      "light_type": "Directional",
-      "color": [
-        1.0,
-        0.98,
-        0.92
-      ],
-      "intensity": 1.0,
-      "range": 10.0
-    },
-    "canvas": null,
-    "rect_transform": null,
-    "ui_text": null,
-    "ui_button": null,
-    "parent": null,
-    "children": []
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": {
+   "fov": 60.0,
+   "near_clip": 0.1,
+   "far_clip": 1000.0,
+   "is_main": true
   },
-  {
-    "id": 3,
-    "active": true,
-    "name": "Static Floor",
-    "tag": "Untagged",
-    "layer": "Default",
-    "is_static": true,
-    "components": [
-      "Transform",
-      "MeshRenderer",
-      "StaticCollider"
-    ],
-    "transform": {
-      "position": [
-        3.5,
-        -0.5,
-        0.0
-      ],
-      "rotation": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        30.0,
-        1.0,
-        30.0
-      ]
-    },
-    "mesh": {
-      "color": [
-        0.2,
-        0.55,
-        0.25
-      ],
-      "wireframe": false,
-      "shader": "pbr.vert.spv"
-    },
-    "script": null,
-    "script_data": null,
-    "physics": {
-      "body_type": "Static",
-      "mass": 0.0,
-      "friction": 0.7,
-      "restitution": 0.05,
-      "box_extents": [
-        15.0,
-        0.5,
-        15.0
-      ],
-      "linear_velocity": [
-        0.0,
-        0.0,
-        0.0
-      ]
-    },
-    "audio": null,
-    "camera": null,
-    "light": null,
-    "canvas": null,
-    "rect_transform": null,
-    "ui_text": null,
-    "ui_button": null,
-    "parent": null,
-    "children": []
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 2,
+  "active": true,
+  "name": "Directional Light",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "Light"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    10.0,
+    0.0
+   ],
+   "rotation": [
+    -50.0,
+    30.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
   },
-  {
-    "id": 10,
-    "active": true,
-    "name": "CanvasF5",
-    "tag": "UI",
-    "layer": "UI",
-    "is_static": false,
-    "components": [
-      "Transform",
-      "RectTransform",
-      "Canvas"
-    ],
-    "transform": {
-      "position": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "rotation": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ]
-    },
-    "mesh": null,
-    "script": null,
-    "script_data": null,
-    "physics": null,
-    "audio": null,
-    "camera": null,
-    "light": null,
-    "canvas": {
-      "render_mode": "ScreenSpaceOverlay",
-      "reference_resolution": [
-        1920.0,
-        1080.0
-      ],
-      "match_width_or_height": 0.5
-    },
-    "rect_transform": {
-      "anchored_position": [
-        0.0,
-        0.0
-      ],
-      "size_delta": [
-        1920.0,
-        1080.0
-      ],
-      "anchor_min": [
-        0.0,
-        0.0
-      ],
-      "anchor_max": [
-        1.0,
-        1.0
-      ],
-      "pivot": [
-        0.5,
-        0.5
-      ]
-    },
-    "ui_text": null,
-    "ui_button": null,
-    "parent": null,
-    "children": [
-      11,
-      20
-    ]
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": {
+   "light_type": "Directional",
+   "color": [
+    1.0,
+    0.98,
+    0.92
+   ],
+   "intensity": 1.0,
+   "range": 10.0
   },
-  {
-    "id": 11,
-    "active": true,
-    "name": "BandaSuperior",
-    "tag": "UI",
-    "layer": "UI",
-    "is_static": false,
-    "components": [
-      "Transform",
-      "RectTransform",
-      "Button",
-      "Text"
-    ],
-    "transform": {
-      "position": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "rotation": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ]
-    },
-    "mesh": null,
-    "script": null,
-    "script_data": null,
-    "physics": null,
-    "audio": null,
-    "camera": null,
-    "light": null,
-    "canvas": null,
-    "rect_transform": {
-      "anchored_position": [
-        0.0,
-        0.0
-      ],
-      "size_delta": [
-        0.0,
-        64.0
-      ],
-      "anchor_min": [
-        0.0,
-        1.0
-      ],
-      "anchor_max": [
-        1.0,
-        1.0
-      ],
-      "pivot": [
-        0.5,
-        1.0
-      ]
-    },
-    "ui_text": {
-      "text": "",
-      "font_size": 24.0,
-      "color": [
-        1.0,
-        1.0,
-        1.0,
-        1.0
-      ]
-    },
-    "ui_button": {
-      "interactable": false,
-      "target_graphic_color": [
-        0.2,
-        0.35,
-        0.6,
-        1.0
-      ],
-      "on_click_action": "StartGame"
-    },
-    "parent": 10,
-    "children": [
-      30
-    ]
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 3,
+  "active": true,
+  "name": "Static Floor",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": true,
+  "components": [
+   "Transform",
+   "MeshRenderer",
+   "StaticCollider"
+  ],
+  "transform": {
+   "position": [
+    3.5,
+    -0.5,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    30.0,
+    1.0,
+    30.0
+   ]
   },
-  {
-    "id": 30,
-    "active": true,
-    "name": "TituloBanda",
-    "tag": "UI",
-    "layer": "UI",
-    "is_static": false,
-    "components": [
-      "Transform",
-      "RectTransform",
-      "Text"
-    ],
-    "transform": {
-      "position": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "rotation": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ]
-    },
-    "mesh": null,
-    "script": null,
-    "script_data": null,
-    "physics": null,
-    "audio": null,
-    "camera": null,
-    "light": null,
-    "canvas": null,
-    "rect_transform": {
-      "anchored_position": [
-        0.0,
-        0.0
-      ],
-      "size_delta": [
-        400.0,
-        40.0
-      ],
-      "anchor_min": [
-        0.5,
-        0.5
-      ],
-      "anchor_max": [
-        0.5,
-        0.5
-      ],
-      "pivot": [
-        0.5,
-        0.5
-      ]
-    },
-    "ui_text": {
-      "text": "FASE 5 - LAYOUT",
-      "font_size": 22.0,
-      "color": [
-        1.0,
-        0.9,
-        0.2,
-        1.0
-      ]
-    },
-    "ui_button": null,
-    "parent": 11,
-    "children": []
+  "mesh": {
+   "color": [
+    0.2,
+    0.55,
+    0.25
+   ],
+   "wireframe": false,
+   "shader": "pbr.vert.spv"
   },
-  {
-    "id": 20,
-    "active": true,
-    "name": "PanelBotones",
-    "tag": "UI",
-    "layer": "UI",
-    "is_static": false,
-    "components": [
-      "Transform",
-      "RectTransform",
-      "Button",
-      "LayoutGroup"
-    ],
-    "transform": {
-      "position": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "rotation": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ]
-    },
-    "mesh": null,
-    "script": null,
-    "script_data": null,
-    "physics": null,
-    "audio": null,
-    "camera": null,
-    "light": null,
-    "canvas": null,
-    "rect_transform": {
-      "anchored_position": [
-        0.0,
-        0.0
-      ],
-      "size_delta": [
-        0.0,
-        80.0
-      ],
-      "anchor_min": [
-        0.0,
-        0.0
-      ],
-      "anchor_max": [
-        1.0,
-        0.0
-      ],
-      "pivot": [
-        0.5,
-        0.0
-      ]
-    },
-    "ui_text": {
-      "text": "",
-      "font_size": 24.0,
-      "color": [
-        1.0,
-        1.0,
-        1.0,
-        1.0
-      ]
-    },
-    "ui_button": {
-      "interactable": false,
-      "target_graphic_color": [
-        0.16,
-        0.16,
-        0.2,
-        1.0
-      ],
-      "on_click_action": "StartGame"
-    },
-    "parent": 10,
-    "children": [
-      21,
-      22,
-      23
-    ],
-    "layout_group": {
-      "direction": "horizontal",
-      "spacing": 16.0,
-      "padding": [
-        16.0,
-        15.0,
-        16.0,
-        15.0
-      ],
-      "alignment": "center"
-    }
+  "script": null,
+  "script_data": null,
+  "physics": {
+   "body_type": "Static",
+   "mass": 0.0,
+   "friction": 0.7,
+   "restitution": 0.05,
+   "box_extents": [
+    15.0,
+    0.5,
+    15.0
+   ],
+   "linear_velocity": [
+    0.0,
+    0.0,
+    0.0
+   ]
   },
-  {
-    "id": 21,
-    "active": true,
-    "name": "BtnUno",
-    "tag": "UI",
-    "layer": "UI",
-    "is_static": false,
-    "components": [
-      "Transform",
-      "RectTransform",
-      "Button",
-      "Text"
-    ],
-    "transform": {
-      "position": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "rotation": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ]
-    },
-    "mesh": null,
-    "script": null,
-    "script_data": null,
-    "physics": null,
-    "audio": null,
-    "camera": null,
-    "light": null,
-    "canvas": null,
-    "rect_transform": {
-      "anchored_position": [
-        0.0,
-        0.0
-      ],
-      "size_delta": [
-        180.0,
-        50.0
-      ],
-      "anchor_min": [
-        0.5,
-        0.5
-      ],
-      "anchor_max": [
-        0.5,
-        0.5
-      ],
-      "pivot": [
-        0.5,
-        0.5
-      ]
-    },
-    "ui_text": {
-      "text": "BTNUNO",
-      "font_size": 24.0,
-      "color": [
-        1.0,
-        1.0,
-        1.0,
-        1.0
-      ]
-    },
-    "ui_button": {
-      "interactable": true,
-      "target_graphic_color": [
-        0.85,
-        0.3,
-        0.25,
-        1.0
-      ],
-      "on_click_action": "StartGame"
-    },
-    "parent": 20,
-    "children": []
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": []
+ },
+ {
+  "id": 10,
+  "active": true,
+  "name": "CanvasF5",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Canvas"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
   },
-  {
-    "id": 22,
-    "active": true,
-    "name": "BtnDos",
-    "tag": "UI",
-    "layer": "UI",
-    "is_static": false,
-    "components": [
-      "Transform",
-      "RectTransform",
-      "Button",
-      "Text"
-    ],
-    "transform": {
-      "position": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "rotation": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ]
-    },
-    "mesh": null,
-    "script": null,
-    "script_data": null,
-    "physics": null,
-    "audio": null,
-    "camera": null,
-    "light": null,
-    "canvas": null,
-    "rect_transform": {
-      "anchored_position": [
-        0.0,
-        0.0
-      ],
-      "size_delta": [
-        180.0,
-        50.0
-      ],
-      "anchor_min": [
-        0.5,
-        0.5
-      ],
-      "anchor_max": [
-        0.5,
-        0.5
-      ],
-      "pivot": [
-        0.5,
-        0.5
-      ]
-    },
-    "ui_text": {
-      "text": "BTNDOS",
-      "font_size": 24.0,
-      "color": [
-        1.0,
-        1.0,
-        1.0,
-        1.0
-      ]
-    },
-    "ui_button": {
-      "interactable": true,
-      "target_graphic_color": [
-        0.3,
-        0.7,
-        0.35,
-        1.0
-      ],
-      "on_click_action": "StartGame"
-    },
-    "parent": 20,
-    "children": []
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": {
+   "render_mode": "ScreenSpaceOverlay",
+   "reference_resolution": [
+    1920.0,
+    1080.0
+   ],
+   "match_width_or_height": 0.5
   },
-  {
-    "id": 23,
-    "active": true,
-    "name": "BtnTres",
-    "tag": "UI",
-    "layer": "UI",
-    "is_static": false,
-    "components": [
-      "Transform",
-      "RectTransform",
-      "Button",
-      "Text"
-    ],
-    "transform": {
-      "position": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "rotation": [
-        0.0,
-        0.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ]
-    },
-    "mesh": null,
-    "script": null,
-    "script_data": null,
-    "physics": null,
-    "audio": null,
-    "camera": null,
-    "light": null,
-    "canvas": null,
-    "rect_transform": {
-      "anchored_position": [
-        0.0,
-        0.0
-      ],
-      "size_delta": [
-        180.0,
-        50.0
-      ],
-      "anchor_min": [
-        0.5,
-        0.5
-      ],
-      "anchor_max": [
-        0.5,
-        0.5
-      ],
-      "pivot": [
-        0.5,
-        0.5
-      ]
-    },
-    "ui_text": {
-      "text": "BTNTRES",
-      "font_size": 24.0,
-      "color": [
-        1.0,
-        1.0,
-        1.0,
-        1.0
-      ]
-    },
-    "ui_button": {
-      "interactable": true,
-      "target_graphic_color": [
-        0.25,
-        0.45,
-        0.85,
-        1.0
-      ],
-      "on_click_action": "StartGame"
-    },
-    "parent": 20,
-    "children": []
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    1920.0,
+    1080.0
+   ],
+   "anchor_min": [
+    0.0,
+    0.0
+   ],
+   "anchor_max": [
+    1.0,
+    1.0
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": [
+   11,
+   20
+  ]
+ },
+ {
+  "id": 11,
+  "active": true,
+  "name": "BandaSuperior",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Button",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    0.0,
+    64.0
+   ],
+   "anchor_min": [
+    0.0,
+    1.0
+   ],
+   "anchor_max": [
+    1.0,
+    1.0
+   ],
+   "pivot": [
+    0.5,
+    1.0
+   ]
+  },
+  "ui_text": {
+   "text": "",
+   "font_size": 24.0,
+   "color": [
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": {
+   "interactable": false,
+   "target_graphic_color": [
+    0.2,
+    0.35,
+    0.6,
+    1.0
+   ],
+   "on_click_action": "StartGame"
+  },
+  "parent": 10,
+  "children": [
+   30
+  ]
+ },
+ {
+  "id": 30,
+  "active": true,
+  "name": "TituloBanda",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    400.0,
+    40.0
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": {
+   "text": "FASE 5 - LAYOUT",
+   "font_size": 22.0,
+   "color": [
+    1.0,
+    0.9,
+    0.2,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "parent": 11,
+  "children": []
+ },
+ {
+  "id": 20,
+  "active": true,
+  "name": "PanelBotones",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Button",
+   "LayoutGroup"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    0.0,
+    80.0
+   ],
+   "anchor_min": [
+    0.0,
+    0.0
+   ],
+   "anchor_max": [
+    1.0,
+    0.0
+   ],
+   "pivot": [
+    0.5,
+    0.0
+   ]
+  },
+  "ui_text": {
+   "text": "",
+   "font_size": 24.0,
+   "color": [
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": {
+   "interactable": false,
+   "target_graphic_color": [
+    0.16,
+    0.16,
+    0.2,
+    1.0
+   ],
+   "on_click_action": "StartGame"
+  },
+  "parent": 10,
+  "children": [
+   21,
+   22,
+   23
+  ],
+  "layout_group": {
+   "direction": "horizontal",
+   "spacing": 16.0,
+   "padding": [
+    16.0,
+    15.0,
+    16.0,
+    15.0
+   ],
+   "alignment": "center"
   }
+ },
+ {
+  "id": 21,
+  "active": true,
+  "name": "BtnUno",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Button",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    180.0,
+    50.0
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": {
+   "text": "BTNUNO",
+   "font_size": 24.0,
+   "color": [
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": {
+   "interactable": true,
+   "target_graphic_color": [
+    0.85,
+    0.3,
+    0.25,
+    1.0
+   ],
+   "on_click_action": "StartGame"
+  },
+  "parent": 20,
+  "children": []
+ },
+ {
+  "id": 22,
+  "active": true,
+  "name": "BtnDos",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Button",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    180.0,
+    50.0
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": {
+   "text": "BTNDOS",
+   "font_size": 24.0,
+   "color": [
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": {
+   "interactable": true,
+   "target_graphic_color": [
+    0.3,
+    0.7,
+    0.35,
+    1.0
+   ],
+   "on_click_action": "StartGame"
+  },
+  "parent": 20,
+  "children": []
+ },
+ {
+  "id": 23,
+  "active": true,
+  "name": "BtnTres",
+  "tag": "UI",
+  "layer": "UI",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Button",
+   "Text"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    0.0
+   ],
+   "size_delta": [
+    180.0,
+    50.0
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "ui_text": {
+   "text": "BTNTRES",
+   "font_size": 24.0,
+   "color": [
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": {
+   "interactable": true,
+   "target_graphic_color": [
+    0.25,
+    0.45,
+    0.85,
+    1.0
+   ],
+   "on_click_action": "StartGame"
+  },
+  "parent": 20,
+  "children": []
+ },
+ {
+  "id": 31,
+  "active": true,
+  "name": "Ambiente",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "Ambiente"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": [],
+  "character": null,
+  "particles": null,
+  "light_profile": null,
+  "fog": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "ambient": {
+   "sky": [
+    0.82,
+    0.88,
+    1.0
+   ],
+   "equator": [
+    0.522,
+    0.52925,
+    0.561875
+   ],
+   "ground": [
+    0.279,
+    0.261,
+    0.2475
+   ],
+   "intensity": 0.25
+  }
+ }
 ]

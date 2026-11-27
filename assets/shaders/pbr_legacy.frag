@@ -36,6 +36,10 @@ layout(set = 2, binding = 0) uniform ShadowUbo {
     // x = distancia total, y = 1 si activa.
     vec4 fog_color_dist;
     vec4 fog_far_mode;
+    // G1 Ambiente de escena: colores lineales del gradient (w sin uso).
+    vec4 ambient_sky;
+    vec4 ambient_equator;
+    vec4 ambient_ground;
 } u_shadow;
 layout(set = 2, binding = 1) uniform sampler2DShadow shadow_map;
 
@@ -197,11 +201,14 @@ void main() {
     // ambiente era plano — el mismo para todas las caras — y las caras
     // en sombra salían casi tan brillantes como las iluminadas: la
     // escena se veía lavada y sin volumen.
+    // G1: ambiente de escena, gradient de 3 paradas tipo URP (cielo /
+    // ecuador / suelo). Colores lineales desde el UBO de frame (set 2);
+    // la intensidad sigue en light_dir.w.
     float ambient_intensity = u_push.light_dir.w;
-    float hemi_t = N.y * 0.5 + 0.5;
-    float hemi_factor = mix(0.45, 1.0, hemi_t);
-    vec3 ambient_color = mix(vec3(0.62, 0.58, 0.55), vec3(0.82, 0.88, 1.0), hemi_t);
-    vec3 ambient = ambient_color * (ambient_intensity * hemi_factor) * albedo * ao;
+    float amb_ny = clamp(N.y, -1.0, 1.0);
+    vec3 amb_pole = (amb_ny >= 0.0) ? u_shadow.ambient_sky.rgb : u_shadow.ambient_ground.rgb;
+    vec3 ambient_color = mix(u_shadow.ambient_equator.rgb, amb_pole, abs(amb_ny));
+    vec3 ambient = ambient_color * ambient_intensity * albedo * ao;
 
     // IBL (set 6): con entorno válido, el difuso ambiental sale del
     // cubemap del cielo (su mip más borroso) en vez del hemisférico.

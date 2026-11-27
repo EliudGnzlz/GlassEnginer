@@ -443,5 +443,73 @@
   "ui_drag": null,
   "fog": null,
   "light_profile": null
+ },
+ {
+  "id": 952,
+  "name": "Ambiente",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "active": true,
+  "parent": null,
+  "children": [],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "components": [
+   "Transform",
+   "Ambiente"
+  ],
+  "mesh": null,
+  "camera": null,
+  "light": null,
+  "physics": null,
+  "script": null,
+  "script_data": null,
+  "audio": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "portal": null,
+  "animator": null,
+  "fog": null,
+  "character": null,
+  "particles": null,
+  "light_profile": null,
+  "ambient": {
+   "sky": [
+    0.82,
+    0.88,
+    1.0
+   ],
+   "equator": [
+    0.522,
+    0.52925,
+    0.561875
+   ],
+   "ground": [
+    0.279,
+    0.261,
+    0.2475
+   ],
+   "intensity": 0.25
+  }
  }
 ]

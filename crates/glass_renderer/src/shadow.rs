@@ -57,9 +57,18 @@ pub struct ShadowUbo {
     pub fog_color_dist: [f32; 4],
     /// Niebla: x = distancia total, y = 1 si activa.
     pub fog_far_mode: [f32; 4],
+    /// G1 Ambiente de escena: color lineal del cielo. w sin uso.
+    pub ambient_sky: [f32; 4],
+    /// G1 Ambiente de escena: color lineal del ecuador. w sin uso.
+    pub ambient_equator: [f32; 4],
+    /// G1 Ambiente de escena: color lineal del suelo. w sin uso.
+    pub ambient_ground: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<ShadowUbo>() == 112);
+const _: () = assert!(std::mem::size_of::<ShadowUbo>() == 160);
+const _: () = assert!(std::mem::offset_of!(ShadowUbo, ambient_sky) == 112);
+const _: () = assert!(std::mem::offset_of!(ShadowUbo, ambient_equator) == 128);
+const _: () = assert!(std::mem::offset_of!(ShadowUbo, ambient_ground) == 144);
 
 fn pipe_err(e: PipelineError) -> OffscreenError {
     match e {
@@ -329,6 +338,24 @@ impl ShadowResources {
                 params: [1.0 / size as f32, SHADOW_DEPTH_BIAS, SHADOW_NORMAL_BIAS, 0.0],
                 fog_color_dist: [0.0; 4],
                 fog_far_mode: [0.0; 4],
+                ambient_sky: [
+                    glass_core::scene::LEGACY_AMBIENT_SKY[0],
+                    glass_core::scene::LEGACY_AMBIENT_SKY[1],
+                    glass_core::scene::LEGACY_AMBIENT_SKY[2],
+                    0.0,
+                ],
+                ambient_equator: [
+                    glass_core::scene::LEGACY_AMBIENT_EQUATOR[0],
+                    glass_core::scene::LEGACY_AMBIENT_EQUATOR[1],
+                    glass_core::scene::LEGACY_AMBIENT_EQUATOR[2],
+                    0.0,
+                ],
+                ambient_ground: [
+                    glass_core::scene::LEGACY_AMBIENT_GROUND[0],
+                    glass_core::scene::LEGACY_AMBIENT_GROUND[1],
+                    glass_core::scene::LEGACY_AMBIENT_GROUND[2],
+                    0.0,
+                ],
             };
             std::ptr::copy_nonoverlapping(
                 bytemuck::bytes_of(&initial).as_ptr(),

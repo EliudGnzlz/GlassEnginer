@@ -791,6 +791,157 @@ impl LightData {
     }
 }
 
+
+// === G1: Ambiente de escena ===
+
+/// Valores URP (Universal Render Pipeline) de referencia para el gradient
+/// ambiente de 3 paradas (cielo / ecuador / suelo), en espacio lineal.
+pub const URP_AMBIENT_SKY: [f32; 3] = [0.03697, 0.04215, 0.05455];
+pub const URP_AMBIENT_EQUATOR: [f32; 3] = [0.01233, 0.01435, 0.01593];
+pub const URP_AMBIENT_GROUND: [f32; 3] = [0.003671, 0.003335, 0.002709];
+pub const URP_AMBIENT_INTENSITY: f32 = 1.0;
+
+/// Valores que reproducen EXACTAMENTE la fórmula ambiente heredada
+/// (hemisférica de dos paradas con factor 0,45–1,0) en las paradas
+/// N.y ∈ {-1, 0, +1}; entre paradas el error es ≤ ~4 % del término
+/// ambiente (dictamen G0/G1).
+pub const LEGACY_AMBIENT_SKY: [f32; 3] = [0.82, 0.88, 1.0];
+pub const LEGACY_AMBIENT_EQUATOR: [f32; 3] = [0.522, 0.52925, 0.561875];
+pub const LEGACY_AMBIENT_GROUND: [f32; 3] = [0.279, 0.261, 0.2475];
+pub const LEGACY_AMBIENT_INTENSITY_LIT: f32 = 0.25;
+pub const LEGACY_AMBIENT_INTENSITY_UNLIT: f32 = 0.06;
+
+/// Componente de ambiente de escena (G1): gradient de 3 paradas en
+/// espacio lineal — `sky` hacia arriba, `equator` en horizontal y
+/// `ground` hacia abajo — modulado por `intensity` (0..=8, tipo URP).
+/// Lo porta cualquier entidad; la resolución usa la primera activa.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AmbientComponent {
+    pub sky: [f32; 3],
+    pub equator: [f32; 3],
+    pub ground: [f32; 3],
+    pub intensity: f32,
+}
+
+impl Default for AmbientComponent {
+    fn default() -> Self {
+        Self {
+            sky: URP_AMBIENT_SKY,
+            equator: URP_AMBIENT_EQUATOR,
+            ground: URP_AMBIENT_GROUND,
+            intensity: URP_AMBIENT_INTENSITY,
+        }
+    }
+}
+
+/// Origen de los valores de ambiente resueltos para una escena.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AmbientSource {
+    /// Hay al menos una entidad activa con `AmbientComponent` explícito.
+    Explicit,
+    /// Ninguna entidad lo declara: valores heredados, look de siempre.
+    Legacy,
+}
+
+/// Resultado de resolver el ambiente efectivo de una escena.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ResolvedAmbient {
+    pub sky: [f32; 3],
+    pub equator: [f32; 3],
+    pub ground: [f32; 3],
+    /// `None` en modo Legacy: la rama consumidora conserva su literal
+    /// de intensidad actual (0,25 con sol / 0,06 sin sol).
+    pub intensity: Option<f32>,
+    pub source: AmbientSource,
+    /// Portadores activos adicionales ignorados (gana el primero).
+    pub extra_carriers: usize,
+}
+
+impl ResolvedAmbient {
+    /// El ambiente heredado (sin portador): colores LEGACY_* e
+    /// intensidad None.
+    pub fn legacy() -> Self {
+        Self {
+            sky: LEGACY_AMBIENT_SKY,
+            equator: LEGACY_AMBIENT_EQUATOR,
+            ground: LEGACY_AMBIENT_GROUND,
+            intensity: None,
+            source: AmbientSource::Legacy,
+            extra_carriers: 0,
+        }
+    }
+}
+
+/// Resuelve el ambiente efectivo de la escena: la primera entidad
+/// ACTIVA con `ambient` gana; sus canales se sanean (no finitos o
+/// negativos → 0, sin tope superior) y la intensidad se acota a 0..=8
+/// (no finita → 1,0). Sin portador, modo Legacy.
+pub fn resolve_ambient(entities: &[EntityData]) -> ResolvedAmbient {
+    let carriers: Vec<&AmbientComponent> = entities
+        .iter()
+        .filter(|e| e.active)
+        .filter_map(|e| e.ambient.as_ref())
+        .collect();
+
+    let Some(first) = carriers.first().copied() else {
+        return ResolvedAmbient::legacy();
+    };
+
+    let sanitize_channel = |v: f32| -> f32 {
+        if !v.is_finite() || v < 0.0 { 0.0 } else { v }
+    };
+    let sanitize_rgb = |c: [f32; 3]| -> [f32; 3] {
+        [sanitize_channel(c[0]), sanitize_channel(c[1]), sanitize_channel(c[2])]
+    };
+    let intensity = if !first.intensity.is_finite() {
+        1.0
+    } else {
+        first.intensity.clamp(0.0, 8.0)
+    };
+
+    ResolvedAmbient {
+        sky: sanitize_rgb(first.sky),
+        equator: sanitize_rgb(first.equator),
+        ground: sanitize_rgb(first.ground),
+        intensity: Some(intensity),
+        source: AmbientSource::Explicit,
+        extra_carriers: carriers.len() - 1,
+    }
+}
+
+/// Migración G1 de una escena: si ninguna entidad activa porta
+/// ambiente, añade AL FINAL una entidad "Ambiente" con los valores
+/// heredados equivalentes. La intensidad es 0,25 si la escena tiene
+/// luz principal — el mismo predicado de `SceneState::main_light`
+/// (entidad activa con luz, de cualquier tipo) — y 0,06 si no.
+/// Devuelve la intensidad escrita, o None si ya había portador
+/// (idempotente). `new_id` es el id para la entidad nueva.
+pub fn migrate_scene_ambient(entities: &mut Vec<EntityData>, new_id: u64) -> Option<f32> {
+    if resolve_ambient(entities).source == AmbientSource::Explicit {
+        return None;
+    }
+    let has_main_light = entities.iter().any(|e| e.active && e.light.is_some());
+    let intensity = if has_main_light {
+        LEGACY_AMBIENT_INTENSITY_LIT
+    } else {
+        LEGACY_AMBIENT_INTENSITY_UNLIT
+    };
+    let mut carrier = EntityData::new(
+        new_id,
+        "Ambiente".into(),
+        vec!["Transform".into(), "Ambiente".into()],
+    );
+    carrier.ambient = Some(AmbientComponent {
+        sky: LEGACY_AMBIENT_SKY,
+        equator: LEGACY_AMBIENT_EQUATOR,
+        ground: LEGACY_AMBIENT_GROUND,
+        intensity,
+    });
+    entities.push(carrier);
+    Some(intensity)
+}
+
 fn default_tope_perfil() -> u8 { 4 }
 fn default_prioridad_perfil() -> f32 { 1.0 }
 
@@ -1579,6 +1730,10 @@ pub struct EntityData {
     /// escenas anteriores no traen el campo.
     #[serde(default)]
     pub fog: Option<FogData>,
+    /// Ambiente de escena (G1). `#[serde(default)]`: las escenas
+    /// anteriores no traen el campo.
+    #[serde(default)]
+    pub ambient: Option<AmbientComponent>,
     pub canvas: Option<CanvasData>,
     pub rect_transform: Option<RectTransformData>,
     pub ui_text: Option<UITextData>,
@@ -1779,6 +1934,7 @@ impl EntityData {
             light,
             light_profile,
             fog: None,
+            ambient: None,
             canvas,
             rect_transform,
             ui_text,
@@ -2521,6 +2677,20 @@ impl SceneState {
     /// entidad que lo lleve, si alguna.
     pub fn fog_settings(&self) -> Option<FogData> {
         self.entities.iter().find_map(|e| e.fog)
+    }
+
+    /// Ambiente efectivo de la escena (G1): ver `resolve_ambient`.
+    pub fn ambient_settings(&self) -> ResolvedAmbient {
+        resolve_ambient(&self.entities)
+    }
+
+    /// Nombre de la entidad que aporta el ambiente efectivo (la
+    /// primera activa con el componente), si alguna lo declara.
+    pub fn ambient_carrier_name(&self) -> Option<String> {
+        self.entities
+            .iter()
+            .find(|e| e.active && e.ambient.is_some())
+            .map(|e| e.name.clone())
     }
 
     pub fn replace_entities(&mut self, entities: Vec<EntityData>) {
@@ -5745,5 +5915,462 @@ mod prefab_recalculo_tests {
         // Vínculo roto: el diff guardado no se toca.
         scene.recalcular_overrides_prefab(&|_| None);
         assert!(scene.get_entity(raiz).unwrap().prefab_overrides.is_some());
+    }
+}
+
+#[cfg(test)]
+mod g1_ambient_tests {
+    use super::*;
+
+    /// Conversión sRGB -> lineal (IEC 61966-2-1), usada solo para
+    /// documentar en el test de dónde vienen los literales URP_*.
+    fn srgb_to_linear(c: f32) -> f32 {
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    const EPS: f32 = 1e-4;
+
+    fn approx_eq3(a: [f32; 3], b: [f32; 3], eps: f32) {
+        for i in 0..3 {
+            assert!(
+                (a[i] - b[i]).abs() <= eps,
+                "canal {i}: {} vs {} (eps {eps})",
+                a[i], b[i]
+            );
+        }
+    }
+
+    // --- Default / serde ---
+
+    #[test]
+    fn default_matches_urp_table() {
+        let amb = AmbientComponent::default();
+        assert_eq!(amb.sky, URP_AMBIENT_SKY);
+        assert_eq!(amb.equator, URP_AMBIENT_EQUATOR);
+        assert_eq!(amb.ground, URP_AMBIENT_GROUND);
+        assert_eq!(amb.intensity, URP_AMBIENT_INTENSITY);
+        // Los literales URP_* son los colores por defecto del gradient
+        // de Unity (sRGB) convertidos a lineal: se comprueba la
+        // conversión canal a canal con tolerancia de redondeo.
+        let sky_srgb = [0.212, 0.227, 0.259];
+        let equator_srgb = [0.114, 0.125, 0.133];
+        let ground_srgb = [0.047, 0.043, 0.035];
+        for i in 0..3 {
+            assert!((srgb_to_linear(sky_srgb[i]) - URP_AMBIENT_SKY[i]).abs() < 2e-3);
+            assert!((srgb_to_linear(equator_srgb[i]) - URP_AMBIENT_EQUATOR[i]).abs() < 2e-3);
+            assert!((srgb_to_linear(ground_srgb[i]) - URP_AMBIENT_GROUND[i]).abs() < 2e-3);
+        }
+    }
+
+    #[test]
+    fn entity_without_key_resolves_to_none() {
+        let e = EntityData::new(1, "E".into(), vec![]);
+        let mut v = serde_json::to_value(&e).unwrap();
+        v.as_object_mut().unwrap().remove("ambient");
+        let back: EntityData = serde_json::from_value(v).unwrap();
+        assert!(back.ambient.is_none());
+    }
+
+    #[test]
+    fn entity_with_null_ambient_resolves_to_none() {
+        let e = EntityData::new(1, "E".into(), vec![]);
+        let mut v = serde_json::to_value(&e).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .insert("ambient".into(), serde_json::Value::Null);
+        let back: EntityData = serde_json::from_value(v).unwrap();
+        assert!(back.ambient.is_none());
+    }
+
+    #[test]
+    fn empty_object_resolves_to_default() {
+        let amb: AmbientComponent = serde_json::from_str("{}").unwrap();
+        assert_eq!(amb, AmbientComponent::default());
+    }
+
+    #[test]
+    fn partial_object_fills_missing_with_default() {
+        let amb: AmbientComponent = serde_json::from_str(r#"{ "intensity": 2.5 }"#).unwrap();
+        assert_eq!(amb.sky, URP_AMBIENT_SKY);
+        assert_eq!(amb.equator, URP_AMBIENT_EQUATOR);
+        assert_eq!(amb.ground, URP_AMBIENT_GROUND);
+        assert_eq!(amb.intensity, 2.5);
+    }
+
+    #[test]
+    fn roundtrip_serialize_deserialize() {
+        let amb = AmbientComponent {
+            sky: [0.1, 0.2, 0.3],
+            equator: [0.4, 0.5, 0.6],
+            ground: [0.7, 0.8, 0.9],
+            intensity: 3.0,
+        };
+        let json = serde_json::to_string(&amb).unwrap();
+        let back: AmbientComponent = serde_json::from_str(&json).unwrap();
+        assert_eq!(amb, back);
+    }
+
+    // --- Resolución ---
+
+    fn entity_with_ambient(ambient: Option<AmbientComponent>) -> EntityData {
+        let mut e = EntityData::new(1, "E".into(), vec![]);
+        e.ambient = ambient;
+        e
+    }
+
+    #[test]
+    fn resolve_zero_carriers_is_legacy() {
+        let entities = vec![entity_with_ambient(None), entity_with_ambient(None)];
+        let resolved = resolve_ambient(&entities);
+        assert_eq!(resolved.sky, LEGACY_AMBIENT_SKY);
+        assert_eq!(resolved.equator, LEGACY_AMBIENT_EQUATOR);
+        assert_eq!(resolved.ground, LEGACY_AMBIENT_GROUND);
+        assert_eq!(resolved.intensity, None);
+        assert_eq!(resolved.source, AmbientSource::Legacy);
+        assert_eq!(resolved.extra_carriers, 0);
+    }
+
+    #[test]
+    fn resolve_one_carrier_is_explicit() {
+        let amb = AmbientComponent {
+            sky: [0.1, 0.2, 0.3],
+            equator: [0.4, 0.5, 0.6],
+            ground: [0.7, 0.8, 0.9],
+            intensity: 2.0,
+        };
+        let entities = vec![
+            entity_with_ambient(None),
+            entity_with_ambient(Some(amb.clone())),
+        ];
+        let resolved = resolve_ambient(&entities);
+        assert_eq!(resolved.sky, amb.sky);
+        assert_eq!(resolved.equator, amb.equator);
+        assert_eq!(resolved.ground, amb.ground);
+        assert_eq!(resolved.intensity, Some(2.0));
+        assert_eq!(resolved.source, AmbientSource::Explicit);
+        assert_eq!(resolved.extra_carriers, 0);
+    }
+
+    #[test]
+    fn resolve_two_carriers_uses_first_and_counts_extra() {
+        let first = AmbientComponent {
+            sky: [0.1, 0.1, 0.1],
+            ..Default::default()
+        };
+        let second = AmbientComponent {
+            sky: [0.9, 0.9, 0.9],
+            ..Default::default()
+        };
+        let entities = vec![
+            entity_with_ambient(Some(first.clone())),
+            entity_with_ambient(Some(second)),
+        ];
+        let resolved = resolve_ambient(&entities);
+        assert_eq!(resolved.sky, first.sky);
+        assert_eq!(resolved.source, AmbientSource::Explicit);
+        assert_eq!(resolved.extra_carriers, 1);
+    }
+
+    #[test]
+    fn resolve_ignores_inactive_carrier() {
+        let mut e = entity_with_ambient(Some(AmbientComponent::default()));
+        e.active = false;
+        let resolved = resolve_ambient(&[e]);
+        assert_eq!(resolved.source, AmbientSource::Legacy);
+        assert_eq!(resolved.intensity, None);
+    }
+
+    #[test]
+    fn resolve_sanitizes_negative_and_non_finite_channels() {
+        let amb = AmbientComponent {
+            sky: [-1.0, f32::NAN, f32::INFINITY],
+            equator: [f32::NEG_INFINITY, 0.5, -0.0001],
+            ground: [0.0, 1.0, 2.0],
+            intensity: f32::NAN,
+        };
+        let entities = vec![entity_with_ambient(Some(amb))];
+        let resolved = resolve_ambient(&entities);
+        // No finito (NaN, ±∞) o negativo -> 0.0; el 2.0 HDR se conserva.
+        assert_eq!(resolved.sky, [0.0, 0.0, 0.0]);
+        assert_eq!(resolved.equator, [0.0, 0.5, 0.0]);
+        assert_eq!(resolved.ground, [0.0, 1.0, 2.0]);
+        assert_eq!(resolved.intensity, Some(1.0));
+    }
+
+    #[test]
+    fn resolve_clamps_intensity_to_0_8_range() {
+        let too_high = AmbientComponent {
+            intensity: 100.0,
+            ..Default::default()
+        };
+        let too_low = AmbientComponent {
+            intensity: -5.0,
+            ..Default::default()
+        };
+        let r_high = resolve_ambient(&[entity_with_ambient(Some(too_high))]);
+        let r_low = resolve_ambient(&[entity_with_ambient(Some(too_low))]);
+        assert_eq!(r_high.intensity, Some(8.0));
+        assert_eq!(r_low.intensity, Some(0.0));
+    }
+
+    // --- Equivalencia de fórmula ---
+
+    fn old_formula(normal_y: f32, intensity: f32) -> [f32; 3] {
+        let g = [0.62_f32, 0.58, 0.55];
+        let s = [0.82_f32, 0.88, 1.0];
+        let t = normal_y * 0.5 + 0.5;
+        let hemi = 0.45 + 0.55 * t;
+        let mix3 = |a: [f32; 3], b: [f32; 3], t: f32| -> [f32; 3] {
+            [
+                a[0] + (b[0] - a[0]) * t,
+                a[1] + (b[1] - a[1]) * t,
+                a[2] + (b[2] - a[2]) * t,
+            ]
+        };
+        let color = mix3(g, s, t);
+        [
+            intensity * hemi * color[0],
+            intensity * hemi * color[1],
+            intensity * hemi * color[2],
+        ]
+    }
+
+    fn new_formula(
+        normal_y: f32,
+        intensity: f32,
+        sky: [f32; 3],
+        equator: [f32; 3],
+        ground: [f32; 3],
+    ) -> [f32; 3] {
+        let pole = if normal_y >= 0.0 { sky } else { ground };
+        let t = normal_y.abs();
+        let mix3 = |a: [f32; 3], b: [f32; 3], t: f32| -> [f32; 3] {
+            [
+                a[0] + (b[0] - a[0]) * t,
+                a[1] + (b[1] - a[1]) * t,
+                a[2] + (b[2] - a[2]) * t,
+            ]
+        };
+        let color = mix3(equator, pole, t);
+        [
+            intensity * color[0],
+            intensity * color[1],
+            intensity * color[2],
+        ]
+    }
+
+    #[test]
+    fn equivalence_exact_at_stops_for_lit_and_unlit() {
+        for intensity in [LEGACY_AMBIENT_INTENSITY_LIT, LEGACY_AMBIENT_INTENSITY_UNLIT] {
+            for ny in [-1.0_f32, 0.0, 1.0] {
+                let old = old_formula(ny, intensity);
+                let new = new_formula(
+                    ny,
+                    intensity,
+                    LEGACY_AMBIENT_SKY,
+                    LEGACY_AMBIENT_EQUATOR,
+                    LEGACY_AMBIENT_GROUND,
+                );
+                approx_eq3(old, new, EPS);
+            }
+        }
+    }
+
+    #[test]
+    fn equivalence_error_bounded_over_201_samples() {
+        let intensity = LEGACY_AMBIENT_INTENSITY_LIT;
+        let s = [0.82_f32, 0.88, 1.0];
+        let g = [0.62_f32, 0.58, 0.55];
+        for i in 0..=200 {
+            let ny = -1.0 + 2.0 * (i as f32) / 200.0;
+            let old = old_formula(ny, intensity);
+            let new = new_formula(
+                ny,
+                intensity,
+                LEGACY_AMBIENT_SKY,
+                LEGACY_AMBIENT_EQUATOR,
+                LEGACY_AMBIENT_GROUND,
+            );
+            for c in 0..3 {
+                let diff = new[c] - old[c];
+                let upper = 0.034375 * intensity * (s[c] - g[c]);
+                assert!(diff >= -1e-5, "canal {c} ny={ny}: diff {diff} < 0");
+                assert!(
+                    diff <= upper + 1e-5,
+                    "canal {c} ny={ny}: diff {diff} > cota {upper}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn equivalence_error_at_half_stops_matches_expected() {
+        let intensity = LEGACY_AMBIENT_INTENSITY_LIT;
+        let expected = [0.001719_f32, 0.002578, 0.003867];
+        for &ny in &[0.5_f32, -0.5_f32] {
+            let old = old_formula(ny, intensity);
+            let new = new_formula(
+                ny,
+                intensity,
+                LEGACY_AMBIENT_SKY,
+                LEGACY_AMBIENT_EQUATOR,
+                LEGACY_AMBIENT_GROUND,
+            );
+            for c in 0..3 {
+                let diff = (new[c] - old[c]).abs();
+                assert!(
+                    (diff - expected[c]).abs() <= 1e-5,
+                    "ny={ny} canal {c}: diff {diff} esperado {}",
+                    expected[c]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn equivalence_continuous_at_zero() {
+        let intensity = LEGACY_AMBIENT_INTENSITY_LIT;
+        let eps = 1e-4_f32;
+        let below = new_formula(
+            -eps,
+            intensity,
+            LEGACY_AMBIENT_SKY,
+            LEGACY_AMBIENT_EQUATOR,
+            LEGACY_AMBIENT_GROUND,
+        );
+        let above = new_formula(
+            eps,
+            intensity,
+            LEGACY_AMBIENT_SKY,
+            LEGACY_AMBIENT_EQUATOR,
+            LEGACY_AMBIENT_GROUND,
+        );
+        let at_zero = new_formula(
+            0.0,
+            intensity,
+            LEGACY_AMBIENT_SKY,
+            LEGACY_AMBIENT_EQUATOR,
+            LEGACY_AMBIENT_GROUND,
+        );
+        approx_eq3(below, at_zero, 1e-3);
+        approx_eq3(above, at_zero, 1e-3);
+    }
+}
+
+#[cfg(test)]
+mod migrate_ambient_tests {
+    use super::*;
+
+    fn entity_with_light(id: u64, name: &str) -> EntityData {
+        let mut e = EntityData::new(id, name.into(), vec!["Transform".into(), "Light".into()]);
+        e.light = Some(LightData::default());
+        e
+    }
+
+    #[test]
+    fn migrate_adds_carrier_with_sun() {
+        let mut entities = vec![
+            entity_with_light(1, "Sun"),
+            EntityData::new(2, "Other".into(), vec!["Transform".into()]),
+        ];
+        let result = migrate_scene_ambient(&mut entities, 3);
+        assert_eq!(result, Some(LEGACY_AMBIENT_INTENSITY_LIT));
+        assert_eq!(entities.len(), 3);
+        let last = entities.last().unwrap();
+        assert_eq!(last.name, "Ambiente");
+        let amb = last.ambient.as_ref().unwrap();
+        assert_eq!(amb.sky, LEGACY_AMBIENT_SKY);
+        assert_eq!(amb.equator, LEGACY_AMBIENT_EQUATOR);
+        assert_eq!(amb.ground, LEGACY_AMBIENT_GROUND);
+        assert_eq!(amb.intensity, LEGACY_AMBIENT_INTENSITY_LIT);
+    }
+
+    #[test]
+    fn migrate_adds_carrier_without_sun() {
+        let mut entities = vec![EntityData::new(1, "Other".into(), vec!["Transform".into()])];
+        let result = migrate_scene_ambient(&mut entities, 2);
+        assert_eq!(result, Some(LEGACY_AMBIENT_INTENSITY_UNLIT));
+        assert_eq!(
+            entities.last().unwrap().ambient.as_ref().unwrap().intensity,
+            LEGACY_AMBIENT_INTENSITY_UNLIT
+        );
+    }
+
+    #[test]
+    fn migrate_is_idempotent() {
+        let mut entities = vec![entity_with_light(1, "Sun")];
+        assert_eq!(
+            migrate_scene_ambient(&mut entities, 2),
+            Some(LEGACY_AMBIENT_INTENSITY_LIT)
+        );
+        let len_after_first = entities.len();
+        assert_eq!(migrate_scene_ambient(&mut entities, 3), None);
+        assert_eq!(entities.len(), len_after_first);
+    }
+
+    #[test]
+    fn migrate_preserves_other_entities() {
+        // EntityData no deriva PartialEq: se compara por su JSON.
+        let original = vec![
+            entity_with_light(1, "Sun"),
+            EntityData::new(2, "Other".into(), vec!["Transform".into()]),
+        ];
+        let mut entities = original.clone();
+        migrate_scene_ambient(&mut entities, 3);
+        assert_eq!(
+            serde_json::to_value(&entities[0]).unwrap(),
+            serde_json::to_value(&original[0]).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&entities[1]).unwrap(),
+            serde_json::to_value(&original[1]).unwrap()
+        );
+    }
+
+    /// Verificación G1 de los ficheros reales: cada escena del
+    /// directorio (GLASS_MIGRATE_DIR o ../../assets/scenes desde el
+    /// crate) carga con el cargador del motor y resuelve su ambiente
+    /// como Explicit con exactamente un portador. La migración en sí
+    /// se hizo editando el JSON en su formato de lista (el guardador
+    /// del motor escribe otro formato envuelto; ver el registro G1).
+    /// `cargo test -p glass_core -- --ignored verify_scene_files_ambient`
+    #[test]
+    #[ignore]
+    fn verify_scene_files_ambient() {
+        let dir = std::env::var("GLASS_MIGRATE_DIR")
+            .unwrap_or_else(|_| "../../assets/scenes".to_string());
+        let mut paths: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("no se pudo leer {dir}: {e}"))
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().ends_with(".scene.json"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        paths.sort();
+        assert!(!paths.is_empty(), "sin escenas en {dir}");
+        for path in &paths {
+            let mut state = SceneState::new();
+            state
+                .load_from_json(path.to_str().unwrap())
+                .unwrap_or_else(|e| panic!("carga {}: {e}", path.display()));
+            let amb = state.ambient_settings();
+            assert_eq!(
+                amb.source,
+                AmbientSource::Explicit,
+                "{} sin portador explícito",
+                path.display()
+            );
+            assert_eq!(amb.extra_carriers, 0, "{} con portadores extra", path.display());
+            assert_eq!(amb.sky, LEGACY_AMBIENT_SKY);
+            assert_eq!(amb.equator, LEGACY_AMBIENT_EQUATOR);
+            assert_eq!(amb.ground, LEGACY_AMBIENT_GROUND);
+        }
+        println!("verificadas {} escenas", paths.len());
     }
 }

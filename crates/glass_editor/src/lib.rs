@@ -1,5 +1,6 @@
 //! glass_editor: Unity-style docking editor layout powered by egui.
 
+pub mod color;
 pub mod docking;
 pub mod herramientas;
 pub mod panels;

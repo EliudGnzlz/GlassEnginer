@@ -562,7 +562,7 @@
    ]
   },
   "ui_text": {
-   "text": "¡VICTORIA!",
+   "text": "\u00a1VICTORIA!",
    "font_size": 54.0,
    "color": [
     1.0,
@@ -825,5 +825,71 @@
   },
   "parent": 10,
   "children": []
+ },
+ {
+  "id": 105,
+  "active": true,
+  "name": "Ambiente",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "Ambiente"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": [],
+  "character": null,
+  "particles": null,
+  "light_profile": null,
+  "fog": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "ambient": {
+   "sky": [
+    0.82,
+    0.88,
+    1.0
+   ],
+   "equator": [
+    0.522,
+    0.52925,
+    0.561875
+   ],
+   "ground": [
+    0.279,
+    0.261,
+    0.2475
+   ],
+   "intensity": 0.25
+  }
  }
 ]

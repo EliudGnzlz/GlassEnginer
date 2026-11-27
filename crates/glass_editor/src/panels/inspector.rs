@@ -330,6 +330,7 @@ pub enum TipoComponente {
     CharacterController,
     Camera,
     Light,
+    Ambiente,
     Script,
     AudioSource,
     Canvas,
@@ -351,6 +352,7 @@ impl TipoComponente {
             TipoComponente::CharacterController => "CharacterController",
             TipoComponente::Camera => "Camera",
             TipoComponente::Light => "Light",
+            TipoComponente::Ambiente => "Ambiente",
             TipoComponente::Script => "Script",
             TipoComponente::AudioSource => "AudioSource",
             TipoComponente::Canvas => "Canvas",
@@ -768,6 +770,7 @@ pub fn extraer_componente(ent: &EntityData, tipo: TipoComponente) -> Option<Stri
         TipoComponente::CharacterController => ent.character.as_ref().and_then(a_json),
         TipoComponente::Camera => ent.camera.as_ref().and_then(a_json),
         TipoComponente::Light => ent.light.as_ref().and_then(a_json),
+        TipoComponente::Ambiente => ent.ambient.as_ref().and_then(a_json),
         TipoComponente::AudioSource => ent.audio.as_ref().and_then(a_json),
         TipoComponente::Canvas => ent.canvas.as_ref().and_then(a_json),
         TipoComponente::RectTransform => ent.rect_transform.as_ref().and_then(a_json),
@@ -821,6 +824,7 @@ pub fn aplicar_datos(ent: &mut EntityData, tipo: TipoComponente, json: &str) -> 
         TipoComponente::CharacterController => sustituir(&mut ent.character, json),
         TipoComponente::Camera => sustituir(&mut ent.camera, json),
         TipoComponente::Light => sustituir(&mut ent.light, json),
+        TipoComponente::Ambiente => sustituir(&mut ent.ambient, json),
         TipoComponente::AudioSource => sustituir(&mut ent.audio, json),
         TipoComponente::Canvas => sustituir(&mut ent.canvas, json),
         TipoComponente::RectTransform => sustituir(&mut ent.rect_transform, json),
@@ -876,6 +880,7 @@ pub fn instalar_componente(ent: &mut EntityData, tipo: TipoComponente, json: &st
         }
         TipoComponente::Camera => crear(&mut ent.camera, json, &mut ent.components, nombre),
         TipoComponente::Light => crear(&mut ent.light, json, &mut ent.components, nombre),
+        TipoComponente::Ambiente => crear(&mut ent.ambient, json, &mut ent.components, nombre),
         TipoComponente::AudioSource => crear(&mut ent.audio, json, &mut ent.components, nombre),
         TipoComponente::Canvas => crear(&mut ent.canvas, json, &mut ent.components, nombre),
         TipoComponente::RectTransform => {
@@ -1870,7 +1875,7 @@ impl InspectorPanel {
                     seccion_componente(ui, "mesh", "◈ Mesh Renderer & Material", TipoComponente::MeshRenderer, true, self.portapapeles.as_ref(), &mut accion_mesh, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("Color Albedo:");
-                            ui.color_edit_button_rgb(&mut mesh.color);
+                            crate::color::color_edit_linear_rgb(ui, &mut mesh.color);
                         });
                         // Selector de modelo: la clave es el nombre del
                         // .glb en assets/ (vacío = cubo por defecto), la
@@ -2002,7 +2007,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         });
                         ui.horizontal(|ui| {
                             ui.label("Color:");
-                            ui.color_edit_button_rgb(&mut light.color);
+                            crate::color::color_edit_linear_rgb(ui, &mut light.color);
                         });
                         ui.horizontal(|ui| {
                             ui.label("Intensidad:");
@@ -2062,6 +2067,43 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                     entity.light = None;
                     entity.components.retain(|c| c != "Light");
                 }
+
+                // ==========================================
+                // 3.7. COMPONENTE AMBIENTE DE ESCENA (G1)
+                // ==========================================
+                let mut accion_ambient = AccionCabecera::Nada;
+                let mut remove_ambient = false;
+                if let Some(ref mut amb) = entity.ambient {
+                    seccion_componente(ui, "ambient", "🌍 Ambiente (Escena)", TipoComponente::Ambiente, true, self.portapapeles.as_ref(), &mut accion_ambient, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Cielo:");
+                            crate::color::color_edit_linear_rgb(ui, &mut amb.sky);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Ecuador:");
+                            crate::color::color_edit_linear_rgb(ui, &mut amb.equator);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Suelo:");
+                            crate::color::color_edit_linear_rgb(ui, &mut amb.ground);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Intensidad:");
+                            ui.add(DragValue::new(&mut amb.intensity).speed(0.01).range(0.0..=8.0));
+                        });
+                        ui.label(RichText::new("Sin efecto donde haya IBL activo.").weak());
+                    });
+                }
+                if accion_ambient == AccionCabecera::Quitar {
+                    remove_ambient = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::Ambiente, accion_ambient);
+                }
+                if remove_ambient {
+                    entity.ambient = None;
+                    entity.components.retain(|c| c != "Ambiente");
+                }
+
 
                 // ==========================================
                 // 4. COMPONENTES RIGIDBODY Y COLLIDER (RAPIER3D)
@@ -2988,6 +3030,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         hay_resultados |= coincide("CharacterController");
                         hay_resultados |= coincide("Camera");
                         hay_resultados |= coincide("Light");
+                        hay_resultados |= coincide("Ambiente");
                         hay_resultados |= coincide("Canvas");
                         hay_resultados |= coincide("RectTransform");
                         hay_resultados |= coincide("Text");
@@ -3075,6 +3118,20 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         if coincide("Light") && entity.light.is_none() && ui.button("☼ Luz (Light)").clicked() {
                             entity.light = Some(LightData::default());
                             entity.components.push("Light".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if coincide("Ambiente") && entity.ambient.is_none() && ui.button("🌍 Ambiente (Escena)").clicked() {
+                            // Se inicializa con los valores heredados:
+                            // añadir el componente no cambia el look
+                            // de una escena actual (diseño G1 §5.1).
+                            entity.ambient = Some(glass_core::scene::AmbientComponent {
+                                sky: glass_core::scene::LEGACY_AMBIENT_SKY,
+                                equator: glass_core::scene::LEGACY_AMBIENT_EQUATOR,
+                                ground: glass_core::scene::LEGACY_AMBIENT_GROUND,
+                                intensity: glass_core::scene::LEGACY_AMBIENT_INTENSITY_LIT,
+                            });
+                            entity.components.push("Ambiente".into());
                             self.show_add_component_menu = false;
                         }
 
