@@ -138,7 +138,8 @@ internal sealed class MonoBehaviourHost : GlassBehaviour
         EnsureAwake();
         if (State != HostState.Awake)
             return;
-        object?[]? args = m.Param == ContactParam.None ? null : new object?[] { hit };
+        object?[]? args = m.Param == ContactParam.None ? null : new object?[] { new UnityEngine.ControllerColliderHit(
+                hit.point, hit.normal, hit.gameObject, hit.moveDirection, hit.moveLength) };
         Call(m.Method, args, "OnControllerColliderHit");
     }
 

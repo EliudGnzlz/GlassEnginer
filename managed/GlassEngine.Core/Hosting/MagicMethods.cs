@@ -78,7 +78,7 @@ internal sealed class MagicMethods
         TriggerStay = FindContact("OnTriggerStay", typeof(UnityEngine.Collider), ContactParam.Collider);
         TriggerExit = FindContact("OnTriggerExit", typeof(UnityEngine.Collider), ContactParam.Collider);
         ControllerHit = FindContact("OnControllerColliderHit",
-            typeof(GlassEngine.Core.Physics.ControllerColliderHit), ContactParam.ControllerHit);
+            typeof(UnityEngine.ControllerColliderHit), ContactParam.ControllerHit);
     }
 
     internal MethodInfo? Awake { get; }

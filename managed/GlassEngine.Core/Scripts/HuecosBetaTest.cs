@@ -79,7 +79,7 @@ public class HuecosBetaTest : GlassBehaviour
         _montado = true;
     }
 
-    public override void OnControllerColliderHit(ControllerColliderHit hit)
+    public override void OnControllerColliderHit(GlassEngine.Core.Physics.ControllerColliderHit hit)
     {
         if (Math.Abs(hit.normal.y) < 0.3f && !_hitPared)
         {
