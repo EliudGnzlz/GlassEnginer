@@ -1,3 +1,4 @@
+using System.Globalization;
 using UnityEngine;
 
 namespace GlassEngine.Core.Scripts
@@ -21,11 +22,32 @@ namespace GlassEngine.Core.Scripts
     /// (luz direccional): gira el sol por tramos, cambia su color/intensidad
     /// y publica <see cref="Plat3DDayNightState.NightFactor"/> para el resto
     /// de guiones. Ciclo completo: 150 s.
+    /// <para>
+    /// La curva de intensidad es relativa: el pico se autoría en la escena y
+    /// este guion lo lee en el arranque (la curva se escribió contra
+    /// <see cref="PicoReferencia"/>). Re-autorar el sol en la escena escala el
+    /// ciclo entero en vez de ser pisado por constantes; con el sol autorado a
+    /// 1,05 (Plat3D L2 y DayNightTest hoy) el resultado es idéntico al de antes.
+    /// </para>
+    /// <para>
+    /// Para las capturas de verificación se puede congelar la fase desde fuera
+    /// con <see cref="Plat3DDayNightState.PhaseOverride"/> o, si nadie lo ha
+    /// puesto, con la variable de entorno <c>GLASS_SOL_FASE</c> (0..1), la
+    /// misma que honra <c>SolDiaNoche</c> de la Demo FPS. Un PhaseOverride
+    /// puesto por script manda sobre el entorno.
+    /// </para>
+    /// <para>
+    /// La modulación del ambiente queda fuera: no hay API de ambiente en
+    /// scripting (misma nota que dejó G5-S1 en SolDiaNoche).
+    /// </para>
     /// </summary>
     public class Plat3DDayNight : GlassBehaviour
     {
         private const float CycleDuration = 150f;
         private const float Yaw = 30f;
+
+        // Pico de intensidad con el que la curva fue autorada.
+        private const float PicoReferencia = 1.05f;
 
         // Fases de los tramos.
         private const float SunsetStart = 0.55f;
@@ -39,6 +61,7 @@ namespace GlassEngine.Core.Scripts
         private static readonly Color NightColor = new Color(0.32f, 0.42f, 0.68f);
 
         private Light? _light;
+        private float _escala = 1f;
         private float _phase;
         private int _segment = -1;
 
@@ -47,10 +70,35 @@ namespace GlassEngine.Core.Scripts
             var go = GameObject.GetOrCreate(EntityId, "Sun");
             _light = go.GetComponent<Light>() ?? go.AddComponent<Light>();
 
+            // El pico sale de la escena: la curva se escala respecto a la
+            // intensidad autorada en la luz. Se lee el componente real a
+            // través del puente; si no responde, el valor local de C#.
+            float autorada = _light != null && _light.TryGetEngineIntensity(out float delMotor)
+                ? delMotor
+                : (_light?.intensity ?? 0f);
+            _escala = EsFinita(autorada) && autorada > 0f
+                ? autorada / PicoReferencia
+                : 1f;
+
+            // Si nadie ha congelado la fase por script, se admite la variable
+            // de entorno compartida con SolDiaNoche (útil para capturas).
+            if (Plat3DDayNightState.PhaseOverride < 0f)
+            {
+                string? texto = System.Environment.GetEnvironmentVariable("GLASS_SOL_FASE");
+                if (!string.IsNullOrEmpty(texto)
+                    && float.TryParse(texto, NumberStyles.Float, CultureInfo.InvariantCulture, out float desdeEntorno)
+                    && EsFinita(desdeEntorno)
+                    && desdeEntorno >= 0f
+                    && desdeEntorno <= 1f)
+                {
+                    Plat3DDayNightState.PhaseOverride = desdeEntorno;
+                }
+            }
+
             float overridePhase = Plat3DDayNightState.PhaseOverride;
             _phase = overridePhase >= 0f ? Clamp01(overridePhase) : 0f;
 
-            Log($"Ciclo día/noche listo (entidad {EntityId}, {CycleDuration:0} s por vuelta).");
+            Log($"Ciclo día/noche listo (entidad {EntityId}, {CycleDuration:0} s por vuelta, pico {autorada:0.00}, escala {_escala:0.00}).");
         }
 
         public override void Update(float deltaTime)
@@ -116,7 +164,9 @@ namespace GlassEngine.Core.Scripts
             if (_light != null)
             {
                 _light.color = color;
-                _light.intensity = intensity;
+
+                // La curva es relativa: se escala al pico autorado en la escena.
+                _light.intensity = intensity * _escala;
             }
 
             Plat3DDayNightState.NightFactor = ComputeNightFactor(_phase);
@@ -152,6 +202,9 @@ namespace GlassEngine.Core.Scripts
             _segment = index;
             Log($"Tramo «{name}» (fase {_phase:0.000}, luz {_light?.intensity:0.00}).");
         }
+
+        private static bool EsFinita(float value)
+            => !float.IsNaN(value) && !float.IsInfinity(value);
 
         private static float Lerp(float a, float b, float t) => a + (b - a) * t;
 

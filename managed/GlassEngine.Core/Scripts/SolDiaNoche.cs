@@ -31,7 +31,11 @@ namespace GlassEngine.Core.Scripts
             var go = GameObject.GetOrCreate(EntityId, "Sol");
             _light = go.GetComponent<Light>() ?? go.AddComponent<Light>();
 
-            float picoAutorado = _light != null ? _light.intensity : float.NaN;
+            // Lectura del componente real de la escena; si el puente no
+            // responde, se cae al valor local de C#.
+            float picoAutorado = _light == null
+                ? float.NaN
+                : (_light.TryGetEngineIntensity(out float delMotor) ? delMotor : _light.intensity);
             _pico = (float.IsFinite(picoAutorado) && picoAutorado > 0f)
                 ? picoAutorado
                 : 1.0f;

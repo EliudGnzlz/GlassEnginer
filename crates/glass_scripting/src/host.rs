@@ -228,6 +228,7 @@ type InitAnimatorFsmBridgeFn = unsafe extern "system" fn(
 type InitLightBridgeFn = unsafe extern "system" fn(
     *const c_void, // light_set_color
     *const c_void, // light_set_intensity
+    *const c_void, // light_get_intensity
 );
 
 /// Puente de propiedades de luz (integración de iluminación): tipo,
@@ -802,6 +803,7 @@ impl ScriptHost {
                 init_light_fn(
                     crate::bindings::light_set_color as *const c_void,
                     crate::bindings::light_set_intensity as *const c_void,
+                    crate::bindings::light_get_intensity as *const c_void,
                 );
             }
         } else {

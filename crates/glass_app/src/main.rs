@@ -943,6 +943,18 @@ impl SceneBridge for EngineSceneBridge {
         true
     }
 
+    /// `Light.TryGetEngineIntensity` de C#: lee la intensidad del
+    /// componente Light de la entidad tal como está en la escena. Es solo
+    /// lectura; si la entidad no existe o no tiene luz, `None`.
+    fn light_get_intensity(&self, entity_id: u64) -> Option<f32> {
+        let state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return None,
+        };
+        let ent = state.entities.iter().find(|e| e.id == entity_id)?;
+        ent.light.as_ref().map(|l| l.intensity)
+    }
+
     /// `Light.type` de C#: escribe el tipo del componente Light de la
     /// entidad. 0 = Directional, 1 = Point, 2 = Spot.
     fn light_set_type(&self, entity_id: u64, tipo: i32) -> bool {

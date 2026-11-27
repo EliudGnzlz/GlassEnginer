@@ -580,6 +580,27 @@ pub unsafe extern "C" fn light_set_intensity(entity_id: u64, intensity: f32) -> 
     }
 }
 
+/// Lee la intensidad de la luz de la entidad y la escribe en `out`.
+/// Mismos códigos que `light_set_intensity`: si `out` es nulo o el puente
+/// no tiene valor, devuelve `BRIDGE_ERR_NOT_FOUND` sin escribir.
+#[no_mangle]
+/// # Safety
+/// Sí desreferencia `out`: solo cuando no es nulo y el puente devolvió
+/// valor, por lo que `out` debe apuntar a un `f32` válido y alineado donde
+/// se pueda escribir. La invoca el host C# con el puente inicializado.
+pub unsafe extern "C" fn light_get_intensity(entity_id: u64, out: *mut f32) -> i32 {
+    if out.is_null() {
+        return BRIDGE_ERR_NOT_FOUND;
+    }
+    match crate::bridge::light_get_intensity(entity_id) {
+        Some(intensity) => {
+            unsafe { *out = intensity };
+            BRIDGE_OK
+        }
+        None => BRIDGE_ERR_NOT_FOUND,
+    }
+}
+
 /// Fija el tipo de la luz de la entidad. Mismos códigos que
 /// `light_set_color`.
 #[no_mangle]

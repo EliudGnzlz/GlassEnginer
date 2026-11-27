@@ -1102,17 +1102,20 @@ private static InputAxisCountDelegate? _inputAxisCount;
 
     private static LightSetColorDelegate? _lightSetColor;
     private static LightSetIntensityDelegate? _lightSetIntensity;
+    private static LightGetIntensityDelegate? _lightGetIntensity;
 
     /// <summary>True cuando Rust conectó el puente de luces.</summary>
     public static bool LightBridgeAvailable => _lightSetColor is not null;
 
     [UnmanagedCallersOnly(EntryPoint = "InitLightBridge")]
-    public static void InitLightBridge(IntPtr setColorFn, IntPtr setIntensityFn)
+    public static void InitLightBridge(IntPtr setColorFn, IntPtr setIntensityFn, IntPtr getIntensityFn)
     {
         if (setColorFn != IntPtr.Zero)
             _lightSetColor = Marshal.GetDelegateForFunctionPointer<LightSetColorDelegate>(setColorFn);
         if (setIntensityFn != IntPtr.Zero)
             _lightSetIntensity = Marshal.GetDelegateForFunctionPointer<LightSetIntensityDelegate>(setIntensityFn);
+        if (getIntensityFn != IntPtr.Zero)
+            _lightGetIntensity = Marshal.GetDelegateForFunctionPointer<LightGetIntensityDelegate>(getIntensityFn);
 
         Log(2, "GlassEngine.Core LightBridge inicializado exitosamente desde Rust.");
     }
@@ -1136,6 +1139,21 @@ private static InputAxisCountDelegate? _inputAxisCount;
     {
         if (_lightSetIntensity is null) return -4;
         return _lightSetIntensity(entityId, intensity);
+    }
+
+    /// <summary>
+    /// Lee la intensidad REAL del componente de luz en la escena. Devuelve
+    /// el código del motor: 0 si escribió <paramref name="intensity"/>, -4
+    /// si el puente de luces aún no está enlazado (deja 0f).
+    /// </summary>
+    public static int LightGetIntensity(ulong entityId, out float intensity)
+    {
+        if (_lightGetIntensity is null)
+        {
+            intensity = 0f;
+            return -4;
+        }
+        return _lightGetIntensity(entityId, out intensity);
     }
 
 // Export NUEVO y separado del puente de luces original (InitLightBridge).

@@ -6675,6 +6675,66 @@ mod g5_demo_values {
             "las puntuales no se tocan: deben ser 1.2, 1.2 y 1.4"
         );
     }
+
+    /// G5 DayNightTest: la escena del ciclo pasa al ambiente URP de
+    /// referencia (día) y a exposición 1,0. El sol queda autorado a
+    /// 1,05 — el pico contra el que `Plat3DDayNight` escribió su
+    /// curva; el script ahora lee ese pico de la escena y escala —
+    /// y la «Luz Nocturna» puntual sigue a 0,0 (la enciende
+    /// Plat3DNightGlow de noche). La modulación del AMBIENTE por el
+    /// ciclo queda fuera: no hay API de ambiente en scripting.
+    #[test]
+    fn g5_daynight_valores() {
+        let data = include_str!("../../../assets/scenes/DayNightTest.scene.json");
+        let entities: Vec<EntityData> = serde_json::from_str(data)
+            .unwrap_or_else(|e| panic!("JSON inválido en DayNightTest.scene.json: {e}"));
+
+        let ambient = resolve_ambient(&entities);
+        assert_eq!(ambient.sky, URP_AMBIENT_SKY, "sky debe ser el valor URP de referencia");
+        assert_eq!(
+            ambient.equator, URP_AMBIENT_EQUATOR,
+            "equator debe ser el valor URP de referencia"
+        );
+        assert_eq!(
+            ambient.ground, URP_AMBIENT_GROUND,
+            "ground debe ser el valor URP de referencia"
+        );
+        assert_eq!(
+            ambient.intensity,
+            Some(URP_AMBIENT_INTENSITY),
+            "ambient intensity debe ser {}",
+            URP_AMBIENT_INTENSITY
+        );
+
+        let post = resolve_post(&entities);
+        assert!(
+            (post.exposure - 1.0).abs() < 1e-6,
+            "exposure debe ser 1.0, es {}",
+            post.exposure
+        );
+
+        let sol = entities
+            .iter()
+            .filter_map(|e| e.light.as_ref())
+            .find(|l| l.light_type == "Directional")
+            .expect("DayNightTest: sin luz direccional");
+        assert!(
+            (sol.intensity - 1.05).abs() < 1e-6,
+            "el sol no se toca: debe valer 1.05 (pico de la curva), es {}",
+            sol.intensity
+        );
+
+        let nocturna = entities
+            .iter()
+            .filter_map(|e| e.light.as_ref())
+            .find(|l| l.light_type == "Point")
+            .expect("DayNightTest: sin luz puntual (Luz Nocturna)");
+        assert!(
+            nocturna.intensity.abs() < 1e-6,
+            "la Luz Nocturna no se toca: debe valer 0.0, es {}",
+            nocturna.intensity
+        );
+    }
 }
 
 #[cfg(test)]

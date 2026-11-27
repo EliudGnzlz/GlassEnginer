@@ -1444,6 +1444,25 @@ public enum LightType
             }
         }
 
+        /// <summary>
+        /// Lee la intensidad del componente de luz REAL de la escena a través
+        /// del puente. El getter <see cref="intensity"/> devuelve el campo
+        /// local, que es la verdad hasta el primer setter; este método existe
+        /// para que los scripts lean el valor autorado al arrancar, antes de
+        /// escribir nada. Si el puente no responde, deja el valor local en
+        /// <paramref name="value"/> y devuelve false.
+        /// </summary>
+        public bool TryGetEngineIntensity(out float value)
+        {
+            if (RuntimeBridge.LightGetIntensity(EntityId, out float delMotor) == 0)
+            {
+                value = delMotor;
+                return true;
+            }
+            value = _intensity;
+            return false;
+        }
+
         public LightType type
         {
             get => _type;

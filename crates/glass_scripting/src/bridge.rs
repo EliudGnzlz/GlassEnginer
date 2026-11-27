@@ -147,6 +147,14 @@ pub trait SceneBridge: Send + Sync + 'static {
         false
     }
 
+    /// Lee la intensidad de la luz de la entidad (bloque de luces): es una
+    /// lectura REAL del componente del motor, no del campo local de C#.
+    /// Por defecto devuelve `None`, igual que `light_set_intensity` da
+    /// `false` cuando no hay puente.
+    fn light_get_intensity(&self, _entity_id: u64) -> Option<f32> {
+        None
+    }
+
     /// Tipo de la luz de la entidad (bloque de luces): muta
     /// `light.light_type` del componente. 0 = Directional, 1 = Point,
     /// 2 = Spot. Por defecto no hace nada, como `animator_set_param`.
@@ -452,6 +460,16 @@ pub(crate) fn light_set_intensity(entity_id: u64, intensity: f32) -> bool {
         cell.light_set_intensity(entity_id, intensity)
     } else {
         false
+    }
+}
+
+/// Lee la intensidad de la luz de la entidad a través del puente activo;
+/// sin puente, devuelve `None`.
+pub(crate) fn light_get_intensity(entity_id: u64) -> Option<f32> {
+    if let Ok(cell) = get_bridge_cell().read() {
+        cell.light_get_intensity(entity_id)
+    } else {
+        None
     }
 }
 

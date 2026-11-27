@@ -167,6 +167,7 @@ public delegate int LightSetColorDelegate(ulong entityId, float r, float g, floa
 /// <summary>Fija la intensidad de la luz de la entidad. Devuelve 0 si el motor acepto.</summary>
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate int LightSetIntensityDelegate(ulong entityId, float intensity);
+public delegate int LightGetIntensityDelegate(ulong entityId, out float intensity);
 
 /// <summary>
 /// Delegado para establecer el tipo de una luz (Directional/Point/Spot) desde Rust.
