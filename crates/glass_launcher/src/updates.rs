@@ -79,6 +79,9 @@ pub struct LauncherStore {
     /// Intervalo de autoguardado del editor en minutos (0 = desactivado).
     #[serde(default = "default_autosave_minutes")]
     pub autosave_minutes: u32,
+    /// El usuario cerró el aviso de .NET del editor con «no volver a mostrar».
+    #[serde(default)]
+    pub ocultar_aviso_dotnet: bool,
 }
 
 fn default_autosave_minutes() -> u32 {
@@ -97,6 +100,7 @@ impl Default for LauncherStore {
             projects: Vec::new(),
             ocultos: Vec::new(),
             autosave_minutes: default_autosave_minutes(),
+            ocultar_aviso_dotnet: false,
         }
     }
 }
@@ -3408,6 +3412,24 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb *glass.zip
         assert!(super::blender_portable_instalado(&motor));
 
         let _ = std::fs::remove_dir_all(&motor);
+    }
+
+    #[test]
+    fn ocultar_aviso_dotnet_por_defecto_falso_y_roundtrip() {
+        let store = LauncherStore::default();
+        assert!(!store.ocultar_aviso_dotnet);
+
+        let mut store = store;
+        store.ocultar_aviso_dotnet = true;
+        let json = serde_json::to_string(&store).expect("serializa");
+        let recargado: LauncherStore = serde_json::from_str(&json).expect("deserializa");
+        assert!(recargado.ocultar_aviso_dotnet);
+
+        // Un launcher.json viejo, sin el campo, debe deserializar con false.
+        let json_viejo = r#"{"repo":"x","installations":[],"projects":[],"ocultos":[]}"#;
+        let desde_viejo: LauncherStore =
+            serde_json::from_str(json_viejo).expect("deserializa viejo");
+        assert!(!desde_viejo.ocultar_aviso_dotnet);
     }
 }
 

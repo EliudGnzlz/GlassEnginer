@@ -112,6 +112,9 @@ pub struct EditorDockingLayout {
     pub aviso_dotnet: Option<AvisoBanner>,
     /// El usuario cerró la banda con «✕» para el aviso vigente.
     aviso_dotnet_oculto: bool,
+    /// El usuario suprimió el aviso de .NET para siempre (✕ de la banda); se
+    /// carga del almacén del Launcher y se persiste al cambiarlo.
+    pub aviso_dotnet_suprimido: bool,
     pub shader_graph: ShaderGraphEditorPanel,
     pub mesh_tool: MeshToolPanel,
     /// Panel de edición de Canvas y UI.
@@ -255,6 +258,7 @@ impl EditorDockingLayout {
             hash_guardado: 0,
             ultimo_guardado: None,
             autosave_minutos: crate::updates::LauncherStore::load().autosave_minutes,
+            aviso_dotnet_suprimido: crate::updates::LauncherStore::load().ocultar_aviso_dotnet,
             show_preferences_dialog: false,
             dialogo_guardar_cierre: false,
             decision_cierre: None,
@@ -678,7 +682,12 @@ impl EditorDockingLayout {
 
     /// Muestra (o reemplaza) el aviso de .NET. Sólo se resetea el estado «oculto» si
     /// cambia el título: así, tras cerrarlo, no reaparece mientras el estado no cambie.
+    /// Si el usuario lo suprimió para siempre (✕ con persistencia), no se muestra nunca
+    /// más, sin importar el título, hasta que se reactive desde Preferencias.
     pub fn mostrar_aviso_dotnet(&mut self, aviso: AvisoBanner) {
+        if self.aviso_dotnet_suprimido {
+            return;
+        }
         let mismo_titulo = self
             .aviso_dotnet
             .as_ref()
@@ -727,8 +736,23 @@ impl EditorDockingLayout {
                 .max_rect(rect_boton)
                 .layout(egui::Layout::top_down(egui::Align::Center)),
         );
-        if ui_boton.button("✕").on_hover_text("Ocultar aviso").clicked() {
+        if ui_boton
+            .button("✕")
+            .on_hover_text("No volver a mostrar")
+            .clicked()
+        {
             self.aviso_dotnet_oculto = true;
+            self.aviso_dotnet_suprimido = true;
+            // Cargar-modificar-guardar FRESCO: el almacén también guarda
+            // proyectos e instalaciones.
+            let mut store = crate::updates::LauncherStore::load();
+            store.ocultar_aviso_dotnet = true;
+            if let Err(e) = store.save() {
+                self.status_message = Some((
+                    format!("No se pudieron guardar las preferencias: {e:?}"),
+                    std::time::Instant::now(),
+                ));
+            }
         }
 
         // Título y cuerpo a la izquierda del botón.
@@ -1925,6 +1949,26 @@ impl EditorDockingLayout {
                             ));
                         }
                     }
+                    let mut mostrar = !self.aviso_dotnet_suprimido;
+                    if ui
+                        .checkbox(&mut mostrar, "Mostrar el aviso de .NET cuando falte")
+                        .on_hover_text(
+                            "Reactiva la banda de aviso si se cerró con «no volver a mostrar»",
+                        )
+                        .changed()
+                    {
+                        self.aviso_dotnet_suprimido = !mostrar;
+                        // Cargar-modificar-guardar FRESCO: el almacén también
+                        // guarda proyectos e instalaciones.
+                        let mut store = crate::updates::LauncherStore::load();
+                        store.ocultar_aviso_dotnet = self.aviso_dotnet_suprimido;
+                        if let Err(e) = store.save() {
+                            self.status_message = Some((
+                                format!("No se pudieron guardar las preferencias: {e:?}"),
+                                std::time::Instant::now(),
+                            ));
+                        }
+                    }
                     ui.separator();
                     if ui.button("Cerrar").clicked() {
                         cerrar = true;
@@ -2424,4 +2468,31 @@ fn es_ruta_physmat(ruta: &std::path::Path) -> bool {
     ruta.file_name()
         .and_then(|n| n.to_str())
         .is_some_and(glass_core::physics_material::es_physmat)
+}
+
+#[cfg(test)]
+mod tests_aviso_dotnet {
+    use super::*;
+
+    #[test]
+    fn aviso_suprimido_no_se_muestra() {
+        let mut layout = EditorDockingLayout::new();
+        layout.aviso_dotnet_suprimido = true;
+        layout.mostrar_aviso_dotnet(AvisoBanner {
+            titulo: "Prueba".to_string(),
+            cuerpo: "Cuerpo de prueba".to_string(),
+        });
+        assert!(layout.aviso_dotnet.is_none());
+    }
+
+    #[test]
+    fn aviso_sin_supresion_se_muestra() {
+        let mut layout = EditorDockingLayout::new();
+        layout.aviso_dotnet_suprimido = false;
+        layout.mostrar_aviso_dotnet(AvisoBanner {
+            titulo: "Prueba".to_string(),
+            cuerpo: "Cuerpo de prueba".to_string(),
+        });
+        assert!(layout.aviso_dotnet.is_some());
+    }
 }
