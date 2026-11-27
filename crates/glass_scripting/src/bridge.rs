@@ -214,6 +214,60 @@ pub trait SceneBridge: Send + Sync + 'static {
     fn ui_set_size_delta(&self, _entity_id: u64, _w: f32, _h: f32) -> bool {
         false
     }
+
+    /// Muta la declaración `background-color` del style_extra de la entidad.
+    /// Devuelve `false` si el puente no está vinculado o la entidad no existe.
+    fn ui_set_background_color(&self, _entity_id: u64, _r: f32, _g: f32, _b: f32, _a: f32) -> bool {
+        false
+    }
+
+    /// Muta la declaración `border-radius` del style_extra de la entidad.
+    /// Devuelve `false` si el puente no está vinculado o la entidad no existe.
+    fn ui_set_border_radius(&self, _entity_id: u64, _tl: f32, _tr: f32, _br: f32, _bl: f32) -> bool {
+        false
+    }
+
+    /// Muta la declaración `opacity` del style_extra de la entidad.
+    /// Devuelve `false` si el puente no está vinculado o la entidad no existe.
+    fn ui_set_opacity(&self, _entity_id: u64, _opacity: f32) -> bool {
+        false
+    }
+
+    /// Muta la declaración `overflow` del style_extra de la entidad.
+    /// Devuelve `false` si el puente no está vinculado o la entidad no existe.
+    fn ui_set_overflow(&self, _entity_id: u64, _overflow: &str) -> bool {
+        false
+    }
+
+    /// Muta la declaración `letter-spacing` del style_extra de la entidad.
+    /// Devuelve `false` si el puente no está vinculado o la entidad no existe.
+    fn ui_set_letter_spacing(&self, _entity_id: u64, _px: f32) -> bool {
+        false
+    }
+
+    /// Muta la declaración `border` del style_extra de la entidad.
+    /// Devuelve `false` si el puente no está vinculado o la entidad no existe.
+    fn ui_set_border(&self, _entity_id: u64, _width: f32, _r: f32, _g: f32, _b: f32, _a: f32) -> bool {
+        false
+    }
+
+    /// Muta `rect_transform.anchor_min` de la entidad indicada.
+    /// Devuelve `false` si el puente no está vinculado o la entidad no existe.
+    fn ui_set_anchor_min(&self, _entity_id: u64, _x: f32, _y: f32) -> bool {
+        false
+    }
+
+    /// Muta `rect_transform.anchor_max` de la entidad indicada.
+    /// Devuelve `false` si el puente no está vinculado o la entidad no existe.
+    fn ui_set_anchor_max(&self, _entity_id: u64, _x: f32, _y: f32) -> bool {
+        false
+    }
+
+    /// Muta `rect_transform.pivot` de la entidad indicada.
+    /// Devuelve `false` si el puente no está vinculado o la entidad no existe.
+    fn ui_set_pivot(&self, _entity_id: u64, _x: f32, _y: f32) -> bool {
+        false
+    }
     /// Entidad del último arrastre del Canvas (UI v2, drag &
     /// drop): la lee C# como `DragDrop.DraggedEntityId`.
     fn ui_dragged_id(&self) -> u64 {
@@ -552,6 +606,87 @@ pub(crate) fn ui_set_anchored_pos(entity_id: u64, x: f32, y: f32) -> bool {
 pub(crate) fn ui_set_size_delta(entity_id: u64, w: f32, h: f32) -> bool {
     if let Ok(cell) = get_bridge_cell().read() {
         cell.ui_set_size_delta(entity_id, w, h)
+    } else {
+        false
+    }
+}
+
+/// Despacha la mutación de `background-color` al puente activo.
+pub(crate) fn ui_set_background_color(entity_id: u64, r: f32, g: f32, b: f32, a: f32) -> bool {
+    if let Ok(cell) = get_bridge_cell().read() {
+        cell.ui_set_background_color(entity_id, r, g, b, a)
+    } else {
+        false
+    }
+}
+
+/// Despacha la mutación de `border-radius` al puente activo.
+pub(crate) fn ui_set_border_radius(entity_id: u64, tl: f32, tr: f32, br: f32, bl: f32) -> bool {
+    if let Ok(cell) = get_bridge_cell().read() {
+        cell.ui_set_border_radius(entity_id, tl, tr, br, bl)
+    } else {
+        false
+    }
+}
+
+/// Despacha la mutación de `opacity` al puente activo.
+pub(crate) fn ui_set_opacity(entity_id: u64, opacity: f32) -> bool {
+    if let Ok(cell) = get_bridge_cell().read() {
+        cell.ui_set_opacity(entity_id, opacity)
+    } else {
+        false
+    }
+}
+
+/// Despacha la mutación de `overflow` al puente activo.
+pub(crate) fn ui_set_overflow(entity_id: u64, overflow: &str) -> bool {
+    if let Ok(cell) = get_bridge_cell().read() {
+        cell.ui_set_overflow(entity_id, overflow)
+    } else {
+        false
+    }
+}
+
+/// Despacha la mutación de `letter-spacing` al puente activo.
+pub(crate) fn ui_set_letter_spacing(entity_id: u64, px: f32) -> bool {
+    if let Ok(cell) = get_bridge_cell().read() {
+        cell.ui_set_letter_spacing(entity_id, px)
+    } else {
+        false
+    }
+}
+
+/// Despacha la mutación de `border` al puente activo.
+pub(crate) fn ui_set_border(entity_id: u64, width: f32, r: f32, g: f32, b: f32, a: f32) -> bool {
+    if let Ok(cell) = get_bridge_cell().read() {
+        cell.ui_set_border(entity_id, width, r, g, b, a)
+    } else {
+        false
+    }
+}
+
+/// Despacha la mutación de `anchor_min` al puente activo.
+pub(crate) fn ui_set_anchor_min(entity_id: u64, x: f32, y: f32) -> bool {
+    if let Ok(cell) = get_bridge_cell().read() {
+        cell.ui_set_anchor_min(entity_id, x, y)
+    } else {
+        false
+    }
+}
+
+/// Despacha la mutación de `anchor_max` al puente activo.
+pub(crate) fn ui_set_anchor_max(entity_id: u64, x: f32, y: f32) -> bool {
+    if let Ok(cell) = get_bridge_cell().read() {
+        cell.ui_set_anchor_max(entity_id, x, y)
+    } else {
+        false
+    }
+}
+
+/// Despacha la mutación de `pivot` al puente activo.
+pub(crate) fn ui_set_pivot(entity_id: u64, x: f32, y: f32) -> bool {
+    if let Ok(cell) = get_bridge_cell().read() {
+        cell.ui_set_pivot(entity_id, x, y)
     } else {
         false
     }

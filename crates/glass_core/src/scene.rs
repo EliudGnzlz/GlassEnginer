@@ -1459,6 +1459,21 @@ pub struct EntityData {
 }
 
 impl EntityData {
+    /// `style_extra` de la componente que posee el estilo efectivo
+    /// (prioridad: imagen > texto > botón). Devuelve `None` si la
+    /// entidad no tiene ninguna componente de UI.
+    pub fn style_extra_mut(&mut self) -> Option<&mut String> {
+        if let Some(ref mut img) = self.ui_image {
+            Some(&mut img.style_extra)
+        } else if let Some(ref mut txt) = self.ui_text {
+            Some(&mut txt.style_extra)
+        } else if let Some(ref mut btn) = self.ui_button {
+            Some(&mut btn.style_extra)
+        } else {
+            None
+        }
+    }
+
     pub fn new(id: u64, name: String, components: Vec<String>) -> Self {
         let is_static = components.iter().any(|c| c == "StaticCollider");
         let mesh = if components.iter().any(|c| c == "MeshRenderer") {

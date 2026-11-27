@@ -687,6 +687,81 @@ pub fn resolver_estilos(nodo: &NodoDocumento, estado: &EstadoPseudo) -> StylePro
     salida
 }
 
+/// Posición del primer bloque de pseudo-clase (`:hover{`, `:active{`,
+/// ...) en el CSS extra. Todo lo anterior es el bloque base. Las
+/// declaraciones se escriben siempre en el bloque base; los bloques de
+/// pseudo-clase no se tocan (su contenido no tiene efecto en runtime
+/// hasta V6, deuda D-V4-1).
+fn fin_bloque_base(css: &str) -> usize {
+    let b = css.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b':' {
+            let mut j = i + 1;
+            while j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'-') {
+                j += 1;
+            }
+            let mut k = j;
+            while k < b.len() && (b[k] == b' ' || b[k] == b'\t') {
+                k += 1;
+            }
+            if j > i + 1 && k < b.len() && b[k] == b'{' {
+                return i;
+            }
+        }
+        i += 1;
+    }
+    css.len()
+}
+
+/// Reescribe (o añade) una declaración `prop: valor;` en el bloque base
+/// del CSS extra, sin tocar los bloques de pseudo-clase. Si la propiedad
+/// ya existe en el base se sustituye su valor; si no, se añade al final
+/// del bloque base.
+pub fn establecer_declaracion(css: &str, prop: &str, valor: &str) -> String {
+    let fin = fin_bloque_base(css);
+    let (base, resto) = css.split_at(fin);
+    // Buscar `prop` como nombre completo de declaración en el base.
+    let mut inicio = 0;
+    while let Some(rel) = base[inicio..].find(prop) {
+        let pos = inicio + rel;
+        let antes_ok = pos == 0
+            || matches!(
+                base.as_bytes()[pos - 1],
+                b' ' | b'\t' | b'\n' | b';' | b'{'
+            );
+        let despues = &base[pos + prop.len()..];
+        let despues_ok = despues
+            .trim_start()
+            .as_bytes()
+            .first()
+            .is_some_and(|c| *c == b':');
+        if antes_ok && despues_ok {
+            let fin_declaracion = base[pos..]
+                .find(';')
+                .map(|r| pos + r + 1)
+                .unwrap_or(base.len());
+            return format!(
+                "{}{}: {};{}{}",
+                &base[..pos],
+                prop,
+                valor,
+                &base[fin_declaracion..],
+                resto
+            );
+        }
+        inicio = pos + prop.len();
+    }
+    let separador = if base.is_empty() {
+        ""
+    } else if base.ends_with(';') {
+        " "
+    } else {
+        "; "
+    };
+    format!("{base}{separador}{prop}: {valor};{resto}")
+}
+
 /// ¿Todos los f32 de un `StyleProps` son finitos? (para el fuzz).
 #[cfg(test)]
 fn estilos_validos(p: &StyleProps) -> bool {
@@ -1076,6 +1151,92 @@ mod pruebas {
         let extra2 = parsear_estilo_extra("color: rgba(255, 0, 0, 0.5);");
         let c2 = extra2.base.color.unwrap();
         assert!(color_a_css(c2).starts_with("rgba(255, 0, 0, 0.5"));
+    }
+
+    mod tests_establecer_declaracion {
+        use super::*;
+
+        #[test]
+        fn sustituye_propiedad_existente_en_base() {
+            let css = "color: red; opacity: 0.500;";
+            let resultado = establecer_declaracion(css, "opacity", "1.000");
+            assert_eq!(resultado, "color: red; opacity: 1.000;");
+        }
+
+        #[test]
+        fn anade_propiedad_nueva_en_base() {
+            let css = "color: red;";
+            let resultado = establecer_declaracion(css, "opacity", "0.500");
+            assert_eq!(resultado, "color: red; opacity: 0.500;");
+        }
+
+        #[test]
+        fn no_toca_bloque_hover() {
+            let css = "color: red;:hover{ color: blue; }";
+            let resultado = establecer_declaracion(css, "color", "green");
+            assert_eq!(resultado, "color: green;:hover{ color: blue; }");
+        }
+
+        #[test]
+        fn css_vacio_crea_declaracion() {
+            let resultado = establecer_declaracion("", "opacity", "0.500");
+            assert_eq!(resultado, "opacity: 0.500;");
+        }
+
+        #[test]
+        fn base_sin_punto_y_coma_final_anade_separador() {
+            let css = "color: red";
+            let resultado = establecer_declaracion(css, "opacity", "0.500");
+            assert_eq!(resultado, "color: red; opacity: 0.500;");
+        }
+    }
+
+    mod tests_puente_estilo_parseo {
+        use super::*;
+
+        #[test]
+        fn style_extra_del_puente_parsea_correctamente() {
+            let css = "background-color: #1ed760; border-radius: 4.0px 4.0px 4.0px 4.0px; opacity: 0.500; overflow: hidden; letter-spacing: 2.0px; border: 2.0px #ffffff;";
+            let props = parsear_estilo_extra(css).base;
+
+            // background-color: #1ed760 es sRGB (0x1e=30, 0xd7=215, 0x60=96);
+            // el parser convierte sRGB→lineal.
+            let srgb_a_lineal_local = |c: f32| -> f32 {
+                if c <= 0.04045 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            let bg = props.background_color.expect("background_color debería estar presente");
+            assert!((bg[0] - srgb_a_lineal_local(30.0 / 255.0)).abs() < 0.01);
+            assert!((bg[1] - srgb_a_lineal_local(215.0 / 255.0)).abs() < 0.01);
+            assert!((bg[2] - srgb_a_lineal_local(96.0 / 255.0)).abs() < 0.01);
+            assert!((bg[3] - 1.0).abs() < 0.01);
+            // El color #1ed760 NO debe ser igual al sRGB sin convertir.
+            assert!((bg[0] - 30.0 / 255.0).abs() > 0.001);
+
+            let br = props.border_radius.expect("border_radius debería estar presente");
+            assert!((br[0] - 4.0).abs() < 0.1);
+            assert!((br[1] - 4.0).abs() < 0.1);
+            assert!((br[2] - 4.0).abs() < 0.1);
+            assert!((br[3] - 4.0).abs() < 0.1);
+
+            let op = props.opacity.expect("opacity debería estar presente");
+            assert!((op - 0.5).abs() < 0.01);
+
+            assert_eq!(props.overflow, Some("hidden".to_string()));
+
+            let ls = props.letter_spacing.expect("letter_spacing debería estar presente");
+            assert!((ls - 2.0).abs() < 0.1);
+
+            let (ancho, color_borde) = props.border.expect("border debería estar presente");
+            assert!((ancho - 2.0).abs() < 0.1);
+            assert!((color_borde[0] - 1.0).abs() < 0.01);
+            assert!((color_borde[1] - 1.0).abs() < 0.01);
+            assert!((color_borde[2] - 1.0).abs() < 0.01);
+            assert!((color_borde[3] - 1.0).abs() < 0.01);
+        }
     }
 
 }

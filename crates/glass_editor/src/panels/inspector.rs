@@ -8,7 +8,7 @@ use glass_core::{
     UIDragData,
 };
 use glass_ui::estilos::{StyleProps, TextOverflow};
-use glass_ui::parser::{color_a_css, parsear_estilo_extra};
+use glass_ui::parser::{color_a_css, establecer_declaracion, parsear_estilo_extra};
 use super::project::ArrastreAsset;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -428,81 +428,6 @@ fn crear<T: serde::de::DeserializeOwned>(
     *slot = Some(v);
     registrar_nombre(components, nombre);
     true
-}
-
-/// Posición del primer bloque de pseudo-clase (`:hover{`, `:active{`,
-/// ...) en el CSS extra. Todo lo anterior es el bloque base. Las
-/// declaraciones se escriben siempre en el bloque base; los bloques de
-/// pseudo-clase no se tocan (su contenido no tiene efecto en runtime
-/// hasta V6, deuda D-V4-1).
-fn fin_bloque_base(css: &str) -> usize {
-    let b = css.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b':' {
-            let mut j = i + 1;
-            while j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'-') {
-                j += 1;
-            }
-            let mut k = j;
-            while k < b.len() && (b[k] == b' ' || b[k] == b'\t') {
-                k += 1;
-            }
-            if j > i + 1 && k < b.len() && b[k] == b'{' {
-                return i;
-            }
-        }
-        i += 1;
-    }
-    css.len()
-}
-
-/// Reescribe (o añade) una declaración `prop: valor;` en el bloque base
-/// del CSS extra, sin tocar los bloques de pseudo-clase. Si la propiedad
-/// ya existe en el base se sustituye su valor; si no, se añade al final
-/// del bloque base.
-fn establecer_declaracion(css: &str, prop: &str, valor: &str) -> String {
-    let fin = fin_bloque_base(css);
-    let (base, resto) = css.split_at(fin);
-    // Buscar `prop` como nombre completo de declaración en el base.
-    let mut inicio = 0;
-    while let Some(rel) = base[inicio..].find(prop) {
-        let pos = inicio + rel;
-        let antes_ok = pos == 0
-            || matches!(
-                base.as_bytes()[pos - 1],
-                b' ' | b'\t' | b'\n' | b';' | b'{'
-            );
-        let despues = &base[pos + prop.len()..];
-        let despues_ok = despues
-            .trim_start()
-            .as_bytes()
-            .first()
-            .is_some_and(|c| *c == b':');
-        if antes_ok && despues_ok {
-            let fin_declaracion = base[pos..]
-                .find(';')
-                .map(|r| pos + r + 1)
-                .unwrap_or(base.len());
-            return format!(
-                "{}{}: {};{}{}",
-                &base[..pos],
-                prop,
-                valor,
-                &base[fin_declaracion..],
-                resto
-            );
-        }
-        inicio = pos + prop.len();
-    }
-    let separador = if base.is_empty() {
-        ""
-    } else if base.ends_with(';') {
-        " "
-    } else {
-        "; "
-    };
-    format!("{base}{separador}{prop}: {valor};{resto}")
 }
 
 /// Bloque «Estilo CSS» del Inspector (V4a): campos tipados para el
