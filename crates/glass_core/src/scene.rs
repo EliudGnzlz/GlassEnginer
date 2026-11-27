@@ -919,7 +919,15 @@ pub struct LayoutGroupData {
     /// Márgenes interiores [izquierda, arriba, derecha, abajo].
     #[serde(default)]
     pub padding: [f32; 4],
-    /// Alineación del bloque: "start", "center" o "end".
+    /// Alineación del bloque en el interior del grupo. Acepta las 9
+    /// posiciones de cuadrícula (`upper_left`, `upper_center`, `upper_right`,
+    /// `middle_left`, `center`, `middle_right`, `lower_left`, `lower_center`,
+    /// `lower_right`) o los alias heredados `start`, `center`, `end`.
+    /// Para un grupo horizontal el eje principal toma la parte horizontal
+    /// (left/center/right) y el eje cruzado la parte vertical
+    /// (upper/middle/lower); en vertical se intercambian. Los alias
+    /// equivalen a (start,start) / (center,center) / (end,end) y los valores
+    /// desconocidos se comportan como `start`.
     #[serde(default = "default_layout_alignment")]
     pub alignment: String,
 }
@@ -943,6 +951,55 @@ impl Default for LayoutGroupData {
     }
 }
 
+/// Resuelve `alignment` en la pareja (eje principal, eje cruzado) del
+/// grupo, cada componente en {"start", "center", "end"}. Acepta las 9
+/// posiciones (upper/middle/lower × left/center/right) y los alias
+/// legados "start"/"center"/"end" (mismo valor en ambos ejes). Cualquier
+/// valor desconocido cae a ("start", "start").
+pub fn resolver_alineacion(alignment: &str, horizontal: bool) -> (&'static str, &'static str) {
+    // Alias legados: mismo valor en ambos ejes. "center" de las 9 posiciones
+    // resuelve a ("center", "center") por este mismo camino, así que no
+    // necesita brazo adicional abajo.
+    match alignment {
+        "start" => return ("start", "start"),
+        "center" => return ("center", "center"),
+        "end" => return ("end", "end"),
+        _ => {}
+    }
+
+    // Descomponer las 9 posiciones en (parte vertical, parte horizontal).
+    let (vert, horiz) = match alignment {
+        "upper_left" => ("upper", "left"),
+        "upper_center" => ("upper", "center"),
+        "upper_right" => ("upper", "right"),
+        "middle_left" => ("middle", "left"),
+        "middle_right" => ("middle", "right"),
+        "lower_left" => ("lower", "left"),
+        "lower_center" => ("lower", "center"),
+        "lower_right" => ("lower", "right"),
+        // Desconocido → start en ambos ejes.
+        _ => ("upper", "left"),
+    };
+
+    // Mapear cada parte al eje correspondiente.
+    let eje = |parte: &str| -> &'static str {
+        match parte {
+            "left" | "upper" => "start",
+            "center" | "middle" => "center",
+            "right" | "lower" => "end",
+            _ => "start",
+        }
+    };
+
+    if horizontal {
+        // Principal = horizontal (left/center/right); cruzado = vertical (upper/middle/lower).
+        (eje(horiz), eje(vert))
+    } else {
+        // Principal = vertical (upper/middle/lower); cruzado = horizontal (left/center/right).
+        (eje(vert), eje(horiz))
+    }
+}
+
 /// Recoloca los rects de los hijos dentro del rect del grupo
 /// (Fase 5): eje principal en orden, con el espaciado y el bloque
 /// alineado; eje cruzado alineado por hijo. Los tamaños no cambian.
@@ -962,11 +1019,12 @@ pub fn layout_group_rects(
         (group_rect[3] - group.padding[1] - group.padding[3]).max(0.0),
     ];
     let horizontal = group.direction != "vertical";
+    let (main_align, cross_align) = resolver_alineacion(&group.alignment, horizontal);
     let main = |r: &[f32; 4]| if horizontal { r[2] } else { r[3] };
     let total: f32 = children.iter().map(main).sum::<f32>()
         + group.spacing * (children.len() as f32 - 1.0);
     let inner_main = if horizontal { inner[2] } else { inner[3] };
-    let bloque = match group.alignment.as_str() {
+    let bloque = match main_align {
         "center" => (inner_main - total) * 0.5,
         "end" => inner_main - total,
         _ => 0.0,
@@ -976,7 +1034,7 @@ pub fn layout_group_rects(
     for r in children {
         let cross_size = if horizontal { r[3] } else { r[2] };
         let inner_cross = if horizontal { inner[3] } else { inner[2] };
-        let off_cross = match group.alignment.as_str() {
+        let off_cross = match cross_align {
             "center" => (inner_cross - cross_size) * 0.5,
             "end" => inner_cross - cross_size,
             _ => 0.0,
@@ -3884,6 +3942,130 @@ mod tests {
         let b = back.rotation_quat();
         let dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
         assert!((dot.abs() - 1.0).abs() < 1.0e-6, "dot = {dot}");
+    }
+
+    // Rect [0,0,400,200] con padding [10,20,10,20] y spacing 10.
+    // Hijos de tamaños conocidos (las posiciones iniciales no importan).
+    fn rect_grupo() -> [f32; 4] {
+        [0.0, 0.0, 400.0, 200.0]
+    }
+    fn hijos_grupo() -> Vec<[f32; 4]> {
+        vec![[0.0, 0.0, 100.0, 40.0], [0.0, 0.0, 60.0, 30.0]]
+    }
+    fn grupo(dir: &str, align: &str) -> LayoutGroupData {
+        LayoutGroupData {
+            direction: dir.into(),
+            spacing: 10.0,
+            padding: [10.0, 20.0, 10.0, 20.0],
+            alignment: align.into(),
+        }
+    }
+    fn assert_rects(real: &[[f32; 4]], esperado: &[[f32; 4]]) {
+        assert_eq!(real.len(), esperado.len(), "número de rects distinto");
+        for (i, (r, e)) in real.iter().zip(esperado.iter()).enumerate() {
+            for j in 0..4 {
+                assert!(
+                    (r[j] - e[j]).abs() < 1e-4,
+                    "rect[{i}].{j} = {} != {}",
+                    r[j],
+                    e[j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn layout_horizontal_9_posiciones() {
+        // inner = 380x160; total = 100+60+10 = 170.
+        // main: start=0, center=105, end=210.
+        // cross (upper=start, middle=center, lower=end) sobre 160:
+        //   hijo0(h=40): 0 / 60 / 120 ; hijo1(h=30): 0 / 65 / 130.
+        let casos: &[(&str, [[f32; 4]; 2])] = &[
+            ("upper_left",   [[10.0, 20.0, 100.0, 40.0], [120.0, 20.0, 60.0, 30.0]]),
+            ("upper_center", [[115.0, 20.0, 100.0, 40.0], [225.0, 20.0, 60.0, 30.0]]),
+            ("upper_right",  [[220.0, 20.0, 100.0, 40.0], [330.0, 20.0, 60.0, 30.0]]),
+            ("middle_left",  [[10.0, 80.0, 100.0, 40.0], [120.0, 85.0, 60.0, 30.0]]),
+            ("center",       [[115.0, 80.0, 100.0, 40.0], [225.0, 85.0, 60.0, 30.0]]),
+            ("middle_right", [[220.0, 80.0, 100.0, 40.0], [330.0, 85.0, 60.0, 30.0]]),
+            ("lower_left",   [[10.0, 140.0, 100.0, 40.0], [120.0, 150.0, 60.0, 30.0]]),
+            ("lower_center", [[115.0, 140.0, 100.0, 40.0], [225.0, 150.0, 60.0, 30.0]]),
+            ("lower_right",  [[220.0, 140.0, 100.0, 40.0], [330.0, 150.0, 60.0, 30.0]]),
+        ];
+        for (align, esperado) in casos {
+            let real = layout_group_rects(rect_grupo(), &grupo("horizontal", align), &hijos_grupo());
+            assert_rects(&real, esperado);
+        }
+    }
+
+    #[test]
+    fn layout_vertical_9_posiciones() {
+        // inner = 380x160; main(vertical) = 160; total = 40+30+10 = 80.
+        // main: start=0, center=40, end=80.
+        // cross (left=start, center=center, right=end) sobre 380:
+        //   hijo0(w=100): 0 / 140 / 280 ; hijo1(w=60): 0 / 160 / 320.
+        let casos: &[(&str, [[f32; 4]; 2])] = &[
+            ("upper_left",   [[10.0, 20.0, 100.0, 40.0], [10.0, 70.0, 60.0, 30.0]]),
+            ("upper_center", [[150.0, 20.0, 100.0, 40.0], [170.0, 70.0, 60.0, 30.0]]),
+            ("upper_right",  [[290.0, 20.0, 100.0, 40.0], [330.0, 70.0, 60.0, 30.0]]),
+            ("middle_left",  [[10.0, 60.0, 100.0, 40.0], [10.0, 110.0, 60.0, 30.0]]),
+            ("center",       [[150.0, 60.0, 100.0, 40.0], [170.0, 110.0, 60.0, 30.0]]),
+            ("middle_right", [[290.0, 60.0, 100.0, 40.0], [330.0, 110.0, 60.0, 30.0]]),
+            ("lower_left",   [[10.0, 100.0, 100.0, 40.0], [10.0, 150.0, 60.0, 30.0]]),
+            ("lower_center", [[150.0, 100.0, 100.0, 40.0], [170.0, 150.0, 60.0, 30.0]]),
+            ("lower_right",  [[290.0, 100.0, 100.0, 40.0], [330.0, 150.0, 60.0, 30.0]]),
+        ];
+        for (align, esperado) in casos {
+            let real = layout_group_rects(rect_grupo(), &grupo("vertical", align), &hijos_grupo());
+            assert_rects(&real, esperado);
+        }
+    }
+
+    #[test]
+    fn layout_alias_legados() {
+        // "start"/"center"/"end" en horizontal deben reproducir el
+        // comportamiento previo (mismo valor en ambos ejes).
+        let g = rect_grupo();
+        let h = hijos_grupo();
+        let start = layout_group_rects(g, &grupo("horizontal", "start"), &h);
+        assert_rects(&start, &[[10.0, 20.0, 100.0, 40.0], [120.0, 20.0, 60.0, 30.0]]);
+        let center = layout_group_rects(g, &grupo("horizontal", "center"), &h);
+        assert_rects(&center, &[[115.0, 80.0, 100.0, 40.0], [225.0, 85.0, 60.0, 30.0]]);
+        let end = layout_group_rects(g, &grupo("horizontal", "end"), &h);
+        assert_rects(&end, &[[220.0, 140.0, 100.0, 40.0], [330.0, 150.0, 60.0, 30.0]]);
+
+        // Y lo mismo en vertical (bit a bit con el comportamiento previo).
+        let v_start = layout_group_rects(g, &grupo("vertical", "start"), &h);
+        assert_rects(&v_start, &[[10.0, 20.0, 100.0, 40.0], [10.0, 70.0, 60.0, 30.0]]);
+        let v_center = layout_group_rects(g, &grupo("vertical", "center"), &h);
+        assert_rects(&v_center, &[[150.0, 60.0, 100.0, 40.0], [170.0, 110.0, 60.0, 30.0]]);
+        let v_end = layout_group_rects(g, &grupo("vertical", "end"), &h);
+        assert_rects(&v_end, &[[290.0, 100.0, 100.0, 40.0], [330.0, 150.0, 60.0, 30.0]]);
+    }
+
+    #[test]
+    fn layout_desconocido_igual_a_start() {
+        let g = rect_grupo();
+        let h = hijos_grupo();
+        let desconocido = layout_group_rects(g, &grupo("horizontal", "lo_que_sea"), &h);
+        let start = layout_group_rects(g, &grupo("horizontal", "start"), &h);
+        assert_rects(&desconocido, &start);
+        let desconocido_v = layout_group_rects(g, &grupo("vertical", "xyz"), &h);
+        let start_v = layout_group_rects(g, &grupo("vertical", "start"), &h);
+        assert_rects(&desconocido_v, &start_v);
+    }
+
+    #[test]
+    fn resolver_alineacion_basico() {
+        assert_eq!(resolver_alineacion("start", true), ("start", "start"));
+        assert_eq!(resolver_alineacion("center", false), ("center", "center"));
+        assert_eq!(resolver_alineacion("end", true), ("end", "end"));
+        assert_eq!(resolver_alineacion("upper_left", true), ("start", "start"));
+        assert_eq!(resolver_alineacion("upper_left", false), ("start", "start"));
+        assert_eq!(resolver_alineacion("lower_right", true), ("end", "end"));
+        assert_eq!(resolver_alineacion("lower_right", false), ("end", "end"));
+        assert_eq!(resolver_alineacion("upper_right", true), ("end", "start"));
+        assert_eq!(resolver_alineacion("upper_right", false), ("start", "end"));
+        assert_eq!(resolver_alineacion("basura", true), ("start", "start"));
     }
 }
 

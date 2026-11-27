@@ -1,7 +1,7 @@
 use egui::{Color32, DragValue, RichText, Slider, Ui};
 use glass_core::physics_material::{MaterialCombine, PhysicsMaterial};
 use glass_core::{
-    AudioSourceData, CameraData, CanvasData, CharacterData, ColliderSpec, EntityData, LightData,
+    AudioSourceData, CameraData, CanvasData, CharacterData, ColliderSpec, EntityData, LayoutGroupData, LightData,
     MeshData, PhysicsData,
     RectTransformData, SceneState, ScriptComponentData, UIButtonData, UITextData,
     UIImageData, UIInputFieldData,
@@ -341,6 +341,7 @@ pub enum TipoComponente {
     Imagen,
     InputField,
     DragDrop,
+    LayoutGroup,
 }
 
 impl TipoComponente {
@@ -363,6 +364,7 @@ impl TipoComponente {
             TipoComponente::Imagen => "Image",
             TipoComponente::InputField => "InputField",
             TipoComponente::DragDrop => "DragDrop",
+            TipoComponente::LayoutGroup => "LayoutGroup",
         }
     }
 }
@@ -1032,6 +1034,7 @@ pub fn extraer_componente(ent: &EntityData, tipo: TipoComponente) -> Option<Stri
         TipoComponente::Imagen => ent.ui_image.as_ref().and_then(a_json),
         TipoComponente::InputField => ent.ui_input_field.as_ref().and_then(a_json),
         TipoComponente::DragDrop => ent.ui_drag.as_ref().and_then(a_json),
+        TipoComponente::LayoutGroup => ent.layout_group.as_ref().and_then(a_json),
         TipoComponente::Script => {
             if ent.script.is_none() && ent.script_data.is_none() {
                 None
@@ -1086,6 +1089,7 @@ pub fn aplicar_datos(ent: &mut EntityData, tipo: TipoComponente, json: &str) -> 
         TipoComponente::Imagen => sustituir(&mut ent.ui_image, json),
         TipoComponente::InputField => sustituir(&mut ent.ui_input_field, json),
         TipoComponente::DragDrop => sustituir(&mut ent.ui_drag, json),
+        TipoComponente::LayoutGroup => sustituir(&mut ent.layout_group, json),
         TipoComponente::Script => {
             if ent.script.is_none() && ent.script_data.is_none() {
                 return false;
@@ -1146,6 +1150,7 @@ pub fn instalar_componente(ent: &mut EntityData, tipo: TipoComponente, json: &st
             crear(&mut ent.ui_input_field, json, &mut ent.components, nombre)
         }
         TipoComponente::DragDrop => crear(&mut ent.ui_drag, json, &mut ent.components, nombre),
+        TipoComponente::LayoutGroup => crear(&mut ent.layout_group, json, &mut ent.components, nombre),
         TipoComponente::Script => {
             if ent.script.is_some() || ent.script_data.is_some() {
                 return false;
@@ -3391,6 +3396,72 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                     entity.components.retain(|c| c != "DragDrop");
                 }
 
+                // Sección LayoutGroup (V5a): dirección, espaciado, padding y
+                // alineación de 9 posiciones (+ alias legados).
+                let mut accion_layout = AccionCabecera::Nada;
+
+                let mut remove_layout = false;
+                if let Some(ref mut grupo) = entity.layout_group {
+                    seccion_componente(ui, "layout_group", "🗂 LayoutGroup", TipoComponente::LayoutGroup, true, self.portapapeles.as_ref(), &mut accion_layout, |ui| {
+                        // Dirección.
+                        egui::ComboBox::from_id_salt("layout_dir")
+                            .selected_text(if grupo.direction == "vertical" { "Vertical" } else { "Horizontal" })
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(grupo.direction == "horizontal", "Horizontal").clicked() {
+                                    grupo.direction = "horizontal".into();
+                                }
+                                if ui.selectable_label(grupo.direction == "vertical", "Vertical").clicked() {
+                                    grupo.direction = "vertical".into();
+                                }
+                            });
+
+                        // Espaciado.
+                        ui.horizontal(|ui| {
+                            ui.label("Espaciado");
+                            ui.add(egui::DragValue::new(&mut grupo.spacing).speed(0.5));
+                        });
+
+                        // Padding [izq, arriba, der, abajo].
+                        ui.label("Padding [izq, arriba, der, abajo]");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::DragValue::new(&mut grupo.padding[0]).speed(0.5));
+                            ui.add(egui::DragValue::new(&mut grupo.padding[1]).speed(0.5));
+                            ui.add(egui::DragValue::new(&mut grupo.padding[2]).speed(0.5));
+                            ui.add(egui::DragValue::new(&mut grupo.padding[3]).speed(0.5));
+                        });
+
+                        // Alineación: 9 posiciones + alias legados start/end
+                        // ("center" ya es una de las 9). Se muestra el valor
+                        // guardado tal cual, incluido un alias legado.
+                        let opciones = [
+                            "upper_left", "upper_center", "upper_right",
+                            "middle_left", "center", "middle_right",
+                            "lower_left", "lower_center", "lower_right",
+                            "start", "end",
+                        ];
+                        let etiqueta = grupo.alignment.clone();
+                        egui::ComboBox::from_id_salt("layout_align")
+                            .selected_text(etiqueta)
+                            .show_ui(ui, |ui| {
+                                for v in opciones.iter() {
+                                    if ui.selectable_label(grupo.alignment == *v, *v).clicked() {
+                                        grupo.alignment = (*v).to_string();
+                                    }
+                                }
+                            });
+                    });
+                    ui.separator();
+                }
+                if accion_layout == AccionCabecera::Quitar {
+                    remove_layout = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::LayoutGroup, accion_layout);
+                }
+                if remove_layout {
+                    entity.layout_group = None;
+                    entity.components.retain(|c| c != "LayoutGroup");
+                }
+
                 // ==========================================
                 // 7. BOTÓN "AÑADIR COMPONENTE" ESTILO UNITY
                 // ==========================================
@@ -3441,6 +3512,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         hay_resultados |= coincide("Image");
                         hay_resultados |= coincide("InputField");
                         hay_resultados |= coincide("DragDrop");
+                        hay_resultados |= coincide("LayoutGroup");
 
                         if !hay_resultados && !q.is_empty() {
                             ui.label(RichText::new("Sin componentes que coincidan.").weak());
@@ -3564,6 +3636,12 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         if entity.ui_drag.is_none() && ui.button("✋ Drag & Drop").clicked() {
                             entity.ui_drag = Some(UIDragData::default());
                             entity.components.push("DragDrop".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if coincide("LayoutGroup") && entity.layout_group.is_none() && ui.button("🗂 LayoutGroup").clicked() {
+                            entity.layout_group = Some(LayoutGroupData::default());
+                            entity.components.push("LayoutGroup".into());
                             self.show_add_component_menu = false;
                         }
                     });

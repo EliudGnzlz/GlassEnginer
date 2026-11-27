@@ -25,6 +25,8 @@ pub enum EntityPreset {
     UIPanel,
     UIImage,
     UIInputField,
+    UIGroupRow,
+    UIGroupColumn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,6 +236,14 @@ impl HierarchyPanel {
             }
             if ui.button("⌨ Campo de texto (InputField)").clicked() {
                 *pending_action = Some(HierarchyAction::Create(EntityPreset::UIInputField));
+                ui.close();
+            }
+            if ui.button("↔ Panel con fila").clicked() {
+                *pending_action = Some(HierarchyAction::Create(EntityPreset::UIGroupRow));
+                ui.close();
+            }
+            if ui.button("↕ Panel con columna").clicked() {
+                *pending_action = Some(HierarchyAction::Create(EntityPreset::UIGroupColumn));
                 ui.close();
             }
         });
@@ -1061,6 +1071,48 @@ impl HierarchyPanel {
                     }
                     if let Some(img) = &mut ent.ui_image {
                         img.style_extra = "background-color: #ffffff;".into();
+                    }
+                }
+                id
+            }
+            EntityPreset::UIGroupRow => {
+                let id = scene.create_entity(
+                    "Grupo Fila".into(),
+                    vec!["Transform".into(), "RectTransform".into(), "Image".into(), "LayoutGroup".into()],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    if let Some(rt) = &mut ent.rect_transform {
+                        rt.size_delta = [400.0, 100.0];
+                    }
+                    if let Some(img) = &mut ent.ui_image {
+                        img.style_extra = "background-color: #ffffff;".into();
+                    }
+                    if let Some(lg) = &mut ent.layout_group {
+                        lg.direction = "horizontal".into();
+                        lg.spacing = 8.0;
+                        lg.padding = [0.0; 4];
+                        lg.alignment = "start".into();
+                    }
+                }
+                id
+            }
+            EntityPreset::UIGroupColumn => {
+                let id = scene.create_entity(
+                    "Grupo Columna".into(),
+                    vec!["Transform".into(), "RectTransform".into(), "Image".into(), "LayoutGroup".into()],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    if let Some(rt) = &mut ent.rect_transform {
+                        rt.size_delta = [200.0, 300.0];
+                    }
+                    if let Some(img) = &mut ent.ui_image {
+                        img.style_extra = "background-color: #ffffff;".into();
+                    }
+                    if let Some(lg) = &mut ent.layout_group {
+                        lg.direction = "vertical".into();
+                        lg.spacing = 8.0;
+                        lg.padding = [0.0; 4];
+                        lg.alignment = "start".into();
                     }
                 }
                 id

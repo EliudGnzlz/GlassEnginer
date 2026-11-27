@@ -533,7 +533,7 @@ impl McpServer {
                         },
                         {
                             "name": "glass_component_get",
-                            "description": "Devuelve el JSON completo de un componente de una entidad (Transform, MeshRenderer, Rigidbody, Collider, CharacterController, Camera, Light, Script, AudioSource, Canvas, RectTransform, Text, Button, Image, DragDrop, Animator, Fog, Particles, Portal).",
+                            "description": "Devuelve el JSON completo de un componente de una entidad (Transform, MeshRenderer, Rigidbody, Collider, CharacterController, Camera, Light, Script, AudioSource, Canvas, RectTransform, Text, Button, Image, DragDrop, Animator, Fog, Particles, Portal, LayoutGroup).",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -5602,6 +5602,35 @@ mod tests_catchup {
             json!({ "entity_id": 4242, "component": "NoExiste", "values": {} }),
         );
         assert!(r.contains("-32602"), "set desconocido: {r}");
+    }
+
+    #[test]
+    fn component_set_get_roundtrip_layout_group() {
+        let srv = servidor();
+        srv.scene
+            .lock()
+            .unwrap()
+            .entities
+            .push(glass_core::scene::EntityData::new(
+                4243,
+                "GrupoMcp".into(),
+                vec!["Transform".into()],
+            ));
+
+        let r = llamar(
+            &srv,
+            "glass_component_set",
+            json!({ "entity_id": 4243, "component": "LayoutGroup", "values": { "direction": "vertical", "spacing": 12.0 } }),
+        );
+        assert!(!r.contains("\"error\""), "set LayoutGroup: {r}");
+
+        let r = llamar(
+            &srv,
+            "glass_component_get",
+            json!({ "entity_id": 4243, "component": "LayoutGroup" }),
+        );
+        assert!(r.contains("vertical"), "get LayoutGroup: {r}");
+        assert!(r.contains("12.0"), "get LayoutGroup: {r}");
     }
 
     #[test]

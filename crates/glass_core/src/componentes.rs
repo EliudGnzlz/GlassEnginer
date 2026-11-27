@@ -30,6 +30,7 @@ const COMPONENTES: &[&str] = &[
     "Fog",
     "Particles",
     "Portal",
+    "LayoutGroup",
 ];
 
 /// JSON completo del componente `nombre` de la entidad, Ok(None) si la
@@ -73,6 +74,7 @@ pub fn componente_json(ent: &EntityData, nombre: &str) -> Result<Option<Value>, 
         "Button" => get_opt(&ent.ui_button, n),
         "Image" => get_opt(&ent.ui_image, n),
         "DragDrop" => get_opt(&ent.ui_drag, n),
+        "LayoutGroup" => get_opt(&ent.layout_group, n),
         "Animator" => get_opt(&ent.animator, n),
         "Fog" => get_opt(&ent.fog, n),
         "Particles" => get_opt(&ent.particles, n),
@@ -110,6 +112,7 @@ pub fn aplicar_componente(ent: &mut EntityData, nombre: &str, parcial: &Value) -
         "Button" => set_opt(&mut ent.ui_button, &mut ent.components, n, parcial),
         "Image" => set_opt(&mut ent.ui_image, &mut ent.components, n, parcial),
         "DragDrop" => set_opt(&mut ent.ui_drag, &mut ent.components, n, parcial),
+        "LayoutGroup" => set_opt(&mut ent.layout_group, &mut ent.components, n, parcial),
         "Animator" => set_opt(&mut ent.animator, &mut ent.components, n, parcial),
         "Fog" => set_fog(ent, n, parcial),
         "Particles" => set_opt(&mut ent.particles, &mut ent.components, n, parcial),
