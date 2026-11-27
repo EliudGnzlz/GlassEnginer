@@ -11,7 +11,7 @@ use crate::api::{
     RectColocado, Viewport,
 };
 use crate::documento::{Documento, TipoGraphic};
-use crate::estilos::{Dimension, Display, StyleProps, TamanoColumna, TextOverflow};
+use crate::estilos::{Dimension, Display, Sombra, StyleProps, TamanoColumna, TextOverflow};
 use crate::parser::resolver_estilos;
 use glass_core::scene::{canvas_scale_factor, layout_group_rects, resolve_ui_rect_in};
 use std::sync::OnceLock;
@@ -610,13 +610,62 @@ pub fn colocar_documento_con_medidor(
             alto: alto_ref * s,
         };
 
+        // D-V4-2 (decisión de Rayo): los valores en px de los estilos se
+        // escalan por `s`, igual que el rect. El mapa y el pintor reciben
+        // los valores ya escalados, así lo que se autora es lo que se ve:
+        // antes el texto se pintaba a tamaño de referencia dentro de un
+        // rect escalado (a 1280x720 se veía 1,5x grande) y el mapa
+        // (ancho de rect escalado, fuente sin escalar) divergía del
+        // render. La geometría (width/height/min/max) NO se toca aquí:
+        // ya se escala al final con el rect.
+        let mut estilos_pintado = estilos.clone();
+        if s != 1.0 {
+            match nodo.graphic {
+                TipoGraphic::Texto | TipoGraphic::InputField => {
+                    // El valor efectivo es el del estilo o el del
+                    // componente; se fija siempre para que el pintor no
+                    // caiga en el valor sin escalar del componente.
+                    let fs = estilos.font_size.unwrap_or_else(|| {
+                        nodo.texto
+                            .as_ref()
+                            .map(|t| t.font_size)
+                            .unwrap_or(14.0)
+                    });
+                    estilos_pintado.font_size = Some(fs * s);
+                }
+                _ => {
+                    if let Some(v) = estilos_pintado.font_size {
+                        estilos_pintado.font_size = Some(v * s);
+                    }
+                }
+            }
+            if let Some(v) = estilos_pintado.letter_spacing {
+                estilos_pintado.letter_spacing = Some(v * s);
+            }
+            if let Some(rad) = estilos_pintado.border_radius {
+                estilos_pintado.border_radius =
+                    Some([rad[0] * s, rad[1] * s, rad[2] * s, rad[3] * s]);
+            }
+            if let Some((w, c)) = estilos_pintado.border {
+                estilos_pintado.border = Some((w * s, c));
+            }
+            if let Some(som) = estilos_pintado.box_shadow {
+                estilos_pintado.box_shadow = Some(Sombra {
+                    dx: som.dx * s,
+                    dy: som.dy * s,
+                    desenfoque: som.desenfoque * s,
+                    color: som.color,
+                });
+            }
+        }
+
         // V3c: mapa carácter→posición para nodos de texto (y campos de
         // entrada, que llevan el texto sintetizado en `nodo.texto`).
         let mapa_texto = if nodo.graphic == TipoGraphic::Texto
             || nodo.graphic == TipoGraphic::InputField
         {
             if let Some(ref txt) = nodo.texto {
-                let fs = estilos.font_size.unwrap_or(txt.font_size);
+                let fs = estilos_pintado.font_size.unwrap_or(txt.font_size);
                 construir_mapa_texto(
                     &txt.text,
                     fs,
@@ -624,7 +673,7 @@ pub fn colocar_documento_con_medidor(
                     estilos.text_overflow.unwrap_or(TextOverflow::Envolver),
                     &txt.align,
                     [rect.x, rect.y],
-                    estilos.letter_spacing.unwrap_or(0.0),
+                    estilos_pintado.letter_spacing.unwrap_or(0.0),
                 )
             } else {
                 MapaTexto::default()
@@ -637,7 +686,7 @@ pub fn colocar_documento_con_medidor(
             nodo: idx,
             entidad: nodo.entidad,
             rect,
-            estilos,
+            estilos: estilos_pintado,
             mapa_texto,
         });
     }
@@ -2004,6 +2053,46 @@ mod tests {
         let n = nodo_texto_colocado(&colocado);
         assert_eq!(n.mapa_texto.texto_visible, "Escribe...");
         celdas_dentro_del_rect(n);
+    }
+
+    #[test]
+    fn escena_escala_canvas_reduce_px_de_estilo() {
+        // D-V4-2 (decisión de Rayo): a 1280x720 con canvas 1920x1080
+        // (s=2/3) los px de los estilos se escalan como el rect: el
+        // texto se veía 1,5x grande y el mapa divergía del render.
+        let extra = "font-size: 24px; letter-spacing: 6px; border-radius: 12px; border: 3px #ffffff; box-shadow: 4px 4px 8px #000000;";
+        let doc = Documento {
+            canvas_raiz: 0,
+            nodos: vec![
+                canvas_flex(1, vec![1], 1920.0, 1080.0),
+                nodo_texto_escena(2, "AB", [100.0, 40.0], extra),
+            ],
+            avisos: vec![],
+        };
+        let colocado = colocar_documento(&doc, Viewport { ancho: 1280.0, alto: 720.0 });
+        let n = nodo_texto_colocado(&colocado);
+        let s = 2.0 / 3.0;
+        // El rect ya se escalaba; ahora los px también.
+        assert!((n.rect.ancho - 100.0 * s).abs() <= 0.01, "ancho: {}", n.rect.ancho);
+        assert_eq!(n.estilos.font_size, Some(24.0 * s));
+        assert_eq!(n.estilos.letter_spacing, Some(6.0 * s));
+        assert_eq!(n.estilos.border_radius, Some([12.0 * s; 4]));
+        let (w, _) = n.estilos.border.expect("borde");
+        assert!((w - 3.0 * s).abs() <= 0.001, "ancho borde: {w}");
+        let som = n.estilos.box_shadow.expect("sombra");
+        assert!((som.dx - 4.0 * s).abs() <= 0.001, "dx: {}", som.dx);
+        assert!((som.dy - 4.0 * s).abs() <= 0.001, "dy: {}", som.dy);
+        assert!((som.desenfoque - 8.0 * s).abs() <= 0.001, "blur: {}", som.desenfoque);
+        // El mapa se construye con la fuente escalada y cabe en el rect.
+        assert_eq!(n.mapa_texto.texto_visible, "AB");
+        celdas_dentro_del_rect(n);
+
+        // Control: a escala 1 nada cambia.
+        let colocado = colocar_documento(&doc, Viewport { ancho: 1920.0, alto: 1080.0 });
+        let n = nodo_texto_colocado(&colocado);
+        assert_eq!(n.estilos.font_size, Some(24.0));
+        assert_eq!(n.estilos.letter_spacing, Some(6.0));
+        assert_eq!(n.estilos.border_radius, Some([12.0; 4]));
     }
 
     #[test]
