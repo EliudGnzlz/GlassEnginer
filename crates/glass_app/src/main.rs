@@ -9310,6 +9310,21 @@ impl ApplicationHandler for GlassEngineApp {
                 if cargada {
                     let ruta = scene_file.clone();
                     self.bootstrap_scene_scripts_and_physics(&ruta);
+                    // Adenda V4c: el arranque con --scene cargaba directo
+                    // sin registrar la ruta (eso solo lo hacía
+                    // open_scene_file), así que Guardar caía siempre en
+                    // assets/scenes/<nombre>.scene.json. Se registra aquí
+                    // la ruta de origen para que Guardar reescriba el
+                    // archivo que se abrió. (Se usa la copia local `ruta`:
+                    // `scene_file` toma prestado `self.scene_to_load` y
+                    // no puede usarse tras el préstamo mutable de arriba.)
+                    #[cfg(feature = "editor")]
+                    {
+                        self.nombre_escena_con_ruta =
+                            glass_core::scenes::short_scene_name(&ruta);
+                        self.ruta_escena_actual =
+                            Some(std::path::PathBuf::from(ruta));
+                    }
                 }
             } else if self.is_standalone {
                 let default_sc = glass_core::ProjectSettings::load_or_default("project.json").default_scene;

@@ -2275,11 +2275,14 @@ impl ViewportPanel {
                         }
                     }
                 }
-                // Si no, hit-test sobre lo colocado: selecciona y arrastra.
+                // Si no, hit-test sobre lo colocado: asciende al control
+                // (V4c adenda: el cuerpo arrastra el botón/panel/imagen,
+                // no el hijo de texto) y selecciona y arrastra ese.
                 if !iniciado {
                     if let Some(colocado) = ctx.colocado {
                         match glass_ui::api::hit_test(doc, colocado, px, py) {
                             Some(id) => {
+                                let id = glass_ui::api::ascender_a_control(doc, id);
                                 *selected_entity_id = Some(id);
                                 if let (Some(rc), Some(rt)) =
                                     (ctx.rects.get(&id), rect_transform_de(scene_state, id))
