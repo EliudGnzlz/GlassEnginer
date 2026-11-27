@@ -553,8 +553,11 @@ pub fn colocar_documento_con_medidor(
                 Dimension::Px(v) => ancho_ref = *v,
                 Dimension::Porcentaje(p) => ancho_ref = p / 100.0 * padre_ref[2],
                 Dimension::Auto => {
-                    // Para nodos de texto: medir.
-                    if nodo.graphic == TipoGraphic::Texto {
+                    // Para nodos de texto (y campos de entrada, que
+                    // llevan el texto sintetizado en `nodo.texto`): medir.
+                    if nodo.graphic == TipoGraphic::Texto
+                        || nodo.graphic == TipoGraphic::InputField
+                    {
                         if let Some(ref txt) = nodo.texto {
                             let tam = estilos.font_size.unwrap_or(14.0);
                             let ls = estilos.letter_spacing.unwrap_or(0.0);
@@ -573,7 +576,9 @@ pub fn colocar_documento_con_medidor(
                 Dimension::Px(v) => alto_ref = *v,
                 Dimension::Porcentaje(p) => alto_ref = p / 100.0 * padre_ref[3],
                 Dimension::Auto => {
-                    if nodo.graphic == TipoGraphic::Texto {
+                    if nodo.graphic == TipoGraphic::Texto
+                        || nodo.graphic == TipoGraphic::InputField
+                    {
                         if let Some(ref txt) = nodo.texto {
                             let tam = estilos.font_size.unwrap_or(14.0);
                             let ls = estilos.letter_spacing.unwrap_or(0.0);
@@ -605,8 +610,11 @@ pub fn colocar_documento_con_medidor(
             alto: alto_ref * s,
         };
 
-        // V3c: mapa carácter→posición para nodos de texto.
-        let mapa_texto = if nodo.graphic == TipoGraphic::Texto {
+        // V3c: mapa carácter→posición para nodos de texto (y campos de
+        // entrada, que llevan el texto sintetizado en `nodo.texto`).
+        let mapa_texto = if nodo.graphic == TipoGraphic::Texto
+            || nodo.graphic == TipoGraphic::InputField
+        {
             if let Some(ref txt) = nodo.texto {
                 let fs = estilos.font_size.unwrap_or(txt.font_size);
                 construir_mapa_texto(
@@ -1982,6 +1990,19 @@ mod tests {
         assert!(!n.mapa_texto.texto_visible.is_empty());
         assert!(texto.starts_with(&n.mapa_texto.texto_visible), "visible: {}", n.mapa_texto.texto_visible);
         assert!(!n.mapa_texto.texto_visible.ends_with('…'));
+        celdas_dentro_del_rect(n);
+    }
+
+    #[test]
+    fn escena_input_field_tiene_mapa_texto() {
+        // V4b: el layout construía el mapa solo para graphic Texto; el
+        // InputField quedaba con texto_visible vacío y el pintor no
+        // emitía el segmento de texto (campo blanco sin letras).
+        let mut doc = doc_desbordamiento("Escribe...", "");
+        doc.nodos[1].graphic = TipoGraphic::InputField;
+        let colocado = colocar_documento(&doc, Viewport { ancho: 400.0, alto: 100.0 });
+        let n = nodo_texto_colocado(&colocado);
+        assert_eq!(n.mapa_texto.texto_visible, "Escribe...");
         celdas_dentro_del_rect(n);
     }
 

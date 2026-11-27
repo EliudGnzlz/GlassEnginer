@@ -42,7 +42,7 @@ pub use scene::{
     LayoutGroupData, LightData, LightProfileData, MaterialData, MeshColliderMode, MeshData,
     PhysicsData,
     RectTransformData, SceneState, ScriptComponentData, TransformData, UIButtonData, UITextData,
-    UIImageData, UIDragData,
+    UIImageData, UIInputFieldData, UIDragData,
 };
 pub use scenes::{SceneError, SceneManager, SceneLoaded};
 pub use types::TransformFfi;

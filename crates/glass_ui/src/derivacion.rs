@@ -16,7 +16,29 @@
 
 use std::collections::{HashMap, HashSet};
 
-use glass_core::scene::{EntityData, RectTransformData, SceneState};
+use glass_core::scene::{EntityData, RectTransformData, SceneState, UIInputFieldData, UITextData};
+
+/// Texto visible de un InputField (V4, Q1): el valor si no está vacío;
+/// si lo está, el placeholder con el alfa a la mitad. El resto sale del
+/// campo (tamaño, color, fuente por defecto, alineación izquierda).
+fn texto_de_input(inp: &UIInputFieldData) -> UITextData {
+    let (texto, color) = if inp.text.is_empty() {
+        let mut c = inp.color;
+        c[3] *= 0.5;
+        (inp.placeholder.clone(), c)
+    } else {
+        (inp.text.clone(), inp.color)
+    };
+    UITextData {
+        text: texto,
+        font_size: inp.font_size,
+        color,
+        font: "default".into(),
+        align: "Left".into(),
+        style_extra: String::new(),
+        raycast_target: true,
+    }
+}
 
 use crate::documento::{Documento, NodoDocumento, TipoGraphic};
 
@@ -142,11 +164,23 @@ fn construir_nodo(
     avisos: &mut Vec<String>,
 ) -> NodoDocumento {
     let imagen = ent.ui_image.clone();
-    let texto = ent.ui_text.clone();
+    let texto_real = ent.ui_text.clone();
     let boton = ent.ui_button.clone();
+    let input = ent.ui_input_field.clone();
 
-    let graphic = if imagen.is_some() {
-        if texto.is_some() {
+    // InputField (V4, Q1): el texto que se ve se sintetiza del campo —
+    // el valor si no está vacío, el placeholder atenuado si lo está — y
+    // el fondo lo pone la imagen del nodo. Sin ui_text en la entidad.
+    let texto = if let Some(ref inp) = input {
+        Some(texto_de_input(inp))
+    } else {
+        texto_real.clone()
+    };
+
+    let graphic = if input.is_some() {
+        TipoGraphic::InputField
+    } else if imagen.is_some() {
+        if texto_real.is_some() {
             avisos.push(format!(
                 "Entidad '{}' (id {}) tiene UIImage y UIText: manda la imagen; el texto queda fuera hasta que la migración lo separe en un hijo",
                 ent.name, ent.id
@@ -202,7 +236,7 @@ fn construir_nodo(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glass_core::scene::{parsear_escena, CanvasData, UIImageData, UITextData};
+    use glass_core::scene::{parsear_escena, CanvasData, UIInputFieldData, UIImageData, UITextData};
 
     fn entidad(id: u64, nombre: &str) -> EntityData {
         let mut e = EntityData::new(id, nombre.to_string(), Vec::new());
@@ -294,6 +328,51 @@ mod tests {
         let mut ents = vec![a, entidad(2, "B")];
         enlazar(&mut ents, 1, 2);
         assert!(derivar_documentos(&escena(ents)).is_empty());
+    }
+
+    #[test]
+    fn input_field_vacio_muestra_placeholder_atenuado() {
+        let mut campo = entidad(2, "Campo");
+        campo.rect_transform = Some(rect());
+        campo.ui_image = Some(imagen(""));
+        campo.ui_input_field = Some(UIInputFieldData {
+            text: String::new(),
+            placeholder: "Escribe...".into(),
+            font_size: 20.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+        });
+        let mut ents = vec![canvas_raiz(1), campo];
+        enlazar(&mut ents, 1, 2);
+
+        let docs = derivar_documentos(&escena(ents));
+        let n = nodo_de(&docs[0], 2);
+        assert_eq!(n.graphic, TipoGraphic::InputField);
+        let txt = n.texto.as_ref().expect("texto sintetizado");
+        assert_eq!(txt.text, "Escribe...");
+        assert_eq!(txt.font_size, 20.0);
+        assert_eq!(txt.color[3], 0.5);
+    }
+
+    #[test]
+    fn input_field_con_valor_muestra_el_valor() {
+        let mut campo = entidad(2, "Campo");
+        campo.rect_transform = Some(rect());
+        campo.ui_image = Some(imagen(""));
+        campo.ui_input_field = Some(UIInputFieldData {
+            text: "hola".into(),
+            placeholder: "Escribe...".into(),
+            font_size: 20.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+        });
+        let mut ents = vec![canvas_raiz(1), campo];
+        enlazar(&mut ents, 1, 2);
+
+        let docs = derivar_documentos(&escena(ents));
+        let n = nodo_de(&docs[0], 2);
+        assert_eq!(n.graphic, TipoGraphic::InputField);
+        let txt = n.texto.as_ref().expect("texto sintetizado");
+        assert_eq!(txt.text, "hola");
+        assert_eq!(txt.color[3], 1.0);
     }
 
     #[test]

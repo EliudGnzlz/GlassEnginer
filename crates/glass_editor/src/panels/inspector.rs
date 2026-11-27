@@ -4,7 +4,7 @@ use glass_core::{
     AudioSourceData, CameraData, CanvasData, CharacterData, ColliderSpec, EntityData, LightData,
     MeshData, PhysicsData,
     RectTransformData, SceneState, ScriptComponentData, UIButtonData, UITextData,
-    UIImageData,
+    UIImageData, UIInputFieldData,
     UIDragData,
 };
 use glass_ui::estilos::{StyleProps, TextOverflow};
@@ -339,6 +339,7 @@ pub enum TipoComponente {
     Texto,
     Boton,
     Imagen,
+    InputField,
     DragDrop,
 }
 
@@ -360,6 +361,7 @@ impl TipoComponente {
             TipoComponente::Texto => "Text",
             TipoComponente::Boton => "Button",
             TipoComponente::Imagen => "Image",
+            TipoComponente::InputField => "InputField",
             TipoComponente::DragDrop => "DragDrop",
         }
     }
@@ -1103,6 +1105,7 @@ pub fn extraer_componente(ent: &EntityData, tipo: TipoComponente) -> Option<Stri
         TipoComponente::Texto => ent.ui_text.as_ref().and_then(a_json),
         TipoComponente::Boton => ent.ui_button.as_ref().and_then(a_json),
         TipoComponente::Imagen => ent.ui_image.as_ref().and_then(a_json),
+        TipoComponente::InputField => ent.ui_input_field.as_ref().and_then(a_json),
         TipoComponente::DragDrop => ent.ui_drag.as_ref().and_then(a_json),
         TipoComponente::Script => {
             if ent.script.is_none() && ent.script_data.is_none() {
@@ -1156,6 +1159,7 @@ pub fn aplicar_datos(ent: &mut EntityData, tipo: TipoComponente, json: &str) -> 
         TipoComponente::Texto => sustituir(&mut ent.ui_text, json),
         TipoComponente::Boton => sustituir(&mut ent.ui_button, json),
         TipoComponente::Imagen => sustituir(&mut ent.ui_image, json),
+        TipoComponente::InputField => sustituir(&mut ent.ui_input_field, json),
         TipoComponente::DragDrop => sustituir(&mut ent.ui_drag, json),
         TipoComponente::Script => {
             if ent.script.is_none() && ent.script_data.is_none() {
@@ -1213,6 +1217,9 @@ pub fn instalar_componente(ent: &mut EntityData, tipo: TipoComponente, json: &st
         TipoComponente::Texto => crear(&mut ent.ui_text, json, &mut ent.components, nombre),
         TipoComponente::Boton => crear(&mut ent.ui_button, json, &mut ent.components, nombre),
         TipoComponente::Imagen => crear(&mut ent.ui_image, json, &mut ent.components, nombre),
+        TipoComponente::InputField => {
+            crear(&mut ent.ui_input_field, json, &mut ent.components, nombre)
+        }
         TipoComponente::DragDrop => crear(&mut ent.ui_drag, json, &mut ent.components, nombre),
         TipoComponente::Script => {
             if ent.script.is_some() || ent.script_data.is_some() {
@@ -3371,6 +3378,61 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                     entity.components.retain(|c| c != "Image");
                 }
 
+                let mut accion_input = AccionCabecera::Nada;
+
+                let mut remove_input = false;
+                if let Some(ref mut campo) = entity.ui_input_field {
+                    seccion_componente(ui, "inputfield", "⌨ InputField (Texto editable)", TipoComponente::InputField, true, self.portapapeles.as_ref(), &mut accion_input, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Texto:");
+                            ui.text_edit_singleline(&mut campo.text);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Placeholder:");
+                            ui.text_edit_singleline(&mut campo.placeholder);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Tamaño:");
+                            ui.add_enabled(
+                                estilos_efectivos.font_size.is_none(),
+                                DragValue::new(&mut campo.font_size).speed(0.5).range(8.0..=120.0).suffix(" px"),
+                            );
+                            if estilos_efectivos.font_size.is_some() {
+                                ui.label(RichText::new("controlado por estilo").small().italics());
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Color:");
+                            ui.add_enabled_ui(estilos_efectivos.color.is_none(), |ui| {
+                                ui.color_edit_button_rgba_unmultiplied(&mut campo.color);
+                            });
+                            if estilos_efectivos.color.is_some() {
+                                ui.label(RichText::new("controlado por estilo").small().italics());
+                            }
+                        });
+                        ui.label("La conducta interactiva (teclear, caret, selección) llega en V6; la presentación (fondo + texto) ya es real.");
+                        if !dueno_estilo.is_empty() {
+                            ui.label(
+                                RichText::new(format!(
+                                    "El estilo CSS efectivo es el de {dueno_estilo} (Imagen > Texto > Botón)."
+                                ))
+                                .small()
+                                .italics(),
+                            );
+                        }
+                    });
+                    ui.separator();
+                }
+                if accion_input == AccionCabecera::Quitar {
+                    remove_input = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::InputField, accion_input);
+                }
+                if remove_input {
+                    entity.ui_input_field = None;
+                    entity.components.retain(|c| c != "InputField");
+                }
+
                 let mut accion_drag = AccionCabecera::Nada;
 
                 let mut remove_drag = false;
@@ -3452,6 +3514,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         hay_resultados |= coincide("Text");
                         hay_resultados |= coincide("Button");
                         hay_resultados |= coincide("Image");
+                        hay_resultados |= coincide("InputField");
                         hay_resultados |= coincide("DragDrop");
 
                         if !hay_resultados && !q.is_empty() {
@@ -3564,6 +3627,12 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         if entity.ui_image.is_none() && ui.button("🖼 Image").clicked() {
                             entity.ui_image = Some(UIImageData::default());
                             entity.components.push("Image".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if coincide("InputField") && entity.ui_input_field.is_none() && ui.button("⌨ InputField").clicked() {
+                            entity.ui_input_field = Some(UIInputFieldData::default());
+                            entity.components.push("InputField".into());
                             self.show_add_component_menu = false;
                         }
 

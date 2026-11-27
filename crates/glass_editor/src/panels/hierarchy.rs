@@ -22,6 +22,9 @@ pub enum EntityPreset {
     Canvas,
     UIText,
     UIButton,
+    UIPanel,
+    UIImage,
+    UIInputField,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,6 +222,18 @@ impl HierarchyPanel {
             }
             if ui.button("🔘 Botón (Button)").clicked() {
                 *pending_action = Some(HierarchyAction::Create(EntityPreset::UIButton));
+                ui.close();
+            }
+            if ui.button("⬜ Panel").clicked() {
+                *pending_action = Some(HierarchyAction::Create(EntityPreset::UIPanel));
+                ui.close();
+            }
+            if ui.button("🖼 Imagen").clicked() {
+                *pending_action = Some(HierarchyAction::Create(EntityPreset::UIImage));
+                ui.close();
+            }
+            if ui.button("⌨ Campo de texto (InputField)").clicked() {
+                *pending_action = Some(HierarchyAction::Create(EntityPreset::UIInputField));
                 ui.close();
             }
         });
@@ -1030,6 +1045,62 @@ impl HierarchyPanel {
                 }
                 id
             }
+            // V4b: el pintor solo dibuja la imagen si hay sprite y el
+            // fondo solo sale de `background-color`; un panel recién
+            // creado con sprite vacío sería invisible. Por eso los tres
+            // presets ponen fondo blanco en el style_extra de su imagen
+            // (visible al crear; se cambia en el Inspector).
+            EntityPreset::UIPanel => {
+                let id = scene.create_entity(
+                    "Panel".into(),
+                    vec!["Transform".into(), "RectTransform".into(), "Image".into()],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    if let Some(rt) = &mut ent.rect_transform {
+                        rt.size_delta = [200.0, 200.0];
+                    }
+                    if let Some(img) = &mut ent.ui_image {
+                        img.style_extra = "background-color: #ffffff;".into();
+                    }
+                }
+                id
+            }
+            EntityPreset::UIImage => {
+                let id = scene.create_entity(
+                    "Imagen".into(),
+                    vec!["Transform".into(), "RectTransform".into(), "Image".into()],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    if let Some(rt) = &mut ent.rect_transform {
+                        rt.size_delta = [200.0, 200.0];
+                    }
+                    if let Some(img) = &mut ent.ui_image {
+                        img.style_extra = "background-color: #ffffff;".into();
+                    }
+                }
+                id
+            }
+            EntityPreset::UIInputField => {
+                let id = scene.create_entity(
+                    "InputField".into(),
+                    vec!["Transform".into(), "RectTransform".into(), "InputField".into(), "Image".into()],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    if let Some(rt) = &mut ent.rect_transform {
+                        rt.size_delta = [200.0, 40.0];
+                    }
+                    if let Some(img) = &mut ent.ui_image {
+                        img.style_extra = "background-color: #ffffff;".into();
+                    }
+                    // Texto oscuro sobre fondo blanco, como Unity: el
+                    // default del componente es blanco y sobre blanco no
+                    // se vería.
+                    if let Some(campo) = &mut ent.ui_input_field {
+                        campo.color = [0.1, 0.1, 0.1, 1.0];
+                    }
+                }
+                id
+            }
         }
     }
 }
@@ -1060,6 +1131,48 @@ mod preset_physics_tests {
         panel.nota_creacion(EntityPreset::Canvas, 42);
         assert_eq!(panel.selected_entity, Some(42));
         assert!(panel.abrir_panel_canvas);
+    }
+
+    #[test]
+    fn preset_panel_nace_visible_y_centrado() {
+        let mut scene = glass_core::SceneState::default();
+        let id = HierarchyPanel::instantiate_preset(&mut scene, EntityPreset::UIPanel);
+        let ent = scene.get_entity(id).expect("la entidad existe");
+        let img = ent.ui_image.as_ref().expect("trae Image");
+        assert!(img.style_extra.contains("background-color: #ffffff"));
+        let rt = ent.rect_transform.as_ref().expect("trae RectTransform");
+        assert_eq!(rt.size_delta, [200.0, 200.0]);
+        assert_eq!(rt.anchor_min, [0.5, 0.5]);
+        assert_eq!(rt.anchor_max, [0.5, 0.5]);
+        assert_eq!(rt.pivot, [0.5, 0.5]);
+    }
+
+    #[test]
+    fn preset_imagen_nace_con_sprite_vacio() {
+        let mut scene = glass_core::SceneState::default();
+        let id = HierarchyPanel::instantiate_preset(&mut scene, EntityPreset::UIImage);
+        let ent = scene.get_entity(id).expect("la entidad existe");
+        let img = ent.ui_image.as_ref().expect("trae Image");
+        assert!(img.sprite.is_empty());
+        assert_eq!(
+            ent.rect_transform.as_ref().unwrap().size_delta,
+            [200.0, 200.0]
+        );
+    }
+
+    #[test]
+    fn preset_input_field_nace_con_texto_oscuro() {
+        let mut scene = glass_core::SceneState::default();
+        let id = HierarchyPanel::instantiate_preset(&mut scene, EntityPreset::UIInputField);
+        let ent = scene.get_entity(id).expect("la entidad existe");
+        let campo = ent.ui_input_field.as_ref().expect("trae InputField");
+        assert_eq!(campo.placeholder, "Escribe aquí...");
+        assert_eq!(campo.color, [0.1, 0.1, 0.1, 1.0]);
+        assert!(ent.ui_image.is_some());
+        assert_eq!(
+            ent.rect_transform.as_ref().unwrap().size_delta,
+            [200.0, 40.0]
+        );
     }
 
     #[test]

@@ -315,7 +315,7 @@ pub fn pintar_documento(
 
         // --- Imagen ---
         let mut tiene_imagen = false;
-        if nd.graphic == TipoGraphic::Imagen {
+        if nd.graphic == TipoGraphic::Imagen || nd.graphic == TipoGraphic::InputField {
             if let Some(ref img) = nd.imagen {
                 if !img.sprite.is_empty() {
                     tiene_imagen = true;
@@ -358,7 +358,7 @@ pub fn pintar_documento(
 
         // --- Texto ---
         let mut tiene_texto = false;
-        if nd.graphic == TipoGraphic::Texto {
+        if nd.graphic == TipoGraphic::Texto || nd.graphic == TipoGraphic::InputField {
             if let Some(ref txt) = nd.texto {
                 tiene_texto = true;
                 // V3c: el texto visible puede quedar vacío por
@@ -632,6 +632,43 @@ mod tests {
         assert_eq!(segs[1].desenfoque, 3.0);
         assert_eq!(segs[1].color, [0.0, 1.0, 0.0, 1.0]);
         assert_eq!(segs[1].rect.ancho, 100.0);
+    }
+
+    #[test]
+    fn pintor_input_field_emite_imagen_y_texto() {
+        // Un nodo InputField pinta el fondo (imagen) y el texto
+        // sintetizado en el mismo nodo.
+        let mut nodo = nodo_base(1, None, vec![]);
+        nodo.graphic = TipoGraphic::InputField;
+        nodo.imagen = Some(UIImageData {
+            sprite: "textures/campo.png".into(),
+            ..Default::default()
+        });
+        nodo.texto = Some(glass_core::scene::UITextData {
+            text: "Escribe...".into(),
+            ..Default::default()
+        });
+        let doc = Documento {
+            canvas_raiz: 0,
+            nodos: vec![nodo],
+            avisos: vec![],
+        };
+        let colocado = DocumentoColocado {
+            nodos: vec![NodoColocado {
+                nodo: 0,
+                entidad: 1,
+                rect: RectColocado { x: 10.0, y: 20.0, ancho: 200.0, alto: 40.0 },
+                estilos: StyleProps::default(),
+                mapa_texto: MapaTexto {
+                    celdas: vec![],
+                    texto_visible: "Escribe...".into(),
+                },
+            }],
+        };
+        let segs = pintar_documento(&doc, &colocado, &MedidaImagenNula);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].modo, ModoPintado::Imagen);
+        assert_eq!(segs[1].modo, ModoPintado::Texto);
     }
 
     #[test]
