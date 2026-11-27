@@ -1018,11 +1018,10 @@ mod tests {
     const SCRIPT_DIRECTO: &str = "using UnityEngine;\n\npublic class Mover : MonoBehaviour\n{\n    \
         public float velocidad = 1.0f;\n\n    void Update()\n    {\n    }\n}\n";
 
-    // Bloqueado por FindObjectOfType (la búsqueda por tipo llega en C2);
-    // las corrutinas ya no sirven de ejemplo: se desbloquearon en C1.
+    // Bloqueado por Rigidbody2D: el motor no tiene modo 2D; las corrutinas
+    // se desbloquearon en C1 y la búsqueda por tipo en C2.
     const SCRIPT_BLOQUEADO: &str = "using UnityEngine;\n\n\
-        public class Espera : MonoBehaviour\n{\n    void Start()\n    {\n        \
-        Espera otra = FindObjectOfType<Espera>();\n    }\n}\n";
+        public class Espera : MonoBehaviour\n{\n    Rigidbody2D cuerpo;\n}\n";
 
     const BIN: &[u8] = &[0x00, 0x01, 0x02, 0xFF, 0xFE, 0x10, 0x00, 0x7F];
 

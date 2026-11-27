@@ -33,7 +33,6 @@ pub struct ResultadoScript {
     pub es_editor: bool,
 }
 
-const MOTIVO_BUSQUEDA: &str = "búsqueda por tipo en la escena: sin equivalente en v1";
 const MOTIVO_2D: &str = "2D: el motor no tiene modo ni física 2D";
 const MOTIVO_GET_FORMA: &str =
     "no hay clase por forma; el motor usa el Collider genérico y los Attach del cuerpo";
@@ -42,12 +41,6 @@ const MOTIVO_ADD_FORMA: &str =
 
 /// Identificadores que bloquean por sí solos (elemento, motivo).
 const DIRECTOS: &[(&str, &str)] = &[
-    ("FindObjectOfType", MOTIVO_BUSQUEDA),
-    ("FindObjectsOfType", MOTIVO_BUSQUEDA),
-    ("FindFirstObjectByType", MOTIVO_BUSQUEDA),
-    ("FindAnyObjectByType", MOTIVO_BUSQUEDA),
-    // Misma familia, tampoco existe en la fachada.
-    ("FindObjectsByType", MOTIVO_BUSQUEDA),
     ("Rigidbody2D", MOTIVO_2D),
     ("Collider2D", MOTIVO_2D),
     ("BoxCollider2D", MOTIVO_2D),
@@ -973,18 +966,20 @@ fn sintaxis_rota_no_resuelve() {
     }
 
     #[test]
-    fn busqueda_por_tipo_y_2d() {
+    fn busqueda_por_tipo_ya_no_bloquea_y_2d_si() {
         let texto = "public class A : MonoBehaviour\n{\n    Rigidbody2D cuerpo;\n    void Start() { var e = FindObjectOfType<Enemigo>(); }\n}\n";
         let r = convertir_script("Assets/A.cs", texto);
         assert!(r.codigo.is_none());
         let b = bloqueantes(&r);
-        assert_eq!(b.len(), 2, "{:?}", r.marcas);
+        assert_eq!(b.len(), 1, "{:?}", r.marcas);
         assert_eq!(b[0].elemento, "Rigidbody2D");
         assert_eq!(b[0].linea, 3);
         assert_eq!(b[0].motivo, MOTIVO_2D);
-        assert_eq!(b[1].elemento, "FindObjectOfType");
-        assert_eq!(b[1].linea, 4);
-        assert_eq!(b[1].motivo, MOTIVO_BUSQUEDA);
+
+        let texto2 = "public class A : MonoBehaviour\n{\n    void Start() { var e = FindObjectOfType<Enemigo>(); }\n}\n";
+        let r2 = convertir_script("Assets/A.cs", texto2);
+        assert_eq!(r2.codigo.as_deref(), Some(texto2));
+        assert!(bloqueantes(&r2).is_empty());
     }
 
     #[test]
