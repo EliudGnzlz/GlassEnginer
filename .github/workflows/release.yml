@@ -345,6 +345,9 @@ jobs:
           fi
           cat checksums.txt
 
+      # Sin --latest: GitHub rechaza marcar como Latest una prerelease
+      # (HTTP 422; causa raíz del fallo de publish de la Release #40,
+      # v0.10.25.5-beta). Todas las releases de este repo son prerelease.
       - name: Crear release
         working-directory: dist
         env:
@@ -368,7 +371,6 @@ jobs:
             gh release create "$TAG" \
               --title "GlassEnginer Hub $TAG" \
               --prerelease \
-              --latest \
               --notes-file notas.md \
               --target "${{ github.sha }}" \
               *.exe *.AppImage checksums.txt
@@ -388,7 +390,6 @@ jobs:
             gh release create "$TAG" \
               --title "GlassEnginer Launcher $TAG" \
               --prerelease \
-              --latest \
               --notes-file notas.md \
               --target "${{ github.sha }}" \
               *.exe *.zip *.AppImage checksums.txt
