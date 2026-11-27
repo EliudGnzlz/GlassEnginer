@@ -1286,6 +1286,16 @@ mod tests {
             (0.0, 0.0, 0.0, 0.0),
             "Hijo de nodo inactivo debe tener rect cero"
         );
+        // Contrato H1 (peces V4): un nodo inactivo no pinta texto
+        // (mapa vacío) ni él ni sus descendientes.
+        assert!(
+            colocado.nodos[1].mapa_texto.texto_visible.is_empty(),
+            "Nodo inactivo debe tener texto_visible vacío"
+        );
+        assert!(
+            colocado.nodos[2].mapa_texto.texto_visible.is_empty(),
+            "Hijo de nodo inactivo debe tener texto_visible vacío"
+        );
     }
     // --- P2b: flex (tests escritos a mano) ---
 

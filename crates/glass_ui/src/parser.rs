@@ -646,17 +646,22 @@ fn defecto_tipo(nodo: &NodoDocumento) -> StyleProps {
 }
 
 /// Capa del componente: texto, tinte de imagen y color del botón.
+/// La prioridad declarada es imagen > texto > botón: el botón aporta
+/// su color PRIMERO para que el tinte de la Image lo sobrescriba.
+/// (Antes era al revés y el azul por defecto del Button pisaba el
+/// tinte de la Image salvo que el CSS tuviera `background-color`;
+/// hallazgo de los peces de fin de módulo V4.)
 fn capa_componente(nodo: &NodoDocumento) -> StyleProps {
     let mut p = StyleProps::default();
     if let Some(texto) = &nodo.texto {
         p.color = Some(texto.color);
         p.font_size = Some(texto.font_size);
     }
-    if let Some(imagen) = &nodo.imagen {
-        p.background_color = Some(imagen.color);
-    }
     if let Some(boton) = &nodo.boton {
         p.background_color = Some(boton.target_graphic_color);
+    }
+    if let Some(imagen) = &nodo.imagen {
+        p.background_color = Some(imagen.color);
     }
     p
 }
@@ -836,7 +841,7 @@ fn estilos_validos(p: &StyleProps) -> bool {
 mod pruebas {
     use super::*;
     use crate::documento::TipoGraphic;
-    use glass_core::scene::{RectTransformData, UITextData};
+    use glass_core::scene::{RectTransformData, UIButtonData, UIImageData, UITextData};
 
     fn nodo_texto(extra: &str) -> NodoDocumento {
         NodoDocumento {
@@ -935,6 +940,59 @@ mod pruebas {
         let resuelto2 = resolver_estilos(&nodo2, &EstadoPseudo::default());
         assert_eq!(resuelto2.color, Some([0.0, 0.0, 0.0, 1.0]));
         assert_eq!(resuelto2.font_size, Some(14.0));
+    }
+
+    /// H2 (peces V4): la prioridad declarada es imagen > texto > botón.
+    /// Con colores divergentes, el tinte de la Image debe ganar sobre el
+    /// `target_graphic_color` del Button; sin Image, manda el del botón.
+    #[test]
+    fn imagen_gana_a_target_graphic_color_del_boton() {
+        fn nodo_boton(imagen: Option<[f32; 4]>, boton_color: [f32; 4]) -> NodoDocumento {
+            NodoDocumento {
+                entidad: 1,
+                nombre: String::new(),
+                padre: None,
+                hijos: vec![],
+                graphic: TipoGraphic::Imagen,
+                es_canvas: false,
+                es_canvas_raiz: false,
+                activo: true,
+                rect_transform: RectTransformData {
+                    anchored_position: [0.0, 0.0],
+                    size_delta: [100.0, 50.0],
+                    anchor_min: [0.0, 0.0],
+                    anchor_max: [0.0, 0.0],
+                    pivot: [0.5, 0.5],
+                },
+                canvas: None,
+                imagen: imagen.map(|c| UIImageData {
+                    color: c,
+                    ..UIImageData::default()
+                }),
+                texto: None,
+                boton: Some(UIButtonData {
+                    target_graphic_color: boton_color,
+                    ..UIButtonData::default()
+                }),
+                drag: None,
+                layout_group: None,
+                style_extra: String::new(),
+                raycast_target: true,
+            }
+        }
+        // Imagen roja + botón azul (el azul por defecto del editor):
+        // gana la imagen.
+        let nodo = nodo_boton(Some([1.0, 0.0, 0.0, 1.0]), [0.25, 0.55, 0.85, 1.0]);
+        assert_eq!(
+            resolver_estilos(&nodo, &EstadoPseudo::default()).background_color,
+            Some([1.0, 0.0, 0.0, 1.0])
+        );
+        // Sin imagen, manda el color del botón.
+        let nodo2 = nodo_boton(None, [0.25, 0.55, 0.85, 1.0]);
+        assert_eq!(
+            resolver_estilos(&nodo2, &EstadoPseudo::default()).background_color,
+            Some([0.25, 0.55, 0.85, 1.0])
+        );
     }
 
     #[test]
