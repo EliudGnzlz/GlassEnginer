@@ -34,10 +34,6 @@ pub struct ResultadoScript {
 }
 
 const MOTIVO_2D: &str = "2D: el motor no tiene modo ni física 2D";
-const MOTIVO_GET_FORMA: &str =
-    "no hay clase por forma; el motor usa el Collider genérico y los Attach del cuerpo";
-const MOTIVO_ADD_FORMA: &str =
-    "no hay clase por forma; el equivalente manual es el Attach… del cuerpo rígido";
 
 /// Identificadores que bloquean por sí solos (elemento, motivo).
 const DIRECTOS: &[(&str, &str)] = &[
@@ -48,20 +44,6 @@ const DIRECTOS: &[(&str, &str)] = &[
     ("CapsuleCollider2D", MOTIVO_2D),
     ("PolygonCollider2D", MOTIVO_2D),
     ("Physics2D", MOTIVO_2D),
-];
-
-/// Clases de collider por forma que la fachada no tiene.
-const FORMAS: &[&str] = &["SphereCollider", "CapsuleCollider", "MeshCollider"];
-
-/// Métodos genéricos de obtención de componentes (motivo «Get»).
-const OBTENER: &[&str] = &[
-    "GetComponent",
-    "GetComponents",
-    "GetComponentInChildren",
-    "GetComponentsInChildren",
-    "GetComponentInParent",
-    "GetComponentsInParent",
-    "TryGetComponent",
 ];
 
 /// Convierte un script C# de Unity según el contrato U4.
@@ -654,30 +636,6 @@ fn solo_espacios(cs: &[char], desde: usize, hasta: usize) -> bool {
         .is_some_and(|s| s.iter().all(|c| c.is_whitespace()))
 }
 
-/// Lee `<Tipo>` tras `desde` (con cualquier espaciado y nombre cualificado)
-/// y devuelve el último segmento del tipo.
-fn argumento_generico(cs: &[char], desde: usize) -> Option<String> {
-    let mut i = desde;
-    while i < cs.len() && cs[i].is_whitespace() {
-        i += 1;
-    }
-    if cs.get(i) != Some(&'<') {
-        return None;
-    }
-    let mut arg = String::new();
-    for &c in cs.get(i + 1..)? {
-        if c == '>' {
-            return arg.rsplit('.').next().map(|s| s.trim().to_string());
-        }
-        if es_ident(c) || c == '.' || c.is_whitespace() {
-            arg.push(c);
-        } else {
-            return None;
-        }
-    }
-    None
-}
-
 /// Línea original del primer `using UnityEditor` fuera de comentarios
 /// y cadenas (admite `using static UnityEditor…`), buscado sobre las
 /// líneas efectivas que deja el preprocesador.
@@ -709,38 +667,10 @@ fn buscar_using_editor(lineas: &[(usize, &str)]) -> Option<usize> {
 fn detectar_linea(num: usize, linea: &str, marcas: &mut Vec<MarcaScript>) {
     let cs: Vec<char> = linea.chars().collect();
     let ids = identificadores(&cs);
-    for (palabra, _, fin) in ids.iter() {
+    for (palabra, _, _) in ids.iter() {
         let palabra = palabra.as_str();
-        match palabra {
-            "AddComponent" => {
-                if let Some(forma) =
-                    argumento_generico(&cs, *fin).filter(|f| FORMAS.contains(&f.as_str()))
-                {
-                    marcas.push(marca(
-                        num,
-                        &format!("{palabra}<{forma}>"),
-                        MOTIVO_ADD_FORMA,
-                        true,
-                    ));
-                }
-            }
-            _ if OBTENER.contains(&palabra) => {
-                if let Some(forma) =
-                    argumento_generico(&cs, *fin).filter(|f| FORMAS.contains(&f.as_str()))
-                {
-                    marcas.push(marca(
-                        num,
-                        &format!("{palabra}<{forma}>"),
-                        MOTIVO_GET_FORMA,
-                        true,
-                    ));
-                }
-            }
-            _ => {
-                if let Some(&(nombre, motivo)) = DIRECTOS.iter().find(|e| e.0 == palabra) {
-                    marcas.push(marca(num, nombre, motivo, true));
-                }
-            }
+        if let Some(&(nombre, motivo)) = DIRECTOS.iter().find(|e| e.0 == palabra) {
+            marcas.push(marca(num, nombre, motivo, true));
         }
     }
 }
@@ -947,18 +877,11 @@ fn sintaxis_rota_no_resuelve() {
     }
 
     #[test]
-    fn colliders_por_forma() {
+    fn colliders_por_forma_ya_no_bloquean() {
         let texto = "public class A : MonoBehaviour\n{\n    void Start() {\n        var e = GetComponent<SphereCollider>();\n        var c = gameObject.AddComponent< CapsuleCollider >();\n        var r = GetComponent<Rigidbody>();\n    }\n}\n";
         let r = convertir_script("Assets/A.cs", texto);
-        assert!(r.codigo.is_none());
-        let b = bloqueantes(&r);
-        assert_eq!(b.len(), 2, "{:?}", r.marcas);
-        assert_eq!(b[0].linea, 4);
-        assert_eq!(b[0].elemento, "GetComponent<SphereCollider>");
-        assert_eq!(b[0].motivo, MOTIVO_GET_FORMA);
-        assert_eq!(b[1].linea, 5);
-        assert_eq!(b[1].elemento, "AddComponent<CapsuleCollider>");
-        assert_eq!(b[1].motivo, MOTIVO_ADD_FORMA);
+        assert_eq!(r.codigo.as_deref(), Some(texto));
+        assert!(bloqueantes(&r).is_empty(), "{:?}", r.marcas);
 
         let r = convertir_script("Assets/A.cs", "var r = GetComponent<Rigidbody>();\n");
         assert!(r.marcas.is_empty());
