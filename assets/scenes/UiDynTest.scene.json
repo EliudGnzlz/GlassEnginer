@@ -630,7 +630,9 @@
   "children": [
    11,
    12,
-   13
+   13,
+   15,
+   16
   ]
  },
  {
@@ -946,6 +948,166 @@
     1.0
    ],
    "preserve_aspect": false
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "components": [
+   "RectTransform",
+   "Image",
+   "Script"
+  ],
+  "id": 15,
+  "is_static": false,
+  "layer": "Default",
+  "light": null,
+  "mesh": null,
+  "name": "Panel Estilo",
+  "parent": 10,
+  "physics": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    -300.0
+   ],
+   "size_delta": [
+    300.0,
+    120.0
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "script": "GlassEngine.Core.Scripts.UiDynStyleProbe",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.UiDynStyleProbe",
+   "move_speed": 5.0,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "tag": "Untagged",
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "ui_text": null,
+  "ui_image": {
+   "sprite": "",
+   "color": [
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ],
+   "preserve_aspect": false
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text",
+   "Script"
+  ],
+  "id": 16,
+  "is_static": false,
+  "layer": "UI",
+  "light": null,
+  "mesh": null,
+  "name": "Texto Estilo",
+  "parent": 10,
+  "physics": null,
+  "rect_transform": {
+   "anchored_position": [
+    20.0,
+    120.0
+   ],
+   "size_delta": [
+    300.0,
+    40.0
+   ],
+   "anchor_min": [
+    0.0,
+    0.0
+   ],
+   "anchor_max": [
+    0.0,
+    0.0
+   ],
+   "pivot": [
+    0.0,
+    0.0
+   ]
+  },
+  "script": "GlassEngine.Core.Scripts.UiDynStyleTextProbe",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.UiDynStyleTextProbe",
+   "move_speed": 5.0,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "tag": "UI",
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "ui_text": {
+   "text": "ESTILO C#",
+   "font_size": 22.0,
+   "color": [
+    1.0,
+    0.9,
+    0.2,
+    1.0
+   ]
   }
  }
 ]

@@ -194,6 +194,15 @@ public delegate int UiSetImageColorDelegate(ulong entityId, float r, float g, fl
 public delegate int UiSetButtonColorDelegate(ulong entityId, float r, float g, float b, float a);
 public delegate int UiSetAnchoredPosDelegate(ulong entityId, float x, float y);
 public delegate int UiSetSizeDeltaDelegate(ulong entityId, float x, float y);
+    public delegate int UiSetBackgroundColorDelegate(ulong entityId, float r, float g, float b, float a);
+    public delegate int UiSetBorderRadiusDelegate(ulong entityId, float tl, float tr, float br, float bl);
+    public delegate int UiSetOpacityDelegate(ulong entityId, float opacity);
+    public delegate int UiSetOverflowDelegate(ulong entityId, IntPtr overflowUtf8);
+    public delegate int UiSetLetterSpacingDelegate(ulong entityId, float px);
+    public delegate int UiSetBorderDelegate(ulong entityId, float width, float r, float g, float b, float a);
+    public delegate int UiSetAnchorMinDelegate(ulong entityId, float x, float y);
+    public delegate int UiSetAnchorMaxDelegate(ulong entityId, float x, float y);
+    public delegate int UiSetPivotDelegate(ulong entityId, float x, float y);
 
 /// <summary>Entidad del último arrastre del Canvas (drag &amp; drop).</summary>
 public delegate ulong UiGetDraggedIdDelegate();

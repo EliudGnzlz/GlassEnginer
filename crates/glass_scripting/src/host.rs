@@ -251,6 +251,15 @@ struct UiBridgeCallbacks {
     // Añadidos AL FINAL (drag & drop): getters del último gesto.
     ui_get_dragged_id: *const c_void,
     ui_get_drop_target_id: *const c_void,
+    ui_set_background_color: *const c_void,
+    ui_set_border_radius: *const c_void,
+    ui_set_opacity: *const c_void,
+    ui_set_overflow: *const c_void,
+    ui_set_letter_spacing: *const c_void,
+    ui_set_border: *const c_void,
+    ui_set_anchor_min: *const c_void,
+    ui_set_anchor_max: *const c_void,
+    ui_set_pivot: *const c_void,
 }
 
 type InitUiBridgeFn = unsafe extern "system" fn(*const UiBridgeCallbacks);
@@ -816,6 +825,15 @@ impl ScriptHost {
                     ui_get_dragged_id: crate::bindings::ui_get_dragged_id as *const c_void,
                     ui_get_drop_target_id: crate::bindings::ui_get_drop_target_id
                         as *const c_void,
+                    ui_set_background_color: crate::bindings::ui_set_background_color as *const c_void,
+                    ui_set_border_radius: crate::bindings::ui_set_border_radius as *const c_void,
+                    ui_set_opacity: crate::bindings::ui_set_opacity as *const c_void,
+                    ui_set_overflow: crate::bindings::ui_set_overflow as *const c_void,
+                    ui_set_letter_spacing: crate::bindings::ui_set_letter_spacing as *const c_void,
+                    ui_set_border: crate::bindings::ui_set_border as *const c_void,
+                    ui_set_anchor_min: crate::bindings::ui_set_anchor_min as *const c_void,
+                    ui_set_anchor_max: crate::bindings::ui_set_anchor_max as *const c_void,
+                    ui_set_pivot: crate::bindings::ui_set_pivot as *const c_void,
                 });
             }
         } else {
