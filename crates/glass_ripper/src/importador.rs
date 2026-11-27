@@ -928,7 +928,7 @@ mod tests {
     const G_TEX: &str = "a0000000000000000000000000000002";
     const G_MAT: &str = "a0000000000000000000000000000003";
     const G_DIRECTO: &str = "a0000000000000000000000000000004";
-    const G_CORRUTINA: &str = "a0000000000000000000000000000005";
+    const G_BLOQUEADO: &str = "a0000000000000000000000000000005";
     const G_BIN: &str = "a0000000000000000000000000000006";
     const G_CTRL: &str = "a0000000000000000000000000000007";
 
@@ -1018,10 +1018,11 @@ mod tests {
     const SCRIPT_DIRECTO: &str = "using UnityEngine;\n\npublic class Mover : MonoBehaviour\n{\n    \
         public float velocidad = 1.0f;\n\n    void Update()\n    {\n    }\n}\n";
 
-    const SCRIPT_CORRUTINA: &str = "using System.Collections;\nusing UnityEngine;\n\n\
+    // Bloqueado por FindObjectOfType (la búsqueda por tipo llega en C2);
+    // las corrutinas ya no sirven de ejemplo: se desbloquearon en C1.
+    const SCRIPT_BLOQUEADO: &str = "using UnityEngine;\n\n\
         public class Espera : MonoBehaviour\n{\n    void Start()\n    {\n        \
-        StartCoroutine(Esperar());\n    }\n\n    IEnumerator Esperar()\n    {\n        \
-        yield return null;\n    }\n}\n";
+        Espera otra = FindObjectOfType<Espera>();\n    }\n}\n";
 
     const BIN: &[u8] = &[0x00, 0x01, 0x02, 0xFF, 0xFE, 0x10, 0x00, 0x7F];
 
@@ -1039,10 +1040,10 @@ mod tests {
         );
         entrada(
             &mut b,
-            G_CORRUTINA,
+            G_BLOQUEADO,
             "Assets/Synty/Scripts/Espera.cs",
             "MonoImporter",
-            Some(SCRIPT_CORRUTINA.as_bytes()),
+            Some(SCRIPT_BLOQUEADO.as_bytes()),
         );
         entrada(&mut b, G_BIN, "Assets/Synty/Datos/blob.bin", "DefaultImporter", Some(BIN));
         cerrar_tar(b, destino);
@@ -1081,7 +1082,7 @@ mod tests {
         assert!(ruta_registro.is_file());
         let registro = RegistroGuids::cargar(&ruta_registro).unwrap();
         assert_eq!(registro.len(), 6);
-        for g in [G_CARPETA, G_TEX, G_MAT, G_DIRECTO, G_CORRUTINA, G_BIN] {
+        for g in [G_CARPETA, G_TEX, G_MAT, G_DIRECTO, G_BLOQUEADO, G_BIN] {
             assert!(registro.resolver(g).is_some(), "falta {g} en el registro");
         }
 
@@ -1108,10 +1109,10 @@ mod tests {
         );
         entrada(
             &mut b,
-            G_CORRUTINA,
+            G_BLOQUEADO,
             "Assets/Synty/Scripts/Espera.cs",
             "MonoImporter",
-            Some(SCRIPT_CORRUTINA.as_bytes()),
+            Some(SCRIPT_BLOQUEADO.as_bytes()),
         );
         cerrar_tar(b, &paquete);
 
@@ -1122,7 +1123,7 @@ mod tests {
 
         assert!(hay_linea(
             &informe.a_texto(),
-            G_CORRUTINA,
+            G_BLOQUEADO,
             "Assets/Synty/Scripts/Espera.cs",
             "referenciado por scripts convertidos: Synty/Scripts/Usa.cs",
         ));

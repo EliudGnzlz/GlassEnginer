@@ -187,21 +187,21 @@ mod tests {
         );
         assert!(resultado.is_ok(), "script directo rechazado: {resultado:?}");
 
-        let invalido = "using UnityEngine;\nusing System.Collections;\n\
+        let corrutina = "using UnityEngine;\nusing System.Collections;\n\
                         public class PruebaCorrutina : MonoBehaviour {\n\
                         public void Iniciar() { StartCoroutine(Rutina()); }\n\
                         private IEnumerator Rutina() { yield break; }\n\
                         }\n";
-        let errores = verificar_compilacion(
-            invalido,
+        let resultado = verificar_compilacion(
+            corrutina,
             "PruebaCorrutina.cs",
             &proyecto_core,
-            &base.join("invalido"),
-        )
-        .expect_err("las corrutinas no deben compilar contra la fachada");
-        assert!(errores.iter().any(|error| error.contains("error CS")));
+            &base.join("corrutina"),
+        );
+        assert!(resultado.is_ok(), "{:?}", resultado);
 
         let _ = fs::remove_dir_all(base);
+
     }
 
     fn directorio_temporal() -> PathBuf {

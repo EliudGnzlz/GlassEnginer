@@ -33,8 +33,6 @@ pub struct ResultadoScript {
     pub es_editor: bool,
 }
 
-const MOTIVO_CORRUTINA_START: &str = "corrutinas: el motor no tiene StartCoroutine en v1";
-const MOTIVO_YIELD: &str = "corrutinas (yield): sin equivalente en v1";
 const MOTIVO_BUSQUEDA: &str = "búsqueda por tipo en la escena: sin equivalente en v1";
 const MOTIVO_2D: &str = "2D: el motor no tiene modo ni física 2D";
 const MOTIVO_GET_FORMA: &str =
@@ -44,18 +42,6 @@ const MOTIVO_ADD_FORMA: &str =
 
 /// Identificadores que bloquean por sí solos (elemento, motivo).
 const DIRECTOS: &[(&str, &str)] = &[
-    ("StartCoroutine", MOTIVO_CORRUTINA_START),
-    ("IEnumerator", "corrutinas (IEnumerator): sin equivalente en v1"),
-    ("WaitForSeconds", "corrutinas (WaitForSeconds): sin equivalente en v1"),
-    ("WaitForEndOfFrame", "corrutinas (WaitForEndOfFrame): sin equivalente en v1"),
-    (
-        "WaitForSecondsRealtime",
-        "corrutinas (WaitForSecondsRealtime): sin equivalente en v1",
-    ),
-    (
-        "CustomYieldInstruction",
-        "corrutinas (CustomYieldInstruction): sin equivalente en v1",
-    ),
     ("FindObjectOfType", MOTIVO_BUSQUEDA),
     ("FindObjectsOfType", MOTIVO_BUSQUEDA),
     ("FindFirstObjectByType", MOTIVO_BUSQUEDA),
@@ -730,17 +716,9 @@ fn buscar_using_editor(lineas: &[(usize, &str)]) -> Option<usize> {
 fn detectar_linea(num: usize, linea: &str, marcas: &mut Vec<MarcaScript>) {
     let cs: Vec<char> = linea.chars().collect();
     let ids = identificadores(&cs);
-    for (k, (palabra, _, fin)) in ids.iter().enumerate() {
+    for (palabra, _, fin) in ids.iter() {
         let palabra = palabra.as_str();
         match palabra {
-            "yield" => {
-                let siguiente = ids.get(k + 1).filter(|(s, ini, _)| {
-                    matches!(s.as_str(), "return" | "break") && solo_espacios(&cs, *fin, *ini)
-                });
-                if let Some((s, _, _)) = siguiente {
-                    marcas.push(marca(num, &format!("yield {s}"), MOTIVO_YIELD, true));
-                }
-            }
             "AddComponent" => {
                 if let Some(forma) =
                     argumento_generico(&cs, *fin).filter(|f| FORMAS.contains(&f.as_str()))
@@ -800,15 +778,11 @@ mod tests {
     }
 
     #[test]
-    fn start_coroutine_bloquea_con_su_linea() {
+    fn start_coroutine_ya_no_bloquea() {
         let texto = "using UnityEngine;\npublic class A : MonoBehaviour\n{\n    void Start()\n    {\n        StartCoroutine(Bucle());\n    }\n}\n";
         let r = convertir_script("Assets/A.cs", texto);
-        assert!(r.codigo.is_none());
-        let b = bloqueantes(&r);
-        assert_eq!(b.len(), 1);
-        assert_eq!(b[0].elemento, "StartCoroutine");
-        assert_eq!(b[0].linea, 6);
-        assert_eq!(b[0].motivo, MOTIVO_CORRUTINA_START);
+        assert_eq!(r.codigo.as_deref(), Some(texto));
+        assert!(bloqueantes(&r).is_empty(), "{:?}", r.marcas);
     }
 
     #[test]
@@ -818,10 +792,11 @@ mod tests {
         assert!(bloqueantes(&r).is_empty(), "{:?}", r.marcas);
         assert_eq!(r.codigo.as_deref(), Some(texto));
 
-        // Tras un comentario de bloque cerrado y un carácter, el código vuelve a contar.
+        // Tras un comentario de bloque cerrado y un carácter, el código real ya no bloquea.
         let texto = "/* x */ char c = '\"'; StartCoroutine(y);\n";
         let r = convertir_script("Assets/B.cs", texto);
-        assert_eq!(bloqueantes(&r).len(), 1);
+        assert!(bloqueantes(&r).is_empty(), "{:?}", r.marcas);
+        assert_eq!(r.codigo.as_deref(), Some(texto));
     }
 
     #[test]
@@ -834,14 +809,14 @@ mod tests {
             Some("public class A : MonoBehaviour\n{\n    void Start() { }\n}\n")
         );
 
-        // Las marcas conservan la línea original tras eliminar ramas.
+        // La rama #else conserva su línea original tras eliminar ramas.
         let texto = "public class A : MonoBehaviour\n{\n#if UNITY_EDITOR\n    void Start() { }\n#else\n    object w = new WaitForSeconds(1f);\n#endif\n}\n";
         let r = convertir_script("Assets/A.cs", texto);
-        let b = bloqueantes(&r);
-        assert_eq!(b.len(), 1);
-        assert_eq!(b[0].elemento, "WaitForSeconds");
-        assert_eq!(b[0].linea, 6);
-        assert!(r.codigo.is_none());
+        assert!(bloqueantes(&r).is_empty(), "{:?}", r.marcas);
+        assert_eq!(
+            r.codigo.as_deref(),
+            Some("public class A : MonoBehaviour\n{\n    object w = new WaitForSeconds(1f);\n}\n")
+        );
     }
 
     #[test]

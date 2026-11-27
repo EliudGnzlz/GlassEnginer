@@ -188,13 +188,13 @@ mod tests {
     }
 
     #[test]
-    fn script_con_corrutina_queda_en_cuarentena() {
+    fn script_con_corrutina_se_convierte() {
         let texto = "using UnityEngine;\npublic class Foo : MonoBehaviour { void Start() { StartCoroutine(Bar()); } }\n";
         let resultado = procesar_script("Assets/Foo.cs", texto, None);
 
-        assert_eq!(resultado.destino, DestinoScript::Cuarentena);
-        assert!(resultado.codigo.is_none());
-        assert!(resultado
+        assert_eq!(resultado.destino, DestinoScript::Convertido);
+        assert!(resultado.codigo.is_some());
+        assert!(!resultado
             .marcas
             .iter()
             .any(|marca| marca.bloqueante && marca.elemento == "StartCoroutine"));
