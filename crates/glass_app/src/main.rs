@@ -8187,7 +8187,10 @@ for name in wanted {
             // IBL (set 6): el cubemap del cielo se regenera solo si el
             // sol se movió o cambió de color (con freno de 2 s). Sin luz
             // direccional, el entorno se desactiva y el shader vuelve
-            // al ambiente hemisférico.
+            // al ambiente hemisférico. La intensidad del entorno es la
+            // constante propia del módulo ibl, desacoplada de la intensidad
+            // de ambiente de la escena (G5-C), para que autorar ambiente
+            // 1.0 no multiplique el entorno.
             {
                 let hay_sol = light_color[0] + light_color[1] + light_color[2] > 0.0;
                 if hay_sol {
@@ -8205,7 +8208,7 @@ for name in wanted {
                             .is_ok()
                         {
                             renderer.set_ibl_params(
-                                light_dir[3],
+                                ibl::INTENSIDAD_ENTORNO,
                                 (ibl::IBL_MIPS - 1) as f32,
                                 true,
                             );

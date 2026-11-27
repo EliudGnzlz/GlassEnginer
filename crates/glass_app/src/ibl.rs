@@ -6,6 +6,15 @@
 pub const IBL_SIZE: u32 = 64;
 pub const IBL_MIPS: u32 = 5; // 64, 32, 16, 8, 4
 
+/// Intensidad del entorno (IBL) del motor. Es propia e independiente de la
+/// intensidad de ambiente de la escena, que solo manda en el degradado de
+/// reserva cuando no hay IBL válido. El cubemap es un cielo procedural de
+/// radiancia media ≈0.7 con el sol ya horneado como color × intensidad, así
+/// que este valor no vuelve a escalar ni por el sol ni por el ambiente.
+/// 0.25 es el nivel al que están validados los looks de las escenas:
+/// cambiarlo es una decisión deliberada (lo fija un test).
+pub const INTENSIDAD_ENTORNO: f32 = 0.25;
+
 const CIELO: [f32; 3] = [0.82, 0.88, 1.0];
 const SUELO: [f32; 3] = [0.62, 0.58, 0.55];
 
@@ -414,5 +423,13 @@ mod tests {
         let media4: f32 = nivel4.iter().map(|c| luminancia(*c)).sum::<f32>() / num4 as f32;
 
         assert!((media0 - media4).abs() < 0.02, "{media0} vs {media4}");
+    }
+
+    #[test]
+    fn intensidad_entorno_fijada_en_el_nivel_validado() {
+        // Si alguien lo cambia, este test obliga a hacerlo a conciencia: todos los looks validados dependen de este nivel.
+        let i = super::INTENSIDAD_ENTORNO;
+        assert!(i.is_finite() && i > 0.0, "intensidad de entorno no válida: {i}");
+        assert_eq!(i, 0.25, "INTENSIDAD_ENTORNO cambió: revisar los looks validados");
     }
 }
