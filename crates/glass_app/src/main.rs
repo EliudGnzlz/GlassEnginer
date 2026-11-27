@@ -5579,6 +5579,22 @@ let resueltos = if body.has_collider {
             match self.script_host.create_instance(*entity_id, class_name) {
                 Ok(handle) => {
                     log::info!("Script '{class_name}' instanciado para entidad {entity_id} (handle {handle}).");
+                    // Sobre C0 del huésped MonoBehaviour: nombre, tag y
+                    // estado activo de la entidad. La fachada devuelve 1
+                    // si la instancia no es un huésped (GlassBehaviour de
+                    // siempre) y None si no exporta el símbolo: ambos se
+                    // ignoran en silencio.
+                    if let Ok(scene) = self.scene_state.lock() {
+                        if let Some(e) = scene.entities.iter().find(|e| e.id == *entity_id) {
+                            let sobre = serde_json::json!({
+                                "v": 1,
+                                "name": e.name,
+                                "tag": e.tag,
+                                "active": e.active,
+                            });
+                            let _ = self.script_host.apply_script_data(handle, &sobre.to_string());
+                        }
+                    }
                     // El jugador se localiza por clase: es la única forma de
                     // recuperar el handle del `RigidBody` que mueve el controlador
                     // sin meter un campo extra en el formato de escena.

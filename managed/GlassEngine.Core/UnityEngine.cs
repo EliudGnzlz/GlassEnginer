@@ -201,6 +201,42 @@ namespace UnityEngine
         public static float deltaTime { get; internal set; } = 0.01667f;
         public static float time { get; internal set; } = 0.0f;
         public static int frameCount { get; internal set; } = 0;
+
+        /// <summary>Paso de FixedUpdate (el mismo FixedStep de RuntimeBridge).</summary>
+        public static float fixedDeltaTime { get; internal set; } = 1f / 60f;
+
+        // Reloj de pared: arranca en el primer uso y Reset lo reinicia.
+        private static System.Diagnostics.Stopwatch? s_clock;
+
+        /// <summary>Segundos reales desde el primer uso (o desde el último Reset).</summary>
+        public static float realtimeSinceStartup
+        {
+            get
+            {
+                s_clock ??= System.Diagnostics.Stopwatch.StartNew();
+                return (float)s_clock.Elapsed.TotalSeconds;
+            }
+        }
+
+        /// <summary>Avance de frame que hace el huésped al inicio de cada tick.</summary>
+        internal static void BeginFrame(float dt)
+        {
+            frameCount++;
+            time += dt;
+            deltaTime = dt;
+        }
+
+        /// <summary>Vuelta al estado inicial al sustituir el ensamblado del proyecto.</summary>
+        internal static void Reset()
+        {
+            time = 0f;
+            frameCount = 0;
+            deltaTime = 1f / 60f;
+            if (s_clock is null)
+                s_clock = System.Diagnostics.Stopwatch.StartNew();
+            else
+                s_clock.Restart();
+        }
     }
 
     public enum KeyCode
@@ -350,7 +386,22 @@ namespace UnityEngine
 
     public class Behaviour : Component
     {
-        public bool enabled { get; set; } = true;
+        private bool _enabled = true;
+
+        public bool enabled
+        {
+            get => _enabled;
+            set
+            {
+                if (_enabled == value)
+                    return;
+                _enabled = value;
+                OnEnabledChanged(value);
+            }
+        }
+
+        /// <summary>Aviso de cambio efectivo de <see cref="enabled"/> (MonoBehaviour lo reenvía a su huésped, D13).</summary>
+        internal virtual void OnEnabledChanged(bool value) { }
     }
 
     public class Transform : Component
@@ -485,6 +536,15 @@ namespace UnityEngine
         }
 
         /// <summary>
+        /// Vacía el mapa id -> wrapper (MonoBehaviourHost.ResetAll, al
+        /// sustituir el ensamblado del proyecto).
+        /// </summary>
+        internal static void ClearEntityMap()
+        {
+            _entityMap.Clear();
+        }
+
+        /// <summary>
         /// Quita a la entidad del mapa id -> wrapper (al destruirla):
         /// sin esto, el mapa retendría un wrapper por cada entidad
         /// creada en la sesión y un EntityId reutilizado resucitaría el
@@ -548,7 +608,8 @@ namespace UnityEngine
                 Debug.LogError($"[Spawn] El motor rechazó crear '{name}' (modelo '{model}').");
                 return null;
             }
-            return new GameObject(name, id);
+            // D10: si un huésped ya enlazó esta entidad, se reutiliza su wrapper.
+            return GetOrCreate(id, name);
         }
 
         /// <summary>
@@ -565,7 +626,8 @@ namespace UnityEngine
                 Debug.LogError($"[InstantiatePrefab] El motor rechazó instanciar '{name}'.");
                 return null;
             }
-            return new GameObject(name, id);
+            // D10: si un huésped ya enlazó esta entidad, se reutiliza su wrapper.
+            return GetOrCreate(id, name);
         }
 
 
@@ -597,10 +659,14 @@ namespace UnityEngine
         /// </summary>
         public void SetActive(bool active)
         {
+            bool changed = activeSelf != active;
             activeSelf = active;
             if (EntityId != 0)
             {
                 RuntimeBridge.SetEntityActive(EntityId, active);
+                // D13: OnEnable/OnDisable de los huéspedes, solo si el estado cambió.
+                if (changed)
+                    GlassEngine.Core.Hosting.MonoBehaviourRegistry.NotifyActiveChanged(EntityId, active);
             }
         }
 
@@ -609,6 +675,42 @@ namespace UnityEngine
             var comp = new T { gameObject = this, name = typeof(T).Name };
             _components.Add(comp);
             return comp;
+        }
+
+        /// <summary>Enlaza un componente ya instanciado (el MonoBehaviour de un huésped).</summary>
+        internal void AddComponentInternal(Component c)
+        {
+            if (!_components.Contains(c))
+                _components.Add(c);
+            c.gameObject = this;
+        }
+
+        internal void RemoveComponentInternal(Component c)
+        {
+            _components.Remove(c);
+        }
+
+        /// <summary>
+        /// Sobre de ApplyScriptData (D12): name y tag solo se escriben si
+        /// el wrapper conserva su valor por defecto; active se aplica con
+        /// SetActive si difiere del actual.
+        /// </summary>
+        internal void ApplyHostInit(string? name, string? tag, bool? active)
+        {
+            if (!string.IsNullOrEmpty(name)
+                && (string.IsNullOrEmpty(this.name) || this.name == "GameObject" || this.name == "Entity"))
+            {
+                this.name = name;
+            }
+
+            if (!string.IsNullOrEmpty(tag)
+                && (string.IsNullOrEmpty(this.tag) || this.tag == "Untagged"))
+            {
+                this.tag = tag;
+            }
+
+            if (active.HasValue && active.Value != activeSelf)
+                SetActive(active.Value);
         }
 
         public T? GetComponent<T>() where T : Component
@@ -629,6 +731,11 @@ namespace UnityEngine
         public virtual void FixedUpdate() { }
         public virtual void LateUpdate() { }
         public virtual void OnDestroy() { }
+
+        /// <summary>Huésped que ticka a este script (null si no está alojado).</summary>
+        internal GlassEngine.Core.Hosting.MonoBehaviourHost? Host { get; set; }
+
+        internal override void OnEnabledChanged(bool value) => Host?.NotifyEnabledChanged(value);
     }
 
     // ==========================================
@@ -662,7 +769,7 @@ namespace UnityEngine
         }
     }
 
-    public class BoxCollider : Component
+    public class BoxCollider : Collider
     {
         public Vector3 size { get; set; } = Vector3.one;
     }

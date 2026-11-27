@@ -379,6 +379,9 @@ type DispatchAnimEventFn = unsafe extern "system" fn(u64, *const std::ffi::c_cha
 type DispatchStateEventFn = unsafe extern "system" fn(u64, *const std::ffi::c_char, i32);
 /// LoadScriptAssembly(pathUtf8) -> i32; 0 = éxito.
 type LoadScriptAssemblyFn = unsafe extern "system" fn(*const c_char) -> i32;
+/// ApplyScriptData(handle, jsonUtf8) -> i32 (C0, huésped MonoBehaviour):
+/// 0 = aplicado, 1 = no aplica (no es huésped); negativos = error.
+type ApplyScriptDataFn = unsafe extern "system" fn(i32, *const c_char) -> i32;
 /// Init dedicado del lote de transforms (patrón de la casa: Init
 /// nuevo y separado; nunca se toca un Init existente). Recibe los
 /// dos punteros que C# usará para pedir y devolver el lote completo
@@ -400,6 +403,8 @@ pub struct ScriptHost {
     state_event_fn: Option<DispatchStateEventFn>,
     /// Opcional: las fachadas antiguas no lo exportan.
     load_script_assembly_fn: Option<LoadScriptAssemblyFn>,
+    /// Opcional (C0): las fachadas sin huésped MonoBehaviour no lo exportan.
+    apply_script_data_fn: Option<ApplyScriptDataFn>,
     active_instances: HashMap<i32, (u64, String)>, // handle -> (entity_id, script_name)
 }
 
@@ -423,6 +428,7 @@ impl ScriptHost {
             anim_event_fn: None,
             state_event_fn: None,
             load_script_assembly_fn: None,
+            apply_script_data_fn: None,
             active_instances: HashMap::new(),
         }
     }
@@ -1128,6 +1134,21 @@ impl ScriptHost {
             );
         }
         self.load_script_assembly_fn = load_script_assembly_fn.map(|f| *f);
+        // Sobre de datos del script (C0): misma resolución tolerante —
+        // una fachada sin el export no impide arrancar; los huéspedes
+        // simplemente nacen con el nombre y el estado por defecto.
+        let apply_script_data_fn = loader
+            .get_function_with_unmanaged_callers_only::<ApplyScriptDataFn>(
+                bridge_type,
+                pdcstr!("ApplyScriptData"),
+            )
+            .ok();
+        if apply_script_data_fn.is_none() {
+            log::warn!(
+                "El ensamblado managed no exporta ApplyScriptData: los scripts MonoBehaviour nacerán sin su sobre (nombre/tag/activo)."
+            );
+        }
+        self.apply_script_data_fn = apply_script_data_fn.map(|f| *f);
         self.tick_all_fn = tick_all_fn.map(|f| *f);
         self.invoke_click_fn = invoke_click_fn.map(|f| *f);
         self.create_instance_fn = Some(*create_fn);
@@ -1164,6 +1185,18 @@ impl ScriptHost {
             )));
         }
         Ok(())
+    }
+
+    /// Entrega a un huésped MonoBehaviour su sobre de datos (C0):
+    /// `{"v":1,"name":…,"tag":…,"active":…}` y, desde C0b, los campos
+    /// serializados. Devuelve el código de la fachada (0 = aplicado,
+    /// 1 = no aplica) o `None` si la fachada no exporta el símbolo:
+    /// en ese caso el llamador sigue sin ruido, como con
+    /// LoadScriptAssembly en fachadas antiguas.
+    pub fn apply_script_data(&mut self, handle: i32, json: &str) -> Option<i32> {
+        let apply_fn = self.apply_script_data_fn?;
+        let c_json = CString::new(json).ok()?;
+        Some(unsafe { apply_fn(handle, c_json.as_ptr()) })
     }
 
     /// Instantiates a C# script (e.g. "GlassEngine.Core.Scripts.Rotator") attached to an entity.

@@ -2733,6 +2733,10 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
                 _typeCache.Clear();
                 _unresolvedReported.Clear();
 
+                // Los huéspedes y el reloj de Unity del proyecto anterior no sobreviven al cambio.
+                GlassEngine.Core.Hosting.MonoBehaviourHost.ResetAll();
+                UnityEngine.Time.Reset();
+
                 ProjectScriptLoadContext? context = null;
                 try
                 {
@@ -2758,6 +2762,17 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         }
     }
 
+    // Interruptor del huésped de MonoBehaviour: GLASS_MONOBEHAVIOUR_HOST=0
+    // lo apaga y los scripts de Unity vuelven a no resolverse.
+    private static readonly bool s_monoBehaviourHostEnabled =
+        Environment.GetEnvironmentVariable("GLASS_MONOBEHAVIOUR_HOST") != "0";
+
+    private static bool IsHostableMonoBehaviour(Type type) =>
+        s_monoBehaviourHostEnabled
+        && typeof(UnityEngine.MonoBehaviour).IsAssignableFrom(type)
+        && !type.IsAbstract
+        && !type.ContainsGenericParameters;
+
     [UnmanagedCallersOnly(EntryPoint = "CreateScriptInstance")]
     public static int CreateScriptInstance(ulong entityId, IntPtr typeNameUtf8)
     {
@@ -2769,7 +2784,36 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         }
 
         Type? type = ResolveType(typeName);
-        if (type is null || !typeof(GlassBehaviour).IsAssignableFrom(type) || type.IsAbstract)
+        GlassBehaviour instance;
+        if (type is not null && typeof(GlassBehaviour).IsAssignableFrom(type) && !type.IsAbstract)
+        {
+            try
+            {
+                instance = (GlassBehaviour)Activator.CreateInstance(type)!;
+            }
+            catch (Exception ex)
+            {
+                Log(4, $"CreateScriptInstance falló al instanciar '{typeName}': {ex.Message}");
+                return -1;
+            }
+        }
+        else if (type is not null && IsHostableMonoBehaviour(type))
+        {
+            try
+            {
+                // D1: el huésped instancia el MonoBehaviour del usuario y es
+                // lo que vive en _instances.
+                instance = new GlassEngine.Core.Hosting.MonoBehaviourHost(type);
+            }
+            catch (Exception ex)
+            {
+                // D2: el constructor del usuario llega envuelto en TargetInvocationException.
+                var inner = ex is TargetInvocationException && ex.InnerException is not null ? ex.InnerException : ex;
+                Log(4, $"CreateScriptInstance falló al instanciar '{typeName}': {inner.Message}");
+                return -1;
+            }
+        }
+        else
         {
             // El error se emite una sola vez por clase: una escena
             // puede tener cientos de entidades con la misma clase no
@@ -2781,25 +2825,16 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
             }
             if (shouldLog)
             {
-                Log(4, $"CreateScriptInstance falló: No se pudo resolver la clase GlassBehaviour '{typeName}'.");
+                Log(4, $"CreateScriptInstance falló: No se pudo resolver la clase GlassBehaviour ni MonoBehaviour '{typeName}'.");
             }
-            return -1;
-        }
-
-        GlassBehaviour instance;
-        try
-        {
-            instance = (GlassBehaviour)Activator.CreateInstance(type)!;
-        }
-        catch (Exception ex)
-        {
-            Log(4, $"CreateScriptInstance falló al instanciar '{typeName}': {ex.Message}");
             return -1;
         }
 
         instance.EntityId = entityId;
         try
         {
+            // En un huésped, Awake solo enlaza (D3): el del usuario corre
+            // en el siguiente BeginFrame.
             instance.Awake();
         }
         catch (Exception ex)
@@ -2818,6 +2853,45 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
             _instances[handle] = instance;
             Log(2, $"Instancia de script C# '{type.Name}' creada con handle {handle} para entidad {entityId}.");
             return handle;
+        }
+    }
+
+    /// <summary>
+    /// Aplica el sobre JSON (UTF-8, terminado en nulo) de un script de
+    /// Unity alojado (D16). Códigos: 0 = aplicado; 1 = la instancia no es
+    /// un huésped (nada que aplicar); -1 = handle desconocido o huésped
+    /// sin enlazar; -2 = JSON inválido o error interno (ya logueado);
+    /// -3 = el Awake del usuario ya corrió.
+    /// </summary>
+    [UnmanagedCallersOnly(EntryPoint = "ApplyScriptData")]
+    public static int ApplyScriptData(int handle, IntPtr jsonUtf8)
+    {
+        try
+        {
+            GlassBehaviour? instance;
+            lock (_sync)
+            {
+                if (!_instances.TryGetValue(handle, out instance))
+                {
+                    return -1;
+                }
+            }
+
+            if (instance is not GlassEngine.Core.Hosting.MonoBehaviourHost host)
+            {
+                return 1;
+            }
+
+            // Puntero nulo = entrada vacía: el host la rechaza como JSON inválido.
+            string? json = Marshal.PtrToStringUTF8(jsonUtf8);
+            byte[] bytes = json is null ? Array.Empty<byte>() : System.Text.Encoding.UTF8.GetBytes(json);
+            return host.ApplyScriptData(bytes);
+        }
+        catch (Exception ex)
+        {
+            // Ninguna excepción cruza [UnmanagedCallersOnly].
+            Log(4, $"ApplyScriptData falló en el handle {handle}: {ex.Message}");
+            return -2;
         }
     }
 
@@ -2864,14 +2938,28 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
         try
         {
             KeyValuePair<int, GlassBehaviour>[] instances;
+            // Los mismos valores de la foto, para los ganchos del huésped (§3).
+            List<GlassBehaviour> snapshot;
             lock (_sync)
             {
                 instances = new KeyValuePair<int, GlassBehaviour>[_instances.Count];
+                snapshot = new List<GlassBehaviour>(_instances.Count);
                 int i = 0;
                 foreach (KeyValuePair<int, GlassBehaviour> instance in _instances)
                 {
                     instances[i++] = instance;
+                    snapshot.Add(instance.Value);
                 }
+            }
+
+            // Gancho 1: EndOfFrame anterior, Time, Awake diferidos y Start.
+            try
+            {
+                GlassEngine.Core.Hosting.MonoBehaviourHost.BeginFrame(snapshot, deltaTime);
+            }
+            catch (Exception ex)
+            {
+                Log(4, $"Error en MonoBehaviourHost.BeginFrame: {ex.Message}");
             }
 
             _fixedAccumulator += deltaTime;
@@ -2891,6 +2979,16 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
                     {
                         Log(4, $"Error ejecutando FixedUpdate en script handle {instance.Key}: {ex.Message}");
                     }
+                }
+
+                // Gancho 2: corrutinas de WaitForFixedUpdate.
+                try
+                {
+                    GlassEngine.Core.Hosting.MonoBehaviourHost.AfterFixedStep(snapshot);
+                }
+                catch (Exception ex)
+                {
+                    Log(4, $"Error en MonoBehaviourHost.AfterFixedStep: {ex.Message}");
                 }
 
                 _fixedAccumulator -= FixedStep;
@@ -2913,6 +3011,16 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
                 {
                     Log(4, $"Error ejecutando Update en script handle {instance.Key}: {ex.Message}");
                 }
+            }
+
+            // Gancho 3: corrutinas de Update y LateUpdate de los huéspedes.
+            try
+            {
+                GlassEngine.Core.Hosting.MonoBehaviourHost.AfterUpdates(snapshot);
+            }
+            catch (Exception ex)
+            {
+                Log(4, $"Error en MonoBehaviourHost.AfterUpdates: {ex.Message}");
             }
         }
         finally
@@ -2979,7 +3087,9 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
             return -1;
         }
 
-        var method = target.GetType().GetMethod(
+        var (scriptObject, scriptType) = ScriptTarget(target);
+
+        var method = scriptType.GetMethod(
             action,
             BindingFlags.Public | BindingFlags.Instance,
             binder: null,
@@ -2987,14 +3097,14 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
             modifiers: null);
         if (method is null)
         {
-            Log(3, $"[Canvas UI] Clic en la entidad {entityId}: el script '{target.GetType().Name}' no tiene un método público sin parámetros llamado '{action}'.");
+            Log(3, $"[Canvas UI] Clic en la entidad {entityId}: el script '{scriptType.Name}' no tiene un método público sin parámetros llamado '{action}'.");
             return -2;
         }
 
         try
         {
-            method.Invoke(target, null);
-            Log(2, $"[Canvas UI] Botón de la entidad {entityId}: método '{action}' invocado en '{target.GetType().Name}'.");
+            method.Invoke(scriptObject, null);
+            Log(2, $"[Canvas UI] Botón de la entidad {entityId}: método '{action}' invocado en '{scriptType.Name}'.");
             return 0;
         }
         catch (Exception ex)
@@ -3005,6 +3115,21 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
             Log(4, $"[Canvas UI] Error invocando '{action}' en la entidad {entityId}: {inner.Message}");
             return -4;
         }
+    }
+
+    /// <summary>
+    /// Objeto y tipo sobre los que se busca un método del script: en un
+    /// huésped es el MonoBehaviour envuelto, despertado antes si su Awake
+    /// seguía pendiente.
+    /// </summary>
+    private static (object Target, Type Type) ScriptTarget(GlassBehaviour instance)
+    {
+        if (instance is GlassEngine.Core.Hosting.MonoBehaviourHost host)
+        {
+            host.EnsureAwake();
+            return (host.Wrapped, host.Wrapped.GetType());
+        }
+        return (instance, instance.GetType());
     }
 
     /// <summary>
