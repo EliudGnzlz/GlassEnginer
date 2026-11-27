@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "notas": "Medición 2026-11-27, release .11. Payload sin comprimir (glass_app 32.387.824 B + managed net8.0 485.630 B + bridge 14.791 B + assets sin prototype 39.487.602 B) = 72.375.847 B (~69 MB). assets sin prototype = 39.487.602 B (scenes 21.596.305, models 10.616.550, audio 5.914.586, fonts 760.467, shaders 318.893, lightmaps 187.656, shader_graphs 73.808, animators 7.295, materials 1.293), 0 .ktx2 aún, 24 PNG/JPG = 2.085.385 B, 36 .glb = 8.135.156 B. Zip del motor .11: 28,8 MB Linux / 25,6 MB Windows. Cada textura 2048² nueva en KTX2 pesa ≈5,6 MB y casi no comprime en zip (bloques BC cuasi-aleatorios), por lo que aporta ≈+5,6 MB tanto al payload como al zip. payload_total: base 72.375.847 B + holgura 60% (≈43.425.508 B) para absorber la migración de las 24 imágenes actuales (2.085.385 B) a sus gemelos .ktx2 (~hasta 24×5,6 MB si todas fueran 2048² ≈134 MB en el peor caso, pero la mayoría son texturas menores) más crecimiento de contenido futuro; límite = 115.801.355 B (~110 MB). assets: base 39.487.602 B + holgura 70% (≈27.641.321 B), más generosa porque es donde impacta directamente la llegada de .ktx2 (sustituyen PNG/JPG y añaden peso neto al no comprimir); límite = 67.128.923 B (~64 MB). zip_engine: base 28.800.000 B (el mayor de los dos SO, Linux .11) + holgura 60% (≈17.280.000 B) para cubrir que los .ktx2 casi no comprimen (cada textura nueva pesa en el zip casi lo mismo que en el payload); límite = 46.080.000 B (~44 MB).",
+  "politica": "Si `comprobar` falla, la respuesta es optimizar los assets (recomprimir, recortar resolución, eliminar duplicados) o subir el límite correspondiente de forma explícita en un commit dedicado que documente el motivo en `notas`; nunca se sube el límite en silencio dentro de otro cambio ni se omite o desactiva el paso de comprobación.",
+  "limites_bytes": {
+    "payload_total": 115801355,
+    "assets": 67128923,
+    "zip_engine": 46080000
+  }
+}

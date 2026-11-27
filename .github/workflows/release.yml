@@ -132,9 +132,7 @@ jobs:
           Copy-Item 'managed/GlassEngine.Core/bin/Debug/net8.0' -Destination $managedParent -Recurse
 
           # Recursos de runtime, sin las fuentes crudas del pack
-          Copy-Item 'assets' -Destination "$payload/assets" -Recurse
-          $proto = "$payload/assets/polygon-prototype"
-          if (Test-Path $proto) { Remove-Item $proto -Recurse -Force }
+          python tools/empaquetar_assets.py copiar assets "$payload/assets"
 
           # El bridge de conversión .blend/.fbx -> .glb: sin él en el
           # payload, la build instalada no puede convertir modelos al
@@ -180,6 +178,12 @@ jobs:
             $archive.Dispose()
           }
           Get-Item "dist/$zipName" | Select-Object Name, Length
+
+      - name: Comprobar presupuesto del motor
+        if: env.FAMILY == 'engine'
+        shell: pwsh
+        run: |
+          python tools/empaquetar_assets.py comprobar --payload dist/engine --presupuesto presupuesto_build.json --zips "dist/GlassEnginer-Engine-*-windows-x64.zip"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -248,8 +252,7 @@ jobs:
           cp -a managed/GlassEngine.Core/bin/Debug/net8.0 "$payload/managed/GlassEngine.Core/bin/Debug/"
 
           # Recursos de runtime, sin las fuentes crudas del pack
-          cp -a assets "$payload/assets"
-          rm -rf "$payload/assets/polygon-prototype"
+          python3 tools/empaquetar_assets.py copiar assets "$payload/assets"
 
           # El bridge de conversión .blend/.fbx -> .glb: sin él en el
           # payload, la build instalada no puede convertir modelos al
@@ -273,6 +276,11 @@ jobs:
           else
             ls -l "dist/${launcher_zip}"
           fi
+
+      - name: Comprobar presupuesto del motor
+        if: env.FAMILY == 'engine'
+        run: |
+          python3 tools/empaquetar_assets.py comprobar --payload dist/engine --presupuesto presupuesto_build.json --zips "dist/GlassEnginer-Engine-*-linux-x64.zip"
 
       - name: Montar AppDir
         run: |
