@@ -230,7 +230,7 @@ void main() {
 
     // Iluminación directa solar
     vec3 radiance = u_push.light_color.rgb * has_light;
-    vec3 Lo = (kD * albedo / PI + specular) * radiance * NdotL;
+    vec3 Lo = (kD * albedo + specular) * radiance * NdotL;
     // La sombra del sol atenúa SOLO la luz directa: el ambiente
     // hemisférico sigue llegando (es luz rebotada/difusa del cielo).
     float shadow_f = shadow_factor(v_world_pos, N) * has_light + (1.0 - has_light);
@@ -304,7 +304,7 @@ void main() {
         }
         radiance_p *= point_shadow_factor(i);
 
-        Lo_points += (kDp * albedo / PI + specular_p) * radiance_p * NdotLp;
+        Lo_points += (kDp * albedo + specular_p) * radiance_p * NdotLp;
     }
 
     // Bake: si esta entidad tiene lightmap, su difuso del sol y su
