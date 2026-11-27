@@ -194,6 +194,12 @@ impl CommandHistory {
     pub fn last(&self) -> Option<&MeshCommand> {
         self.past.last().map(|(cmd, _)| cmd)
     }
+
+    /// Comandos en vigor (los de la pila de deshacer), en orden de aplicación.
+    /// Los comandos deshechos (pila de rehacer) no se incluyen.
+    pub fn live_commands(&self) -> Vec<MeshCommand> {
+        self.past.iter().map(|(cmd, _)| cmd.clone()).collect()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -302,6 +308,31 @@ mod tests {
         assert_eq!(history.len(), 0);
         assert!(history.is_empty());
         assert_eq!(mesh.verts, before);
+    }
+
+    #[test]
+    fn live_commands_sigue_undo_y_redo() {
+        let mut mesh = cube_mesh();
+        let mut history = CommandHistory::new();
+        let a = MeshCommand::MoveVerts {
+            indices: vec![0],
+            delta: [1.0, 0.0, 0.0],
+        };
+        let b = MeshCommand::MoveVerts {
+            indices: vec![1],
+            delta: [0.0, 2.0, 0.0],
+        };
+        assert!(history.live_commands().is_empty());
+
+        history.execute(&mut mesh, a.clone()).unwrap();
+        history.execute(&mut mesh, b.clone()).unwrap();
+        assert_eq!(history.live_commands(), vec![a.clone(), b.clone()]);
+
+        history.undo(&mut mesh).unwrap();
+        assert_eq!(history.live_commands(), vec![a.clone()]);
+
+        history.redo(&mut mesh).unwrap();
+        assert_eq!(history.live_commands(), vec![a, b]);
     }
 
     #[test]
