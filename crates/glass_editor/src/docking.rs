@@ -1011,6 +1011,10 @@ impl EditorDockingLayout {
                         if let Some(e) = sc.entities.iter_mut().find(|e| e.id == amb_id) {
                             e.ambient = Some(glass_core::scene::AmbientComponent::default());
                         }
+                        let post_id = sc.create_entity("Post".into(), vec!["Transform".into(), "Post".into()]);
+                        if let Some(e) = sc.entities.iter_mut().find(|e| e.id == post_id) {
+                            e.post = Some(glass_core::scene::PostComponent::default());
+                        }
                         self.undo_history.reset(&sc.entities, sc.next_entity_id);
                     }
                     self.status_message = Some(("Nueva escena inicializada".into(), std::time::Instant::now()));

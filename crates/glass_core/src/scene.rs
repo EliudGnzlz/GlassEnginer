@@ -811,6 +811,98 @@ pub const LEGACY_AMBIENT_GROUND: [f32; 3] = [0.279, 0.261, 0.2475];
 pub const LEGACY_AMBIENT_INTENSITY_LIT: f32 = 0.25;
 pub const LEGACY_AMBIENT_INTENSITY_UNLIT: f32 = 0.06;
 
+/// Post de escena (G2): exposición previa al ACES, intensidad del
+/// bloom y viñeta. Valores por defecto = URP (Post Exposure 0 EV).
+/// El umbral y la rodilla del bloom NO son datos de escena: siguen
+/// siendo constantes del motor (ver `crate::post` / glass_renderer).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PostComponent {
+    pub exposure: f32,
+    pub intensity: f32,
+    pub vignette: f32,
+}
+
+impl Default for PostComponent {
+    fn default() -> Self {
+        Self { exposure: 1.0, intensity: 0.3, vignette: 0.22 }
+    }
+}
+
+/// Valores heredados del motor (lo que hoy es constante/entorno):
+/// la exposición 1,5 que vivía en el post; bloom y viñeta iguales
+/// a los defectos actuales.
+pub const LEGACY_POST_EXPOSURE: f32 = 1.5;
+pub const LEGACY_POST_INTENSITY: f32 = 0.3;
+pub const LEGACY_POST_VIGNETTE: f32 = 0.22;
+
+/// Origen de los valores de post resueltos para una escena.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PostSource {
+    /// Hay al menos una entidad activa con `PostComponent` explícito.
+    Explicit,
+    /// Ninguna entidad lo declara: valores heredados, look de siempre.
+    Legacy,
+}
+
+/// Resultado de resolver el post efectivo de una escena.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ResolvedPost {
+    pub exposure: f32,
+    pub intensity: f32,
+    pub vignette: f32,
+    pub source: PostSource,
+    /// Portadores activos adicionales ignorados (gana el primero).
+    pub extra_carriers: usize,
+}
+
+impl ResolvedPost {
+    /// El post heredado (sin portador): LEGACY_POST_*.
+    pub fn legacy() -> Self {
+        Self {
+            exposure: LEGACY_POST_EXPOSURE,
+            intensity: LEGACY_POST_INTENSITY,
+            vignette: LEGACY_POST_VIGNETTE,
+            source: PostSource::Legacy,
+            extra_carriers: 0,
+        }
+    }
+}
+
+/// Resuelve el post efectivo de la escena: la primera entidad ACTIVA
+/// con `post` gana; sus canales se sanean (no finito o negativo →
+/// defecto del componente) y se acotan: exposición 0..=8, intensidad
+/// 0..=4, viñeta 0..=1. Sin portador, modo Legacy.
+pub fn resolve_post(entities: &[EntityData]) -> ResolvedPost {
+    let carriers: Vec<&PostComponent> = entities
+        .iter()
+        .filter(|e| e.active)
+        .filter_map(|e| e.post.as_ref())
+        .collect();
+
+    let Some(first) = carriers.first().copied() else {
+        return ResolvedPost::legacy();
+    };
+
+    let default = PostComponent::default();
+    let sanitize = |v: f32, fallback: f32, lo: f32, hi: f32| -> f32 {
+        if !v.is_finite() || v < 0.0 {
+            fallback
+        } else {
+            v.clamp(lo, hi)
+        }
+    };
+
+    ResolvedPost {
+        exposure: sanitize(first.exposure, default.exposure, 0.0, 8.0),
+        intensity: sanitize(first.intensity, default.intensity, 0.0, 4.0),
+        vignette: sanitize(first.vignette, default.vignette, 0.0, 1.0),
+        source: PostSource::Explicit,
+        extra_carriers: carriers.len() - 1,
+    }
+}
+
+
 /// Componente de ambiente de escena (G1): gradient de 3 paradas en
 /// espacio lineal — `sky` hacia arriba, `equator` en horizontal y
 /// `ground` hacia abajo — modulado por `intensity` (0..=8, tipo URP).
@@ -941,6 +1033,131 @@ pub fn migrate_scene_ambient(entities: &mut Vec<EntityData>, new_id: u64) -> Opt
     entities.push(carrier);
     Some(intensity)
 }
+
+/// Migración G2 de una escena: si ninguna entidad activa porta post,
+/// añade AL FINAL una entidad "Post" con los valores heredados
+/// equivalentes (exposición 1,5, bloom 0,3, viñeta 0,22). Devuelve
+/// la exposición escrita, o None si ya había portador (idempotente).
+/// `new_id` es el id para la entidad nueva.
+pub fn migrate_scene_post(entities: &mut Vec<EntityData>, new_id: u64) -> Option<f32> {
+    if resolve_post(entities).source == PostSource::Explicit {
+        return None;
+    }
+
+    let mut nueva = EntityData::new(
+        new_id,
+        "Post".to_string(),
+        vec!["Transform".to_string(), "Post".to_string()],
+    );
+    nueva.post = Some(PostComponent {
+        exposure: LEGACY_POST_EXPOSURE,
+        intensity: LEGACY_POST_INTENSITY,
+        vignette: LEGACY_POST_VIGNETTE,
+    });
+
+    entities.push(nueva);
+    Some(LEGACY_POST_EXPOSURE)
+}
+
+#[cfg(test)]
+mod migrate_post_tests {
+    use super::*;
+
+    fn entidad_base(id: u64, nombre: &str) -> EntityData {
+        EntityData::new(id, nombre.to_string(), vec!["Transform".to_string()])
+    }
+
+    #[test]
+    fn migrate_adds_carrier() {
+        let mut entidades = vec![entidad_base(1, "Main Camera"), entidad_base(2, "Directional Light")];
+        let resultado = migrate_scene_post(&mut entidades, 3);
+
+        assert_eq!(resultado, Some(LEGACY_POST_EXPOSURE));
+        assert_eq!(entidades.len(), 3);
+
+        let ultima = entidades.last().unwrap();
+        assert_eq!(ultima.name, "Post");
+        let post = ultima.post.as_ref().expect("la nueva entidad debe portar post");
+        assert_eq!(post.exposure, LEGACY_POST_EXPOSURE);
+        assert_eq!(post.intensity, LEGACY_POST_INTENSITY);
+        assert_eq!(post.vignette, LEGACY_POST_VIGNETTE);
+    }
+
+    #[test]
+    fn migrate_is_idempotent() {
+        let mut entidades = vec![entidad_base(1, "Main Camera")];
+        migrate_scene_post(&mut entidades, 2);
+        let len_tras_primera = entidades.len();
+
+        let resultado = migrate_scene_post(&mut entidades, 3);
+
+        assert_eq!(resultado, None);
+        assert_eq!(entidades.len(), len_tras_primera);
+    }
+
+    #[test]
+    fn migrate_preserves_other_entities() {
+        let mut entidades = vec![entidad_base(1, "Main Camera"), entidad_base(2, "Directional Light")];
+        migrate_scene_post(&mut entidades, 3);
+
+        assert_eq!(entidades[0].id, 1);
+        assert_eq!(entidades[0].name, "Main Camera");
+        assert_eq!(entidades[1].id, 2);
+        assert_eq!(entidades[1].name, "Directional Light");
+    }
+
+    #[test]
+    fn migrate_skips_when_carrier_exists() {
+        let mut portador = entidad_base(1, "Post");
+        portador.post = Some(PostComponent::default());
+        let mut entidades = vec![portador];
+
+        let resultado = migrate_scene_post(&mut entidades, 2);
+
+        assert_eq!(resultado, None);
+        assert_eq!(entidades.len(), 1);
+    }
+}
+    /// Verificador G2: cada `*.scene.json` del directorio de migración
+    /// carga con el cargador del motor y resuelve su post como Explicit
+    /// con exactamente un portador y los valores heredados.
+    /// `cargo test -p glass_core -- --ignored verify_scene_files_post`
+    #[test]
+    #[ignore]
+    fn verify_scene_files_post() {
+        let dir = std::env::var("GLASS_MIGRATE_DIR")
+            .unwrap_or_else(|_| "../../assets/scenes".to_string());
+        let mut paths: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("no se pudo leer {dir}: {e}"))
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().ends_with(".scene.json"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        paths.sort();
+        assert!(!paths.is_empty(), "sin escenas en {dir}");
+        for path in &paths {
+            let mut state = SceneState::new();
+            state
+                .load_from_json(path.to_str().unwrap())
+                .unwrap_or_else(|e| panic!("carga {}: {e}", path.display()));
+            let post = state.post_settings();
+            assert_eq!(
+                post.source,
+                PostSource::Explicit,
+                "{} sin portador explícito",
+                path.display()
+            );
+            assert_eq!(post.extra_carriers, 0, "{} con portadores extra", path.display());
+            assert_eq!(post.exposure, LEGACY_POST_EXPOSURE);
+            assert_eq!(post.intensity, LEGACY_POST_INTENSITY);
+            assert_eq!(post.vignette, LEGACY_POST_VIGNETTE);
+        }
+        println!("verificadas {} escenas", paths.len());
+    }
+
 
 fn default_tope_perfil() -> u8 { 4 }
 fn default_prioridad_perfil() -> f32 { 1.0 }
@@ -1734,6 +1951,10 @@ pub struct EntityData {
     /// anteriores no traen el campo.
     #[serde(default)]
     pub ambient: Option<AmbientComponent>,
+    /// Post de escena (G2). `#[serde(default)]`: las escenas
+    /// anteriores no traen el campo.
+    #[serde(default)]
+    pub post: Option<PostComponent>,
     pub canvas: Option<CanvasData>,
     pub rect_transform: Option<RectTransformData>,
     pub ui_text: Option<UITextData>,
@@ -1935,6 +2156,7 @@ impl EntityData {
             light_profile,
             fog: None,
             ambient: None,
+            post: None,
             canvas,
             rect_transform,
             ui_text,
@@ -2690,6 +2912,20 @@ impl SceneState {
         self.entities
             .iter()
             .find(|e| e.active && e.ambient.is_some())
+            .map(|e| e.name.clone())
+    }
+
+    /// Post efectivo de la escena (G2): ver `resolve_post`.
+    pub fn post_settings(&self) -> ResolvedPost {
+        resolve_post(&self.entities)
+    }
+
+    /// Nombre de la entidad que aporta el post efectivo (la primera
+    /// activa con el componente), si alguna lo declara.
+    pub fn post_carrier_name(&self) -> Option<String> {
+        self.entities
+            .iter()
+            .find(|e| e.active && e.post.is_some())
             .map(|e| e.name.clone())
     }
 
@@ -6262,7 +6498,85 @@ mod g1_ambient_tests {
 }
 
 #[cfg(test)]
+mod g2_post_tests {
+    use super::*;
+
+    #[test]
+    fn post_default_values() {
+        let p = PostComponent::default();
+        assert_eq!(p.exposure, 1.0);
+        assert_eq!(p.intensity, 0.3);
+        assert_eq!(p.vignette, 0.22);
+    }
+
+    #[test]
+    fn post_resolve_explicit() {
+        let mut e = EntityData::new(1, "E".into(), vec!["Transform".into()]);
+        e.post = Some(PostComponent { exposure: 1.0, intensity: 0.5, vignette: 0.1 });
+        let resolved = resolve_post(&[e]);
+        assert_eq!(resolved.exposure, 1.0);
+        assert_eq!(resolved.intensity, 0.5);
+        assert_eq!(resolved.vignette, 0.1);
+        assert_eq!(resolved.source, PostSource::Explicit);
+    }
+
+    #[test]
+    fn post_resolve_first_active_wins() {
+        let mut e1 = EntityData::new(1, "A".into(), vec!["Transform".into()]);
+        e1.post = Some(PostComponent { exposure: 1.0, intensity: 0.4, vignette: 0.2 });
+        let mut e2 = EntityData::new(2, "B".into(), vec!["Transform".into()]);
+        e2.post = Some(PostComponent { exposure: 2.0, intensity: 0.9, vignette: 0.9 });
+        e2.active = false;
+        let resolved = resolve_post(&[e1, e2]);
+        assert_eq!(resolved.exposure, 1.0);
+        assert_eq!(resolved.intensity, 0.4);
+        assert_eq!(resolved.vignette, 0.2);
+        assert_eq!(resolved.source, PostSource::Explicit);
+        assert_eq!(resolved.extra_carriers, 0);
+    }
+
+    #[test]
+    fn post_resolve_legacy() {
+        let e = EntityData::new(1, "E".into(), vec!["Transform".into()]);
+        let resolved = resolve_post(&[e]);
+        assert_eq!(resolved.exposure, 1.5);
+        assert_eq!(resolved.intensity, 0.3);
+        assert_eq!(resolved.vignette, 0.22);
+        assert_eq!(resolved.source, PostSource::Legacy);
+    }
+
+    #[test]
+    fn post_resolve_sanitizes() {
+        let mut e = EntityData::new(1, "E".into(), vec!["Transform".into()]);
+        e.post = Some(PostComponent {
+            exposure: f32::NAN,
+            intensity: -2.0,
+            vignette: f32::INFINITY,
+        });
+        let resolved = resolve_post(&[e.clone()]);
+        assert_eq!(resolved.exposure, 1.0);
+        assert_eq!(resolved.intensity, 0.3);
+        assert_eq!(resolved.vignette, 0.22);
+
+        e.post = Some(PostComponent { exposure: 99.0, intensity: 0.3, vignette: 0.22 });
+        let resolved = resolve_post(&[e]);
+        assert_eq!(resolved.exposure, 8.0);
+    }
+
+    #[test]
+    fn post_serde_roundtrip() {
+        let json = r#"{"exposure": 2.0}"#;
+        let parsed: PostComponent = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.exposure, 2.0);
+        assert_eq!(parsed.intensity, 0.3);
+        assert_eq!(parsed.vignette, 0.22);
+    }
+}
+
+#[cfg(test)]
 mod migrate_ambient_tests {
+
+
     use super::*;
 
     fn entity_with_light(id: u64, name: &str) -> EntityData {

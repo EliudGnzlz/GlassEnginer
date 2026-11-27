@@ -331,6 +331,7 @@ pub enum TipoComponente {
     Camera,
     Light,
     Ambiente,
+    Post,
     Script,
     AudioSource,
     Canvas,
@@ -353,6 +354,7 @@ impl TipoComponente {
             TipoComponente::Camera => "Camera",
             TipoComponente::Light => "Light",
             TipoComponente::Ambiente => "Ambiente",
+            TipoComponente::Post => "Post",
             TipoComponente::Script => "Script",
             TipoComponente::AudioSource => "AudioSource",
             TipoComponente::Canvas => "Canvas",
@@ -771,6 +773,7 @@ pub fn extraer_componente(ent: &EntityData, tipo: TipoComponente) -> Option<Stri
         TipoComponente::Camera => ent.camera.as_ref().and_then(a_json),
         TipoComponente::Light => ent.light.as_ref().and_then(a_json),
         TipoComponente::Ambiente => ent.ambient.as_ref().and_then(a_json),
+            TipoComponente::Post => ent.post.as_ref().and_then(a_json),
         TipoComponente::AudioSource => ent.audio.as_ref().and_then(a_json),
         TipoComponente::Canvas => ent.canvas.as_ref().and_then(a_json),
         TipoComponente::RectTransform => ent.rect_transform.as_ref().and_then(a_json),
@@ -825,6 +828,7 @@ pub fn aplicar_datos(ent: &mut EntityData, tipo: TipoComponente, json: &str) -> 
         TipoComponente::Camera => sustituir(&mut ent.camera, json),
         TipoComponente::Light => sustituir(&mut ent.light, json),
         TipoComponente::Ambiente => sustituir(&mut ent.ambient, json),
+            TipoComponente::Post => sustituir(&mut ent.post, json),
         TipoComponente::AudioSource => sustituir(&mut ent.audio, json),
         TipoComponente::Canvas => sustituir(&mut ent.canvas, json),
         TipoComponente::RectTransform => sustituir(&mut ent.rect_transform, json),
@@ -881,6 +885,7 @@ pub fn instalar_componente(ent: &mut EntityData, tipo: TipoComponente, json: &st
         TipoComponente::Camera => crear(&mut ent.camera, json, &mut ent.components, nombre),
         TipoComponente::Light => crear(&mut ent.light, json, &mut ent.components, nombre),
         TipoComponente::Ambiente => crear(&mut ent.ambient, json, &mut ent.components, nombre),
+            TipoComponente::Post => crear(&mut ent.post, json, &mut ent.components, nombre),
         TipoComponente::AudioSource => crear(&mut ent.audio, json, &mut ent.components, nombre),
         TipoComponente::Canvas => crear(&mut ent.canvas, json, &mut ent.components, nombre),
         TipoComponente::RectTransform => {
@@ -2104,6 +2109,35 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                     entity.components.retain(|c| c != "Ambiente");
                 }
 
+                let mut accion_post = AccionCabecera::Nada;
+                let mut remove_post = false;
+                if let Some(ref mut post) = entity.post {
+                    seccion_componente(ui, "post", "🎛️ Post (Escena)", TipoComponente::Post, true, self.portapapeles.as_ref(), &mut accion_post, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Exposición:");
+                            ui.add(DragValue::new(&mut post.exposure).speed(0.01).range(0.0..=8.0));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Bloom:");
+                            ui.add(DragValue::new(&mut post.intensity).speed(0.01).range(0.0..=4.0));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Viñeta:");
+                            ui.add(DragValue::new(&mut post.vignette).speed(0.01).range(0.0..=1.0));
+                        });
+                        ui.label(RichText::new("Sin portador, la escena usa los valores heredados (exposición 1,5).").weak());
+                    });
+                }
+                if accion_post == AccionCabecera::Quitar {
+                    remove_post = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::Post, accion_post);
+                }
+                if remove_post {
+                    entity.post = None;
+                    entity.components.retain(|c| c != "Post");
+                }
+
 
                 // ==========================================
                 // 4. COMPONENTES RIGIDBODY Y COLLIDER (RAPIER3D)
@@ -3031,6 +3065,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         hay_resultados |= coincide("Camera");
                         hay_resultados |= coincide("Light");
                         hay_resultados |= coincide("Ambiente");
+                        hay_resultados |= coincide("Post");
                         hay_resultados |= coincide("Canvas");
                         hay_resultados |= coincide("RectTransform");
                         hay_resultados |= coincide("Text");
@@ -3132,6 +3167,16 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                 intensity: glass_core::scene::LEGACY_AMBIENT_INTENSITY_LIT,
                             });
                             entity.components.push("Ambiente".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if coincide("Post") && entity.post.is_none() && ui.button("🎛️ Post (Escena)").clicked() {
+                            entity.post = Some(glass_core::scene::PostComponent {
+                                exposure: glass_core::scene::LEGACY_POST_EXPOSURE,
+                                intensity: glass_core::scene::LEGACY_POST_INTENSITY,
+                                vignette: glass_core::scene::LEGACY_POST_VIGNETTE,
+                            });
+                            entity.components.push("Post".into());
                             self.show_add_component_menu = false;
                         }
 

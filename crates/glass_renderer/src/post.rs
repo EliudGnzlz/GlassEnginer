@@ -57,25 +57,41 @@ impl Default for PostSettings {
 }
 
 impl PostSettings {
-    /// Valores por defecto con los overrides de entorno que existan.
+    /// Construye el post a partir de los valores resueltos de escena
+    /// (G2: exposición/intensidad/viñeta). El umbral y la rodilla del
+    /// bloom son constantes del motor, no datos de escena. Tras
+    /// aplicar los valores de escena, los overrides de entorno
+    /// GLASS_* siguen mandando (misma semántica que antes).
+    pub fn from_scene_values(exposure: f32, intensity: f32, vignette: f32) -> Self {
+        let mut s = Self {
+            threshold: 1.0,
+            knee: 0.5,
+            intensity,
+            vignette,
+            exposure,
+        };
+        Self::apply_env_overrides(&mut s);
+        s
+    }
+
+    /// Sin escena (compatibilidad): valores heredados + overrides de
+    /// entorno. Equivalente a `from_scene_values` con los LEGACY_POST_*.
     pub fn from_env() -> Self {
         let mut s = Self::default();
+        Self::apply_env_overrides(&mut s);
+        s
+    }
+
+    fn apply_env_overrides(s: &mut Self) {
         if let Ok(v) = std::env::var("GLASS_BLOOM") {
-            if let Ok(f) = v.parse::<f32>() {
-                s.intensity = f.max(0.0);
-            }
+            if let Ok(f) = v.parse::<f32>() { s.intensity = f.max(0.0); }
         }
         if let Ok(v) = std::env::var("GLASS_BLOOM_THRESHOLD") {
-            if let Ok(f) = v.parse::<f32>() {
-                s.threshold = f.max(0.0);
-            }
+            if let Ok(f) = v.parse::<f32>() { s.threshold = f.max(0.0); }
         }
         if let Ok(v) = std::env::var("GLASS_VIGNETTE") {
-            if let Ok(f) = v.parse::<f32>() {
-                s.vignette = f.clamp(0.0, 1.0);
-            }
+            if let Ok(f) = v.parse::<f32>() { s.vignette = f.clamp(0.0, 1.0); }
         }
-        s
     }
 
     fn push_bytes(&self, blur_dir: [f32; 2]) -> [u8; 32] {

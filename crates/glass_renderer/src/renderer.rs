@@ -2599,6 +2599,16 @@ impl GlassRenderer {
         self.ambient_ground = [ground[0], ground[1], ground[2], 0.0];
     }
 
+
+    /// Publica el post de escena del frame (G2): exposición,
+    /// intensidad del bloom y viñeta resueltas por la app desde la
+    /// escena activa (la app lo llama cada frame, como `set_ambient`).
+    /// El umbral y la rodilla del bloom permanecen constantes del
+    /// motor y no viajan por aquí.
+    pub fn set_post(&mut self, settings: crate::post::PostSettings) {
+        self.post_settings = settings;
+    }
+
 /// Publica las luces puntuales con sombra del frame (Fase 2), en el
     /// mismo orden de ranuras que el PointLightsUbo.
     pub fn set_point_shadow_lights(&mut self, lights: Vec<PointShadowLight>) {

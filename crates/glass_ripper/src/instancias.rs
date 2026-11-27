@@ -751,6 +751,7 @@ mod tests {
             light_profile: None,
             fog: None,
             ambient: None,
+            post: None,
             canvas: None,
             rect_transform: None,
             ui_text: None,

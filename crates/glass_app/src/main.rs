@@ -6656,6 +6656,19 @@ let resueltos = if body.has_collider {
             renderer.set_ambient(amb.sky, amb.equator, amb.ground);
         }
 
+
+        // G2: post resuelto de la escena (exposición/bloom/viñeta).
+        // Sin portador, la resolución devuelve los valores heredados
+        // y nada cambia. Los overrides GLASS_* siguen mandando.
+        if let Ok(scene) = self.scene_state.lock() {
+            let p = scene.post_settings();
+            renderer.set_post(glass_renderer::post::PostSettings::from_scene_values(
+                p.exposure,
+                p.intensity,
+                p.vignette,
+            ));
+        }
+
         // El canal w de light_color está reservado en el PBR (no lo lee) y
         // los materiales de grafo lo leen como tiempo en segundos: se
         // sobrescribe aquí con el tiempo desde el arranque de la app.

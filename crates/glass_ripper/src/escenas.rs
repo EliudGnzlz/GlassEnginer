@@ -346,6 +346,7 @@ fn entidad_vacia(id: u64) -> EntityData {
         light_profile: None,
         fog: None,
         ambient: None,
+        post: None,
         canvas: None,
         rect_transform: None,
         ui_text: None,

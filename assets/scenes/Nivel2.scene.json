@@ -723,5 +723,59 @@
    ],
    "intensity": 0.25
   }
+ },
+ {
+  "id": 12,
+  "active": true,
+  "name": "Post",
+  "tag": "Untagged",
+  "layer": "Default",
+  "is_static": false,
+  "components": [
+   "Transform",
+   "Post"
+  ],
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "mesh": null,
+  "script": null,
+  "script_data": null,
+  "physics": null,
+  "audio": null,
+  "camera": null,
+  "light": null,
+  "canvas": null,
+  "rect_transform": null,
+  "ui_text": null,
+  "ui_button": null,
+  "parent": null,
+  "children": [],
+  "character": null,
+  "particles": null,
+  "light_profile": null,
+  "fog": null,
+  "ambient": null,
+  "ui_image": null,
+  "ui_drag": null,
+  "post": {
+   "exposure": 1.5,
+   "intensity": 0.3,
+   "vignette": 0.22
+  }
  }
 ]
