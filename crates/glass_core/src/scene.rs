@@ -941,8 +941,9 @@ pub struct LayoutGroupData {
     #[serde(default)]
     pub child_control_height: bool,
     /// Force Expand (V5b-1): con Control Size en ese eje, el sobrante se
-    /// reparte a partes iguales entre los hijos con este flag. Sin control
-    /// en el eje, no tiene efecto.
+    /// reparte entre los participantes. V5b-2: en proporción a los pesos
+    /// `flexible_*` de cada hijo cuando hay alguno > 0; si no hay pesos,
+    /// a partes iguales. Sin control en el eje, no tiene efecto.
     #[serde(default)]
     pub child_force_expand_width: bool,
     #[serde(default)]
@@ -977,7 +978,8 @@ impl Default for LayoutGroupData {
 /// `min_*` = 0; `None` en `preferred_*` = medido (texto con el medidor
 /// SDF, imagen y resto con su rect actual). `preferred_*` explícito
 /// manda sobre lo medido. `ignore_layout` excluye al hijo del reparto:
-/// conserva su rect y no consume espacio ni spacing.
+/// conserva su rect y no consume espacio ni spacing. V5b-2 añade los
+/// pesos `flexible_*` para el reparto del sobrante con Force Expand.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct LayoutElementData {
     #[serde(default)]
@@ -988,8 +990,60 @@ pub struct LayoutElementData {
     pub preferred_width: Option<f32>,
     #[serde(default)]
     pub preferred_height: Option<f32>,
+    /// Peso flexible en el eje horizontal (V5b-2): con Force Expand en
+    /// el grupo, el sobrante se reparte en proporción a este peso.
+    /// 0 = sin peso (reparto a partes iguales con los demás sin peso).
+    #[serde(default)]
+    pub flexible_width: f32,
+    /// Peso flexible en el eje vertical (V5b-2). Igual que el horizontal.
+    #[serde(default)]
+    pub flexible_height: f32,
     #[serde(default)]
     pub ignore_layout: bool,
+}
+
+/// Ajuste de tamaño al contenido (V5b-2, G6): el RectTransform del
+/// grupo se redimensiona a su contenido por eje, estilo Unity
+/// (ContentSizeFitter: Unconstrained / MinSize / PreferredSize).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentSizeFitterData {
+    /// "none" | "min" | "preferred" para el ancho.
+    #[serde(default = "default_fit_none")]
+    pub horizontal_fit: String,
+    /// "none" | "min" | "preferred" para el alto.
+    #[serde(default = "default_fit_none")]
+    pub vertical_fit: String,
+}
+
+fn default_fit_none() -> String {
+    "none".into()
+}
+
+impl Default for ContentSizeFitterData {
+    fn default() -> Self {
+        Self {
+            horizontal_fit: "none".into(),
+            vertical_fit: "none".into(),
+        }
+    }
+}
+
+/// Modo de ajuste de un eje del ContentSizeFitter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModoAjuste {
+    Ninguno,
+    Minimo,
+    Preferido,
+}
+
+/// Resuelve un modo de ajuste ("none"/"min"/"preferred"). Valores
+/// desconocidos caen a Ninguno.
+pub fn resolver_ajuste(fit: &str) -> ModoAjuste {
+    match fit {
+        "min" => ModoAjuste::Minimo,
+        "preferred" => ModoAjuste::Preferido,
+        _ => ModoAjuste::Ninguno,
+    }
 }
 
 /// Resuelve `alignment` en la pareja (eje principal, eje cruzado) del
@@ -1121,7 +1175,28 @@ pub fn calcular_preferidos_bottom_up(
     nodos: &[EntradaPreferido<'_>],
     medir: &MedirTextoFn<'_>,
 ) -> Vec<[f32; 2]> {
-    let mut pref = vec![[0.0f32; 2]; nodos.len()];
+    calcular_tamanos_bottom_up(nodos, medir, false)
+}
+
+/// Post-orden de tamaños MÍNIMOS (V5b-2, G6): misma pasada que los
+/// preferidos, agregando mínimos. Nodo inactivo => (0,0). Un mínimo
+/// explícito por eje manda; un grupo sin mínimo explícito agrega los
+/// mínimos de sus participantes (+ spacing + padding); grupo vacío =
+/// solo padding; Texto/Imagen sin mínimo explícito = (0,0) (pueden
+/// encoger a cero). Sin clamp final: el mínimo ES el suelo.
+pub fn calcular_minimos_bottom_up(
+    nodos: &[EntradaPreferido<'_>],
+    medir: &MedirTextoFn<'_>,
+) -> Vec<[f32; 2]> {
+    calcular_tamanos_bottom_up(nodos, medir, true)
+}
+
+fn calcular_tamanos_bottom_up(
+    nodos: &[EntradaPreferido<'_>],
+    medir: &MedirTextoFn<'_>,
+    minimo: bool,
+) -> Vec<[f32; 2]> {
+    let mut tam = vec![[0.0f32; 2]; nodos.len()];
 
     // Orden post-orden explícito por pila (sin recursión).
     fn post_orden(nodos: &[EntradaPreferido<'_>]) -> Vec<usize> {
@@ -1151,14 +1226,26 @@ pub fn calcular_preferidos_bottom_up(
     for i in post_orden(nodos) {
         let n = &nodos[i];
         if !n.activo {
-            pref[i] = [0.0, 0.0];
+            tam[i] = [0.0, 0.0];
             continue;
         }
-        // preferred_* explícito manda siempre.
-        let pref_exp_a = n.layout_element.and_then(|e| e.preferred_width);
-        let pref_exp_b = n.layout_element.and_then(|e| e.preferred_height);
+        // Explícito por eje manda siempre (preferred_* o min_* según modo).
+        let exp_a = n.layout_element.and_then(|e| {
+            if minimo {
+                e.min_width
+            } else {
+                e.preferred_width
+            }
+        });
+        let exp_b = n.layout_element.and_then(|e| {
+            if minimo {
+                e.min_height
+            } else {
+                e.preferred_height
+            }
+        });
 
-        let (mut pw, mut ph) = match (pref_exp_a, pref_exp_b) {
+        let (mut tw, mut th) = match (exp_a, exp_b) {
             (Some(w), Some(h)) => (w, h),
             _ => {
                 if let Some(g) = n.layout_group {
@@ -1181,7 +1268,7 @@ pub fn calcular_preferidos_bottom_up(
                         {
                             continue;
                         }
-                        let p = pref[h];
+                        let p = tam[h];
                         let principal = if horizontal { p[0] } else { p[1] };
                         let cruzado = if horizontal { p[1] } else { p[0] };
                         suma += principal;
@@ -1191,7 +1278,12 @@ pub fn calcular_preferidos_bottom_up(
                         }
                     }
                     if n_part == 0.0 {
-                        (n.rect_actual[2], n.rect_actual[3])
+                        if minimo {
+                            // Sin hijos no hay contenido: solo padding.
+                            (g.padding[0] + g.padding[2], g.padding[1] + g.padding[3])
+                        } else {
+                            (n.rect_actual[2], n.rect_actual[3])
+                        }
                     } else {
                         let interior_principal = suma + g.spacing * (n_part - 1.0);
                         let pad_principal = if horizontal {
@@ -1208,28 +1300,66 @@ pub fn calcular_preferidos_bottom_up(
                         let p_cr = max_cruz + pad_cruzado;
                         if horizontal { (p_pr, p_cr) } else { (p_cr, p_pr) }
                     }
-                } else if let Some((txt, tam, ls)) = n.texto {
-                    let w = medir(txt, tam, f32::INFINITY, ls).0;
-                    let h = medir(txt, tam, w, ls).1;
-                    (w, h)
+                } else if let Some((txt, tam_f, ls)) = n.texto {
+                    if minimo {
+                        // Un texto puede encoger a cero; su mínimo es 0.
+                        (0.0, 0.0)
+                    } else {
+                        let w = medir(txt, tam_f, f32::INFINITY, ls).0;
+                        let h = medir(txt, tam_f, w, ls).1;
+                        (w, h)
+                    }
                 } else {
-                    // Imagen y cualquier otra hoja: rect actual.
-                    (n.rect_actual[2], n.rect_actual[3])
+                    // Imagen y cualquier otra hoja: rect actual (preferido)
+                    // o cero (mínimo: puede encoger a nada).
+                    if minimo {
+                        (0.0, 0.0)
+                    } else {
+                        (n.rect_actual[2], n.rect_actual[3])
+                    }
                 }
             }
         };
 
-        if let Some(w) = pref_exp_a {
-            pw = w;
+        if let Some(w) = exp_a {
+            tw = w;
         }
-        if let Some(h) = pref_exp_b {
-            ph = h;
+        if let Some(h) = exp_b {
+            th = h;
         }
-        let minw = n.layout_element.and_then(|e| e.min_width).unwrap_or(0.0);
-        let minh = n.layout_element.and_then(|e| e.min_height).unwrap_or(0.0);
-        pref[i] = [pw.max(minw), ph.max(minh)];
+        if minimo {
+            tam[i] = [tw, th];
+        } else {
+            let minw = n.layout_element.and_then(|e| e.min_width).unwrap_or(0.0);
+            let minh = n.layout_element.and_then(|e| e.min_height).unwrap_or(0.0);
+            tam[i] = [tw.max(minw), th.max(minh)];
+        }
     }
-    pref
+    tam
+}
+
+/// Aplica el ContentSizeFitter a un rect de grupo (V5b-2): devuelve el
+/// rect con el tamaño ajustado por eje según el modo (none = intacto,
+/// min = contenido mínimo, preferred = contenido preferido). La posición
+/// no cambia. Función pura.
+pub fn ajustar_fitter(
+    rect_grupo: [f32; 4],
+    fitter: &ContentSizeFitterData,
+    min_contenido: [f32; 2],
+    pref_contenido: [f32; 2],
+) -> [f32; 4] {
+    let mut r = rect_grupo;
+    match resolver_ajuste(&fitter.horizontal_fit) {
+        ModoAjuste::Minimo => r[2] = min_contenido[0],
+        ModoAjuste::Preferido => r[2] = pref_contenido[0],
+        ModoAjuste::Ninguno => {}
+    }
+    match resolver_ajuste(&fitter.vertical_fit) {
+        ModoAjuste::Minimo => r[3] = min_contenido[1],
+        ModoAjuste::Preferido => r[3] = pref_contenido[1],
+        ModoAjuste::Ninguno => {}
+    }
+    r
 }
 
 /// Reparto top-down con Control Size (V5b-1). `preferidos` y
@@ -1371,12 +1501,35 @@ pub fn layout_group_rects_control(
                 }
             }
         } else if expand_main && disponible > suma {
-            // Sobrante a partes iguales entre los participantes: el flag
-            // vive en el grupo, no por hijo (no hay pesos flexibles en
-            // V5b-1; llegan en V5b-2).
-            let cuota = (disponible - suma) / n_part.max(1.0);
-            for &i in &participantes {
-                tam_main[i] += cuota;
+            // Sobrante con Force Expand (V5b-2): con pesos flexibles en el
+            // eje principal se reparte en proporción a los pesos (solo los
+            // hijos con peso > 0 reciben extra); sin pesos, a partes
+            // iguales entre los participantes (V5b-1).
+            let peso = |i: usize| {
+                let f = elementos
+                    .get(i)
+                    .and_then(|e| *e)
+                    .map(|e| {
+                        if horizontal {
+                            e.flexible_width
+                        } else {
+                            e.flexible_height
+                        }
+                    })
+                    .unwrap_or(0.0);
+                f.max(0.0)
+            };
+            let peso_total: f32 = participantes.iter().map(|&i| peso(i)).sum();
+            let sobrante = disponible - suma;
+            if peso_total > 0.0 {
+                for &i in &participantes {
+                    tam_main[i] += sobrante * peso(i) / peso_total;
+                }
+            } else {
+                let cuota = sobrante / n_part.max(1.0);
+                for &i in &participantes {
+                    tam_main[i] += cuota;
+                }
             }
         }
     }
@@ -1868,6 +2021,10 @@ pub struct EntityData {
     /// las escenas anteriores no traen el campo.
     #[serde(default)]
     pub layout_element: Option<LayoutElementData>,
+    /// Ajuste del grupo a su contenido (V5b-2, G6). `#[serde(default)]`:
+    /// las escenas anteriores no traen el campo.
+    #[serde(default)]
+    pub content_size_fitter: Option<ContentSizeFitterData>,
 /// Drag & drop de UI (Canvas v2). `#[serde(default)]`: las
     /// escenas anteriores no traen el campo.
     #[serde(default)]
@@ -2056,6 +2213,11 @@ impl EntityData {
         } else {
             None
         };
+        let content_size_fitter = if components.iter().any(|c| c == "ContentSizeFitter") {
+            Some(ContentSizeFitterData::default())
+        } else {
+            None
+        };
 
         let tag = if name.contains("Player") {
             "Player".into()
@@ -2094,6 +2256,7 @@ impl EntityData {
             ui_drag: None,
             layout_group,
             layout_element,
+            content_size_fitter,
             portal: None,
             animator,
             parent: None,
@@ -4498,6 +4661,8 @@ mod tests {
             min_height: min_h,
             preferred_width: pref_w,
             preferred_height: pref_h,
+            flexible_width: 0.0,
+            flexible_height: 0.0,
             ignore_layout: false,
         }
     }
@@ -4781,6 +4946,283 @@ mod tests {
         assert_eq!(pref[1], [40.0, 24.0]);
         // Preferido explícito 50, pero min 100 manda.
         assert_eq!(pref[2], [100.0, 24.0]);
+    }
+
+    // ---- V5b-2: flexible, mínimos, contenido y fitter ----
+
+    fn elemento_flex(
+        pref_w: Option<f32>,
+        pref_h: Option<f32>,
+        flex_w: f32,
+        flex_h: f32,
+    ) -> LayoutElementData {
+        LayoutElementData {
+            min_width: None,
+            min_height: None,
+            preferred_width: pref_w,
+            preferred_height: pref_h,
+            flexible_width: flex_w,
+            flexible_height: flex_h,
+            ignore_layout: false,
+        }
+    }
+
+    fn cerca(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    #[test]
+    fn flexible_reparte_sobrante_en_proporcion_a_pesos() {
+        // Grupo horizontal, control + expand en ancho. inner_main = 380,
+        // preferidos 80 y 120, spacing 10: disponible 370, sobrante 170.
+        // Pesos 1:2 → 170/3 y 340/3.
+        let g = grupo_control("horizontal", true, false, true, false);
+        let el0 = elemento_flex(Some(80.0), None, 1.0, 0.0);
+        let el1 = elemento_flex(Some(120.0), None, 2.0, 0.0);
+        let out = layout_group_rects_control(
+            rect_grupo(),
+            &g,
+            &hijos_grupo(),
+            &[[80.0, 40.0], [120.0, 30.0]],
+            &[Some(&el0), Some(&el1)],
+        );
+        assert!(cerca(out[0][2], 80.0 + 170.0 / 3.0), "w0 = {}", out[0][2]);
+        assert!(cerca(out[1][2], 120.0 + 340.0 / 3.0), "w1 = {}", out[1][2]);
+        assert!(cerca(out[0][0], 10.0), "x0 = {}", out[0][0]);
+        assert!(
+            cerca(out[1][0], 10.0 + (80.0 + 170.0 / 3.0) + 10.0),
+            "x1 = {}",
+            out[1][0]
+        );
+    }
+
+    #[test]
+    fn flexible_sin_expand_no_reparte() {
+        // Mismo reparto sin force-expand: los tamaños quedan en preferido.
+        let g = grupo_control("horizontal", true, false, false, false);
+        let el0 = elemento_flex(Some(80.0), None, 1.0, 0.0);
+        let el1 = elemento_flex(Some(120.0), None, 2.0, 0.0);
+        let out = layout_group_rects_control(
+            rect_grupo(),
+            &g,
+            &hijos_grupo(),
+            &[[80.0, 40.0], [120.0, 30.0]],
+            &[Some(&el0), Some(&el1)],
+        );
+        assert_eq!(out[0], [10.0, 20.0, 80.0, 40.0]);
+        assert_eq!(out[1], [100.0, 20.0, 120.0, 30.0]);
+    }
+
+    #[test]
+    fn flexible_cero_en_todos_reparte_a_partes_iguales() {
+        // Sin pesos: comportamiento V5b-1 intacto (sobrante 170 / 2 = 85).
+        let g = grupo_control("horizontal", true, false, true, false);
+        let el0 = elemento_flex(Some(80.0), None, 0.0, 0.0);
+        let el1 = elemento_flex(Some(120.0), None, 0.0, 0.0);
+        let out = layout_group_rects_control(
+            rect_grupo(),
+            &g,
+            &hijos_grupo(),
+            &[[80.0, 40.0], [120.0, 30.0]],
+            &[Some(&el0), Some(&el1)],
+        );
+        assert_eq!(out[0], [10.0, 20.0, 165.0, 40.0]);
+        assert_eq!(out[1], [185.0, 20.0, 205.0, 30.0]);
+    }
+
+    #[test]
+    fn flexible_negativo_se_trata_como_cero() {
+        // Peso -5 en el primero: solo el segundo (peso 2) recibe sobrante.
+        let g = grupo_control("horizontal", true, false, true, false);
+        let el0 = elemento_flex(Some(80.0), None, -5.0, 0.0);
+        let el1 = elemento_flex(Some(120.0), None, 2.0, 0.0);
+        let out = layout_group_rects_control(
+            rect_grupo(),
+            &g,
+            &hijos_grupo(),
+            &[[80.0, 40.0], [120.0, 30.0]],
+            &[Some(&el0), Some(&el1)],
+        );
+        assert_eq!(out[0], [10.0, 20.0, 80.0, 40.0]);
+        assert_eq!(out[1], [100.0, 20.0, 290.0, 30.0]);
+    }
+
+    #[test]
+    fn minimos_bottom_up_agrega_minimos() {
+        // Mismo árbol que preferidos_bottom_up_h_dentro_de_v, con mínimos:
+        // ImgA min_w 50, ImgB min_w 60, ImgC min_h 30, HGroup min_h 40.
+        let mut gv = grupo_control("vertical", true, true, false, false);
+        gv.spacing = 5.0;
+        gv.padding = [10.0, 10.0, 10.0, 10.0];
+        let mut gh = grupo_control("horizontal", true, true, false, false);
+        gh.spacing = 4.0;
+        gh.padding = [5.0, 5.0, 5.0, 5.0];
+        let el_h = LayoutElementData {
+            min_width: None,
+            min_height: Some(40.0),
+            preferred_width: None,
+            preferred_height: Some(60.0),
+            flexible_width: 0.0,
+            flexible_height: 0.0,
+            ignore_layout: false,
+        };
+        let el_a = LayoutElementData {
+            min_width: Some(50.0),
+            min_height: None,
+            preferred_width: Some(80.0),
+            preferred_height: None,
+            flexible_width: 0.0,
+            flexible_height: 0.0,
+            ignore_layout: false,
+        };
+        let el_b = LayoutElementData {
+            min_width: Some(60.0),
+            min_height: None,
+            preferred_width: Some(120.0),
+            preferred_height: None,
+            flexible_width: 0.0,
+            flexible_height: 0.0,
+            ignore_layout: false,
+        };
+        let el_c = LayoutElementData {
+            min_width: None,
+            min_height: Some(30.0),
+            preferred_width: None,
+            preferred_height: Some(50.0),
+            flexible_width: 0.0,
+            flexible_height: 0.0,
+            ignore_layout: false,
+        };
+        let entradas = vec![
+            EntradaPreferido {
+                padre: None,
+                hijos: &[1],
+                activo: true,
+                rect_actual: [0.0, 0.0, 400.0, 300.0],
+                layout_group: None,
+                layout_element: None,
+                texto: None,
+            },
+            EntradaPreferido {
+                padre: Some(0),
+                hijos: &[2, 5],
+                activo: true,
+                rect_actual: [0.0, 0.0, 400.0, 300.0],
+                layout_group: Some(&gv),
+                layout_element: None,
+                texto: None,
+            },
+            EntradaPreferido {
+                padre: Some(1),
+                hijos: &[3, 4],
+                activo: true,
+                rect_actual: [0.0, 0.0, 200.0, 60.0],
+                layout_group: Some(&gh),
+                layout_element: Some(&el_h),
+                texto: None,
+            },
+            EntradaPreferido {
+                padre: Some(2),
+                hijos: &[],
+                activo: true,
+                rect_actual: [0.0, 0.0, 50.0, 40.0],
+                layout_group: None,
+                layout_element: Some(&el_a),
+                texto: None,
+            },
+            EntradaPreferido {
+                padre: Some(2),
+                hijos: &[],
+                activo: true,
+                rect_actual: [0.0, 0.0, 50.0, 40.0],
+                layout_group: None,
+                layout_element: Some(&el_b),
+                texto: None,
+            },
+            EntradaPreferido {
+                padre: Some(1),
+                hijos: &[],
+                activo: true,
+                rect_actual: [0.0, 0.0, 100.0, 30.0],
+                layout_group: None,
+                layout_element: Some(&el_c),
+                texto: None,
+            },
+        ];
+        let medir = |_t: &str, _tam: f32, _max: f32, _ls: f32| (0.0, 0.0);
+        let min = calcular_minimos_bottom_up(&entradas, &medir);
+        // Hojas: solo su mínimo explícito por eje.
+        assert_eq!(min[3], [50.0, 0.0]);
+        assert_eq!(min[4], [60.0, 0.0]);
+        assert_eq!(min[5], [0.0, 30.0]);
+        // HGroup: ancho 50+60+4+10 = 124; alto explícito 40.
+        assert_eq!(min[2], [124.0, 40.0]);
+        // VGroup: alto 40+30+5+20 = 95; ancho máx(124, 0)+20 = 144.
+        assert_eq!(min[1], [144.0, 95.0]);
+        // Raíz sin grupo ni mínimo: (0,0).
+        assert_eq!(min[0], [0.0, 0.0]);
+    }
+
+    #[test]
+    fn minimos_grupo_vacio_es_solo_padding() {
+        let g = grupo_control("horizontal", false, false, false, false);
+        let entradas = vec![EntradaPreferido {
+            padre: None,
+            hijos: &[],
+            activo: true,
+            rect_actual: [0.0, 0.0, 400.0, 200.0],
+            layout_group: Some(&g),
+            layout_element: None,
+            texto: None,
+        }];
+        let medir = |_t: &str, _tam: f32, _max: f32, _ls: f32| (0.0, 0.0);
+        // Padding [10,20,10,20]: mínimo [20,40]; preferido = rect.
+        assert_eq!(calcular_minimos_bottom_up(&entradas, &medir)[0], [20.0, 40.0]);
+        assert_eq!(
+            calcular_preferidos_bottom_up(&entradas, &medir)[0],
+            [400.0, 200.0]
+        );
+    }
+
+    #[test]
+    fn ajustar_fitter_respeta_modos_por_eje() {
+        let f = ContentSizeFitterData {
+            horizontal_fit: "preferred".into(),
+            vertical_fit: "min".into(),
+        };
+        assert_eq!(
+            ajustar_fitter([5.0, 7.0, 100.0, 50.0], &f, [140.0, 70.0], [230.0, 80.0]),
+            [5.0, 7.0, 230.0, 70.0]
+        );
+        let ninguno = ContentSizeFitterData::default();
+        assert_eq!(
+            ajustar_fitter([5.0, 7.0, 100.0, 50.0], &ninguno, [140.0, 70.0], [230.0, 80.0]),
+            [5.0, 7.0, 100.0, 50.0]
+        );
+        // Valores desconocidos caen a none.
+        let raro = ContentSizeFitterData {
+            horizontal_fit: "expand".into(),
+            vertical_fit: "".into(),
+        };
+        assert_eq!(
+            ajustar_fitter([5.0, 7.0, 100.0, 50.0], &raro, [140.0, 70.0], [230.0, 80.0]),
+            [5.0, 7.0, 100.0, 50.0]
+        );
+        assert_eq!(resolver_ajuste("min"), ModoAjuste::Minimo);
+        assert_eq!(resolver_ajuste("preferred"), ModoAjuste::Preferido);
+        assert_eq!(resolver_ajuste("none"), ModoAjuste::Ninguno);
+        assert_eq!(resolver_ajuste("otra"), ModoAjuste::Ninguno);
+    }
+
+    #[test]
+    fn fitter_serde_parcial_usa_none() {
+        let f: ContentSizeFitterData =
+            serde_json::from_str(r#"{"horizontal_fit":"preferred"}"#).unwrap();
+        assert_eq!(f.horizontal_fit, "preferred");
+        assert_eq!(f.vertical_fit, "none");
+        let f2 = ContentSizeFitterData::default();
+        assert_eq!(f2.horizontal_fit, "none");
+        assert_eq!(f2.vertical_fit, "none");
     }
 }
 

@@ -306,6 +306,7 @@ mod tests {
                 drag: None,
                 layout_group: None,
                 layout_element: None,
+            content_size_fitter: None,
                 style_extra: String::new(),
                 raycast_target: false,
             },
@@ -337,6 +338,7 @@ mod tests {
                 drag: None,
                 layout_group: None,
                 layout_element: None,
+            content_size_fitter: None,
                 style_extra: String::new(),
                 raycast_target: true,
             },
@@ -391,6 +393,7 @@ mod tests {
             drag: None,
             layout_group: None,
             layout_element: None,
+            content_size_fitter: None,
             style_extra: String::new(),
             raycast_target: true,
         }

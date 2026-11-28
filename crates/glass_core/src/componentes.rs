@@ -32,6 +32,7 @@ const COMPONENTES: &[&str] = &[
     "Portal",
     "LayoutGroup",
     "LayoutElement",
+    "ContentSizeFitter",
 ];
 
 /// JSON completo del componente `nombre` de la entidad, Ok(None) si la
@@ -77,6 +78,7 @@ pub fn componente_json(ent: &EntityData, nombre: &str) -> Result<Option<Value>, 
         "DragDrop" => get_opt(&ent.ui_drag, n),
         "LayoutGroup" => get_opt(&ent.layout_group, n),
         "LayoutElement" => get_opt(&ent.layout_element, n),
+        "ContentSizeFitter" => get_opt(&ent.content_size_fitter, n),
         "Animator" => get_opt(&ent.animator, n),
         "Fog" => get_opt(&ent.fog, n),
         "Particles" => get_opt(&ent.particles, n),
@@ -116,6 +118,9 @@ pub fn aplicar_componente(ent: &mut EntityData, nombre: &str, parcial: &Value) -
         "DragDrop" => set_opt(&mut ent.ui_drag, &mut ent.components, n, parcial),
         "LayoutGroup" => set_opt(&mut ent.layout_group, &mut ent.components, n, parcial),
         "LayoutElement" => set_opt(&mut ent.layout_element, &mut ent.components, n, parcial),
+        "ContentSizeFitter" => {
+            set_opt(&mut ent.content_size_fitter, &mut ent.components, n, parcial)
+        }
         "Animator" => set_opt(&mut ent.animator, &mut ent.components, n, parcial),
         "Fog" => set_fog(ent, n, parcial),
         "Particles" => set_opt(&mut ent.particles, &mut ent.components, n, parcial),

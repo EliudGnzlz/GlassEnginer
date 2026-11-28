@@ -533,7 +533,7 @@ impl McpServer {
                         },
                         {
                             "name": "glass_component_get",
-                            "description": "Devuelve el JSON completo de un componente de una entidad (Transform, MeshRenderer, Rigidbody, Collider, CharacterController, Camera, Light, Script, AudioSource, Canvas, RectTransform, Text, Button, Image, DragDrop, Animator, Fog, Particles, Portal, LayoutGroup, LayoutElement).",
+                            "description": "Devuelve el JSON completo de un componente de una entidad (Transform, MeshRenderer, Rigidbody, Collider, CharacterController, Camera, Light, Script, AudioSource, Canvas, RectTransform, Text, Button, Image, DragDrop, Animator, Fog, Particles, Portal, LayoutGroup, LayoutElement, ContentSizeFitter).",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -5660,6 +5660,49 @@ mod tests_catchup {
         );
         assert!(r.contains("80.0"), "get LayoutElement: {r}");
         assert!(r.contains("true"), "get LayoutElement: {r}");
+    }
+
+    #[test]
+    fn component_set_get_roundtrip_content_size_fitter() {
+        let srv = servidor();
+        srv.scene
+            .lock()
+            .unwrap()
+            .entities
+            .push(glass_core::scene::EntityData::new(
+                4245,
+                "FitterMcp".into(),
+                vec!["Transform".into()],
+            ));
+
+        let r = llamar(
+            &srv,
+            "glass_component_set",
+            json!({ "entity_id": 4245, "component": "ContentSizeFitter", "values": { "horizontal_fit": "preferred", "vertical_fit": "min" } }),
+        );
+        assert!(!r.contains("\"error\""), "set ContentSizeFitter: {r}");
+
+        let r = llamar(
+            &srv,
+            "glass_component_get",
+            json!({ "entity_id": 4245, "component": "ContentSizeFitter" }),
+        );
+        assert!(r.contains("preferred"), "get ContentSizeFitter: {r}");
+        assert!(r.contains("min"), "get ContentSizeFitter: {r}");
+
+        // Flexible de LayoutElement también viaja por MCP.
+        let r = llamar(
+            &srv,
+            "glass_component_set",
+            json!({ "entity_id": 4245, "component": "LayoutElement", "values": { "flexible_width": 2.0 } }),
+        );
+        assert!(!r.contains("\"error\""), "set flexible: {r}");
+        let r = llamar(
+            &srv,
+            "glass_component_get",
+            json!({ "entity_id": 4245, "component": "LayoutElement" }),
+        );
+        assert!(r.contains("2.0"), "get flexible: {r}");
     }
 
     #[test]

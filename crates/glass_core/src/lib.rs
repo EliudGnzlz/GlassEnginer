@@ -39,7 +39,7 @@ pub use scene::{
     canvas_scale_factor, layout_group_rects, resolve_ui_rect,
     resolve_ui_rect_in, spec_por_defecto, AudioSourceData, CameraData, CanvasData, CharacterData,
     ColliderSpec, EntityData,
-    LayoutGroupData, LayoutElementData, LightData, LightProfileData, MaterialData, MeshColliderMode, MeshData,
+    LayoutGroupData, LayoutElementData, ContentSizeFitterData, LightData, LightProfileData, MaterialData, MeshColliderMode, MeshData,
     PhysicsData,
     RectTransformData, SceneState, ScriptComponentData, TransformData, UIButtonData, UITextData,
     UIImageData, UIInputFieldData, UIDragData,
