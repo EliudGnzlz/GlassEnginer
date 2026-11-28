@@ -878,19 +878,40 @@ impl LightProfileData {
     }
 }
 
+/// Modos de render del Canvas (V7): el canon. El campo sigue siendo
+/// String en el JSON (compatibilidad con escenas guardadas); estos
+/// consts son la única fuente de los literales.
+pub const MODO_OVERLAY: &str = "ScreenSpaceOverlay";
+pub const MODO_CAMERA: &str = "ScreenSpaceCamera";
+pub const MODO_WORLD: &str = "WorldSpace";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanvasData {
     pub render_mode: String, // "ScreenSpaceOverlay", "ScreenSpaceCamera", "WorldSpace"
     pub reference_resolution: [f32; 2],
     pub match_width_or_height: f32,
+    /// Cámara que fija el plano en modo Camera (id de entidad, patrón
+    /// `parent`/`children`). None = la cámara de la vista (P2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<u64>,
+    /// Distancia del plano a la cámara en modo Camera (mundo). None =
+    /// derivada d = (h/2)/tan(fov/2) (P2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plane_distance: Option<f32>,
+    /// Orden entre canvas del mismo modo (P4). Default 0.
+    #[serde(default)]
+    pub sorting_order: i32,
 }
 
 impl Default for CanvasData {
     fn default() -> Self {
         Self {
-            render_mode: "ScreenSpaceOverlay".into(),
+            render_mode: MODO_OVERLAY.into(),
             reference_resolution: [1920.0, 1080.0],
             match_width_or_height: 0.5,
+            camera: None,
+            plane_distance: None,
+            sorting_order: 0,
         }
     }
 }
@@ -4566,6 +4587,59 @@ mod tests {
         assert_eq!(loaded_text.parent, Some(canvas_id));
 
         let _ = std::fs::remove_file(temp_path);
+    }
+
+    #[test]
+    fn canvas_campos_p2_roundtrip() {
+        // P2: camera / plane_distance / sorting_order sobreviven a
+        // guardar + cargar; una escena vieja sin los campos carga con
+        // los defaults (None / None / 0).
+        let mut scene = SceneState::new();
+        let cam_id = scene.create_entity(
+            "Cam".into(),
+            vec!["Transform".into(), "Camera".into()],
+        );
+        let canvas_id = scene.create_entity(
+            "Main Canvas".into(),
+            vec!["Transform".into(), "RectTransform".into(), "Canvas".into()],
+        );
+        {
+            let canvas = scene.get_entity_mut(canvas_id).unwrap();
+            let c = canvas.canvas.as_mut().unwrap();
+            c.render_mode = MODO_CAMERA.into();
+            c.camera = Some(cam_id);
+            c.plane_distance = Some(2.5);
+            c.sorting_order = 3;
+        }
+
+        let temp_path = std::env::temp_dir().join("test_scene_canvas_p2.json");
+        let temp_str = temp_path.to_str().unwrap();
+        assert!(scene.save_to_json(temp_str).is_ok());
+
+        let mut loaded = SceneState::new();
+        assert!(loaded.load_from_json(temp_str).is_ok());
+        let c = loaded
+            .get_entity(canvas_id)
+            .unwrap()
+            .canvas
+            .as_ref()
+            .unwrap();
+        assert_eq!(c.render_mode, MODO_CAMERA);
+        assert_eq!(c.camera, Some(cam_id));
+        assert_eq!(c.plane_distance, Some(2.5));
+        assert_eq!(c.sorting_order, 3);
+        let _ = std::fs::remove_file(temp_path);
+
+        // Escena vieja: el JSON del canvas no trae los campos nuevos.
+        let viejo = serde_json::json!({
+            "render_mode": "ScreenSpaceOverlay",
+            "reference_resolution": [1920.0, 1080.0],
+            "match_width_or_height": 0.5
+        });
+        let c_viejo: CanvasData = serde_json::from_value(viejo).unwrap();
+        assert_eq!(c_viejo.camera, None);
+        assert_eq!(c_viejo.plane_distance, None);
+        assert_eq!(c_viejo.sorting_order, 0);
     }
 
     #[test]

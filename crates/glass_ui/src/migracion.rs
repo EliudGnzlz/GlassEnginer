@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use glass_core::scene::EntityData;
+use glass_core::scene::{EntityData, MODO_CAMERA, MODO_OVERLAY, MODO_WORLD};
 
 #[derive(Debug, Clone, Default)]
 pub struct InformeMigracion {
@@ -20,7 +20,7 @@ pub fn necesita_migracion(version: u32) -> bool {
 }
 
 fn es_modo_render_valido(modo: &str) -> bool {
-    matches!(modo, "ScreenSpaceOverlay" | "ScreenSpaceCamera" | "WorldSpace")
+    matches!(modo, MODO_OVERLAY | MODO_CAMERA | MODO_WORLD)
 }
 
 pub fn migrar_entidades(
@@ -36,11 +36,45 @@ pub fn migrar_entidades(
         if let Some(canvas) = entidad.canvas.as_mut() {
             if !es_modo_render_valido(canvas.render_mode.as_str()) {
                 let anterior = canvas.render_mode.clone();
-                canvas.render_mode = "ScreenSpaceOverlay".to_string();
+                canvas.render_mode = MODO_OVERLAY.to_string();
                 informe.aplicada = true;
                 informe.avisos.push(format!(
                     "Entidad '{nombre}': modo de render '{anterior}' no válido; se corrige a ScreenSpaceOverlay"
                 ));
+            }
+        }
+    }
+
+    // 1b. Validar los campos nuevos de Canvas (P2): la cámara debe
+    // existir y tener componente cámara; la distancia debe ser finita
+    // y positiva. Lo inválido vuelve a su default (None) con aviso.
+    // La lista de cámaras se toma antes del bucle: la migración no
+    // crea ni borra cámaras, así que no cambia durante la pasada.
+    let ids_con_camara: std::collections::HashSet<u64> = entities
+        .iter()
+        .filter(|e| e.camera.is_some())
+        .map(|e| e.id)
+        .collect();
+    for entidad in entities.iter_mut() {
+        let nombre = entidad.name.clone();
+        if let Some(canvas) = entidad.canvas.as_mut() {
+            if let Some(id_camara) = canvas.camera {
+                if !ids_con_camara.contains(&id_camara) {
+                    canvas.camera = None;
+                    informe.aplicada = true;
+                    informe.avisos.push(format!(
+                        "Entidad '{nombre}': cámara {id_camara} no existe o no tiene componente cámara; se usa la cámara de la vista"
+                    ));
+                }
+            }
+            if let Some(d) = canvas.plane_distance {
+                if !d.is_finite() || d <= 0.0 {
+                    canvas.plane_distance = None;
+                    informe.aplicada = true;
+                    informe.avisos.push(format!(
+                        "Entidad '{nombre}': plane_distance {d} no válido; se usa la distancia derivada"
+                    ));
+                }
             }
         }
     }
@@ -193,7 +227,16 @@ mod tests {
             render_mode: modo.to_string(),
             reference_resolution: [1920.0, 1080.0],
             match_width_or_height: 0.5,
+            camera: None,
+            plane_distance: None,
+            sorting_order: 0,
         });
+        entidad
+    }
+
+    fn entidad_con_camara(id: u64, nombre: &str) -> EntityData {
+        let mut entidad = EntityData::new(id, nombre.to_string(), Vec::new());
+        entidad.camera = Some(Default::default());
         entidad
     }
 
@@ -247,6 +290,80 @@ mod tests {
                 *modo
             );
         }
+    }
+
+    #[test]
+    fn camara_canvas_valida_intacta() {
+        let mut canvas = entidad_con_canvas(1, "HUD", "ScreenSpaceCamera");
+        canvas.canvas.as_mut().unwrap().camera = Some(2);
+        let mut entities = vec![canvas, entidad_con_camara(2, "Cam")];
+        let mut siguiente_id = 3;
+
+        let informe = migrar_entidades(&mut entities, &mut siguiente_id);
+
+        assert!(!informe.aplicada);
+        assert_eq!(entities[0].canvas.as_ref().unwrap().camera, Some(2));
+    }
+
+    #[test]
+    fn camara_canvas_desconocida_a_none() {
+        let mut canvas = entidad_con_canvas(1, "HUD", "ScreenSpaceCamera");
+        canvas.canvas.as_mut().unwrap().camera = Some(99);
+        let mut entities = vec![canvas, entidad_con_camara(2, "Cam")];
+        let mut siguiente_id = 3;
+
+        let informe = migrar_entidades(&mut entities, &mut siguiente_id);
+
+        assert!(informe.aplicada);
+        assert_eq!(entities[0].canvas.as_ref().unwrap().camera, None);
+        assert!(informe.avisos.iter().any(|a| a.contains("99")));
+    }
+
+    #[test]
+    fn camara_canvas_sin_componente_a_none() {
+        let mut canvas = entidad_con_canvas(1, "HUD", "ScreenSpaceCamera");
+        canvas.canvas.as_mut().unwrap().camera = Some(2);
+        let mut entities = vec![canvas, EntityData::new(2, "Luz".into(), Vec::new())];
+        let mut siguiente_id = 3;
+
+        let informe = migrar_entidades(&mut entities, &mut siguiente_id);
+
+        assert!(informe.aplicada);
+        assert_eq!(entities[0].canvas.as_ref().unwrap().camera, None);
+    }
+
+    #[test]
+    fn plane_distance_invalida_a_none() {
+        for distancia in [0.0, -3.0, f32::NAN, f32::INFINITY] {
+            let mut canvas = entidad_con_canvas(1, "HUD", "ScreenSpaceCamera");
+            canvas.canvas.as_mut().unwrap().plane_distance = Some(distancia);
+            let mut entities = vec![canvas];
+            let mut siguiente_id = 2;
+
+            let informe = migrar_entidades(&mut entities, &mut siguiente_id);
+
+            assert!(informe.aplicada, "distancia {distancia} debe corregirse");
+            assert_eq!(
+                entities[0].canvas.as_ref().unwrap().plane_distance,
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn plane_distance_valida_intacta() {
+        let mut canvas = entidad_con_canvas(1, "HUD", "ScreenSpaceCamera");
+        canvas.canvas.as_mut().unwrap().plane_distance = Some(2.5);
+        let mut entities = vec![canvas];
+        let mut siguiente_id = 2;
+
+        let informe = migrar_entidades(&mut entities, &mut siguiente_id);
+
+        assert!(!informe.aplicada);
+        assert_eq!(
+            entities[0].canvas.as_ref().unwrap().plane_distance,
+            Some(2.5)
+        );
     }
 
     #[test]

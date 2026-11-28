@@ -1548,7 +1548,7 @@ rect_mask2d: None,
                 render_mode: "ScreenSpaceOverlay".into(),
                 reference_resolution: [w, h],
                 match_width_or_height: 0.5,
-            }),
+             ..Default::default() }),
             imagen: None,
             texto: None,
             boton: None,
@@ -1722,7 +1722,7 @@ rect_mask2d: None,
                     graphic: TipoGraphic::Ninguno, es_canvas: true, es_canvas_raiz: true,
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [400.0, 80.0], anchor_min: [0.0, 0.0], anchor_max: [0.0, 0.0], pivot: [0.0, 0.0] },
-                    canvas: Some(CanvasData { render_mode: "ScreenSpaceOverlay".into(), reference_resolution: [400.0, 80.0], match_width_or_height: 0.0 }),
+                    canvas: Some(CanvasData { render_mode: "ScreenSpaceOverlay".into(), reference_resolution: [400.0, 80.0], match_width_or_height: 0.0, ..Default::default() }),
                     imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
             content_size_fitter: None,
 grid_layout_group: None,
@@ -1790,7 +1790,7 @@ rect_mask2d: None,
                     graphic: TipoGraphic::Ninguno, es_canvas: true, es_canvas_raiz: true,
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [320.0, 80.0], anchor_min: [0.0, 0.0], anchor_max: [0.0, 0.0], pivot: [0.0, 0.0] },
-                    canvas: Some(CanvasData { render_mode: "ScreenSpaceOverlay".into(), reference_resolution: [320.0, 80.0], match_width_or_height: 0.0 }),
+                    canvas: Some(CanvasData { render_mode: "ScreenSpaceOverlay".into(), reference_resolution: [320.0, 80.0], match_width_or_height: 0.0, ..Default::default() }),
                     imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
             content_size_fitter: None,
 grid_layout_group: None,
@@ -1857,7 +1857,7 @@ rect_mask2d: None,
                         graphic: TipoGraphic::Ninguno, es_canvas: true, es_canvas_raiz: true,
                         activo: true,
                         rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [1000.0, 1000.0], anchor_min: [0.0, 0.0], anchor_max: [0.0, 0.0], pivot: [0.0, 0.0] },
-                        canvas: Some(CanvasData { render_mode: "ScreenSpaceOverlay".into(), reference_resolution: [1000.0, 1000.0], match_width_or_height: 0.0 }),
+                        canvas: Some(CanvasData { render_mode: "ScreenSpaceOverlay".into(), reference_resolution: [1000.0, 1000.0], match_width_or_height: 0.0, ..Default::default() }),
                         imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
             content_size_fitter: None,
 grid_layout_group: None,
@@ -2476,7 +2476,7 @@ rect_mask2d: None,
             render_mode: "ScreenSpaceOverlay".into(),
             reference_resolution: [400.0, 300.0],
             match_width_or_height: 0.5,
-        });
+         ..Default::default() });
         n0
     }
 
@@ -2569,7 +2569,7 @@ rect_mask2d: None,
             render_mode: "ScreenSpaceOverlay".into(),
             reference_resolution: [600.0, 400.0],
             match_width_or_height: 0.5,
-        });
+         ..Default::default() });
 
         let mut n1 = nodo_base(1, Some(0), true);
         n1.rect_transform = rect_transform_fijo(0.0, 0.0, 600.0, 400.0);
@@ -2663,7 +2663,7 @@ rect_mask2d: None,
             render_mode: "ScreenSpaceOverlay".into(),
             reference_resolution: [400.0, 200.0],
             match_width_or_height: 0.5,
-        });
+         ..Default::default() });
         let doc = doc_de_nodos(vec![n0, n1, n2, n3, n4]);
         let medidor = MedidorTexto::new();
         let colocado =
@@ -2809,7 +2809,7 @@ rect_mask2d: None,
             render_mode: "ScreenSpaceOverlay".into(),
             reference_resolution: [400.0, 300.0],
             match_width_or_height: 0.5,
-        });
+         ..Default::default() });
         n0
     }
 
@@ -3080,7 +3080,7 @@ mod tests_v5b3 {
             render_mode: "ScreenSpaceOverlay".into(),
             reference_resolution: [400.0, 300.0],
             match_width_or_height: 0.5,
-        });
+         ..Default::default() });
         n0
     }
 

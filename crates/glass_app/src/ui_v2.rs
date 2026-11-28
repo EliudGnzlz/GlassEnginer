@@ -1,5 +1,5 @@
-use glass_core::scene::SceneState;
-use glass_core::{CameraData, EntityData};
+use glass_core::scene::{SceneState, MODO_OVERLAY};
+use glass_core::{CameraData, CanvasData, EntityData};
 use glass_renderer::sdf_atlas::SdfAtlas;
 use glass_renderer::ui::{UiAtlasKind, UiBatch, UiSegment, MODO_BORDE, MODO_COLOR, MODO_IMAGEN, MODO_SOMBRA};
 use glass_ui::pintor::{MedidaImagen, ModoPintado, Segmento};
@@ -297,27 +297,71 @@ fn segmento_mut(segs: &mut Vec<UiSegment>, kind: UiAtlasKind) -> &mut UiBatch {
     &mut segs.last_mut().expect("segmento recién creado").batch
 }
 
-/// Resuelve la cámara principal de una escena (P1, V7; ADR D1): la primera
-/// entidad ACTIVA con cámara `is_main`; si no hay ninguna, la primera
-/// ACTIVA con cámara; si no hay cámaras activas, None. El llamador resuelve;
-/// el pase solo recibe. P2/P3 usan el resultado para Camera/World; P1 lo
-/// recibe sin usarlo (Overlay no necesita cámara).
-/// NOTA (pez P1, M3): la GameView elige su cámara por
-/// `selected_camera_id` o `Scene::active_camera()` (primera activa, sin
-/// preferir `is_main`); P2 debe alinear esta política con la de la vista
-/// antes de consumir la cámara.
-pub fn resolver_camara_principal(entities: &[EntityData]) -> Option<CameraData> {
-    entities
-        .iter()
-        .filter(|e| e.active)
-        .find(|e| e.camera.as_ref().is_some_and(|c| c.is_main))
+/// Cámara resuelta para un canvas (P2, V7): la entidad cámara con sus
+/// datos y su transform, clonados (el llamador no retiene el lock).
+/// P2b usa `id`/`posicion`/`rotacion` para el modelo del quad; P2a solo
+/// usa `datos` (el pase Overlay no necesita la cámara).
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct CamaraResuelta {
+    pub id: u64,
+    pub datos: CameraData,
+    pub posicion: [f32; 3],
+    pub rotacion: [f32; 3], // Euler, como TransformData::rotation()
+}
+
+/// Resuelve la cámara de un canvas en modo Camera (P2, V7; ADR D1 con
+/// la corrección de los peces P2): la cámara del canvas DEBE ser la
+/// cámara de la vista, porque el quad se construye con `vp_game`.
+///
+/// - Cámara de la vista = `selected_id` (editor: la cámara elegida en
+///   la GameView) si apunta a una entidad ACTIVA con cámara; si no, la
+///   primera entidad ACTIVA con cámara (`Scene::active_camera()`).
+/// - Campo `camera` del canvas = Some(id): solo vale si id ES la
+///   cámara de la vista (y está activa); si apunta a otra cámara,
+///   None (fallback a Overlay + aviso: no se mezcla su transform con
+///   un `vp_game` de otra cámara).
+/// - Campo None: la cámara de la vista (o None si no hay ninguna).
+///
+/// Sin cámara válida devuelve None: el llamador pinta el canvas como
+/// Overlay (fallback D1). El pase solo recibe; el llamador resuelve.
+pub fn resolver_camara_canvas(
+    entities: &[EntityData],
+    camera_campo: Option<u64>,
+    selected_id: Option<u64>,
+) -> Option<CamaraResuelta> {
+    let vista = selected_id
+        .and_then(|cid| {
+            entities
+                .iter()
+                .find(|e| e.id == cid && e.active && e.camera.is_some())
+        })
         .or_else(|| {
             entities
                 .iter()
                 .filter(|e| e.active)
                 .find(|e| e.camera.is_some())
-        })
-        .and_then(|e| e.camera.clone())
+        })?;
+    if let Some(id_fijado) = camera_campo {
+        if id_fijado != vista.id {
+            return None;
+        }
+    }
+    Some(CamaraResuelta {
+        id: vista.id,
+        datos: vista.camera.clone()?,
+        posicion: vista.transform.position,
+        rotacion: vista.transform.rotation(),
+    })
+}
+
+/// Primer Canvas en una entidad ACTIVA (P2, V7): el que gobierna la UI
+/// hasta P4 (multi-canvas redefine la elección).
+pub fn canvas_principal(entities: &[EntityData]) -> Option<&CanvasData> {
+    entities
+        .iter()
+        .filter(|e| e.active)
+        .find_map(|e| e.canvas.as_ref())
 }
 
 /// Modo de render del Canvas que gobierna la UI (P1, V7): el `render_mode`
@@ -326,12 +370,9 @@ pub fn resolver_camara_principal(entities: &[EntityData]) -> Option<CameraData> 
 /// lo consumen para Camera/World (y P4, con varios Canvas, redefine la
 /// elección).
 pub fn modo_canvas_principal(entities: &[EntityData]) -> String {
-    entities
-        .iter()
-        .filter(|e| e.active)
-        .find_map(|e| e.canvas.as_ref())
+    canvas_principal(entities)
         .map(|c| c.render_mode.clone())
-        .unwrap_or_else(|| "ScreenSpaceOverlay".to_string())
+        .unwrap_or_else(|| MODO_OVERLAY.to_string())
 }
 
 /// Construye los segmentos de dibujo V2 en orden de pintor, agrupados
@@ -378,7 +419,7 @@ pub fn build_canvas_batch_v2(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glass_core::scene::CanvasData;
+    use glass_core::scene::{CanvasData, MODO_CAMERA, MODO_WORLD};
     use glass_ui::api::RectColocado;
     use glass_ui::pintor::{ModoPintado, Segmento};
     use glass_renderer::sdf_atlas::SdfAtlas;
@@ -390,7 +431,7 @@ mod tests {
             .expect("No se pudo construir SdfAtlas con DejaVuSans.ttf")
     }
 
-    // --- resolver_camara_principal (P1, V7) ---
+    // --- resolver_camara_canvas (P2, V7) ---
 
     fn camara_entidad(id: u64, fov: f32, is_main: bool) -> EntityData {
         let mut e = EntityData::new(id, format!("camara{id}"), Vec::new());
@@ -399,51 +440,82 @@ mod tests {
     }
 
     #[test]
-    fn resolver_camara_principal_prefiere_main() {
+    fn resolver_camara_canvas_sin_campo_toma_la_vista() {
         let entidades = vec![
             camara_entidad(1, 50.0, false),
             camara_entidad(2, 60.0, true),
-            camara_entidad(3, 70.0, true),
         ];
-        let resuelta = resolver_camara_principal(&entidades).expect("debe haber cámara");
-        assert_eq!(resuelta.fov, 60.0);
-        assert!(resuelta.is_main);
+        // Sin campo y sin selección: la primera activa (la vista).
+        let r = resolver_camara_canvas(&entidades, None, None).expect("debe haber cámara");
+        assert_eq!(r.id, 1);
+        assert_eq!(r.datos.fov, 50.0);
+        // Sin campo y con selección: la seleccionada.
+        let r = resolver_camara_canvas(&entidades, None, Some(2)).expect("debe haber cámara");
+        assert_eq!(r.id, 2);
+        assert_eq!(r.datos.fov, 60.0);
     }
 
     #[test]
-    fn resolver_camara_principal_sin_main_toma_la_primera() {
+    fn resolver_camara_canvas_campo_igual_a_la_vista() {
         let entidades = vec![
             camara_entidad(1, 50.0, false),
             camara_entidad(2, 60.0, false),
         ];
-        let resuelta = resolver_camara_principal(&entidades).expect("debe haber cámara");
-        assert_eq!(resuelta.fov, 50.0);
-        assert!(!resuelta.is_main);
+        let r = resolver_camara_canvas(&entidades, Some(2), Some(2)).expect("debe haber cámara");
+        assert_eq!(r.id, 2);
+        assert_eq!(r.datos.fov, 60.0);
     }
 
     #[test]
-    fn resolver_camara_principal_sin_camaras_es_none() {
-        let entidades = vec![EntityData::new(1, "vacia".to_string(), Vec::new())];
-        assert!(resolver_camara_principal(&entidades).is_none());
-        assert!(resolver_camara_principal(&[]).is_none());
-    }
-
-    #[test]
-    fn resolver_camara_principal_salta_camara_inactiva() {
-        let mut principal_inactiva = camara_entidad(1, 50.0, true);
-        principal_inactiva.active = false;
+    fn resolver_camara_canvas_campo_distinto_de_la_vista_es_none() {
+        // El campo apunta a otra cámara distinta de la de la vista:
+        // fallback a Overlay (None), no se mezcla su transform con
+        // el vp_game de otra cámara (peces P2, DeepSeek B1).
         let entidades = vec![
-            principal_inactiva,
+            camara_entidad(1, 50.0, false),
             camara_entidad(2, 60.0, false),
         ];
-        let resuelta = resolver_camara_principal(&entidades).expect("debe haber cámara");
-        assert_eq!(resuelta.fov, 60.0);
+        assert!(resolver_camara_canvas(&entidades, Some(1), Some(2)).is_none());
+        assert!(resolver_camara_canvas(&entidades, Some(2), None).is_none());
+    }
+
+    #[test]
+    fn resolver_camara_canvas_sin_camaras_es_none() {
+        let entidades = vec![EntityData::new(1, "vacia".to_string(), Vec::new())];
+        assert!(resolver_camara_canvas(&entidades, None, None).is_none());
+        assert!(resolver_camara_canvas(&[], None, None).is_none());
+    }
+
+    #[test]
+    fn resolver_camara_canvas_salta_camara_inactiva() {
+        let mut inactiva = camara_entidad(1, 50.0, true);
+        inactiva.active = false;
+        let entidades = vec![
+            inactiva,
+            camara_entidad(2, 60.0, false),
+        ];
+        // La seleccionada inactiva no vale: cae a la primera activa.
+        let r = resolver_camara_canvas(&entidades, None, Some(1)).expect("debe haber cámara");
+        assert_eq!(r.id, 2);
+        assert_eq!(r.datos.fov, 60.0);
+        // Solo inactiva: None.
         let solo_inactiva = vec![{
             let mut e = camara_entidad(1, 50.0, true);
             e.active = false;
             e
         }];
-        assert!(resolver_camara_principal(&solo_inactiva).is_none());
+        assert!(resolver_camara_canvas(&solo_inactiva, None, None).is_none());
+    }
+
+    #[test]
+    fn resolver_camara_canvas_devuelve_transform() {
+        let mut cam = camara_entidad(1, 60.0, false);
+        cam.transform.position = [1.0, 2.0, 3.0];
+        cam.transform.set_rotation_euler([10.0, 20.0, 30.0]);
+        let entidades = vec![cam];
+        let r = resolver_camara_canvas(&entidades, None, None).expect("debe haber cámara");
+        assert_eq!(r.posicion, [1.0, 2.0, 3.0]);
+        assert_eq!(r.rotacion, [10.0, 20.0, 30.0]);
     }
 
     // --- modo_canvas_principal (P1, V7; peces P1: solo Canvas activo) ---
@@ -457,25 +529,25 @@ mod tests {
     #[test]
     fn modo_canvas_principal_toma_el_primer_canvas_activo() {
         let entidades = vec![
-            canvas_entidad(1, "WorldSpace"),
-            canvas_entidad(2, "ScreenSpaceCamera"),
+            canvas_entidad(1, MODO_WORLD),
+            canvas_entidad(2, MODO_CAMERA),
         ];
-        assert_eq!(modo_canvas_principal(&entidades), "WorldSpace");
+        assert_eq!(modo_canvas_principal(&entidades), MODO_WORLD);
     }
 
     #[test]
     fn modo_canvas_principal_salta_canvas_inactivo() {
-        let mut inactivo = canvas_entidad(1, "WorldSpace");
+        let mut inactivo = canvas_entidad(1, MODO_WORLD);
         inactivo.active = false;
-        let entidades = vec![inactivo, canvas_entidad(2, "ScreenSpaceCamera")];
-        assert_eq!(modo_canvas_principal(&entidades), "ScreenSpaceCamera");
+        let entidades = vec![inactivo, canvas_entidad(2, MODO_CAMERA)];
+        assert_eq!(modo_canvas_principal(&entidades), MODO_CAMERA);
         let solo_inactivo = vec![{
-            let mut e = canvas_entidad(1, "WorldSpace");
+            let mut e = canvas_entidad(1, MODO_WORLD);
             e.active = false;
             e
         }];
-        assert_eq!(modo_canvas_principal(&solo_inactivo), "ScreenSpaceOverlay");
-        assert_eq!(modo_canvas_principal(&[]), "ScreenSpaceOverlay");
+        assert_eq!(modo_canvas_principal(&solo_inactivo), MODO_OVERLAY);
+        assert_eq!(modo_canvas_principal(&[]), MODO_OVERLAY);
     }
 
     /// Función de búsqueda de UV de prueba.
@@ -667,6 +739,7 @@ mod tests {
             render_mode: "ScreenSpaceOverlay".to_string(),
             reference_resolution: [800.0, 600.0],
             match_width_or_height: 0.5,
+            ..Default::default()
         });
         canvas.rect_transform = Some(RectTransformData {
             anchored_position: [0.0, 0.0],

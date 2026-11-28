@@ -2578,8 +2578,8 @@ fn render_ui_pase(
     modo: &str,
     a_juego: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if modo != "ScreenSpaceOverlay" {
-        log::debug!("Canvas en modo {modo}: aún sin efecto (P1), se pinta como Overlay");
+    if modo != glass_core::scene::MODO_OVERLAY {
+        log::debug!("Canvas en modo {modo}: aún sin efecto (P2a), se pinta como Overlay");
     }
     // P1: Overlay no usa la cámara; P2/P3 la usan (ADR D1). Se recibe
     // ya resuelta por el llamador para que la firma no cambie.
@@ -8459,14 +8459,28 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
         // Canvas sobre la vista de juego, como antes; en el editor pinta la UI
         // runtime en la GameView (mínimo de D-V4-4). Todos los modos siguen
         // siendo Overlay: `modo_canvas` es el `render_mode` del primer Canvas
-        // (solo alimenta el aviso de fallback) y `camara_ui` la cámara resuelta
-        // por el llamador (ADR D1; P1 aún no la usa).
+        // y `camara_ui` la cámara resuelta por el llamador (P2: la cámara de
+        // la vista, o el campo `camera` del canvas si es esa misma; P1 aún
+        // no la usa).
+        #[cfg(feature = "editor")]
+        let selected_id = self.editor_layout.viewport.selected_camera_id;
+        #[cfg(not(feature = "editor"))]
+        let selected_id = None;
         let (modo_canvas, camara_ui) = match self.scene_state.lock() {
-            Ok(scene) => (
-                crate::ui_v2::modo_canvas_principal(&scene.entities),
-                crate::ui_v2::resolver_camara_principal(&scene.entities),
-            ),
-            Err(_) => ("ScreenSpaceOverlay".to_string(), None),
+            Ok(scene) => {
+                let principal = crate::ui_v2::canvas_principal(&scene.entities);
+                (
+                    crate::ui_v2::modo_canvas_principal(&scene.entities),
+                    principal.and_then(|c| {
+                        crate::ui_v2::resolver_camara_canvas(
+                            &scene.entities,
+                            c.camera,
+                            selected_id,
+                        )
+                    }),
+                )
+            }
+            Err(_) => (glass_core::scene::MODO_OVERLAY.to_string(), None),
         };
         if render_standalone {
             let viewport = (
@@ -8483,7 +8497,7 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 },
                 renderer,
                 vk_ctx,
-                camara_ui.as_ref(),
+                camara_ui.as_ref().map(|r| &r.datos),
                 viewport,
                 &modo_canvas,
                 true,
@@ -8508,7 +8522,7 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
                 },
                 renderer,
                 vk_ctx,
-                camara_ui.as_ref(),
+                camara_ui.as_ref().map(|r| &r.datos),
                 viewport,
                 &modo_canvas,
                 true,

@@ -256,6 +256,7 @@ mod tests {
             render_mode: "ScreenSpaceOverlay".to_string(),
             reference_resolution: [1920.0, 1080.0],
             match_width_or_height: 0.5,
+            ..Default::default()
         }
     }
 

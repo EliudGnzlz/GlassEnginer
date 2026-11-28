@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use egui::{DragValue, Ui};
-use glass_core::scene::SceneState;
+use glass_core::scene::{SceneState, MODO_CAMERA, MODO_OVERLAY, MODO_WORLD};
 
 use super::hierarchy::{EntityPreset, HierarchyPanel};
 
@@ -109,24 +109,25 @@ impl CanvasPanel {
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(
                                         &mut canvas.render_mode,
-                                        "ScreenSpaceOverlay".into(),
+                                        MODO_OVERLAY.into(),
                                         "Screen Space - Overlay",
                                     );
                                     ui.selectable_value(
                                         &mut canvas.render_mode,
-                                        "ScreenSpaceCamera".into(),
+                                        MODO_CAMERA.into(),
                                         "Screen Space - Camera",
                                     );
                                     ui.selectable_value(
                                         &mut canvas.render_mode,
-                                        "WorldSpace".into(),
+                                        MODO_WORLD.into(),
                                         "World Space",
                                     );
                                 });
                         });
-                        // P1 (V7, Q11): el modo aún no tiene efecto; se pinta
-                        // como Overlay hasta P2/P3. Aviso visible, sin bloquear.
-                        if canvas.render_mode != "ScreenSpaceOverlay" {
+                        // P2 (V7, Q11): solo WorldSpace sigue sin efecto
+                        // (llega en P3). Camera ya pinta como quad en la
+                        // vista de juego.
+                        if canvas.render_mode == MODO_WORLD {
                             ui.label(super::AVISO_MODO_UI_SIN_EFECTO);
                         }
                         ui.horizontal(|ui| {
@@ -335,6 +336,7 @@ mod tests {
             render_mode: "ScreenSpaceOverlay".into(),
             reference_resolution: [1920.0, 1080.0],
             match_width_or_height: 0.5,
+            ..Default::default()
         }
     }
 

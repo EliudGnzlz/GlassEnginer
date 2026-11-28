@@ -40,7 +40,7 @@ fn canvas_raiz(id: u64) -> EntityData {
         render_mode: "ScreenSpaceOverlay".into(),
         reference_resolution: [1280.0, 720.0],
         match_width_or_height: 0.5,
-    });
+     ..Default::default() });
     e.rect_transform = Some(RectTransformData {
         anchored_position: [0.0, 0.0],
         size_delta: [0.0, 0.0],

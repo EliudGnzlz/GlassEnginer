@@ -1,5 +1,6 @@
 use egui::{Color32, DragValue, RichText, Slider, Ui};
 use glass_core::physics_material::{MaterialCombine, PhysicsMaterial};
+use glass_core::scene::{MODO_CAMERA, MODO_OVERLAY, MODO_WORLD};
 use glass_core::{
     AudioSourceData, CameraData, CanvasData, CharacterData, ColliderSpec, ContentSizeFitterData,
     EntityData, GridLayoutGroupData, LayoutElementData, LayoutGroupData, LightData,
@@ -1777,6 +1778,24 @@ impl InspectorPanel {
             })
         });
 
+        // Lista de cámaras de la escena (P2, V7): snapshot (id, nombre,
+        // fov) para el picker de cámara del Canvas. Se calcula ANTES de
+        // tomar la entidad seleccionada en mutable: dentro de las
+        // secciones la entidad está prestada y la escena no se puede
+        // recorrer.
+        let camaras_escena: Vec<(u64, String, f32)> = scene
+            .entities
+            .iter()
+            .filter(|e| e.camera.is_some())
+            .map(|e| {
+                (
+                    e.id,
+                    e.name.clone(),
+                    e.camera.as_ref().map(|c| c.fov).unwrap_or(60.0),
+                )
+            })
+            .collect();
+
         let entity = match selected_id.and_then(|id| scene.entities.iter_mut().find(|e| e.id == id)) {
             Some(e) => e,
             None => {
@@ -3068,15 +3087,74 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                             egui::ComboBox::from_id_salt(format!("canvas_render_mode_{}", entity.id))
                                 .selected_text(&canvas.render_mode)
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut canvas.render_mode, "ScreenSpaceOverlay".into(), "Screen Space - Overlay");
-                                    ui.selectable_value(&mut canvas.render_mode, "ScreenSpaceCamera".into(), "Screen Space - Camera");
-                                    ui.selectable_value(&mut canvas.render_mode, "WorldSpace".into(), "World Space");
+                                    ui.selectable_value(&mut canvas.render_mode, MODO_OVERLAY.into(), "Screen Space - Overlay");
+                                    ui.selectable_value(&mut canvas.render_mode, MODO_CAMERA.into(), "Screen Space - Camera");
+                                    ui.selectable_value(&mut canvas.render_mode, MODO_WORLD.into(), "World Space");
                                 });
                         });
-                        // P1 (V7, Q11): el modo aún no tiene efecto; se pinta
-                        // como Overlay hasta P2/P3. Aviso visible, sin bloquear.
-                        if canvas.render_mode != "ScreenSpaceOverlay" {
+                        // P2 (V7, Q11): solo WorldSpace sigue sin efecto
+                        // (llega en P3). Camera ya pinta como quad en la
+                        // vista de juego. Aviso visible, sin bloquear.
+                        if canvas.render_mode == MODO_WORLD {
                             ui.label(super::AVISO_MODO_UI_SIN_EFECTO);
+                        }
+                        // P2: campos de Camera (solo en ese modo).
+                        if canvas.render_mode == MODO_CAMERA {
+                            ui.horizontal(|ui| {
+                                ui.label("Cámara:");
+                                let texto_actual = canvas
+                                    .camera
+                                    .and_then(|id| {
+                                        camaras_escena
+                                            .iter()
+                                            .find(|(cid, _, _)| *cid == id)
+                                            .map(|(_, nombre, _)| nombre.clone())
+                                    })
+                                    .unwrap_or_else(|| "(Cámara de la vista)".to_string());
+                                egui::ComboBox::from_id_salt(format!("canvas_camera_{}", entity.id))
+                                    .selected_text(texto_actual)
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut canvas.camera,
+                                            None,
+                                            "(Cámara de la vista)",
+                                        );
+                                        for (id, nombre, _) in &camaras_escena {
+                                            ui.selectable_value(
+                                                &mut canvas.camera,
+                                                Some(*id),
+                                                nombre,
+                                            );
+                                        }
+                                    });
+                            });
+                            ui.horizontal(|ui| {
+                                // La distancia derivada con la altura de
+                                // referencia y el fov de la cámara elegida:
+                                // al activar la fija, el canvas conserva
+                                // su tamaño en pantalla.
+                                let fov_elegido = canvas
+                                    .camera
+                                    .and_then(|id| {
+                                        camaras_escena
+                                            .iter()
+                                            .find(|(cid, _, _)| *cid == id)
+                                            .map(|(_, _, fov)| *fov)
+                                    })
+                                    .unwrap_or(60.0);
+                                let derivada = (canvas.reference_resolution[1] / 2.0)
+                                    / (fov_elegido.to_radians() / 2.0).tan();
+                                let mut distancia_fija = canvas.plane_distance.is_some();
+                                if ui.checkbox(&mut distancia_fija, "Distancia fija").changed() {
+                                    canvas.plane_distance =
+                                        if distancia_fija { Some(derivada) } else { None };
+                                }
+                                if let Some(d) = canvas.plane_distance.as_mut() {
+                                    ui.add(DragValue::new(d).prefix("d: ").speed(0.1));
+                                } else {
+                                    ui.label(format!("derivada ({derivada:.1})"));
+                                }
+                            });
                         }
                         ui.horizontal(|ui| {
                             ui.label("Resolución Ref:");
