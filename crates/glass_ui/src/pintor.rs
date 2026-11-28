@@ -752,7 +752,7 @@ mod tests {
     use crate::api::{DocumentoColocado, MapaTexto, NodoColocado, RectColocado};
     use crate::documento::{Documento, NodoDocumento, TipoGraphic};
     use crate::estilos::{StyleProps, Sombra};
-    use glass_core::scene::{RectMask2DData, UIImageData};
+    use glass_core::scene::{CanvasData, RectMask2DData, UIImageData};
 
     /// Helper: crea un NodoDocumento mínimo activo sin graphic.
     fn nodo_base(entidad: u64, padre: Option<usize>, hijos: Vec<usize>) -> NodoDocumento {
@@ -1184,6 +1184,66 @@ rect_mask2d: None,
     }
 
     #[test]
+    fn pintor_mascara_padding_escala_con_canvas() {
+        // V5d (pez DeepSeek m4): el padding de RectMask2D se autoriza en px
+        // de canvas y se escala por el factor del canvas. Con referencia
+        // 1920x1080 y viewport 1280x720 (s=2/3), padding [30,15,30,15]
+        // encoge [100,100,600,400] a [120,110,560,380]. La softness es px
+        // de pantalla y NO se escala (sigue 2.5).
+        let mut raiz = nodo_base(100, None, vec![1]);
+        raiz.es_canvas_raiz = true;
+        raiz.canvas = Some(CanvasData::default()); // 1920x1080, match 0.5
+        let mut mascara = nodo_base(101, Some(0), vec![2]);
+        mascara.rect_mask2d = Some(RectMask2DData {
+            padding: [30.0, 15.0, 30.0, 15.0],
+            softness: 2.5,
+        });
+        let doc = Documento {
+            canvas_raiz: 0,
+            nodos: vec![
+                raiz,
+                mascara,
+                nodo_base(102, Some(1), vec![]),
+            ],
+            avisos: vec![],
+        };
+        let colocado = DocumentoColocado {
+            nodos: vec![
+                NodoColocado {
+                    nodo: 0, entidad: 100,
+                    rect: RectColocado { x: 0.0, y: 0.0, ancho: 1280.0, alto: 720.0 },
+                    estilos: StyleProps { ..Default::default() },
+                    mapa_texto: MapaTexto::default(),
+                },
+                NodoColocado {
+                    nodo: 1, entidad: 101,
+                    rect: RectColocado { x: 100.0, y: 100.0, ancho: 600.0, alto: 400.0 },
+                    estilos: StyleProps {
+                        background_color: Some([1.0, 1.0, 1.0, 1.0]),
+                        ..Default::default()
+                    },
+                    mapa_texto: MapaTexto::default(),
+                },
+                NodoColocado {
+                    nodo: 2, entidad: 102,
+                    rect: RectColocado { x: 200.0, y: 160.0, ancho: 600.0, alto: 100.0 },
+                    estilos: StyleProps {
+                        background_color: Some([1.0, 0.0, 0.0, 1.0]),
+                        ..Default::default()
+                    },
+                    mapa_texto: MapaTexto::default(),
+                },
+            ],
+        };
+        let segs = pintar_documento(&doc, &colocado, &MedidaImagenNula);
+        let seg_hijo = segs.iter().find(|s| s.entidad == 102).unwrap();
+        assert!(seg_hijo.clip.is_some());
+        let (cr, soft) = seg_hijo.clip.unwrap();
+        assert_eq!(cr, [120.0, 110.0, 560.0, 380.0]);
+        assert_eq!(soft, 2.5);
+    }
+
+    #[test]
     fn pintor_mascara_y_css_se_intersectan() {
         // V5c (A6): ancestro CSS overflow:hidden [50,50,700,500] + máscara
         // [100,100,600,400] padding 0 softness 3.0. El clip del hijo es
@@ -1310,6 +1370,70 @@ rect_mask2d: None,
         let segs = pintar_documento(&doc, &colocado, &MedidaImagenNula);
         let seg_hijo = segs.iter().find(|s| s.entidad == 103).unwrap();
         assert!(seg_hijo.clip.is_none());
+    }
+
+    #[test]
+    fn pintor_interseccion_vacia_descarta_el_nodo() {
+        // V5d (pez DeepSeek M1): dos ancestros con overflow:hidden cuyos
+        // rects NO se intersectan ([50,50,200,200] y [400,400,200,200]).
+        // El clip del hijo es de tamaño cero y el pintor lo descarta: no
+        // emite ningún segmento para él (antes del arreglo del spike, el
+        // hijo quedaba sin clip y se pintaba entero).
+        let doc = Documento {
+            canvas_raiz: 0,
+            nodos: vec![
+                nodo_base(100, None, vec![1]),       // raíz
+                nodo_base(101, Some(0), vec![2]),    // panel A
+                nodo_base(102, Some(1), vec![3]),    // panel B
+                nodo_base(103, Some(2), vec![]),     // hijo
+            ],
+            avisos: vec![],
+        };
+        let colocado = DocumentoColocado {
+            nodos: vec![
+                NodoColocado {
+                    nodo: 0, entidad: 100,
+                    rect: RectColocado { x: 0.0, y: 0.0, ancho: 1280.0, alto: 720.0 },
+                    estilos: StyleProps { ..Default::default() },
+                    mapa_texto: MapaTexto::default(),
+                },
+                NodoColocado {
+                    nodo: 1, entidad: 101,
+                    rect: RectColocado { x: 50.0, y: 50.0, ancho: 200.0, alto: 200.0 },
+                    estilos: StyleProps {
+                        overflow: Some("hidden".to_string()),
+                        background_color: Some([1.0, 1.0, 1.0, 1.0]),
+                        ..Default::default()
+                    },
+                    mapa_texto: MapaTexto::default(),
+                },
+                NodoColocado {
+                    nodo: 2, entidad: 102,
+                    rect: RectColocado { x: 400.0, y: 400.0, ancho: 200.0, alto: 200.0 },
+                    estilos: StyleProps {
+                        overflow: Some("hidden".to_string()),
+                        background_color: Some([1.0, 1.0, 1.0, 1.0]),
+                        ..Default::default()
+                    },
+                    mapa_texto: MapaTexto::default(),
+                },
+                NodoColocado {
+                    nodo: 3, entidad: 103,
+                    rect: RectColocado { x: 450.0, y: 450.0, ancho: 100.0, alto: 100.0 },
+                    estilos: StyleProps {
+                        background_color: Some([1.0, 0.0, 0.0, 1.0]),
+                        ..Default::default()
+                    },
+                    mapa_texto: MapaTexto::default(),
+                },
+            ],
+        };
+        assert_eq!(
+            clip_para_nodo(&doc, &colocado, 3),
+            Some(([0.0; 4], [0.0; 4], 1.0))
+        );
+        let segs = pintar_documento(&doc, &colocado, &MedidaImagenNula);
+        assert!(segs.iter().find(|s| s.entidad == 103).is_none());
     }
 
     #[test]
