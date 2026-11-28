@@ -660,7 +660,7 @@ pub fn cascade_splits(distancia: f32, n: usize, lambda: f32, inicio: f32) -> Vec
             // Exacto: el último tramo debe cerrar en la distancia pedida.
             s = d;
         }
-        if !(s > prev) {
+        if s <= prev {
             s = prev + eps;
         }
         out.push(s);
@@ -700,7 +700,7 @@ pub fn frustum_slice_sphere(
     // se elige otro eje no paralelo para que la base siga existiendo.
     let mut right = cross(dir, up_hint);
     let l2 = right[0] * right[0] + right[1] * right[1] + right[2] * right[2];
-    if !(l2 > 1e-8) {
+    if l2 <= 1e-8 {
         let alt = if dir[1].abs() < 0.99 {
             [0.0, 1.0, 0.0]
         } else {
@@ -757,6 +757,9 @@ pub fn frustum_slice_sphere(
 /// de ella sale su VP.
 /// El margen de profundidad `radio + 40` deja dentro a los ocluyentes que
 /// están fuera de la rebanada pero proyectan sombra hacia ella.
+/// (Los 9 argumentos son el conjunto cámara + luz + distancia; se acepta
+/// el lint too_many_arguments como en glass_app.)
+#[allow(clippy::too_many_arguments)]
 pub fn cascade_vps(
     cam_pos: [f32; 3],
     cam_dir: [f32; 3],
@@ -1721,7 +1724,9 @@ mod tests {
     #[test]
     fn cascade_vps_entradas_degeneradas_sin_nan() {
         let fov = 60f32.to_radians();
-        let casos: [([f32; 3], [f32; 3], f32, f32, f32, [f32; 3]); 5] = [
+        // (dir cámara, up, fov, aspect, distancia, dirección a la luz)
+        type CasoDegenerado = ([f32; 3], [f32; 3], f32, f32, f32, [f32; 3]);
+        let casos: [CasoDegenerado; 5] = [
             ([0.0, 0.0, -1.0], [0.0, 1.0, 0.0], fov, 16.0 / 9.0, 80.0, [0.0, 1.0, 0.0]),
             ([0.0, 1.0, 0.0], [0.0, 1.0, 0.0], fov, 16.0 / 9.0, 80.0, [0.0, 1.0, 0.0]),
             ([0.0, 0.0, -1.0], [0.0, 1.0, 0.0], fov, 16.0 / 9.0, 0.01, [0.3, 0.8, 0.2]),
