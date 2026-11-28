@@ -4780,7 +4780,6 @@ for stem in &referenciados {
         if let Some(fuente_prefab) = self.editor_layout.pending_abrir_prefab.take() {
             self.abrir_prefab_en_editor(&fuente_prefab);
         }
-        self.recarga_bajo_demanda.clear();
         let result = {
             let Ok(mut manager) = self.scene_manager.lock() else {
                 log::error!("SceneManager: candado envenenado, no se aplica la carga pendiente.");
@@ -4789,6 +4788,13 @@ for stem in &referenciados {
             if !manager.has_pending() {
                 return;
             }
+            // Solo al aplicar una carga de verdad se reinicia el conjunto
+            // de stems ya intentados por la recarga bajo demanda. Limpiarlo
+            // en cada frame (como estaba) hacía que un stem sin archivo
+            // (p. ej. `xbot_demo` sin su .glb) se reintentara frame a frame
+            // y bloqueara la cola de recargas: el resto de modelos de la
+            // escena nunca llegaba a cargar.
+            self.recarga_bajo_demanda.clear();
             let requested = manager.pending_request().unwrap_or("?").to_string();
             let mut scene = match self.scene_state.lock() {
                 Ok(s) => s,
