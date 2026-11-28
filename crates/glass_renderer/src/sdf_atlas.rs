@@ -801,6 +801,12 @@ impl SdfAtlas {
     /// Ancho de una cadena en píxeles a un tamaño de fuente dado
     /// (suma de avances, sin kerning — igual que el atlas de bits).
     pub fn measure(&self, text: &str, font_size: f32) -> f32 {
+        self.measure_con_espaciado(text, font_size, 0.0)
+    }
+
+    /// Como `measure`, con letter-spacing en px de documento (Q3):
+    /// se suma al avance de cada glifo, igual que en el mapa de layout.
+    pub fn measure_con_espaciado(&self, text: &str, font_size: f32, espaciado: f32) -> f32 {
         let k = font_size / ATLAS_RASTER_PX;
         let mut widest = 0.0f32;
         let mut line = 0.0f32;
@@ -810,7 +816,7 @@ impl SdfAtlas {
                 line = 0.0;
                 continue;
             }
-            line += self.glifo(c).advance * k;
+            line += self.glifo(c).advance * k + espaciado;
         }
         widest.max(line)
     }

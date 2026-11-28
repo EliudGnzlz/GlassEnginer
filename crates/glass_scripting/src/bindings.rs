@@ -759,6 +759,144 @@ pub unsafe extern "C" fn ui_set_size_delta(entity_id: u64, w: f32, h: f32) -> i3
     }
 }
 
+#[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
+pub unsafe extern "C" fn ui_set_background_color(
+    entity_id: u64,
+    r: f32,
+    g: f32,
+    b: f32,
+    a: f32,
+) -> i32 {
+    if crate::bridge::ui_set_background_color(entity_id, r, g, b, a) {
+        BRIDGE_OK
+    } else {
+        BRIDGE_ERR_NOT_FOUND
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
+pub unsafe extern "C" fn ui_set_border_radius(
+    entity_id: u64,
+    tl: f32,
+    tr: f32,
+    br: f32,
+    bl: f32,
+) -> i32 {
+    if crate::bridge::ui_set_border_radius(entity_id, tl, tr, br, bl) {
+        BRIDGE_OK
+    } else {
+        BRIDGE_ERR_NOT_FOUND
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
+pub unsafe extern "C" fn ui_set_opacity(entity_id: u64, opacity: f32) -> i32 {
+    if crate::bridge::ui_set_opacity(entity_id, opacity) {
+        BRIDGE_OK
+    } else {
+        BRIDGE_ERR_NOT_FOUND
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// `overflow` debe ser null o apuntar a una cadena C válida
+/// (terminada en nulo, en UTF-8) y legible durante la llamada;
+/// la función comprueba el null.
+pub unsafe extern "C" fn ui_set_overflow(
+    entity_id: u64,
+    overflow: *const c_char,
+) -> i32 {
+    if overflow.is_null() {
+        return BRIDGE_ERR_NULL_PTR;
+    }
+    let overflow = match CStr::from_ptr(overflow).to_str() {
+        Ok(s) => s,
+        Err(_) => return BRIDGE_ERR_BRIDGE,
+    };
+    if crate::bridge::ui_set_overflow(entity_id, overflow) {
+        BRIDGE_OK
+    } else {
+        BRIDGE_ERR_NOT_FOUND
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
+pub unsafe extern "C" fn ui_set_letter_spacing(entity_id: u64, px: f32) -> i32 {
+    if crate::bridge::ui_set_letter_spacing(entity_id, px) {
+        BRIDGE_OK
+    } else {
+        BRIDGE_ERR_NOT_FOUND
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
+pub unsafe extern "C" fn ui_set_border(
+    entity_id: u64,
+    width: f32,
+    r: f32,
+    g: f32,
+    b: f32,
+    a: f32,
+) -> i32 {
+    if crate::bridge::ui_set_border(entity_id, width, r, g, b, a) {
+        BRIDGE_OK
+    } else {
+        BRIDGE_ERR_NOT_FOUND
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
+pub unsafe extern "C" fn ui_set_anchor_min(entity_id: u64, x: f32, y: f32) -> i32 {
+    if crate::bridge::ui_set_anchor_min(entity_id, x, y) {
+        BRIDGE_OK
+    } else {
+        BRIDGE_ERR_NOT_FOUND
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
+pub unsafe extern "C" fn ui_set_anchor_max(entity_id: u64, x: f32, y: f32) -> i32 {
+    if crate::bridge::ui_set_anchor_max(entity_id, x, y) {
+        BRIDGE_OK
+    } else {
+        BRIDGE_ERR_NOT_FOUND
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// No dereferencia punteros: recibe solo valores y opera sobre el
+/// estado del puente; la invoca el host C# con el puente inicializado.
+pub unsafe extern "C" fn ui_set_pivot(entity_id: u64, x: f32, y: f32) -> i32 {
+    if crate::bridge::ui_set_pivot(entity_id, x, y) {
+        BRIDGE_OK
+    } else {
+        BRIDGE_ERR_NOT_FOUND
+    }
+}
+
 /// Entidad del último arrastre del Canvas (drag & drop, UI v2).
 #[no_mangle]
 /// # Safety

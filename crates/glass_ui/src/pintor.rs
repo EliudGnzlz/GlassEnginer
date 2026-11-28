@@ -10,6 +10,7 @@ pub enum ModoPintado {
     Imagen,
     Texto,
     Sombra,
+    Borde,
 }
 
 /// Degradado de un segmento: (ángulo, t0, t1, c0, c1).
@@ -30,15 +31,15 @@ pub struct Segmento {
     pub radios: [f32; 4],
     /// (rect de clip [x,y,w,h], softness en px); None = sin recorte.
     pub clip: Option<([f32; 4], f32)>,
-    /// (texto, font_size, align, font) — solo para Texto.
-    pub texto: Option<(String, f32, String, String)>,
+    /// (texto, font_size, align, font, letter_spacing) — solo para Texto.
+    pub texto: Option<(String, f32, String, String, f32)>,
     /// Ruta del sprite — solo para Imagen.
     pub sprite: Option<String>,
     /// Pertenece a capa superior (override_sorting).
     pub capa_superior: bool,
     /// Posición final en la lista de pintado (0 = primero).
     pub orden: usize,
-    /// Desenfoque en px (>0 solo en Sombra).
+    /// Desenfoque en px (Sombra: blur; Borde: ancho del borde).
     pub desenfoque: f32,
 }
 
@@ -291,9 +292,30 @@ pub fn pintar_documento(
             }
         }
 
+        // --- Borde (Q3): banda hacia dentro del rect, sobre el fondo ---
+        if let Some((ancho, color_borde)) = estilos.border {
+            if ancho > 0.0 {
+                let bc = premultiplicar(color_borde, opacity);
+                segs_nodo.push(Segmento {
+                    entidad: nc.entidad,
+                    modo: ModoPintado::Borde,
+                    rect,
+                    color: bc,
+                    degradado: None,
+                    radios,
+                    clip: clip_val,
+                    texto: None,
+                    sprite: None,
+                    capa_superior: sup,
+                    orden: 0,
+                    desenfoque: ancho,
+                });
+            }
+        }
+
         // --- Imagen ---
         let mut tiene_imagen = false;
-        if nd.graphic == TipoGraphic::Imagen {
+        if nd.graphic == TipoGraphic::Imagen || nd.graphic == TipoGraphic::InputField {
             if let Some(ref img) = nd.imagen {
                 if !img.sprite.is_empty() {
                     tiene_imagen = true;
@@ -336,7 +358,7 @@ pub fn pintar_documento(
 
         // --- Texto ---
         let mut tiene_texto = false;
-        if nd.graphic == TipoGraphic::Texto {
+        if nd.graphic == TipoGraphic::Texto || nd.graphic == TipoGraphic::InputField {
             if let Some(ref txt) = nd.texto {
                 tiene_texto = true;
                 // V3c: el texto visible puede quedar vacío por
@@ -358,6 +380,7 @@ pub fn pintar_documento(
                             fs,
                             txt.align.clone(),
                             txt.font.clone(),
+                            estilos.letter_spacing.unwrap_or(0.0),
                         )),
                         sprite: None,
                         capa_superior: sup,
@@ -579,6 +602,73 @@ mod tests {
         assert_eq!(segs[1].rect.ancho, 50.0);
         assert_eq!(segs[1].rect.alto, 30.0);
         assert_eq!(segs[1].orden, 1);
+    }
+
+    #[test]
+    fn pintor_borde_emite_segmento_borde() {
+        // Nodo con fondo + borde: Color y luego Borde, con el ancho en desenfoque.
+        let doc = Documento {
+            canvas_raiz: 0,
+            nodos: vec![nodo_base(1, None, vec![])],
+            avisos: vec![],
+        };
+        let colocado = DocumentoColocado {
+            nodos: vec![NodoColocado {
+                nodo: 0,
+                entidad: 1,
+                rect: RectColocado { x: 10.0, y: 20.0, ancho: 100.0, alto: 40.0 },
+                estilos: StyleProps {
+                    background_color: Some([0.0, 0.0, 0.0, 1.0]),
+                    border: Some((3.0, [0.0, 1.0, 0.0, 1.0])),
+                    ..Default::default()
+                },
+                mapa_texto: MapaTexto::default(),
+            }],
+        };
+        let segs = pintar_documento(&doc, &colocado, &MedidaImagenNula);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].modo, ModoPintado::Color);
+        assert_eq!(segs[1].modo, ModoPintado::Borde);
+        assert_eq!(segs[1].desenfoque, 3.0);
+        assert_eq!(segs[1].color, [0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(segs[1].rect.ancho, 100.0);
+    }
+
+    #[test]
+    fn pintor_input_field_emite_imagen_y_texto() {
+        // Un nodo InputField pinta el fondo (imagen) y el texto
+        // sintetizado en el mismo nodo.
+        let mut nodo = nodo_base(1, None, vec![]);
+        nodo.graphic = TipoGraphic::InputField;
+        nodo.imagen = Some(UIImageData {
+            sprite: "textures/campo.png".into(),
+            ..Default::default()
+        });
+        nodo.texto = Some(glass_core::scene::UITextData {
+            text: "Escribe...".into(),
+            ..Default::default()
+        });
+        let doc = Documento {
+            canvas_raiz: 0,
+            nodos: vec![nodo],
+            avisos: vec![],
+        };
+        let colocado = DocumentoColocado {
+            nodos: vec![NodoColocado {
+                nodo: 0,
+                entidad: 1,
+                rect: RectColocado { x: 10.0, y: 20.0, ancho: 200.0, alto: 40.0 },
+                estilos: StyleProps::default(),
+                mapa_texto: MapaTexto {
+                    celdas: vec![],
+                    texto_visible: "Escribe...".into(),
+                },
+            }],
+        };
+        let segs = pintar_documento(&doc, &colocado, &MedidaImagenNula);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].modo, ModoPintado::Imagen);
+        assert_eq!(segs[1].modo, ModoPintado::Texto);
     }
 
     #[test]

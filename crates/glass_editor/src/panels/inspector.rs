@@ -4,9 +4,11 @@ use glass_core::{
     AudioSourceData, CameraData, CanvasData, CharacterData, ColliderSpec, EntityData, LightData,
     MeshData, PhysicsData,
     RectTransformData, SceneState, ScriptComponentData, UIButtonData, UITextData,
-    UIImageData,
+    UIImageData, UIInputFieldData,
     UIDragData,
 };
+use glass_ui::estilos::{StyleProps, TextOverflow};
+use glass_ui::parser::{color_a_css, establecer_declaracion, parsear_estilo_extra};
 use super::project::ArrastreAsset;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -339,6 +341,7 @@ pub enum TipoComponente {
     Texto,
     Boton,
     Imagen,
+    InputField,
     DragDrop,
 }
 
@@ -362,6 +365,7 @@ impl TipoComponente {
             TipoComponente::Texto => "Text",
             TipoComponente::Boton => "Button",
             TipoComponente::Imagen => "Image",
+            TipoComponente::InputField => "InputField",
             TipoComponente::DragDrop => "DragDrop",
         }
     }
@@ -429,6 +433,258 @@ fn crear<T: serde::de::DeserializeOwned>(
     registrar_nombre(components, nombre);
     true
 }
+
+/// Bloque «Estilo CSS» del Inspector (V4a): campos tipados para el
+/// conjunto cerrado de StyleProps que entiende el pintor, el texto CSS
+/// extra editable y los avisos de parseo en vivo (G-AUTOR4). Los campos
+/// escriben de vuelta en el `style_extra` de la componente que posee el
+/// estilo efectivo; los avisos se recalculan en cada frame.
+fn bloque_estilo_css(ui: &mut Ui, css: &mut String) {
+    let extra = parsear_estilo_extra(css);
+    let estilos = extra.base;
+    ui.label(RichText::new("Estilo CSS (el CSS manda sobre los campos de la componente)").small().italics());
+
+    // border-radius: 4 esquinas, en dos filas (el panel es estrecho y
+    // las cuatro en una fila se salen por la derecha).
+    let mut radios = estilos.border_radius.unwrap_or([0.0; 4]);
+    for (n_fila, esquinas) in [[("TL", 0), ("TR", 1)], [("BR", 2), ("BL", 3)]]
+        .into_iter()
+        .enumerate()
+    {
+        ui.horizontal(|ui| {
+            ui.label(if n_fila == 0 { "Radio esquinas:" } else { "" });
+            let mut cambio = false;
+            for (etiqueta, i) in esquinas {
+                cambio |= ui
+                    .add(
+                        DragValue::new(&mut radios[i])
+                            .speed(0.5)
+                            .range(0.0..=200.0)
+                            .prefix(format!("{etiqueta}: "))
+                            .suffix(" px"),
+                    )
+                    .changed();
+            }
+            if cambio {
+                *css = establecer_declaracion(
+                    css,
+                    "border-radius",
+                    &format!(
+                        "{}px {}px {}px {}px",
+                        radios[0], radios[1], radios[2], radios[3]
+                    ),
+                );
+            }
+        });
+    }
+
+    // background-color.
+    let mut fondo = estilos.background_color.unwrap_or([0.0, 0.0, 0.0, 1.0]);
+    ui.horizontal(|ui| {
+        ui.label("Fondo:");
+        if ui.color_edit_button_rgba_unmultiplied(&mut fondo).changed() {
+            *css = establecer_declaracion(css, "background-color", &color_a_css(fondo));
+        }
+    });
+
+    // background: degradado de 2 paradas (ángulo CSS + 2 colores).
+    if let Some((ang_motor, paradas)) = estilos.background_gradient {
+        if paradas.len() == 2 {
+            let mut ang_css = ang_motor + 90.0;
+            let mut c0 = paradas[0];
+            let mut c1 = paradas[1];
+            ui.horizontal(|ui| {
+                ui.label("Degradado:");
+                let mut cambio = ui
+                    .add(DragValue::new(&mut ang_css).speed(1.0).suffix("°"))
+                    .changed();
+                cambio |= ui.color_edit_button_rgba_unmultiplied(&mut c0).changed();
+                cambio |= ui.color_edit_button_rgba_unmultiplied(&mut c1).changed();
+                if cambio {
+                    *css = establecer_declaracion(
+                        css,
+                        "background",
+                        &format!(
+                            "linear-gradient({}deg, {}, {})",
+                            ang_css.round() as i32,
+                            color_a_css(c0),
+                            color_a_css(c1)
+                        ),
+                    );
+                }
+            });
+        }
+    }
+
+    // border: ancho + color.
+    let (mut ancho_borde, mut color_borde) = estilos.border.unwrap_or((0.0, [0.0, 0.0, 0.0, 1.0]));
+    ui.horizontal(|ui| {
+        ui.label("Borde:");
+        let mut cambio = ui
+            .add(
+                DragValue::new(&mut ancho_borde)
+                    .speed(0.5)
+                    .range(0.0..=50.0)
+                    .suffix(" px"),
+            )
+            .changed();
+        cambio |= ui.color_edit_button_rgba_unmultiplied(&mut color_borde).changed();
+        if cambio {
+            *css = establecer_declaracion(
+                css,
+                "border",
+                &format!("{}px {}", ancho_borde, color_a_css(color_borde)),
+            );
+        }
+    });
+
+    // box-shadow: dx dy blur + color.
+    let mut sombra = estilos.box_shadow;
+    ui.horizontal(|ui| {
+        ui.label("Sombra:");
+        let mut cambio = false;
+        if let Some(s) = sombra.as_mut() {
+            cambio |= ui.add(DragValue::new(&mut s.dx).speed(0.5).prefix("X: ").suffix(" px")).changed();
+            cambio |= ui.add(DragValue::new(&mut s.dy).speed(0.5).prefix("Y: ").suffix(" px")).changed();
+            cambio |= ui.add(DragValue::new(&mut s.desenfoque).speed(0.5).range(0.0..=100.0).prefix("Blur: ").suffix(" px")).changed();
+            cambio |= ui.color_edit_button_rgba_unmultiplied(&mut s.color).changed();
+        } else {
+            let mut dx = 0.0f32;
+            let mut dy = 0.0f32;
+            let mut blur = 0.0f32;
+            let mut c = [0.0, 0.0, 0.0, 1.0];
+            cambio |= ui.add(DragValue::new(&mut dx).speed(0.5).prefix("X: ").suffix(" px")).changed();
+            cambio |= ui.add(DragValue::new(&mut dy).speed(0.5).prefix("Y: ").suffix(" px")).changed();
+            cambio |= ui.add(DragValue::new(&mut blur).speed(0.5).range(0.0..=100.0).prefix("Blur: ").suffix(" px")).changed();
+            cambio |= ui.color_edit_button_rgba_unmultiplied(&mut c).changed();
+            if cambio {
+                sombra = Some(glass_ui::estilos::Sombra { dx, dy, desenfoque: blur, color: c });
+            }
+        }
+        if cambio {
+            if let Some(s) = sombra {
+                *css = establecer_declaracion(
+                    css,
+                    "box-shadow",
+                    &format!("{}px {}px {}px {}", s.dx, s.dy, s.desenfoque, color_a_css(s.color)),
+                );
+            }
+        }
+    });
+
+    // opacity.
+    let mut opacidad = estilos.opacity.unwrap_or(1.0);
+    ui.horizontal(|ui| {
+        ui.label("Opacidad:");
+        if ui.add(DragValue::new(&mut opacidad).speed(0.01).range(0.0..=1.0)).changed() {
+            *css = establecer_declaracion(css, "opacity", &format!("{opacidad:.2}"));
+        }
+    });
+
+    // letter-spacing.
+    let mut espaciado = estilos.letter_spacing.unwrap_or(0.0);
+    ui.horizontal(|ui| {
+        ui.label("Espaciado letras:");
+        if ui.add(DragValue::new(&mut espaciado).speed(0.5).range(0.0..=50.0).suffix(" px")).changed() {
+            *css = establecer_declaracion(css, "letter-spacing", &format!("{espaciado}px"));
+        }
+    });
+
+    // text-overflow.
+    let overflow_txt = estilos.text_overflow.unwrap_or(TextOverflow::Envolver);
+    ui.horizontal(|ui| {
+        ui.label("Desbordamiento:");
+        let etiqueta = match overflow_txt {
+            TextOverflow::Envolver => "Envolver",
+            TextOverflow::Truncar => "Truncar",
+            TextOverflow::PuntosSuspensivos => "Puntos suspensivos",
+        };
+        egui::ComboBox::from_id_salt("css_text_overflow")
+            .selected_text(etiqueta)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(matches!(overflow_txt, TextOverflow::Envolver), "Envolver").clicked() {
+                    *css = establecer_declaracion(css, "text-overflow", "wrap");
+                }
+                if ui.selectable_label(matches!(overflow_txt, TextOverflow::Truncar), "Truncar").clicked() {
+                    *css = establecer_declaracion(css, "text-overflow", "truncate");
+                }
+                if ui.selectable_label(matches!(overflow_txt, TextOverflow::PuntosSuspensivos), "Puntos suspensivos").clicked() {
+                    *css = establecer_declaracion(css, "text-overflow", "ellipsis");
+                }
+            });
+    });
+
+    // overflow (visible/hidden): el parser lo guarda como texto.
+    let overflow_oculto = estilos.overflow.as_deref() == Some("hidden");
+    ui.horizontal(|ui| {
+        ui.label("Recorte:");
+        let etiqueta = if overflow_oculto { "Oculto" } else { "Visible" };
+        egui::ComboBox::from_id_salt("css_overflow")
+            .selected_text(etiqueta)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(!overflow_oculto, "Visible").clicked() {
+                    *css = establecer_declaracion(css, "overflow", "visible");
+                }
+                if ui.selectable_label(overflow_oculto, "Oculto").clicked() {
+                    *css = establecer_declaracion(css, "overflow", "hidden");
+                }
+            });
+    });
+
+    // width / height / min / max (px).
+    for (prop, etiqueta, valor) in [
+        ("width", "Ancho", estilos.width),
+        ("height", "Alto", estilos.height),
+        ("min-width", "Mín. ancho", estilos.min_width),
+        ("min-height", "Mín. alto", estilos.min_height),
+        ("max-width", "Máx. ancho", estilos.max_width),
+        ("max-height", "Máx. alto", estilos.max_height),
+    ] {
+        let mut px = match valor {
+            Some(glass_ui::estilos::Dimension::Px(v)) => v,
+            _ => 0.0,
+        };
+        ui.horizontal(|ui| {
+            ui.label(format!("{etiqueta}:"));
+            if ui.add(DragValue::new(&mut px).speed(1.0).range(0.0..=4000.0).suffix(" px")).changed() {
+                *css = establecer_declaracion(css, prop, &format!("{px}px"));
+            }
+        });
+    }
+
+    // aspect-ratio (W / H).
+    let ratio = estilos.aspect_ratio.unwrap_or(0.0);
+    let mut ratio_w = ratio;
+    let mut ratio_h = 1.0f32;
+    ui.horizontal(|ui| {
+        ui.label("Proporción:");
+        let mut cambio = ui.add(DragValue::new(&mut ratio_w).speed(0.1).range(0.0..=100.0).prefix("W: ")).changed();
+        cambio |= ui.add(DragValue::new(&mut ratio_h).speed(0.1).range(0.1..=100.0).prefix("H: ")).changed();
+        if cambio && ratio_w > 0.0 {
+            *css = establecer_declaracion(css, "aspect-ratio", &format!("{ratio_w} / {ratio_h}"));
+        }
+    });
+
+    // Texto CSS extra + avisos en vivo.
+    ui.label("CSS extra:");
+    ui.text_edit_multiline(css);
+    for aviso in &extra.avisos {
+        ui.label(RichText::new(aviso).color(Color32::from_rgb(255, 120, 120)).small());
+    }
+    if extra.hover != StyleProps::default()
+        || extra.active != StyleProps::default()
+        || extra.disabled != StyleProps::default()
+        || extra.focus != StyleProps::default()
+        || extra.selected != StyleProps::default()
+    {
+        ui.label(
+            RichText::new("Los bloques :hover / :active / :disabled / :focus / :selected se parsean pero NO tienen efecto en runtime hasta V6.")
+                .small()
+                .italics(),
+        );
+    }
+}
+
 
 /// Deja un PhysicsData sin parte Collider (para extraer solo el RB).
 fn neutralizar_collider(p: &mut PhysicsData) {
@@ -780,6 +1036,7 @@ pub fn extraer_componente(ent: &EntityData, tipo: TipoComponente) -> Option<Stri
         TipoComponente::Texto => ent.ui_text.as_ref().and_then(a_json),
         TipoComponente::Boton => ent.ui_button.as_ref().and_then(a_json),
         TipoComponente::Imagen => ent.ui_image.as_ref().and_then(a_json),
+        TipoComponente::InputField => ent.ui_input_field.as_ref().and_then(a_json),
         TipoComponente::DragDrop => ent.ui_drag.as_ref().and_then(a_json),
         TipoComponente::Script => {
             if ent.script.is_none() && ent.script_data.is_none() {
@@ -835,6 +1092,7 @@ pub fn aplicar_datos(ent: &mut EntityData, tipo: TipoComponente, json: &str) -> 
         TipoComponente::Texto => sustituir(&mut ent.ui_text, json),
         TipoComponente::Boton => sustituir(&mut ent.ui_button, json),
         TipoComponente::Imagen => sustituir(&mut ent.ui_image, json),
+        TipoComponente::InputField => sustituir(&mut ent.ui_input_field, json),
         TipoComponente::DragDrop => sustituir(&mut ent.ui_drag, json),
         TipoComponente::Script => {
             if ent.script.is_none() && ent.script_data.is_none() {
@@ -894,6 +1152,9 @@ pub fn instalar_componente(ent: &mut EntityData, tipo: TipoComponente, json: &st
         TipoComponente::Texto => crear(&mut ent.ui_text, json, &mut ent.components, nombre),
         TipoComponente::Boton => crear(&mut ent.ui_button, json, &mut ent.components, nombre),
         TipoComponente::Imagen => crear(&mut ent.ui_image, json, &mut ent.components, nombre),
+        TipoComponente::InputField => {
+            crear(&mut ent.ui_input_field, json, &mut ent.components, nombre)
+        }
         TipoComponente::DragDrop => crear(&mut ent.ui_drag, json, &mut ent.components, nombre),
         TipoComponente::Script => {
             if ent.script.is_some() || ent.script_data.is_some() {
@@ -2820,6 +3081,34 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                 // ==========================================
                 // 6.5. COMPONENTES DE UI (CANVAS, RECTTRANSFORM, TEXT, BUTTON)
                 // ==========================================
+                // Estilo CSS efectivo del nodo (V4a): la derivación toma el
+                // style_extra de la primera componente UI presente, en el
+                // orden Imagen > Texto > Botón (derivacion.rs). Los campos
+                // de componente que el estilo pisa se muestran desactivados
+                // con la marca «controlado por estilo».
+                let css_efectivo = entity
+                    .ui_image
+                    .as_ref()
+                    .map(|i| i.style_extra.clone())
+                    .or_else(|| entity.ui_text.as_ref().map(|t| t.style_extra.clone()))
+                    .or_else(|| entity.ui_button.as_ref().map(|b| b.style_extra.clone()));
+                let estilos_efectivos: StyleProps = css_efectivo
+                    .as_deref()
+                    .map(|css| parsear_estilo_extra(css).base)
+                    .unwrap_or_default();
+                // Componente que posee el estilo efectivo (mismo orden que
+                // la derivación): su sección muestra el editor CSS; las
+                // demás solo una nota.
+                let dueno_estilo: &str = if entity.ui_image.is_some() {
+                    "Image"
+                } else if entity.ui_text.is_some() {
+                    "Text"
+                } else if entity.ui_button.is_some() {
+                    "Button"
+                } else {
+                    ""
+                };
+
                 let mut accion_canvas = AccionCabecera::Nada;
                 let mut remove_canvas = false;
                 if let Some(ref mut canvas) = entity.canvas {
@@ -2864,14 +3153,82 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         });
                         ui.horizontal(|ui| {
                             ui.label("Tamaño Delta:");
-                            ui.add(DragValue::new(&mut rt.size_delta[0]).speed(1.0).prefix("W: "));
-                            ui.add(DragValue::new(&mut rt.size_delta[1]).speed(1.0).prefix("H: "));
+                            ui.add_enabled(
+                                estilos_efectivos.width.is_none(),
+                                DragValue::new(&mut rt.size_delta[0]).speed(1.0).prefix("W: "),
+                            );
+                            ui.add_enabled(
+                                estilos_efectivos.height.is_none(),
+                                DragValue::new(&mut rt.size_delta[1]).speed(1.0).prefix("H: "),
+                            );
+                            if estilos_efectivos.width.is_some()
+                                || estilos_efectivos.height.is_some()
+                            {
+                                ui.label(RichText::new("controlado por estilo").small().italics());
+                            }
                         });
                         ui.horizontal(|ui| {
                             ui.label("Pivote:");
                             ui.add(DragValue::new(&mut rt.pivot[0]).speed(0.05).range(0.0..=1.0).prefix("X: "));
                             ui.add(DragValue::new(&mut rt.pivot[1]).speed(0.05).range(0.0..=1.0).prefix("Y: "));
                         });
+                        ui.horizontal(|ui| {
+                            ui.label("Ancla Mín:");
+                            ui.add(DragValue::new(&mut rt.anchor_min[0]).speed(0.05).range(0.0..=1.0).prefix("X: "));
+                            ui.add(DragValue::new(&mut rt.anchor_min[1]).speed(0.05).range(0.0..=1.0).prefix("Y: "));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Ancla Máx:");
+                            ui.add(DragValue::new(&mut rt.anchor_max[0]).speed(0.05).range(0.0..=1.0).prefix("X: "));
+                            ui.add(DragValue::new(&mut rt.anchor_max[1]).speed(0.05).range(0.0..=1.0).prefix("Y: "));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Preset:");
+                            if ui.button("Sup-Izq").clicked() {
+                                rt.anchor_min = [0.0, 1.0];
+                                rt.anchor_max = [0.0, 1.0];
+                                rt.pivot = [0.0, 1.0];
+                            }
+                            if ui.button("Sup-Der").clicked() {
+                                rt.anchor_min = [1.0, 1.0];
+                                rt.anchor_max = [1.0, 1.0];
+                                rt.pivot = [1.0, 1.0];
+                            }
+                            if ui.button("Inf-Izq").clicked() {
+                                rt.anchor_min = [0.0, 0.0];
+                                rt.anchor_max = [0.0, 0.0];
+                                rt.pivot = [0.0, 0.0];
+                            }
+                            if ui.button("Inf-Der").clicked() {
+                                rt.anchor_min = [1.0, 0.0];
+                                rt.anchor_max = [1.0, 0.0];
+                                rt.pivot = [1.0, 0.0];
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("");
+                            if ui.button("Centro").clicked() {
+                                rt.anchor_min = [0.5, 0.5];
+                                rt.anchor_max = [0.5, 0.5];
+                                rt.pivot = [0.5, 0.5];
+                            }
+                            if ui.button("Estirar H").clicked() {
+                                rt.anchor_min = [0.0, 0.5];
+                                rt.anchor_max = [1.0, 0.5];
+                                rt.pivot = [0.5, 0.5];
+                            }
+                            if ui.button("Estirar V").clicked() {
+                                rt.anchor_min = [0.5, 0.0];
+                                rt.anchor_max = [0.5, 1.0];
+                                rt.pivot = [0.5, 0.5];
+                            }
+                            if ui.button("Estirar").clicked() {
+                                rt.anchor_min = [0.0, 0.0];
+                                rt.anchor_max = [1.0, 1.0];
+                                rt.pivot = [0.5, 0.5];
+                            }
+                        });
+                        ui.label(RichText::new("Las anclas se escriben en el motor con V4d.").small().italics());
                     });
                     ui.separator();
                 }
@@ -2896,11 +3253,22 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         });
                         ui.horizontal(|ui| {
                             ui.label("Tamaño:");
-                            ui.add(DragValue::new(&mut txt.font_size).speed(0.5).range(8.0..=120.0).suffix(" px"));
+                            ui.add_enabled(
+                                estilos_efectivos.font_size.is_none(),
+                                DragValue::new(&mut txt.font_size).speed(0.5).range(8.0..=120.0).suffix(" px"),
+                            );
+                            if estilos_efectivos.font_size.is_some() {
+                                ui.label(RichText::new("controlado por estilo").small().italics());
+                            }
                         });
                         ui.horizontal(|ui| {
                             ui.label("Color:");
-                            ui.color_edit_button_rgba_unmultiplied(&mut txt.color);
+                            ui.add_enabled_ui(estilos_efectivos.color.is_none(), |ui| {
+                                ui.color_edit_button_rgba_unmultiplied(&mut txt.color);
+                            });
+                            if estilos_efectivos.color.is_some() {
+                                ui.label(RichText::new("controlado por estilo").small().italics());
+                            }
                         });
                         ui.horizontal(|ui| {
                             ui.label("Fuente:");
@@ -2920,6 +3288,17 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                 }
                             }
                         });
+                        if dueno_estilo == "Text" {
+                            bloque_estilo_css(ui, &mut txt.style_extra);
+                        } else if !dueno_estilo.is_empty() {
+                            ui.label(
+                                RichText::new(format!(
+                                    "El estilo CSS efectivo es el de {dueno_estilo} (Imagen > Texto > Botón)."
+                                ))
+                                .small()
+                                .italics(),
+                            );
+                        }
                     });
                     ui.separator();
                 }
@@ -2947,6 +3326,17 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                             ui.label("On Click Event:");
                             ui.text_edit_singleline(&mut btn.on_click_action);
                         });
+                        if dueno_estilo == "Button" {
+                            bloque_estilo_css(ui, &mut btn.style_extra);
+                        } else if !dueno_estilo.is_empty() {
+                            ui.label(
+                                RichText::new(format!(
+                                    "El estilo CSS efectivo es el de {dueno_estilo} (Imagen > Texto > Botón)."
+                                ))
+                                .small()
+                                .italics(),
+                            );
+                        }
                     });
                     ui.separator();
                 }
@@ -2975,6 +3365,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                             ui.color_edit_button_rgba_unmultiplied(&mut img.color);
                         });
                         ui.checkbox(&mut img.preserve_aspect, "Preserve Aspect (encajar sin deformar)");
+                        bloque_estilo_css(ui, &mut img.style_extra);
                     });
                     ui.separator();
                 }
@@ -2986,6 +3377,61 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                 if remove_img {
                     entity.ui_image = None;
                     entity.components.retain(|c| c != "Image");
+                }
+
+                let mut accion_input = AccionCabecera::Nada;
+
+                let mut remove_input = false;
+                if let Some(ref mut campo) = entity.ui_input_field {
+                    seccion_componente(ui, "inputfield", "⌨ InputField (Texto editable)", TipoComponente::InputField, true, self.portapapeles.as_ref(), &mut accion_input, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Texto:");
+                            ui.text_edit_singleline(&mut campo.text);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Placeholder:");
+                            ui.text_edit_singleline(&mut campo.placeholder);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Tamaño:");
+                            ui.add_enabled(
+                                estilos_efectivos.font_size.is_none(),
+                                DragValue::new(&mut campo.font_size).speed(0.5).range(8.0..=120.0).suffix(" px"),
+                            );
+                            if estilos_efectivos.font_size.is_some() {
+                                ui.label(RichText::new("controlado por estilo").small().italics());
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Color:");
+                            ui.add_enabled_ui(estilos_efectivos.color.is_none(), |ui| {
+                                ui.color_edit_button_rgba_unmultiplied(&mut campo.color);
+                            });
+                            if estilos_efectivos.color.is_some() {
+                                ui.label(RichText::new("controlado por estilo").small().italics());
+                            }
+                        });
+                        ui.label("La conducta interactiva (teclear, caret, selección) llega en V6; la presentación (fondo + texto) ya es real.");
+                        if !dueno_estilo.is_empty() {
+                            ui.label(
+                                RichText::new(format!(
+                                    "El estilo CSS efectivo es el de {dueno_estilo} (Imagen > Texto > Botón)."
+                                ))
+                                .small()
+                                .italics(),
+                            );
+                        }
+                    });
+                    ui.separator();
+                }
+                if accion_input == AccionCabecera::Quitar {
+                    remove_input = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::InputField, accion_input);
+                }
+                if remove_input {
+                    entity.ui_input_field = None;
+                    entity.components.retain(|c| c != "InputField");
                 }
 
                 let mut accion_drag = AccionCabecera::Nada;
@@ -3071,6 +3517,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         hay_resultados |= coincide("Text");
                         hay_resultados |= coincide("Button");
                         hay_resultados |= coincide("Image");
+                        hay_resultados |= coincide("InputField");
                         hay_resultados |= coincide("DragDrop");
 
                         if !hay_resultados && !q.is_empty() {
@@ -3207,6 +3654,12 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         if entity.ui_image.is_none() && ui.button("🖼 Image").clicked() {
                             entity.ui_image = Some(UIImageData::default());
                             entity.components.push("Image".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if coincide("InputField") && entity.ui_input_field.is_none() && ui.button("⌨ InputField").clicked() {
+                            entity.ui_input_field = Some(UIInputFieldData::default());
+                            entity.components.push("InputField".into());
                             self.show_add_component_menu = false;
                         }
 

@@ -76,6 +76,10 @@ pub struct StyleProps {
     pub background_gradient: Option<(f32, Vec<[f32; 4]>)>,
     /// Radios de esquina [sup-izq, sup-der, inf-der, inf-izq].
     pub border_radius: Option<[f32; 4]>,
+    /// Borde: (ancho en px, color lineal). Sin borde si es None.
+    pub border: Option<(f32, [f32; 4])>,
+    /// Espaciado extra entre caracteres, en px (letter-spacing CSS).
+    pub letter_spacing: Option<f32>,
     pub box_shadow: Option<Sombra>,
     /// Opacidad del elemento (multiplica el alfa, como uGUI).
     pub opacity: Option<f32>,

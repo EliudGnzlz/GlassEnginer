@@ -1540,6 +1540,40 @@ public class Text : Component
             RuntimeBridge.UiSetTextColor(EntityId, value.r, value.g, value.b, value.a);
         }
     }
+
+        // --- Propiedades de estilo V4d ---
+        private float _opacity = 1f;
+        public float opacity
+        {
+            get => _opacity;
+            set
+            {
+                _opacity = value;
+                RuntimeBridge.UiSetOpacity(EntityId, value);
+            }
+        }
+
+        private string _overflow = "visible";
+        public string overflow
+        {
+            get => _overflow;
+            set
+            {
+                _overflow = value;
+                RuntimeBridge.UiSetOverflow(EntityId, value);
+            }
+        }
+
+        private float _letterSpacing;
+        public float letterSpacing
+        {
+            get => _letterSpacing;
+            set
+            {
+                _letterSpacing = value;
+                RuntimeBridge.UiSetLetterSpacing(EntityId, value);
+            }
+        }
 }
 
 public class Image : Component
@@ -1568,6 +1602,95 @@ public class Image : Component
             RuntimeBridge.UiSetImageColor(EntityId, value.r, value.g, value.b, value.a);
         }
     }
+
+        // --- Propiedades de estilo V4d ---
+        private Color _backgroundColor = Color.white;
+        public Color backgroundColor
+        {
+            get => _backgroundColor;
+            set
+            {
+                _backgroundColor = value;
+                RuntimeBridge.UiSetBackgroundColor(EntityId, value.r, value.g, value.b, value.a);
+            }
+        }
+
+        private float _borderRadiusTopLeft;
+        public float borderRadiusTopLeft
+        {
+            get => _borderRadiusTopLeft;
+            set
+            {
+                _borderRadiusTopLeft = value;
+                RuntimeBridge.UiSetBorderRadius(EntityId, _borderRadiusTopLeft, _borderRadiusTopRight, _borderRadiusBottomRight, _borderRadiusBottomLeft);
+            }
+        }
+
+        private float _borderRadiusTopRight;
+        public float borderRadiusTopRight
+        {
+            get => _borderRadiusTopRight;
+            set
+            {
+                _borderRadiusTopRight = value;
+                RuntimeBridge.UiSetBorderRadius(EntityId, _borderRadiusTopLeft, _borderRadiusTopRight, _borderRadiusBottomRight, _borderRadiusBottomLeft);
+            }
+        }
+
+        private float _borderRadiusBottomRight;
+        public float borderRadiusBottomRight
+        {
+            get => _borderRadiusBottomRight;
+            set
+            {
+                _borderRadiusBottomRight = value;
+                RuntimeBridge.UiSetBorderRadius(EntityId, _borderRadiusTopLeft, _borderRadiusTopRight, _borderRadiusBottomRight, _borderRadiusBottomLeft);
+            }
+        }
+
+        private float _borderRadiusBottomLeft;
+        public float borderRadiusBottomLeft
+        {
+            get => _borderRadiusBottomLeft;
+            set
+            {
+                _borderRadiusBottomLeft = value;
+                RuntimeBridge.UiSetBorderRadius(EntityId, _borderRadiusTopLeft, _borderRadiusTopRight, _borderRadiusBottomRight, _borderRadiusBottomLeft);
+            }
+        }
+
+        private float _borderWidth;
+        public float borderWidth
+        {
+            get => _borderWidth;
+            set
+            {
+                _borderWidth = value;
+                RuntimeBridge.UiSetBorder(EntityId, _borderWidth, _borderColor.r, _borderColor.g, _borderColor.b, _borderColor.a);
+            }
+        }
+
+        private Color _borderColor = Color.white;
+        public Color borderColor
+        {
+            get => _borderColor;
+            set
+            {
+                _borderColor = value;
+                RuntimeBridge.UiSetBorder(EntityId, _borderWidth, _borderColor.r, _borderColor.g, _borderColor.b, _borderColor.a);
+            }
+        }
+
+        private float _opacity = 1f;
+        public float opacity
+        {
+            get => _opacity;
+            set
+            {
+                _opacity = value;
+                RuntimeBridge.UiSetOpacity(EntityId, value);
+            }
+        }
 }
 
 
@@ -1586,6 +1709,18 @@ public class Button : Component
             RuntimeBridge.UiSetButtonColor(EntityId, value.r, value.g, value.b, value.a);
         }
     }
+
+        // --- Propiedades de estilo V4d ---
+        private float _opacity = 1f;
+        public float opacity
+        {
+            get => _opacity;
+            set
+            {
+                _opacity = value;
+                RuntimeBridge.UiSetOpacity(EntityId, value);
+            }
+        }
 }
 
 /// <summary>
@@ -1612,8 +1747,7 @@ public static class DragDrop
         // anchoredPosition y sizeDelta escriben en el motor por el
         // puente de UI dinámica: el lote del Canvas se reconstruye
         // cada frame y el cambio se ve al frame siguiente. Anclas y
-        // pivote quedan locales en v1 (el motor los lee de la
-        // escena, no del script).
+        // pivote: desde V4d también escriben en el motor por el puente.
         public Vector2 anchoredPosition
         {
             get => _anchoredPosition;
@@ -1632,9 +1766,38 @@ public static class DragDrop
                 RuntimeBridge.UiSetSizeDelta(EntityId, value.x, value.y);
             }
         }
-        public Vector2 anchorMin { get; set; } = new Vector2(0.5f, 0.5f);
-        public Vector2 anchorMax { get; set; } = new Vector2(0.5f, 0.5f);
-        public Vector2 pivot { get; set; } = new Vector2(0.5f, 0.5f);
+        private Vector2 _anchorMin = new Vector2(0.5f, 0.5f);
+        public Vector2 anchorMin
+        {
+            get => _anchorMin;
+            set
+            {
+                _anchorMin = value;
+                RuntimeBridge.UiSetAnchorMin(EntityId, value.x, value.y);
+            }
+        }
+
+        private Vector2 _anchorMax = new Vector2(0.5f, 0.5f);
+        public Vector2 anchorMax
+        {
+            get => _anchorMax;
+            set
+            {
+                _anchorMax = value;
+                RuntimeBridge.UiSetAnchorMax(EntityId, value.x, value.y);
+            }
+        }
+
+        private Vector2 _pivot = new Vector2(0.5f, 0.5f);
+        public Vector2 pivot
+        {
+            get => _pivot;
+            set
+            {
+                _pivot = value;
+                RuntimeBridge.UiSetPivot(EntityId, value.x, value.y);
+            }
+        }
     }
 
     public class Canvas : Component

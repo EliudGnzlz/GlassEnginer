@@ -142,6 +142,42 @@ fn parse_dimension(valor: &str) -> Option<Dimension> {
 
 /// Color `#rrggbb`, `rgb(r,g,b)` o `rgba(r,g,b,a)` (r/g/b en 0-255,
 /// a en 0-1). Sin colores con nombre en este paquete.
+/// sRGB (0..1) → lineal (Q4a). El pipeline trata el color de vértice
+/// como lineal y lo convierte a sRGB al pintar, así que el CSS debe
+/// entrar ya convertido para que el color escrito sea el que se ve.
+fn srgb_a_lineal(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Lineal (0..1) → sRGB (0..1): inversa de `srgb_a_lineal`. La usa el
+/// editor para escribir de vuelta en CSS un color que el parser ya
+/// convirtió a lineal.
+pub fn lineal_a_srgb(c: f32) -> f32 {
+    if c <= 0.0031308 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// Un color lineal (como los que devuelve `parse_color`) a texto CSS:
+/// `#rrggbb` si es opaco, `rgba(r, g, b, a)` si no. Los canales se
+/// escriben en sRGB, que es lo que el parser espera leer (Q4a).
+pub fn color_a_css(c: [f32; 4]) -> String {
+    let r = (lineal_a_srgb(c[0].clamp(0.0, 1.0)) * 255.0).round() as u8;
+    let g = (lineal_a_srgb(c[1].clamp(0.0, 1.0)) * 255.0).round() as u8;
+    let b = (lineal_a_srgb(c[2].clamp(0.0, 1.0)) * 255.0).round() as u8;
+    if (c[3] - 1.0).abs() < 0.001 {
+        format!("#{r:02x}{g:02x}{b:02x}")
+    } else {
+        format!("rgba({}, {}, {}, {:.2})", r, g, b, c[3].clamp(0.0, 1.0))
+    }
+}
+
 fn parse_color(valor: &str) -> Option<[f32; 4]> {
     let v = valor.trim();
     if let Some(hex) = v.strip_prefix('#') {
@@ -149,7 +185,12 @@ fn parse_color(valor: &str) -> Option<[f32; 4]> {
             let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
             let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
             let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-            return Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]);
+            return Some([
+                srgb_a_lineal(r as f32 / 255.0),
+                srgb_a_lineal(g as f32 / 255.0),
+                srgb_a_lineal(b as f32 / 255.0),
+                1.0,
+            ]);
         }
         return None;
     }
@@ -168,7 +209,12 @@ fn parse_color(valor: &str) -> Option<[f32; 4]> {
                 && (0.0..=255.0).contains(&b)
                 && (0.0..=1.0).contains(&a)
             {
-                return Some([r / 255.0, g / 255.0, b / 255.0, a]);
+                return Some([
+                    srgb_a_lineal(r / 255.0),
+                    srgb_a_lineal(g / 255.0),
+                    srgb_a_lineal(b / 255.0),
+                    a,
+                ]);
             }
         }
         return None;
@@ -180,7 +226,12 @@ fn parse_color(valor: &str) -> Option<[f32; 4]> {
                 (p[0].parse().ok()?, p[1].parse().ok()?, p[2].parse().ok()?);
             if (0.0..=255.0).contains(&r) && (0.0..=255.0).contains(&g) && (0.0..=255.0).contains(&b)
             {
-                return Some([r / 255.0, g / 255.0, b / 255.0, 1.0]);
+                return Some([
+                    srgb_a_lineal(r / 255.0),
+                    srgb_a_lineal(g / 255.0),
+                    srgb_a_lineal(b / 255.0),
+                    1.0,
+                ]);
             }
         }
         return None;
@@ -244,7 +295,9 @@ fn parse_parada(parada: &str) -> Option<[f32; 4]> {
 }
 
 /// `linear-gradient(90deg, color 0%, color 100%)`: solo ángulo y
-/// exactamente 2 paradas en este paquete.
+/// exactamente 2 paradas en este paquete. El ángulo se guarda en la
+/// convención del shader («0° = izq→der, 90° = arriba→abajo»), así
+/// que el ángulo CSS se convierte restando 90 (Q4b: CSS 90° = izq→der).
 fn parse_gradiente(valor: &str) -> Option<(f32, Vec<[f32; 4]>)> {
     let bajo = valor.trim().to_ascii_lowercase();
     let inner = bajo.strip_prefix("linear-gradient(")?.strip_suffix(')')?;
@@ -260,7 +313,7 @@ fn parse_gradiente(valor: &str) -> Option<(f32, Vec<[f32; 4]>)> {
     for parada in &partes[1..] {
         paradas.push(parse_parada(parada)?);
     }
-    Some((angulo, paradas))
+    Some((angulo - 90.0, paradas))
 }
 
 /// `grid-template-columns`: `100px 1fr`, `repeat(auto-fill, 100px)`.
@@ -314,6 +367,21 @@ fn parse_sombra(valor: &str) -> Option<Sombra> {
     }
     let color = parse_color(partes[3])?;
     Some(Sombra { dx, dy, desenfoque: blur, color })
+}
+
+/// Borde CSS: "<ancho>px <color>" (p. ej. "3px #1ed760"). El color
+/// pasa por parse_color, así que ya sale en lineal (Q4a).
+fn parse_borde(valor: &str) -> Option<(f32, [f32; 4])> {
+    let partes = dividir_nivel_superior(valor, ' ');
+    if partes.len() != 2 {
+        return None;
+    }
+    let ancho = parse_px(partes[0])?;
+    if ancho < 0.0 {
+        return None;
+    }
+    let color = parse_color(partes[1])?;
+    Some((ancho, color))
 }
 
 fn aviso_invalido(avisos: &mut Vec<String>, prop: &str, valor: &str) {
@@ -422,6 +490,10 @@ fn aplicar_declaracion(props: &mut StyleProps, avisos: &mut Vec<String>, prop: &
             Some(v) if v.iter().all(|x| *x >= 0.0) => props.border_radius = Some(expandir_radio(&v)),
             _ => aviso_invalido(avisos, prop, valor),
         },
+        "border" => match parse_borde(valor) {
+            Some(b) => props.border = Some(b),
+            None => aviso_invalido(avisos, prop, valor),
+        },
         "box-shadow" => match parse_sombra(valor) {
             Some(s) => props.box_shadow = Some(s),
             None => aviso_invalido(avisos, prop, valor),
@@ -440,6 +512,10 @@ fn aplicar_declaracion(props: &mut StyleProps, avisos: &mut Vec<String>, prop: &
         },
         "font-size" => match parse_px(valor) {
             Some(v) if v >= 0.0 => props.font_size = Some(v),
+            _ => aviso_invalido(avisos, prop, valor),
+        },
+        "letter-spacing" => match parse_px(valor) {
+            Some(v) if v >= 0.0 => props.letter_spacing = Some(v),
             _ => aviso_invalido(avisos, prop, valor),
         },
         "grid-template-columns" => match parse_columnas_grid(valor) {
@@ -529,11 +605,13 @@ fn fusionar(destino: &mut StyleProps, capa: &StyleProps) {
     fusionar_campo!(destino, capa, background_color);
     fusionar_campo!(destino, capa, background_gradient);
     fusionar_campo!(destino, capa, border_radius);
+    fusionar_campo!(destino, capa, border);
     fusionar_campo!(destino, capa, box_shadow);
     fusionar_campo!(destino, capa, opacity);
     fusionar_campo!(destino, capa, overflow);
     fusionar_campo!(destino, capa, color);
     fusionar_campo!(destino, capa, font_size);
+    fusionar_campo!(destino, capa, letter_spacing);
     fusionar_campo!(destino, capa, grid_template_columns);
     fusionar_campo!(destino, capa, sort_order);
     fusionar_campo!(destino, capa, override_sorting);
@@ -568,17 +646,22 @@ fn defecto_tipo(nodo: &NodoDocumento) -> StyleProps {
 }
 
 /// Capa del componente: texto, tinte de imagen y color del botón.
+/// La prioridad declarada es imagen > texto > botón: el botón aporta
+/// su color PRIMERO para que el tinte de la Image lo sobrescriba.
+/// (Antes era al revés y el azul por defecto del Button pisaba el
+/// tinte de la Image salvo que el CSS tuviera `background-color`;
+/// hallazgo de los peces de fin de módulo V4.)
 fn capa_componente(nodo: &NodoDocumento) -> StyleProps {
     let mut p = StyleProps::default();
     if let Some(texto) = &nodo.texto {
         p.color = Some(texto.color);
         p.font_size = Some(texto.font_size);
     }
-    if let Some(imagen) = &nodo.imagen {
-        p.background_color = Some(imagen.color);
-    }
     if let Some(boton) = &nodo.boton {
         p.background_color = Some(boton.target_graphic_color);
+    }
+    if let Some(imagen) = &nodo.imagen {
+        p.background_color = Some(imagen.color);
     }
     p
 }
@@ -607,6 +690,81 @@ pub fn resolver_estilos(nodo: &NodoDocumento, estado: &EstadoPseudo) -> StylePro
         fusionar(&mut salida, capa);
     }
     salida
+}
+
+/// Posición del primer bloque de pseudo-clase (`:hover{`, `:active{`,
+/// ...) en el CSS extra. Todo lo anterior es el bloque base. Las
+/// declaraciones se escriben siempre en el bloque base; los bloques de
+/// pseudo-clase no se tocan (su contenido no tiene efecto en runtime
+/// hasta V6, deuda D-V4-1).
+fn fin_bloque_base(css: &str) -> usize {
+    let b = css.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b':' {
+            let mut j = i + 1;
+            while j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'-') {
+                j += 1;
+            }
+            let mut k = j;
+            while k < b.len() && (b[k] == b' ' || b[k] == b'\t') {
+                k += 1;
+            }
+            if j > i + 1 && k < b.len() && b[k] == b'{' {
+                return i;
+            }
+        }
+        i += 1;
+    }
+    css.len()
+}
+
+/// Reescribe (o añade) una declaración `prop: valor;` en el bloque base
+/// del CSS extra, sin tocar los bloques de pseudo-clase. Si la propiedad
+/// ya existe en el base se sustituye su valor; si no, se añade al final
+/// del bloque base.
+pub fn establecer_declaracion(css: &str, prop: &str, valor: &str) -> String {
+    let fin = fin_bloque_base(css);
+    let (base, resto) = css.split_at(fin);
+    // Buscar `prop` como nombre completo de declaración en el base.
+    let mut inicio = 0;
+    while let Some(rel) = base[inicio..].find(prop) {
+        let pos = inicio + rel;
+        let antes_ok = pos == 0
+            || matches!(
+                base.as_bytes()[pos - 1],
+                b' ' | b'\t' | b'\n' | b';' | b'{'
+            );
+        let despues = &base[pos + prop.len()..];
+        let despues_ok = despues
+            .trim_start()
+            .as_bytes()
+            .first()
+            .is_some_and(|c| *c == b':');
+        if antes_ok && despues_ok {
+            let fin_declaracion = base[pos..]
+                .find(';')
+                .map(|r| pos + r + 1)
+                .unwrap_or(base.len());
+            return format!(
+                "{}{}: {};{}{}",
+                &base[..pos],
+                prop,
+                valor,
+                &base[fin_declaracion..],
+                resto
+            );
+        }
+        inicio = pos + prop.len();
+    }
+    let separador = if base.is_empty() {
+        ""
+    } else if base.ends_with(';') {
+        " "
+    } else {
+        "; "
+    };
+    format!("{base}{separador}{prop}: {valor};{resto}")
 }
 
 /// ¿Todos los f32 de un `StyleProps` son finitos? (para el fuzz).
@@ -683,7 +841,7 @@ fn estilos_validos(p: &StyleProps) -> bool {
 mod pruebas {
     use super::*;
     use crate::documento::TipoGraphic;
-    use glass_core::scene::{RectTransformData, UITextData};
+    use glass_core::scene::{RectTransformData, UIButtonData, UIImageData, UITextData};
 
     fn nodo_texto(extra: &str) -> NodoDocumento {
         NodoDocumento {
@@ -784,6 +942,59 @@ mod pruebas {
         assert_eq!(resuelto2.font_size, Some(14.0));
     }
 
+    /// H2 (peces V4): la prioridad declarada es imagen > texto > botón.
+    /// Con colores divergentes, el tinte de la Image debe ganar sobre el
+    /// `target_graphic_color` del Button; sin Image, manda el del botón.
+    #[test]
+    fn imagen_gana_a_target_graphic_color_del_boton() {
+        fn nodo_boton(imagen: Option<[f32; 4]>, boton_color: [f32; 4]) -> NodoDocumento {
+            NodoDocumento {
+                entidad: 1,
+                nombre: String::new(),
+                padre: None,
+                hijos: vec![],
+                graphic: TipoGraphic::Imagen,
+                es_canvas: false,
+                es_canvas_raiz: false,
+                activo: true,
+                rect_transform: RectTransformData {
+                    anchored_position: [0.0, 0.0],
+                    size_delta: [100.0, 50.0],
+                    anchor_min: [0.0, 0.0],
+                    anchor_max: [0.0, 0.0],
+                    pivot: [0.5, 0.5],
+                },
+                canvas: None,
+                imagen: imagen.map(|c| UIImageData {
+                    color: c,
+                    ..UIImageData::default()
+                }),
+                texto: None,
+                boton: Some(UIButtonData {
+                    target_graphic_color: boton_color,
+                    ..UIButtonData::default()
+                }),
+                drag: None,
+                layout_group: None,
+                style_extra: String::new(),
+                raycast_target: true,
+            }
+        }
+        // Imagen roja + botón azul (el azul por defecto del editor):
+        // gana la imagen.
+        let nodo = nodo_boton(Some([1.0, 0.0, 0.0, 1.0]), [0.25, 0.55, 0.85, 1.0]);
+        assert_eq!(
+            resolver_estilos(&nodo, &EstadoPseudo::default()).background_color,
+            Some([1.0, 0.0, 0.0, 1.0])
+        );
+        // Sin imagen, manda el color del botón.
+        let nodo2 = nodo_boton(None, [0.25, 0.55, 0.85, 1.0]);
+        assert_eq!(
+            resolver_estilos(&nodo2, &EstadoPseudo::default()).background_color,
+            Some([0.25, 0.55, 0.85, 1.0])
+        );
+    }
+
     #[test]
     fn declaracion_invalida_se_ignora_con_aviso() {
         let extra = parsear_estilo_extra("width: 10em; color: red; opacity: 2;");
@@ -810,7 +1021,7 @@ mod pruebas {
         );
         assert!(extra.base.background_gradient.is_some());
         let (angulo, paradas) = extra.base.background_gradient.unwrap();
-        assert_eq!(angulo, 90.0);
+        assert_eq!(angulo, 0.0);
         assert_eq!(paradas.len(), 2);
         let sombra = extra.base.box_shadow.unwrap();
         assert_eq!((sombra.dx, sombra.dy, sombra.desenfoque), (2.0, 3.0, 4.0));
@@ -939,6 +1150,151 @@ mod pruebas {
         let vacia = StyleProps::default();
         fusionar(&mut destino, &vacia);
         assert_eq!(destino.text_overflow, Some(TextOverflow::Truncar));
+    }
+
+    #[test]
+    fn borde_se_parsea() {
+        let extra = parsear_estilo_extra("border: 3px #1ed760;");
+        let (ancho, color) = extra.base.border.unwrap();
+        assert_eq!(ancho, 3.0);
+        assert!(color[1] > 0.5);
+    }
+
+    #[test]
+    fn borde_invalido_da_aviso_y_no_panico() {
+        let extra = parsear_estilo_extra("border: 3px;");
+        assert_eq!(extra.base.border, None);
+        assert!(!extra.avisos.is_empty());
+    }
+
+    #[test]
+    fn letter_spacing_se_parsea_y_rechaza_negativo() {
+        let extra = parsear_estilo_extra("letter-spacing: 8px;");
+        assert_eq!(extra.base.letter_spacing, Some(8.0));
+        let extra2 = parsear_estilo_extra("letter-spacing: -2px;");
+        assert_eq!(extra2.base.letter_spacing, None);
+    }
+
+    #[test]
+    fn color_hex_se_convierte_a_lineal() {
+        let extra = parsear_estilo_extra("background-color: #0a1531;");
+        let c = extra.base.background_color.unwrap();
+        assert!((c[0] - 0.0030).abs() < 0.001);
+        assert!((c[1] - 0.0075).abs() < 0.001);
+        assert!((c[2] - 0.0308).abs() < 0.001);
+        assert_eq!(c[3], 1.0);
+    }
+
+    #[test]
+    fn color_rgba_medio_se_convierte_a_lineal() {
+        let extra = parsear_estilo_extra("color: rgba(128, 128, 128, 1);");
+        let c = extra.base.color.unwrap();
+        assert!((c[0] - 0.2159).abs() < 0.001);
+        assert_eq!(c[3], 1.0);
+    }
+
+    #[test]
+    fn angulo_degradado_sigue_css() {
+        let extra = parsear_estilo_extra("background: linear-gradient(90deg, #000000, #ffffff);");
+        let (angulo, paradas) = extra.base.background_gradient.unwrap();
+        assert_eq!(angulo, 0.0);
+        assert_eq!(paradas.len(), 2);
+    }
+
+    #[test]
+    fn color_a_css_redondea_a_hex() {
+        let extra = parsear_estilo_extra("background-color: #1ed760;");
+        let c = extra.base.background_color.unwrap();
+        assert_eq!(color_a_css(c), "#1ed760");
+        let extra2 = parsear_estilo_extra("color: rgba(255, 0, 0, 0.5);");
+        let c2 = extra2.base.color.unwrap();
+        assert!(color_a_css(c2).starts_with("rgba(255, 0, 0, 0.5"));
+    }
+
+    mod tests_establecer_declaracion {
+        use super::*;
+
+        #[test]
+        fn sustituye_propiedad_existente_en_base() {
+            let css = "color: red; opacity: 0.500;";
+            let resultado = establecer_declaracion(css, "opacity", "1.000");
+            assert_eq!(resultado, "color: red; opacity: 1.000;");
+        }
+
+        #[test]
+        fn anade_propiedad_nueva_en_base() {
+            let css = "color: red;";
+            let resultado = establecer_declaracion(css, "opacity", "0.500");
+            assert_eq!(resultado, "color: red; opacity: 0.500;");
+        }
+
+        #[test]
+        fn no_toca_bloque_hover() {
+            let css = "color: red;:hover{ color: blue; }";
+            let resultado = establecer_declaracion(css, "color", "green");
+            assert_eq!(resultado, "color: green;:hover{ color: blue; }");
+        }
+
+        #[test]
+        fn css_vacio_crea_declaracion() {
+            let resultado = establecer_declaracion("", "opacity", "0.500");
+            assert_eq!(resultado, "opacity: 0.500;");
+        }
+
+        #[test]
+        fn base_sin_punto_y_coma_final_anade_separador() {
+            let css = "color: red";
+            let resultado = establecer_declaracion(css, "opacity", "0.500");
+            assert_eq!(resultado, "color: red; opacity: 0.500;");
+        }
+    }
+
+    mod tests_puente_estilo_parseo {
+        use super::*;
+
+        #[test]
+        fn style_extra_del_puente_parsea_correctamente() {
+            let css = "background-color: #1ed760; border-radius: 4.0px 4.0px 4.0px 4.0px; opacity: 0.500; overflow: hidden; letter-spacing: 2.0px; border: 2.0px #ffffff;";
+            let props = parsear_estilo_extra(css).base;
+
+            // background-color: #1ed760 es sRGB (0x1e=30, 0xd7=215, 0x60=96);
+            // el parser convierte sRGB→lineal.
+            let srgb_a_lineal_local = |c: f32| -> f32 {
+                if c <= 0.04045 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            let bg = props.background_color.expect("background_color debería estar presente");
+            assert!((bg[0] - srgb_a_lineal_local(30.0 / 255.0)).abs() < 0.01);
+            assert!((bg[1] - srgb_a_lineal_local(215.0 / 255.0)).abs() < 0.01);
+            assert!((bg[2] - srgb_a_lineal_local(96.0 / 255.0)).abs() < 0.01);
+            assert!((bg[3] - 1.0).abs() < 0.01);
+            // El color #1ed760 NO debe ser igual al sRGB sin convertir.
+            assert!((bg[0] - 30.0 / 255.0).abs() > 0.001);
+
+            let br = props.border_radius.expect("border_radius debería estar presente");
+            assert!((br[0] - 4.0).abs() < 0.1);
+            assert!((br[1] - 4.0).abs() < 0.1);
+            assert!((br[2] - 4.0).abs() < 0.1);
+            assert!((br[3] - 4.0).abs() < 0.1);
+
+            let op = props.opacity.expect("opacity debería estar presente");
+            assert!((op - 0.5).abs() < 0.01);
+
+            assert_eq!(props.overflow, Some("hidden".to_string()));
+
+            let ls = props.letter_spacing.expect("letter_spacing debería estar presente");
+            assert!((ls - 2.0).abs() < 0.1);
+
+            let (ancho, color_borde) = props.border.expect("border debería estar presente");
+            assert!((ancho - 2.0).abs() < 0.1);
+            assert!((color_borde[0] - 1.0).abs() < 0.01);
+            assert!((color_borde[1] - 1.0).abs() < 0.01);
+            assert!((color_borde[2] - 1.0).abs() < 0.01);
+            assert!((color_borde[3] - 1.0).abs() < 0.01);
+        }
     }
 
 }

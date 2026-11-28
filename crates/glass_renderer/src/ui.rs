@@ -106,6 +106,8 @@ pub const MODO_COLOR: f32 = 0.0;
 pub const MODO_IMAGEN: f32 = 1.0;
 pub const MODO_TEXTO: f32 = 2.0;
 pub const MODO_SOMBRA: f32 = 3.0;
+/// Borde (V4/Q3): banda de `desenfoque` px hacia dentro del rect.
+pub const MODO_BORDE: f32 = 4.0;
 
 /// Métricas de un glifo en el atlas, en píxeles al tamaño de rasterizado.
 #[derive(Clone, Copy, Debug)]
@@ -254,6 +256,8 @@ impl UiBatch {
     /// `push_text`: origen sup-izq, saltos `\n`, avance por glifo).
     /// Primitiva de texto: los parámetros son los atributos de la
     /// pasada de glifos; agruparlos solo añadiría indirección.
+    /// `letter_spacing` es el letter-spacing en px de documento (Q3):
+    /// se suma al avance de cada glifo, como en el mapa de layout.
     #[allow(clippy::too_many_arguments)]
     pub fn push_text_extendido(
         &mut self,
@@ -264,6 +268,7 @@ impl UiBatch {
         color: [f32; 4],
         radios: [f32; 4],
         clip: Option<([f32; 4], f32)>,
+        letter_spacing: f32,
     ) {
         let k = font_size / ATLAS_RASTER_PX;
         let mut pen_x = origin_top_left[0];
@@ -286,7 +291,7 @@ impl UiBatch {
                 ];
                 self.push_quad_extendido(quad, g.uv, color, MODO_TEXTO, radios, clip, None, 0.0);
             }
-            pen_x += g.advance * k;
+            pen_x += g.advance * k + letter_spacing;
         }
     }
 

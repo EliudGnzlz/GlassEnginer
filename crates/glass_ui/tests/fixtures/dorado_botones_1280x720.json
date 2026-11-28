@@ -1,0 +1,1022 @@
+[
+  {
+    "entidad": 10,
+    "nombre": "HUD Canvas",
+    "graphic": "Ninguno",
+    "rect": [
+      0.0,
+      0.0,
+      1280.0,
+      720.0
+    ],
+    "estilos": {
+      "display": "Absoluto"
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 20,
+    "nombre": "Fondo",
+    "graphic": "Imagen",
+    "rect": [
+      0.0,
+      0.0,
+      1280.0,
+      720.0
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.00303527,
+        0.007499032,
+        0.030713445,
+        1.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 100,
+    "nombre": "Boton Verde",
+    "graphic": "Imagen",
+    "rect": [
+      100.0,
+      188.0,
+      240.0,
+      64.0
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.0129830325,
+        0.6795425,
+        0.116970666,
+        1.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 101,
+    "nombre": "Boton Verde Cara",
+    "graphic": "Imagen",
+    "rect": [
+      102.0,
+      190.0,
+      236.0,
+      60.0
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.004024717,
+        0.010960094,
+        0.04231141,
+        1.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 102,
+    "nombre": "Boton Verde Texto",
+    "graphic": "Texto",
+    "rect": [
+      100.0,
+      204.66667,
+      240.0,
+      30.666668
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "color": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "font_size": 22.666668
+    },
+    "texto_visible": "B O T Ó N"
+  },
+  {
+    "entidad": 103,
+    "nombre": "Boton Verde Relleno",
+    "graphic": "Imagen",
+    "rect": [
+      102.0,
+      188.0,
+      236.0,
+      25.333334
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.0129830325,
+        0.6795425,
+        0.116970666,
+        1.0
+      ],
+      "border_radius": [
+        0.0,
+        0.0,
+        40.0,
+        40.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 200,
+    "nombre": "Boton Blanco",
+    "graphic": "Imagen",
+    "rect": [
+      520.0,
+      188.0,
+      240.0,
+      64.0
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.91309863,
+        0.91309863,
+        0.91309863,
+        1.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 201,
+    "nombre": "Boton Blanco Cara",
+    "graphic": "Imagen",
+    "rect": [
+      521.3334,
+      189.33334,
+      237.33334,
+      61.333336
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.004024717,
+        0.010960094,
+        0.04231141,
+        1.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 202,
+    "nombre": "Boton Blanco Texto",
+    "graphic": "Texto",
+    "rect": [
+      520.0,
+      204.66667,
+      240.0,
+      30.666668
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "color": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "font_size": 22.666668
+    },
+    "texto_visible": "B O T Ó N"
+  },
+  {
+    "entidad": 206,
+    "nombre": "Cuadrado Sup Der",
+    "graphic": "Imagen",
+    "rect": [
+      754.6667,
+      182.66667,
+      10.666667,
+      10.666667
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.91309863,
+        0.91309863,
+        0.91309863,
+        1.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 207,
+    "nombre": "Cuadrado Inf Izq",
+    "graphic": "Imagen",
+    "rect": [
+      514.6667,
+      246.66667,
+      10.666667,
+      10.666667
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.91309863,
+        0.91309863,
+        0.91309863,
+        1.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 208,
+    "nombre": "Cuadrado Inf Izq Interior",
+    "graphic": "Imagen",
+    "rect": [
+      517.0,
+      249.0,
+      6.666667,
+      6.666667
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.004024717,
+        0.010960094,
+        0.04231141,
+        1.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 300,
+    "nombre": "Boton Neon",
+    "graphic": "Imagen",
+    "rect": [
+      940.0,
+      188.0,
+      240.0,
+      64.0
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.039546236,
+        0.4677838,
+        1.0,
+        1.0
+      ],
+      "box_shadow": {
+        "dx": 0.0,
+        "dy": 0.0,
+        "desenfoque": 14.666667,
+        "color": [
+          0.000910581,
+          0.06301003,
+          1.0,
+          1.0
+        ]
+      }
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 301,
+    "nombre": "Boton Neon Cara",
+    "graphic": "Imagen",
+    "rect": [
+      942.0,
+      190.0,
+      236.0,
+      60.0
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.004024717,
+        0.010960094,
+        0.04231141,
+        1.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 302,
+    "nombre": "Boton Neon Texto",
+    "graphic": "Texto",
+    "rect": [
+      940.0,
+      204.66667,
+      240.0,
+      30.666668
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "color": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "font_size": 22.666668
+    },
+    "texto_visible": "B O T Ó N"
+  },
+  {
+    "entidad": 306,
+    "nombre": "Rombo Sup",
+    "graphic": "Imagen",
+    "rect": [
+      1103.6667,
+      183.66667,
+      8.666667,
+      8.666667
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.42326766,
+        0.7605245,
+        1.0,
+        1.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 307,
+    "nombre": "Rombo Inf",
+    "graphic": "Imagen",
+    "rect": [
+      1007.6667,
+      247.66667,
+      8.666667,
+      8.666667
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.039546236,
+        0.4677838,
+        1.0,
+        1.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 308,
+    "nombre": "Rombo Inf Interior",
+    "graphic": "Imagen",
+    "rect": [
+      1009.6667,
+      249.66667,
+      6.666667,
+      6.666667
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.004024717,
+        0.010960094,
+        0.04231141,
+        1.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 380,
+    "nombre": "Boton Neon Halo1",
+    "graphic": "Imagen",
+    "rect": [
+      936.6667,
+      184.66667,
+      246.66667,
+      70.66667
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.0129830325,
+        0.27889428,
+        1.0,
+        0.17
+      ],
+      "border_radius": [
+        6.666667,
+        6.666667,
+        6.666667,
+        6.666667
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 381,
+    "nombre": "Boton Neon Halo2",
+    "graphic": "Imagen",
+    "rect": [
+      933.3334,
+      181.33334,
+      253.33334,
+      77.333336
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.0129830325,
+        0.27889428,
+        1.0,
+        0.12
+      ],
+      "border_radius": [
+        9.333334,
+        9.333334,
+        9.333334,
+        9.333334
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 382,
+    "nombre": "Boton Neon Halo3",
+    "graphic": "Imagen",
+    "rect": [
+      929.3334,
+      177.33334,
+      261.33334,
+      85.333336
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.0129830325,
+        0.27889428,
+        1.0,
+        0.08
+      ],
+      "border_radius": [
+        12.0,
+        12.0,
+        12.0,
+        12.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 383,
+    "nombre": "Boton Neon Halo4",
+    "graphic": "Imagen",
+    "rect": [
+      924.6667,
+      172.66667,
+      270.6667,
+      94.66667
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.0129830325,
+        0.27889428,
+        1.0,
+        0.05
+      ],
+      "border_radius": [
+        15.333334,
+        15.333334,
+        15.333334,
+        15.333334
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 384,
+    "nombre": "Boton Neon Halo5",
+    "graphic": "Imagen",
+    "rect": [
+      919.3334,
+      167.33334,
+      281.33334,
+      105.333336
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.0129830325,
+        0.27889428,
+        1.0,
+        0.03
+      ],
+      "border_radius": [
+        19.333334,
+        19.333334,
+        19.333334,
+        19.333334
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 385,
+    "nombre": "Boton Neon Halo6",
+    "graphic": "Imagen",
+    "rect": [
+      913.3334,
+      161.33334,
+      293.33334,
+      117.333336
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.0129830325,
+        0.27889428,
+        1.0,
+        0.018
+      ],
+      "border_radius": [
+        24.0,
+        24.0,
+        24.0,
+        24.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 400,
+    "nombre": "Boton Degradado Rosa",
+    "graphic": "Imagen",
+    "rect": [
+      300.0,
+      414.6667,
+      240.0,
+      64.0
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.9473065,
+        0.08650046,
+        0.5647115,
+        1.0
+      ],
+      "background_gradient": [
+        -90.0,
+        [
+          [
+            0.8879232,
+            0.008023192,
+            0.27889434,
+            1.0
+          ],
+          [
+            0.00303527,
+            0.27889434,
+            0.43965724,
+            1.0
+          ]
+        ]
+      ],
+      "box_shadow": {
+        "dx": 0.0,
+        "dy": 0.0,
+        "desenfoque": 17.333334,
+        "color": [
+          0.6038274,
+          0.008568125,
+          0.1274377,
+          1.0
+        ]
+      }
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 401,
+    "nombre": "Boton Degradado Rosa Texto",
+    "graphic": "Texto",
+    "rect": [
+      300.0,
+      431.33334,
+      240.0,
+      30.666668
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "color": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "font_size": 22.666668
+    },
+    "texto_visible": "B O T Ó N"
+  },
+  {
+    "entidad": 480,
+    "nombre": "Boton Rosa Halo1",
+    "graphic": "Imagen",
+    "rect": [
+      296.6667,
+      411.33334,
+      246.66667,
+      70.66667
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.7991027,
+        0.08865558,
+        0.39157248,
+        0.17
+      ],
+      "border_radius": [
+        6.666667,
+        6.666667,
+        6.666667,
+        6.666667
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 481,
+    "nombre": "Boton Rosa Halo2",
+    "graphic": "Imagen",
+    "rect": [
+      293.33334,
+      408.0,
+      253.33334,
+      77.333336
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.7991027,
+        0.08865558,
+        0.39157248,
+        0.12
+      ],
+      "border_radius": [
+        9.333334,
+        9.333334,
+        9.333334,
+        9.333334
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 482,
+    "nombre": "Boton Rosa Halo3",
+    "graphic": "Imagen",
+    "rect": [
+      289.33334,
+      404.0,
+      261.33334,
+      85.333336
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.7991027,
+        0.08865558,
+        0.39157248,
+        0.08
+      ],
+      "border_radius": [
+        12.0,
+        12.0,
+        12.0,
+        12.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 483,
+    "nombre": "Boton Rosa Halo4",
+    "graphic": "Imagen",
+    "rect": [
+      284.6667,
+      399.33334,
+      270.6667,
+      94.66667
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.7991027,
+        0.08865558,
+        0.39157248,
+        0.05
+      ],
+      "border_radius": [
+        15.333334,
+        15.333334,
+        15.333334,
+        15.333334
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 484,
+    "nombre": "Boton Rosa Halo5",
+    "graphic": "Imagen",
+    "rect": [
+      279.33334,
+      394.0,
+      281.33334,
+      105.333336
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.7991027,
+        0.08865558,
+        0.39157248,
+        0.03
+      ],
+      "border_radius": [
+        19.333334,
+        19.333334,
+        19.333334,
+        19.333334
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 485,
+    "nombre": "Boton Rosa Halo6",
+    "graphic": "Imagen",
+    "rect": [
+      273.33334,
+      388.0,
+      293.33334,
+      117.333336
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        0.7991027,
+        0.08865558,
+        0.39157248,
+        0.018
+      ],
+      "border_radius": [
+        24.0,
+        24.0,
+        24.0,
+        24.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 500,
+    "nombre": "Boton Degradado Rojo",
+    "graphic": "Imagen",
+    "rect": [
+      740.0,
+      414.6667,
+      240.0,
+      64.0
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        1.0,
+        0.6239604,
+        0.0,
+        1.0
+      ],
+      "background_gradient": [
+        -90.0,
+        [
+          [
+            1.0,
+            0.3467041,
+            0.0,
+            1.0
+          ],
+          [
+            1.0,
+            0.003676507,
+            0.0,
+            1.0
+          ]
+        ]
+      ],
+      "box_shadow": {
+        "dx": 0.0,
+        "dy": 0.0,
+        "desenfoque": 17.333334,
+        "color": [
+          1.0,
+          0.018500218,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 501,
+    "nombre": "Boton Degradado Rojo Texto",
+    "graphic": "Texto",
+    "rect": [
+      740.0,
+      431.33334,
+      240.0,
+      30.666668
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "color": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "font_size": 22.666668
+    },
+    "texto_visible": "B O T Ó N"
+  },
+  {
+    "entidad": 580,
+    "nombre": "Boton Rojo Halo1",
+    "graphic": "Imagen",
+    "rect": [
+      736.6667,
+      411.33334,
+      246.66667,
+      70.66667
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        1.0,
+        0.14412847,
+        0.0,
+        0.17
+      ],
+      "border_radius": [
+        6.666667,
+        6.666667,
+        6.666667,
+        6.666667
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 581,
+    "nombre": "Boton Rojo Halo2",
+    "graphic": "Imagen",
+    "rect": [
+      733.3334,
+      408.0,
+      253.33334,
+      77.333336
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        1.0,
+        0.14412847,
+        0.0,
+        0.12
+      ],
+      "border_radius": [
+        9.333334,
+        9.333334,
+        9.333334,
+        9.333334
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 582,
+    "nombre": "Boton Rojo Halo3",
+    "graphic": "Imagen",
+    "rect": [
+      729.3334,
+      404.0,
+      261.33334,
+      85.333336
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        1.0,
+        0.14412847,
+        0.0,
+        0.08
+      ],
+      "border_radius": [
+        12.0,
+        12.0,
+        12.0,
+        12.0
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 583,
+    "nombre": "Boton Rojo Halo4",
+    "graphic": "Imagen",
+    "rect": [
+      724.6667,
+      399.33334,
+      270.6667,
+      94.66667
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        1.0,
+        0.14412847,
+        0.0,
+        0.05
+      ],
+      "border_radius": [
+        15.333334,
+        15.333334,
+        15.333334,
+        15.333334
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 584,
+    "nombre": "Boton Rojo Halo5",
+    "graphic": "Imagen",
+    "rect": [
+      719.3334,
+      394.0,
+      281.33334,
+      105.333336
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        1.0,
+        0.14412847,
+        0.0,
+        0.03
+      ],
+      "border_radius": [
+        19.333334,
+        19.333334,
+        19.333334,
+        19.333334
+      ]
+    },
+    "texto_visible": ""
+  },
+  {
+    "entidad": 585,
+    "nombre": "Boton Rojo Halo6",
+    "graphic": "Imagen",
+    "rect": [
+      713.3334,
+      388.0,
+      293.33334,
+      117.333336
+    ],
+    "estilos": {
+      "display": "Absoluto",
+      "background_color": [
+        1.0,
+        0.14412847,
+        0.0,
+        0.018
+      ],
+      "border_radius": [
+        24.0,
+        24.0,
+        24.0,
+        24.0
+      ]
+    },
+    "texto_visible": ""
+  }
+]

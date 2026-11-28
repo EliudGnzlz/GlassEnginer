@@ -554,6 +554,21 @@ impl EngineSceneBridge {
     }
 }
 
+/// Formatea un color sRGB 0-1 a CSS sin conversión de espacio.
+/// Si a == 1.0 produce `#rrggbb`; si no, `rgba(r, g, b, a)`.
+/// (V4d: C# pasa los colores en sRGB y el parser convierte sRGB→lineal
+/// al derivar; aquí NO se convierte nada.)
+fn format_color_css(r: f32, g: f32, b: f32, a: f32) -> String {
+    let ri = (r * 255.0).round() as u8;
+    let gi = (g * 255.0).round() as u8;
+    let bi = (b * 255.0).round() as u8;
+    if (a - 1.0).abs() < f32::EPSILON {
+        format!("#{:02x}{:02x}{:02x}", ri, gi, bi)
+    } else {
+        format!("rgba({}, {}, {}, {:.3})", ri, gi, bi, a)
+    }
+}
+
 impl SceneBridge for EngineSceneBridge {
     fn get_transform(&self, entity_id: u64) -> Option<TransformFfi> {
         let state = self.scene_state.lock().ok()?;
@@ -896,6 +911,182 @@ impl SceneBridge for EngineSceneBridge {
             return false;
         };
         rt.size_delta = [w, h];
+        true
+    }
+
+    fn ui_set_background_color(&self, entity_id: u64, r: f32, g: f32, b: f32, a: f32) -> bool {
+        if !r.is_finite() || !g.is_finite() || !b.is_finite() || !a.is_finite() {
+            return false;
+        }
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(extra) = ent.style_extra_mut() else {
+            return false;
+        };
+        let valor = format_color_css(r, g, b, a);
+        *extra = glass_ui::parser::establecer_declaracion(extra, "background-color", &valor);
+        true
+    }
+
+    fn ui_set_border_radius(&self, entity_id: u64, tl: f32, tr: f32, br: f32, bl: f32) -> bool {
+        if !tl.is_finite() || !tr.is_finite() || !br.is_finite() || !bl.is_finite() {
+            return false;
+        }
+        if tl < 0.0 || tr < 0.0 || br < 0.0 || bl < 0.0 {
+            return false;
+        }
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(extra) = ent.style_extra_mut() else {
+            return false;
+        };
+        let valor = format!("{:.1}px {:.1}px {:.1}px {:.1}px", tl, tr, br, bl);
+        *extra = glass_ui::parser::establecer_declaracion(extra, "border-radius", &valor);
+        true
+    }
+
+    fn ui_set_opacity(&self, entity_id: u64, opacity: f32) -> bool {
+        if !opacity.is_finite() {
+            return false;
+        }
+        let opacity = opacity.clamp(0.0, 1.0);
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(extra) = ent.style_extra_mut() else {
+            return false;
+        };
+        let valor = format!("{:.3}", opacity);
+        *extra = glass_ui::parser::establecer_declaracion(extra, "opacity", &valor);
+        true
+    }
+
+    fn ui_set_overflow(&self, entity_id: u64, overflow: &str) -> bool {
+        let normalizado = overflow.trim().to_ascii_lowercase();
+        if normalizado != "visible" && normalizado != "hidden" {
+            return false;
+        }
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(extra) = ent.style_extra_mut() else {
+            return false;
+        };
+        *extra = glass_ui::parser::establecer_declaracion(extra, "overflow", &normalizado);
+        true
+    }
+
+    fn ui_set_letter_spacing(&self, entity_id: u64, px: f32) -> bool {
+        if !px.is_finite() {
+            return false;
+        }
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(extra) = ent.style_extra_mut() else {
+            return false;
+        };
+        let valor = format!("{:.1}px", px);
+        *extra = glass_ui::parser::establecer_declaracion(extra, "letter-spacing", &valor);
+        true
+    }
+
+    fn ui_set_border(&self, entity_id: u64, width: f32, r: f32, g: f32, b: f32, a: f32) -> bool {
+        if !width.is_finite() || !r.is_finite() || !g.is_finite() || !b.is_finite() || !a.is_finite() {
+            return false;
+        }
+        if width < 0.0 {
+            return false;
+        }
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(extra) = ent.style_extra_mut() else {
+            return false;
+        };
+        let color = format_color_css(r, g, b, a);
+        let valor = format!("{:.1}px {}", width, color);
+        *extra = glass_ui::parser::establecer_declaracion(extra, "border", &valor);
+        true
+    }
+
+    fn ui_set_anchor_min(&self, entity_id: u64, x: f32, y: f32) -> bool {
+        if !x.is_finite() || !y.is_finite() {
+            return false;
+        }
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(rt) = ent.rect_transform.as_mut() else {
+            return false;
+        };
+        rt.anchor_min = [x, y];
+        true
+    }
+
+    fn ui_set_anchor_max(&self, entity_id: u64, x: f32, y: f32) -> bool {
+        if !x.is_finite() || !y.is_finite() {
+            return false;
+        }
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(rt) = ent.rect_transform.as_mut() else {
+            return false;
+        };
+        rt.anchor_max = [x, y];
+        true
+    }
+
+    fn ui_set_pivot(&self, entity_id: u64, x: f32, y: f32) -> bool {
+        if !x.is_finite() || !y.is_finite() {
+            return false;
+        }
+        let mut state = match self.scene_state.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some(ent) = state.entities.iter_mut().find(|e| e.id == entity_id) else {
+            return false;
+        };
+        let Some(rt) = ent.rect_transform.as_mut() else {
+            return false;
+        };
+        rt.pivot = [x, y];
         true
     }
 
@@ -9612,6 +9803,15 @@ impl ApplicationHandler for GlassEngineApp {
                 if cargada {
                     let ruta = scene_file.clone();
                     self.bootstrap_scene_scripts_and_physics(&ruta);
+                    // Adenda V4c (integrada): el arranque con --scene debe
+                    // registrar la ruta de origen para que Guardar
+                    // reescriba el archivo que se abrió. En main ese
+                    // registro ya lo hace bootstrap_scene_scripts_and_physics
+                    // sobre el SceneManager (set_active_file: el gestor es
+                    // el único dueño de la identidad de la escena activa,
+                    // defecto S1); la versión de la rama V4 con campos
+                    // propios en la app quedó retirada en la integración
+                    // por duplicar ese mecanismo.
                 }
             } else if self.is_standalone {
                 let default_sc = glass_core::ProjectSettings::load_or_default("project.json").default_scene;

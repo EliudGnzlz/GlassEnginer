@@ -13,7 +13,7 @@
 //! - `resolver_estilos` aplica la cascada defecto del tipo → campos
 //!   del componente → `style_extra`, con la pseudo-clase del estado.
 
-use crate::documento::Documento;
+use crate::documento::{Documento, TipoGraphic};
 
 pub use crate::interaccion::RastreadorClic;
 use crate::estilos::StyleProps;
@@ -150,7 +150,7 @@ pub struct DestinoSoltar {
 /// implementa con el rasterizador provisional; V3 lo reimplementa
 /// sin tocar el layout.
 pub trait MedidaTexto {
-    fn medir(&self, texto: &str, tamano: f32, ancho_max: f32) -> (f32, f32);
+    fn medir(&self, texto: &str, tamano: f32, ancho_max: f32, letter_spacing: f32) -> (f32, f32);
 }
 
 /// Layout completo del documento en el viewport (P2).
@@ -167,6 +167,28 @@ pub fn hit_test(
     y: f32,
 ) -> Option<u64> {
     crate::interaccion::hit_test(doc, colocado, x, y)
+}
+
+/// Asciende desde la entidad indicada hasta el ancestro más cercano
+/// con componente UI propio (botón, imagen o InputField): ese es el
+/// CONTROL que se selecciona y se arrastra en el editor. Un hijo de
+/// texto (solo `ui_text`) no es control: se sube a su padre. Si ningún
+/// ancestro tiene componente de control (p. ej. un texto suelto bajo
+/// el Canvas), se devuelve la entidad original. Si la entidad no está
+/// en el documento, también se devuelve tal cual.
+pub fn ascender_a_control(doc: &Documento, entidad: u64) -> u64 {
+    let mut idx = doc.nodos.iter().position(|n| n.entidad == entidad);
+    while let Some(i) = idx {
+        let nodo = &doc.nodos[i];
+        if nodo.boton.is_some()
+            || nodo.imagen.is_some()
+            || nodo.graphic == TipoGraphic::InputField
+        {
+            return nodo.entidad;
+        }
+        idx = nodo.padre;
+    }
+    entidad
 }
 
 /// Inicia un arrastre bajo (x, y).
@@ -202,4 +224,134 @@ pub fn arrastre_soltar(
     y: f32,
 ) -> Option<DestinoSoltar> {
     crate::interaccion::arrastre_soltar(doc, colocado, arrastrada, x, y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::derivacion::derivar_documentos;
+    use glass_core::scene::{
+        CanvasData, EntityData, RectTransformData, SceneState, UIButtonData, UIInputFieldData,
+        UIImageData, UITextData,
+    };
+
+    fn entidad(id: u64, nombre: &str) -> EntityData {
+        let mut e = EntityData::new(id, nombre.to_string(), Vec::new());
+        e.active = true;
+        e
+    }
+
+    fn rect() -> RectTransformData {
+        RectTransformData {
+            anchored_position: [0.0, 0.0],
+            size_delta: [100.0, 100.0],
+            anchor_min: [0.5, 0.5],
+            anchor_max: [0.5, 0.5],
+            pivot: [0.5, 0.5],
+        }
+    }
+
+    fn canvas() -> CanvasData {
+        CanvasData {
+            render_mode: "ScreenSpaceOverlay".to_string(),
+            reference_resolution: [1920.0, 1080.0],
+            match_width_or_height: 0.5,
+        }
+    }
+
+    fn canvas_raiz(id: u64) -> EntityData {
+        let mut e = entidad(id, "Canvas");
+        e.canvas = Some(canvas());
+        e.rect_transform = Some(rect());
+        e
+    }
+
+    fn enlazar(ents: &mut [EntityData], padre: u64, hijo: u64) {
+        for e in ents.iter_mut() {
+            if e.id == padre {
+                e.children.push(hijo);
+            }
+            if e.id == hijo {
+                e.parent = Some(padre);
+            }
+        }
+    }
+
+    fn escena(ents: Vec<EntityData>) -> SceneState {
+        let mut s = SceneState::default();
+        s.replace_entities(ents);
+        s
+    }
+
+    fn documento(ents: Vec<EntityData>) -> Documento {
+        let docs = derivar_documentos(&escena(ents));
+        assert_eq!(docs.len(), 1, "se esperaba un solo documento");
+        docs.into_iter().next().unwrap()
+    }
+
+    fn boton(id: u64) -> EntityData {
+        let mut e = entidad(id, "Botón");
+        e.rect_transform = Some(rect());
+        e.ui_button = Some(UIButtonData::default());
+        e
+    }
+
+    fn texto(id: u64) -> EntityData {
+        let mut e = entidad(id, "Texto");
+        e.rect_transform = Some(rect());
+        e.ui_text = Some(UITextData::default());
+        e
+    }
+
+    fn panel(id: u64) -> EntityData {
+        let mut e = entidad(id, "Panel");
+        e.rect_transform = Some(rect());
+        e.ui_image = Some(UIImageData::default());
+        e
+    }
+
+    #[test]
+    fn hijo_de_texto_asciende_al_boton() {
+        let mut ents = vec![canvas_raiz(10), boton(12), texto(14)];
+        enlazar(&mut ents, 10, 12);
+        enlazar(&mut ents, 12, 14);
+        let doc = documento(ents);
+        assert_eq!(ascender_a_control(&doc, 14), 12);
+        assert_eq!(ascender_a_control(&doc, 12), 12);
+    }
+
+    #[test]
+    fn texto_suelto_se_queda() {
+        let mut ents = vec![canvas_raiz(10), texto(20)];
+        enlazar(&mut ents, 10, 20);
+        let doc = documento(ents);
+        assert_eq!(ascender_a_control(&doc, 20), 20);
+    }
+
+    #[test]
+    fn hijo_de_texto_asciende_al_panel() {
+        let mut ents = vec![canvas_raiz(10), panel(30), texto(31)];
+        enlazar(&mut ents, 10, 30);
+        enlazar(&mut ents, 30, 31);
+        let doc = documento(ents);
+        assert_eq!(ascender_a_control(&doc, 31), 30);
+        assert_eq!(ascender_a_control(&doc, 30), 30);
+    }
+
+    #[test]
+    fn input_field_es_control() {
+        let mut e = entidad(40, "Campo");
+        e.rect_transform = Some(rect());
+        e.ui_input_field = Some(UIInputFieldData::default());
+        let mut ents = vec![canvas_raiz(10), e];
+        enlazar(&mut ents, 10, 40);
+        let doc = documento(ents);
+        assert_eq!(ascender_a_control(&doc, 40), 40);
+    }
+
+    #[test]
+    fn entidad_ausente_devuelve_la_misma() {
+        let doc = documento(vec![canvas_raiz(10)]);
+        assert_eq!(ascender_a_control(&doc, 999), 999);
+    }
 }

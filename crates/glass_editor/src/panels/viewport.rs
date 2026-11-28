@@ -1,5 +1,6 @@
 use egui::load::SizedTexture;
 use egui::{vec2, Color32, Frame, Image, RichText, TextureId, Ui};
+use glass_core::scene::RectTransformData;
 use glass_core::SceneState;
 use std::sync::{Arc, Mutex};
 
@@ -225,6 +226,30 @@ pub struct AristasMalla {
     pub firma: (usize, usize),
 }
 
+/// Modo del arrastre de autorado en la GameView (V4c).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ModoArrastreUi {
+    Mover,
+    Esquina,
+}
+
+/// Estado de un arrastre de autorado en curso en la GameView (V4c).
+#[derive(Debug, Clone)]
+pub struct ArrastreUi {
+    pub entidad: u64,
+    pub modo: ModoArrastreUi,
+    /// Punto del puntero al pulsar, en px locales a game_rect.
+    pub punto_inicial: [f32; 2],
+    /// RectTransform al pulsar (unidades de referencia).
+    pub rt_inicial: RectTransformData,
+    /// Rect completo al pulsar [x, y, w, h] en px locales a game_rect.
+    pub rect_inicial: [f32; 4],
+    /// Rect del padre al pulsar [x, y, w, h] en unidades de referencia.
+    pub padre_ref: [f32; 4],
+    /// Escala del canvas al pulsar.
+    pub escala: f32,
+}
+
 pub struct ViewportPanel {
     pub width: f32, // Para compatibilidad
     pub height: f32,
@@ -255,6 +280,9 @@ pub struct ViewportPanel {
     // saca el puntero del segmento antes de ese frame y la captura se
     // perdía en silencio).
     pub press_axis: GizmoAxis,
+    // Arrastre de autorado UI en la GameView (V4c): mover o redimensionar
+    // con el asa. None cuando no hay arrastre en curso.
+    pub ui_drag: Option<ArrastreUi>,
     // Rect [x, y, ancho, alto] en puntos egui donde se pinta el juego en la
     // pestaña Game; None si aún no se ha dibujado.
     pub game_view_rect: Option<[f32; 4]>,
@@ -321,6 +349,7 @@ impl Default for ViewportPanel {
             selected_camera_id: None,
             active_drag_axis: GizmoAxis::None,
             press_axis: GizmoAxis::None,
+            ui_drag: None,
             game_view_rect: None,
             fly_speed: 10.0,
             fly_active: false,
@@ -333,6 +362,129 @@ impl Default for ViewportPanel {
             pending_carga: None,
         }
     }
+}
+
+/// RectTransform de la entidad, clonado (V4c).
+fn rect_transform_de(
+    scene_state: &Arc<Mutex<SceneState>>,
+    id: u64,
+) -> Option<RectTransformData> {
+    scene_state
+        .lock()
+        .ok()?
+        .entities
+        .iter()
+        .find(|e| e.id == id)?
+        .rect_transform
+        .clone()
+}
+
+/// Rect del padre de la entidad en unidades de referencia (V4c): el span
+/// de anclas se calcula contra él. Sin padre conocido, el viewport.
+fn padre_ref_de(
+    doc: &glass_ui::documento::Documento,
+    colocado: Option<&glass_ui::api::DocumentoColocado>,
+    id: u64,
+    game_rect: egui::Rect,
+    s: f32,
+) -> [f32; 4] {
+    let s = if s.abs() < 1e-6 { 1.0 } else { s };
+    let viewport = [0.0, 0.0, game_rect.width() / s, game_rect.height() / s];
+    let Some(colocado) = colocado else {
+        return viewport;
+    };
+    let Some(idx) = doc.nodos.iter().position(|n| n.entidad == id) else {
+        return viewport;
+    };
+    let Some(pidx) = doc.nodos[idx].padre else {
+        return viewport;
+    };
+    let Some(pn) = colocado.nodos.get(pidx) else {
+        return viewport;
+    };
+    [
+        pn.rect.x / s,
+        pn.rect.y / s,
+        pn.rect.ancho / s,
+        pn.rect.alto / s,
+    ]
+}
+
+/// Convierte un delta en px de pantalla (Y hacia abajo) a unidades de
+/// referencia (la Y de `anchored_position` crece hacia arriba).
+pub fn delta_referencia(delta_pantalla: [f32; 2], s: f32) -> [f32; 2] {
+    let s = if s.abs() < 1e-6 { 1.0 } else { s };
+    [delta_pantalla[0] / s, -delta_pantalla[1] / s]
+}
+
+/// Aplica un arrastre de autorado al RectTransform sin tocar la escena
+/// (V4c). `padre_ref` es el rect del padre en unidades de referencia
+/// (para el span de anclas); `delta_ref` viene de `delta_referencia`.
+pub fn aplicar_arrastre_ui(
+    rt: &RectTransformData,
+    padre_ref: [f32; 4],
+    delta_ref: [f32; 2],
+    modo: ModoArrastreUi,
+) -> RectTransformData {
+    if delta_ref[0] == 0.0 && delta_ref[1] == 0.0 {
+        return rt.clone();
+    }
+
+    let mut out = rt.clone();
+
+    let span_x = (rt.anchor_max[0] - rt.anchor_min[0]) * padre_ref[2];
+    let span_y = (rt.anchor_max[1] - rt.anchor_min[1]) * padre_ref[3];
+
+    match modo {
+        ModoArrastreUi::Mover => {
+            for eje in 0..2 {
+                let estirado = (rt.anchor_min[eje] - rt.anchor_max[eje]).abs() > 1e-6;
+                if estirado {
+                    out.size_delta[eje] += delta_ref[eje];
+                } else {
+                    out.anchored_position[eje] += delta_ref[eje];
+                }
+            }
+        }
+        ModoArrastreUi::Esquina => {
+            // Tamaño inicial en referencia (span de anclas + size_delta).
+            let w_ref = span_x + rt.size_delta[0];
+            let h_ref = span_y + rt.size_delta[1];
+
+            // La esquina bajo el puntero se mueve con el delta en
+            // pantalla: en X el delta de referencia es directo; en Y hay
+            // que deshacer el giro de `delta_referencia` (allí la Y se
+            // invierte porque `anchored_position` crece hacia arriba,
+            // pero el tamaño crece hacia abajo en pantalla).
+            let w_new = (w_ref + delta_ref[0]).max(10.0);
+            let h_new = (h_ref - delta_ref[1]).max(10.0);
+
+            out.size_delta = [w_new - span_x, h_new - span_y];
+
+            // Reajustar `anchored_position` para fijar la esquina
+            // superior-izquierda (en pantalla) del rect, despejando de
+            // `resolve_ui_rect_in` con el nuevo tamaño:
+            //   x = ax0 + span*pivot_x + apos_x - w*pivot_x (constante)
+            //     => apos_x += (w_new - w_ref) * pivot_x
+            //   y = ay0 + span*(1-pivot_y) - apos_y - h*(1-pivot_y)
+            //     => apos_y -= (h_new - h_ref) * (1 - pivot_y)
+            let dw = w_new - w_ref;
+            let dh = h_new - h_ref;
+            out.anchored_position[0] = rt.anchored_position[0] + dw * rt.pivot[0];
+            out.anchored_position[1] =
+                rt.anchored_position[1] - dh * (1.0 - rt.pivot[1]);
+        }
+    }
+
+    out
+}
+
+/// Contexto de un frame de la GameView para el arrastre de autorado
+/// (V4c): el documento y el colocado ya derivados, más los rects.
+struct ContextoArrastreUi<'a> {
+    doc: Option<&'a glass_ui::documento::Documento>,
+    colocado: Option<&'a glass_ui::api::DocumentoColocado>,
+    rects: &'a std::collections::HashMap<u64, [f32; 4]>,
 }
 
 impl ViewportPanel {
@@ -1808,6 +1960,7 @@ impl ViewportPanel {
         &mut self,
         ui: &mut Ui,
         texture_id: Option<TextureId>,
+        selected_entity_id: &mut Option<u64>,
         scene_state: &Arc<Mutex<SceneState>>,
     ) {
         self.active_tab = ViewportTab::GameView;
@@ -1909,8 +2062,72 @@ impl ViewportPanel {
                     let sized_tex = SizedTexture::new(id, draw_size);
                     Image::from_texture(sized_tex).paint_at(ui, game_rect);
                 }
-                // Renderizar Canvas UI sobre la pantalla de juego (Textos, Botones, etc.)
-                Self::render_in_game_canvas_ui(ui, game_rect, scene_state, self.play_state == PlayState::Playing);
+
+                // V4c: una sola derivación del documento por frame en
+                // edición (auditoría C7: la vista previa usa el MISMO
+                // documento colocado que el runtime). En Play no se
+                // deriva nada: el overlay no dibuja y no hay arrastre.
+                let (doc_opt, colocado_opt, rects) = if self.play_state == PlayState::Edit {
+                    match scene_state.lock() {
+                        Ok(scene) => {
+                            let docs = glass_ui::derivacion::derivar_documentos(&scene);
+                            match docs.into_iter().next() {
+                                Some(doc) => {
+                                    let colocado = glass_ui::api::colocar_documento(
+                                        &doc,
+                                        glass_ui::api::Viewport {
+                                            ancho: game_rect.width(),
+                                            alto: game_rect.height(),
+                                        },
+                                    );
+                                    let rects =
+                                        glass_ui::api::rects_colocados(&doc, &colocado);
+                                    (Some(doc), Some(colocado), rects)
+                                }
+                                None => (
+                                    None,
+                                    None,
+                                    std::collections::HashMap::new(),
+                                ),
+                            }
+                        }
+                        Err(_) => (None, None, std::collections::HashMap::new()),
+                    }
+                } else {
+                    (None, None, std::collections::HashMap::new())
+                };
+
+                // Contenido UI + marco de selección + asa (V4c1): el
+                // overlay pinta la UI porque la textura del editor no
+                // lleva el lote (ver render_in_game_canvas_ui).
+                if let Ok(scene) = scene_state.lock() {
+                    Self::render_in_game_canvas_ui(
+                        ui,
+                        game_rect,
+                        &scene.entities,
+                        &rects,
+                        self.play_state == PlayState::Playing,
+                        *selected_entity_id,
+                    );
+                }
+
+                // V4c2: arrastre de autorado en la GameView. Solo en
+                // edición. El vigía de undo (docking) ya consolida UN
+                // paso al soltar: mientras el puntero está pulsado,
+                // `editando` es true y no consolida a mitad del arrastre.
+                if self.play_state == PlayState::Edit {
+                    self.manejar_arrastre_ui(
+                        ui,
+                        game_rect,
+                        scene_state,
+                        selected_entity_id,
+                        ContextoArrastreUi {
+                            doc: doc_opt.as_ref(),
+                            colocado: colocado_opt.as_ref(),
+                            rects: &rects,
+                        },
+                    );
+                }
             } else {
                 // Fondo oscuro cuando no hay cámara activa (Estilo Unity)
                 ui.painter().rect_filled(game_rect, 0.0, Color32::from_rgb(20, 20, 26));
@@ -1974,55 +2191,223 @@ impl ViewportPanel {
     ) {
         match self.active_tab {
             ViewportTab::SceneView => self.render_scene_tab(ui, texture_id, None, selected_entity_id, scene_state, None),
-            ViewportTab::GameView => self.render_game_tab(ui, texture_id, scene_state),
+            ViewportTab::GameView => self.render_game_tab(ui, texture_id, selected_entity_id, scene_state),
         }
     }
 
-    /// Renderiza elementos de Canvas UI superpuestos en la vista de juego (Screen Space Overlay)
-    fn render_in_game_canvas_ui(ui: &mut Ui, game_rect: egui::Rect, scene_state: &Arc<Mutex<SceneState>>, playing: bool) {
-        if let Ok(scene) = scene_state.lock() {
-            // Auditoría C7: la vista previa usa el MISMO documento
-            // colocado que el runtime (V2): jerarquía, anclas con
-            // estirado, layout groups y escala de canvas coinciden
-            // con lo que se verá en juego.
-            let rects = {
-                let docs = glass_ui::derivacion::derivar_documentos(&scene);
-                match docs.into_iter().next() {
-                    Some(doc) => {
-                        let colocado = glass_ui::api::colocar_documento(
-                            &doc,
-                            glass_ui::api::Viewport {
-                                ancho: game_rect.width(),
-                                alto: game_rect.height(),
-                            },
-                        );
-                        glass_ui::api::rects_colocados(&doc, &colocado)
-                    }
-                    None => std::collections::HashMap::new(),
-                }
-            };
-            for ent in &scene.entities {
-                if !ent.active { continue; }
-                if ent.rect_transform.is_some() {
-                    let Some(r) = rects.get(&ent.id) else { continue };
-                    let elem_rect = egui::Rect::from_min_size(
-                        egui::pos2(game_rect.left() + r[0], game_rect.top() + r[1]),
-                        egui::vec2(r[2], r[3]),
-                    );
+    /// Arrastre de autorado UI en la GameView (V4c2): mover con el cuerpo
+    /// o redimensionar con el asa de la seleccionada. Escribe el
+    /// RectTransform en vivo; el vigía de undo consolida un solo paso al
+    /// soltar. Esc cancela y restaura el valor inicial.
+    fn manejar_arrastre_ui(
+        &mut self,
+        ui: &mut Ui,
+        game_rect: egui::Rect,
+        scene_state: &Arc<Mutex<SceneState>>,
+        selected_entity_id: &mut Option<u64>,
+        ctx: ContextoArrastreUi<'_>,
+    ) {
+        let response = ui.interact(
+            game_rect,
+            egui::Id::new("game_view_ui_drag"),
+            egui::Sense::click_and_drag(),
+        );
+        let pos_local = ui
+            .input(|i| i.pointer.hover_pos())
+            .map(|p| [p.x - game_rect.min.x, p.y - game_rect.min.y]);
 
-                    if let Some(btn) = &ent.ui_button {
-                        let col = Color32::from_rgba_unmultiplied(
-                            (btn.target_graphic_color[0] * 255.0) as u8,
-                            (btn.target_graphic_color[1] * 255.0) as u8,
-                            (btn.target_graphic_color[2] * 255.0) as u8,
-                            (btn.target_graphic_color[3] * 255.0) as u8,
+        // Esc cancela un arrastre en curso: restaura el RectTransform
+        // inicial y no deja rastro (el hash vuelve al de antes del
+        // arrastre, así el vigía de undo no consolida ningún paso). Se
+        // comprueba siempre que haya arrastre, no solo al moverse.
+        if self.ui_drag.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if let Some(arr) = self.ui_drag.take() {
+                if let Ok(mut scene) = scene_state.lock() {
+                    if let Some(ent) = scene.entities.iter_mut().find(|e| e.id == arr.entidad) {
+                        ent.rect_transform = Some(arr.rt_inicial);
+                    }
+                }
+            }
+            return;
+        }
+
+        // Pulsar: la decisión de captura se toma en el momento de pulsar
+        // (como el gizmo 3D), no cuando egui declara el arrastre.
+        if response.hovered() && ui.input(|i| i.pointer.primary_pressed()) {
+            if let (Some([px, py]), Some(doc)) = (pos_local, ctx.doc) {
+                let s = doc
+                    .nodos
+                    .get(doc.canvas_raiz)
+                    .and_then(|n| n.canvas.as_ref())
+                    .map(|c| {
+                        glass_core::scene::canvas_scale_factor(
+                            c,
+                            game_rect.width(),
+                            game_rect.height(),
+                        )
+                    })
+                    .unwrap_or(1.0);
+                let mut iniciado = false;
+                // ¿Pulsa en el asa de la seleccionada?
+                if let Some(sel) = *selected_entity_id {
+                    if let Some(r) = ctx.rects.get(&sel) {
+                        let elem = egui::Rect::from_min_size(
+                            egui::pos2(game_rect.min.x + r[0], game_rect.min.y + r[1]),
+                            egui::vec2(r[2], r[3]),
                         );
-                        let label = ent.ui_text.as_ref().map(|t| t.text.as_str()).unwrap_or("Button");
-                        if playing {
-                            // En Play el clic lo despacha la ruta runtime del Canvas;
-                            // aquí solo se pinta para no consumir el evento en egui.
-                            let painter = ui.painter();
-                            painter.rect_filled(elem_rect, 0.0, col);
+                        let (_, asa) = Self::marco_seleccion_ui(elem);
+                        if asa.contains(egui::pos2(game_rect.min.x + px, game_rect.min.y + py))
+                        {
+                            if let Some(rt) = rect_transform_de(scene_state, sel) {
+                                let padre_ref =
+                                    padre_ref_de(doc, ctx.colocado, sel, game_rect, s);
+                                self.ui_drag = Some(ArrastreUi {
+                                    entidad: sel,
+                                    modo: ModoArrastreUi::Esquina,
+                                    punto_inicial: [px, py],
+                                    rt_inicial: rt,
+                                    rect_inicial: *r,
+                                    padre_ref,
+                                    escala: s,
+                                });
+                                iniciado = true;
+                            }
+                        }
+                    }
+                }
+                // Si no, hit-test sobre lo colocado: asciende al control
+                // (V4c adenda: el cuerpo arrastra el botón/panel/imagen,
+                // no el hijo de texto) y selecciona y arrastra ese.
+                if !iniciado {
+                    if let Some(colocado) = ctx.colocado {
+                        match glass_ui::api::hit_test(doc, colocado, px, py) {
+                            Some(id) => {
+                                let id = glass_ui::api::ascender_a_control(doc, id);
+                                *selected_entity_id = Some(id);
+                                if let (Some(rc), Some(rt)) =
+                                    (ctx.rects.get(&id), rect_transform_de(scene_state, id))
+                                {
+                                    let padre_ref =
+                                        padre_ref_de(doc, Some(colocado), id, game_rect, s);
+                                    self.ui_drag = Some(ArrastreUi {
+                                        entidad: id,
+                                        modo: ModoArrastreUi::Mover,
+                                        punto_inicial: [px, py],
+                                        rt_inicial: rt,
+                                        rect_inicial: *rc,
+                                        padre_ref,
+                                        escala: s,
+                                    });
+                                }
+                            }
+                            None => {
+                                *selected_entity_id = None;
+                                self.ui_drag = None;
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        // Arrastrar: escribir el RectTransform en vivo, solo si cambia.
+        if response.dragged() {
+            if let Some(arr) = self.ui_drag.clone() {
+                if let Some([px, py]) = pos_local {
+                    let delta_pantalla =
+                        [px - arr.punto_inicial[0], py - arr.punto_inicial[1]];
+                    let delta_ref = delta_referencia(delta_pantalla, arr.escala);
+                    let nuevo =
+                        aplicar_arrastre_ui(&arr.rt_inicial, arr.padre_ref, delta_ref, arr.modo);
+                    if let Ok(mut scene) = scene_state.lock() {
+                        if let Some(ent) =
+                            scene.entities.iter_mut().find(|e| e.id == arr.entidad)
+                        {
+                            let difiere = match &ent.rect_transform {
+                                Some(a) => {
+                                    a.anchored_position != nuevo.anchored_position
+                                        || a.size_delta != nuevo.size_delta
+                                        || a.anchor_min != nuevo.anchor_min
+                                        || a.anchor_max != nuevo.anchor_max
+                                        || a.pivot != nuevo.pivot
+                                }
+                                None => true,
+                            };
+                            if difiere {
+                                ent.rect_transform = Some(nuevo);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Soltar: el vigía de undo consolida el paso; aquí solo se vacía.
+        // (egui no expone drag_released en esta versión: el puntero
+        // soltado es la señal.)
+        if self.ui_drag.is_some() && !ui.input(|i| i.pointer.any_down()) {
+            self.ui_drag = None;
+        }
+    }
+
+    /// Marco de selección puro: devuelve (marco, asa).
+    /// El marco es el propio rect; el asa es un cuadrado de 8x8 px centrado
+    /// en la esquina inferior derecha del rect (mitad dentro, mitad fuera).
+    fn marco_seleccion_ui(rect: egui::Rect) -> (egui::Rect, egui::Rect) {
+        const LADO_ASA: f32 = 8.0;
+        let centro = rect.right_bottom();
+        let asa = egui::Rect::from_center_size(centro, egui::vec2(LADO_ASA, LADO_ASA));
+        (rect, asa)
+    }
+
+    /// Renderiza elementos de Canvas UI superpuestos en la vista de juego (Screen Space Overlay)
+    ///
+    /// D1 (arreglo de raíz): la textura de juego del editor NO lleva el
+    /// lote UI (en `main.rs` el lote solo se construye con
+    /// `render_standalone`, falso en el binario con editor), así que el
+    /// overlay es lo único que pinta la UI en la GameView. El doble
+    /// dibujo venía de la etiqueta de reserva: un botón sin `ui_text`
+    /// propio (tras la migración su texto vive en un hijo) dibujaba
+    /// «Button», y el hijo dibujaba «JUGAR». Ahora la etiqueta del botón
+    /// sale SOLO de su propio `ui_text`; sin él, el botón se dibuja sin
+    /// texto y el hijo dibuja el suyo una sola vez. Además, en edición,
+    /// se dibuja el marco de selección + asa de la seleccionada.
+    fn render_in_game_canvas_ui(
+        ui: &mut Ui,
+        game_rect: egui::Rect,
+        entities: &[glass_core::scene::EntityData],
+        rects: &std::collections::HashMap<u64, [f32; 4]>,
+        playing: bool,
+        seleccionada: Option<u64>,
+    ) {
+        for ent in entities {
+            if !ent.active {
+                continue;
+            }
+            if ent.rect_transform.is_some() {
+                let Some(r) = rects.get(&ent.id) else { continue };
+                let elem_rect = egui::Rect::from_min_size(
+                    egui::pos2(game_rect.left() + r[0], game_rect.top() + r[1]),
+                    egui::vec2(r[2], r[3]),
+                );
+
+                if let Some(btn) = &ent.ui_button {
+                    let col = Color32::from_rgba_unmultiplied(
+                        (btn.target_graphic_color[0] * 255.0) as u8,
+                        (btn.target_graphic_color[1] * 255.0) as u8,
+                        (btn.target_graphic_color[2] * 255.0) as u8,
+                        (btn.target_graphic_color[3] * 255.0) as u8,
+                    );
+                    // D1: sin `ui_text` propio no hay etiqueta (la lleva
+                    // el hijo); nunca se inventa «Button».
+                    let label = ent.ui_text.as_ref().map(|t| t.text.as_str()).unwrap_or("");
+                    if playing {
+                        // En Play el clic lo despacha la ruta runtime del Canvas;
+                        // aquí solo se pinta para no consumir el evento en egui.
+                        let painter = ui.painter();
+                        painter.rect_filled(elem_rect, 0.0, col);
+                        if !label.is_empty() {
                             painter.text(
                                 elem_rect.center(),
                                 egui::Align2::CENTER_CENTER,
@@ -2030,30 +2415,57 @@ impl ViewportPanel {
                                 egui::FontId::proportional(16.0),
                                 Color32::WHITE,
                             );
-                        } else {
-                            let b = egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(col);
-                            if ui.put(elem_rect, b).clicked() {
-                                log::info!("[Canvas UI] Botón '{}' clickeado en GameView!", ent.name);
-                            }
                         }
-                    } else if let Some(txt) = &ent.ui_text {
-                        let col = Color32::from_rgba_unmultiplied(
-                            (txt.color[0] * 255.0) as u8,
-                            (txt.color[1] * 255.0) as u8,
-                            (txt.color[2] * 255.0) as u8,
-                            (txt.color[3] * 255.0) as u8,
-                        );
-                        ui.painter().text(
-                            elem_rect.min,
-                            egui::Align2::LEFT_TOP,
-                            &txt.text,
-                            egui::FontId::proportional(txt.font_size.max(10.0)),
-                            col,
-                        );
+                    } else {
+                        let b = egui::Button::new(RichText::new(label).color(Color32::WHITE))
+                            .fill(col);
+                        if ui.put(elem_rect, b).clicked() {
+                            log::info!("[Canvas UI] Botón '{}' clickeado en GameView!", ent.name);
+                        }
                     }
+                } else if let Some(txt) = &ent.ui_text {
+                    let col = Color32::from_rgba_unmultiplied(
+                        (txt.color[0] * 255.0) as u8,
+                        (txt.color[1] * 255.0) as u8,
+                        (txt.color[2] * 255.0) as u8,
+                        (txt.color[3] * 255.0) as u8,
+                    );
+                    ui.painter().text(
+                        elem_rect.min,
+                        egui::Align2::LEFT_TOP,
+                        &txt.text,
+                        egui::FontId::proportional(txt.font_size.max(10.0)),
+                        col,
+                    );
                 }
             }
         }
+
+        // Marco de selección + asa (V4c1), solo en edición.
+        if playing {
+            return;
+        }
+        let Some(id_sel) = seleccionada else { return };
+        let Some(r) = rects.get(&id_sel) else { return };
+        let elem_rect = egui::Rect::from_min_size(
+            egui::pos2(game_rect.left() + r[0], game_rect.top() + r[1]),
+            egui::vec2(r[2], r[3]),
+        );
+        let (marco, asa) = Self::marco_seleccion_ui(elem_rect);
+        let painter = ui.painter();
+        painter.rect_stroke(
+            marco,
+            0.0,
+            egui::Stroke::new(1.5, Color32::from_rgb(80, 160, 255)),
+            egui::StrokeKind::Outside,
+        );
+        painter.rect_filled(asa, 0.0, Color32::WHITE);
+        painter.rect_stroke(
+            asa,
+            0.0,
+            egui::Stroke::new(1.0, Color32::BLACK),
+            egui::StrokeKind::Outside,
+        );
     }
 }
 
@@ -2079,5 +2491,117 @@ mod tests {
     #[test]
     fn fmt_miles_mil() {
         assert_eq!(fmt_miles(1000), "1.000");
+    }
+
+    #[test]
+    fn asa_mide_8x8() {
+        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(100.0, 40.0));
+        let (_, asa) = super::ViewportPanel::marco_seleccion_ui(rect);
+        assert!((asa.width() - 8.0).abs() < 1e-4, "ancho asa = {}", asa.width());
+        assert!((asa.height() - 8.0).abs() < 1e-4, "alto asa = {}", asa.height());
+    }
+
+    #[test]
+    fn asa_centrada_en_esquina_inferior_derecha() {
+        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(100.0, 40.0));
+        let (_, asa) = super::ViewportPanel::marco_seleccion_ui(rect);
+        let centro = asa.center();
+        let esquina = rect.right_bottom();
+        assert!((centro.x - esquina.x).abs() < 1e-4, "centro.x = {}", centro.x);
+        assert!((centro.y - esquina.y).abs() < 1e-4, "centro.y = {}", centro.y);
+    }
+
+    #[test]
+    fn marco_es_el_rect_dado() {
+        let rect = egui::Rect::from_min_size(egui::pos2(3.0, 7.0), egui::vec2(64.0, 32.0));
+        let (marco, _) = super::ViewportPanel::marco_seleccion_ui(rect);
+        assert_eq!(marco, rect);
+    }
+
+    fn rt_base_arrastre() -> glass_core::scene::RectTransformData {
+        glass_core::scene::RectTransformData {
+            anchored_position: [10.0, -20.0],
+            size_delta: [100.0, 50.0],
+            anchor_min: [0.5, 0.5],
+            anchor_max: [0.5, 0.5],
+            pivot: [0.5, 0.5],
+        }
+    }
+
+    #[test]
+    fn delta_referencia_invierte_y_divide() {
+        let d = super::delta_referencia([40.0, -20.0], 2.0);
+        assert!((d[0] - 20.0).abs() < 1e-4);
+        assert!((d[1] - 10.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn mover_no_estirado() {
+        let s = 2.0f32 / 3.0;
+        let rt = rt_base_arrastre();
+        let padre = [0.0, 0.0, 1000.0, 1000.0];
+        let r0 = glass_core::scene::resolve_ui_rect_in(&rt, padre);
+        let d_ref = super::delta_referencia([40.0, -20.0], s);
+        let nuevo = super::aplicar_arrastre_ui(&rt, padre, d_ref, super::ModoArrastreUi::Mover);
+        let r1 = glass_core::scene::resolve_ui_rect_in(&nuevo, padre);
+        assert!((r1[0] - r0[0] - 60.0).abs() < 0.01, "dx={}", r1[0] - r0[0]);
+        // La Y de pantalla crece hacia abajo: arrastrar hacia arriba
+        // (-20) sube el rect 30 en referencia, o sea -30 en coords Y-abajo.
+        assert!((r1[1] - r0[1] + 30.0).abs() < 0.01, "dy={}", r1[1] - r0[1]);
+    }
+
+    #[test]
+    fn mover_estirado_x() {
+        let mut rt = rt_base_arrastre();
+        rt.anchor_min = [0.0, 0.5];
+        rt.anchor_max = [1.0, 0.5];
+        let padre = [0.0, 0.0, 1000.0, 1000.0];
+        let d_ref = super::delta_referencia([30.0, 0.0], 1.0);
+        let nuevo = super::aplicar_arrastre_ui(&rt, padre, d_ref, super::ModoArrastreUi::Mover);
+        assert!((nuevo.size_delta[0] - (rt.size_delta[0] + 30.0)).abs() < 1e-4);
+        assert!((nuevo.anchored_position[0] - rt.anchored_position[0]).abs() < 1e-4);
+    }
+
+    #[test]
+    fn esquina_pivote_centro() {
+        let rt = rt_base_arrastre();
+        let padre = [0.0, 0.0, 1000.0, 1000.0];
+        let r0 = glass_core::scene::resolve_ui_rect_in(&rt, padre);
+        let d_ref = super::delta_referencia([60.0, 40.0], 1.0);
+        let nuevo = super::aplicar_arrastre_ui(&rt, padre, d_ref, super::ModoArrastreUi::Esquina);
+        let r1 = glass_core::scene::resolve_ui_rect_in(&nuevo, padre);
+        assert!((r1[0] - r0[0]).abs() < 0.01);
+        assert!((r1[1] - r0[1]).abs() < 0.01);
+        assert!((r1[0] + r1[2] - (r0[0] + r0[2] + 60.0)).abs() < 0.01);
+        assert!((r1[1] + r1[3] - (r0[1] + r0[3] + 40.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn esquina_pivote_cero_ancla_izq_inf() {
+        let mut rt = rt_base_arrastre();
+        rt.anchor_min = [0.0, 0.0];
+        rt.anchor_max = [0.0, 0.0];
+        rt.pivot = [0.0, 0.0];
+        let padre = [0.0, 0.0, 1000.0, 1000.0];
+        let r0 = glass_core::scene::resolve_ui_rect_in(&rt, padre);
+        let d_ref = super::delta_referencia([25.0, 15.0], 1.0);
+        let nuevo = super::aplicar_arrastre_ui(&rt, padre, d_ref, super::ModoArrastreUi::Esquina);
+        let r1 = glass_core::scene::resolve_ui_rect_in(&nuevo, padre);
+        assert!((r1[0] - r0[0]).abs() < 0.01);
+        assert!((r1[1] - r0[1]).abs() < 0.01);
+        assert!((r1[0] + r1[2] - (r0[0] + r0[2] + 25.0)).abs() < 0.01);
+        assert!((r1[1] + r1[3] - (r0[1] + r0[3] + 15.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn delta_cero_identico() {
+        let rt = rt_base_arrastre();
+        let padre = [0.0, 0.0, 1000.0, 1000.0];
+        let nuevo = super::aplicar_arrastre_ui(&rt, padre, [0.0, 0.0], super::ModoArrastreUi::Mover);
+        assert_eq!(rt.anchored_position, nuevo.anchored_position);
+        assert_eq!(rt.size_delta, nuevo.size_delta);
+        assert_eq!(rt.anchor_min, nuevo.anchor_min);
+        assert_eq!(rt.anchor_max, nuevo.anchor_max);
+        assert_eq!(rt.pivot, nuevo.pivot);
     }
 }

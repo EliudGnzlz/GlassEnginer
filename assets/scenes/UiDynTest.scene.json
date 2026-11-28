@@ -630,7 +630,9 @@
   "children": [
    11,
    12,
-   13
+   13,
+   15,
+   16
   ]
  },
  {
@@ -855,7 +857,7 @@
    ]
   },
   "ui_text": {
-   "text": "GLASS ENGINE \u2014 CANVAS UI",
+   "text": "GLASS ENGINE — CANVAS UI",
    "font_size": 30.0,
    "color": [
     1.0,
@@ -949,7 +951,167 @@
   }
  },
  {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "components": [
+   "RectTransform",
+   "Image",
+   "Script"
+  ],
   "id": 15,
+  "is_static": false,
+  "layer": "Default",
+  "light": null,
+  "mesh": null,
+  "name": "Panel Estilo",
+  "parent": 10,
+  "physics": null,
+  "rect_transform": {
+   "anchored_position": [
+    0.0,
+    -300.0
+   ],
+   "size_delta": [
+    300.0,
+    120.0
+   ],
+   "anchor_min": [
+    0.5,
+    0.5
+   ],
+   "anchor_max": [
+    0.5,
+    0.5
+   ],
+   "pivot": [
+    0.5,
+    0.5
+   ]
+  },
+  "script": "GlassEngine.Core.Scripts.UiDynStyleProbe",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.UiDynStyleProbe",
+   "move_speed": 5.0,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "tag": "Untagged",
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "ui_text": null,
+  "ui_image": {
+   "sprite": "",
+   "color": [
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ],
+   "preserve_aspect": false
+  }
+ },
+ {
+  "active": true,
+  "animator": null,
+  "audio": null,
+  "camera": null,
+  "canvas": null,
+  "children": [],
+  "components": [
+   "Transform",
+   "RectTransform",
+   "Text",
+   "Script"
+  ],
+  "id": 16,
+  "is_static": false,
+  "layer": "UI",
+  "light": null,
+  "mesh": null,
+  "name": "Texto Estilo",
+  "parent": 10,
+  "physics": null,
+  "rect_transform": {
+   "anchored_position": [
+    20.0,
+    120.0
+   ],
+   "size_delta": [
+    300.0,
+    40.0
+   ],
+   "anchor_min": [
+    0.0,
+    0.0
+   ],
+   "anchor_max": [
+    0.0,
+    0.0
+   ],
+   "pivot": [
+    0.0,
+    0.0
+   ]
+  },
+  "script": "GlassEngine.Core.Scripts.UiDynStyleTextProbe",
+  "script_data": {
+   "class_name": "GlassEngine.Core.Scripts.UiDynStyleTextProbe",
+   "move_speed": 5.0,
+   "jump_velocity": 7.5,
+   "auto_demo": false
+  },
+  "tag": "UI",
+  "transform": {
+   "position": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  "ui_button": null,
+  "ui_text": {
+   "text": "ESTILO C#",
+   "font_size": 22.0,
+   "color": [
+    1.0,
+    0.9,
+    0.2,
+    1.0
+   ]
+  }
+ },
+ {
+  "id": 17,
   "active": true,
   "name": "Ambiente",
   "tag": "Untagged",
@@ -1012,60 +1174,6 @@
     0.2475
    ],
    "intensity": 0.25
-  }
- },
- {
-  "id": 16,
-  "active": true,
-  "name": "Post",
-  "tag": "Untagged",
-  "layer": "Default",
-  "is_static": false,
-  "components": [
-   "Transform",
-   "Post"
-  ],
-  "transform": {
-   "position": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "rotation": [
-    0.0,
-    0.0,
-    0.0
-   ],
-   "scale": [
-    1.0,
-    1.0,
-    1.0
-   ]
-  },
-  "mesh": null,
-  "script": null,
-  "script_data": null,
-  "physics": null,
-  "audio": null,
-  "camera": null,
-  "light": null,
-  "canvas": null,
-  "rect_transform": null,
-  "ui_text": null,
-  "ui_button": null,
-  "parent": null,
-  "children": [],
-  "character": null,
-  "particles": null,
-  "light_profile": null,
-  "fog": null,
-  "ambient": null,
-  "ui_image": null,
-  "ui_drag": null,
-  "post": {
-   "exposure": 1.5,
-   "intensity": 0.3,
-   "vignette": 0.22
   }
  }
 ]

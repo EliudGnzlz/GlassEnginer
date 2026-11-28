@@ -10,12 +10,15 @@ use glass_core::scene::{
 /// El único Graphic de un nodo (regla de Unity: un Graphic por
 /// GameObject). Si la entidad trae imagen y texto a la vez, manda la
 /// imagen y la derivación lo anota como aviso (la migración separa el
-/// texto en un hijo sintético antes).
+/// texto en un hijo sintético antes). El InputField es la excepción
+/// (V4, Q1): un solo nodo con fondo (imagen) + texto sintetizado del
+/// campo, porque el campo ES el texto que se ve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TipoGraphic {
     Ninguno,
     Imagen,
     Texto,
+    InputField,
 }
 
 /// Un nodo del documento. Los índices (`padre`, `hijos`) son

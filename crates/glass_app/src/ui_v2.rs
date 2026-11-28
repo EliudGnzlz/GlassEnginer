@@ -1,6 +1,6 @@
 use glass_core::scene::SceneState;
 use glass_renderer::sdf_atlas::SdfAtlas;
-use glass_renderer::ui::{UiAtlasKind, UiBatch, UiSegment, MODO_COLOR, MODO_IMAGEN, MODO_SOMBRA};
+use glass_renderer::ui::{UiAtlasKind, UiBatch, UiSegment, MODO_BORDE, MODO_COLOR, MODO_IMAGEN, MODO_SOMBRA};
 use glass_ui::pintor::{MedidaImagen, ModoPintado, Segmento};
 
 
@@ -217,12 +217,12 @@ pub fn push_segmento(
             // Obtener datos de texto; si no hay o el texto está vacío → omitir
             // El nombre de fuente viaja en la tupla, pero el atlas lo
             // resuelve el llamador y llega aquí como `atlas_fuente`.
-            let (texto, font_size, align, _font) = match &seg.texto {
-                Some((t, fs, a, f)) if !t.is_empty() => (t.as_str(), *fs, a.as_str(), f.as_str()),
+            let (texto, font_size, align, _font, espaciado) = match &seg.texto {
+                Some((t, fs, a, f, ls)) if !t.is_empty() => (t.as_str(), *fs, a.as_str(), f.as_str(), *ls),
                 _ => return false,
             };
-            // Medir ancho del texto para alineación
-            let medido = atlas_fuente.measure(texto, font_size);
+            // Medir ancho del texto para alineación (con letter-spacing).
+            let medido = atlas_fuente.measure_con_espaciado(texto, font_size, espaciado);
             // Calcular origen X según alineación
             let ox = if medido <= 0.0 {
                 rect[0]
@@ -243,6 +243,24 @@ pub fn push_segmento(
                 seg.color,
                 seg.radios,
                 cl,
+                espaciado,
+            );
+            true
+        }
+        ModoPintado::Borde => {
+            // UV del texel sólido; el ancho del borde viaja en desenfoque.
+            let u = atlas_fuente.solid_uv[0];
+            let v = atlas_fuente.solid_uv[1];
+            let uv = [u, v, u, v];
+            lote.push_quad_extendido(
+                rect,
+                uv,
+                seg.color,
+                MODO_BORDE,
+                seg.radios,
+                cl,
+                None,
+                seg.desenfoque,
             );
             true
         }
@@ -366,7 +384,7 @@ mod tests {
             degradado: None,
             radios: [0.0; 4],
             clip: None,
-            texto: Some((texto.to_string(), font_size, align.to_string(), "default".to_string())),
+            texto: Some((texto.to_string(), font_size, align.to_string(), "default".to_string(), 0.0)),
             sprite: None,
             capa_superior: false,
             orden: 0,

@@ -1232,6 +1232,15 @@ public struct UiBridgeCallbacks
         // Añadidos AL FINAL (drag & drop): getters del último gesto.
         public IntPtr GetDraggedId;
         public IntPtr GetDropTargetId;
+        public IntPtr SetBackgroundColor;
+        public IntPtr SetBorderRadius;
+        public IntPtr SetOpacity;
+        public IntPtr SetOverflow;
+        public IntPtr SetLetterSpacing;
+        public IntPtr SetBorder;
+        public IntPtr SetAnchorMin;
+        public IntPtr SetAnchorMax;
+        public IntPtr SetPivot;
 }
 
 private static UiSetTextDelegate? _uiSetText;
@@ -1242,6 +1251,15 @@ private static UiSetImageColorDelegate? _uiSetImageColor;
 private static UiSetButtonColorDelegate? _uiSetButtonColor;
 private static UiSetAnchoredPosDelegate? _uiSetAnchoredPos;
 private static UiSetSizeDeltaDelegate? _uiSetSizeDelta;
+private static UiSetBackgroundColorDelegate? _uiSetBackgroundColor;
+private static UiSetBorderRadiusDelegate? _uiSetBorderRadius;
+private static UiSetOpacityDelegate? _uiSetOpacity;
+private static UiSetOverflowDelegate? _uiSetOverflow;
+private static UiSetLetterSpacingDelegate? _uiSetLetterSpacing;
+private static UiSetBorderDelegate? _uiSetBorder;
+private static UiSetAnchorMinDelegate? _uiSetAnchorMin;
+private static UiSetAnchorMaxDelegate? _uiSetAnchorMax;
+private static UiSetPivotDelegate? _uiSetPivot;
     private static UiGetDraggedIdDelegate? _uiGetDraggedId;
     private static UiGetDropTargetIdDelegate? _uiGetDropTargetId;
 
@@ -1268,6 +1286,24 @@ public static unsafe void InitUiBridge(UiBridgeCallbacks* callbacks)
         _uiSetAnchoredPos = Marshal.GetDelegateForFunctionPointer<UiSetAnchoredPosDelegate>(callbacks->SetAnchoredPos);
     if (callbacks->SetSizeDelta != IntPtr.Zero)
         _uiSetSizeDelta = Marshal.GetDelegateForFunctionPointer<UiSetSizeDeltaDelegate>(callbacks->SetSizeDelta);
+    if (callbacks->SetBackgroundColor != IntPtr.Zero)
+        _uiSetBackgroundColor = Marshal.GetDelegateForFunctionPointer<UiSetBackgroundColorDelegate>(callbacks->SetBackgroundColor);
+    if (callbacks->SetBorderRadius != IntPtr.Zero)
+        _uiSetBorderRadius = Marshal.GetDelegateForFunctionPointer<UiSetBorderRadiusDelegate>(callbacks->SetBorderRadius);
+    if (callbacks->SetOpacity != IntPtr.Zero)
+        _uiSetOpacity = Marshal.GetDelegateForFunctionPointer<UiSetOpacityDelegate>(callbacks->SetOpacity);
+    if (callbacks->SetOverflow != IntPtr.Zero)
+        _uiSetOverflow = Marshal.GetDelegateForFunctionPointer<UiSetOverflowDelegate>(callbacks->SetOverflow);
+    if (callbacks->SetLetterSpacing != IntPtr.Zero)
+        _uiSetLetterSpacing = Marshal.GetDelegateForFunctionPointer<UiSetLetterSpacingDelegate>(callbacks->SetLetterSpacing);
+    if (callbacks->SetBorder != IntPtr.Zero)
+        _uiSetBorder = Marshal.GetDelegateForFunctionPointer<UiSetBorderDelegate>(callbacks->SetBorder);
+    if (callbacks->SetAnchorMin != IntPtr.Zero)
+        _uiSetAnchorMin = Marshal.GetDelegateForFunctionPointer<UiSetAnchorMinDelegate>(callbacks->SetAnchorMin);
+    if (callbacks->SetAnchorMax != IntPtr.Zero)
+        _uiSetAnchorMax = Marshal.GetDelegateForFunctionPointer<UiSetAnchorMaxDelegate>(callbacks->SetAnchorMax);
+    if (callbacks->SetPivot != IntPtr.Zero)
+        _uiSetPivot = Marshal.GetDelegateForFunctionPointer<UiSetPivotDelegate>(callbacks->SetPivot);
         if (callbacks->GetDraggedId != IntPtr.Zero)
             _uiGetDraggedId = Marshal.GetDelegateForFunctionPointer<UiGetDraggedIdDelegate>(callbacks->GetDraggedId);
         if (callbacks->GetDropTargetId != IntPtr.Zero)
@@ -1338,6 +1374,68 @@ public static int UiSetSizeDelta(ulong entityId, float x, float y)
 {
     if (_uiSetSizeDelta is null) return -4;
     return _uiSetSizeDelta(entityId, x, y);
+}
+
+public static int UiSetBackgroundColor(ulong entityId, float r, float g, float b, float a)
+{
+    if (_uiSetBackgroundColor is null) return -4;
+    return _uiSetBackgroundColor(entityId, r, g, b, a);
+}
+
+public static int UiSetBorderRadius(ulong entityId, float tl, float tr, float br, float bl)
+{
+    if (_uiSetBorderRadius is null) return -4;
+    return _uiSetBorderRadius(entityId, tl, tr, br, bl);
+}
+
+public static int UiSetOpacity(ulong entityId, float opacity)
+{
+    if (_uiSetOpacity is null) return -4;
+    return _uiSetOpacity(entityId, opacity);
+}
+
+public static int UiSetOverflow(ulong entityId, string overflow)
+{
+    if (_uiSetOverflow is null) return -4;
+    IntPtr overflowUtf8 = Marshal.StringToCoTaskMemUTF8(overflow);
+    try
+    {
+        return _uiSetOverflow(entityId, overflowUtf8);
+    }
+    finally
+    {
+        Marshal.FreeCoTaskMem(overflowUtf8);
+    }
+}
+
+public static int UiSetLetterSpacing(ulong entityId, float px)
+{
+    if (_uiSetLetterSpacing is null) return -4;
+    return _uiSetLetterSpacing(entityId, px);
+}
+
+public static int UiSetBorder(ulong entityId, float width, float r, float g, float b, float a)
+{
+    if (_uiSetBorder is null) return -4;
+    return _uiSetBorder(entityId, width, r, g, b, a);
+}
+
+public static int UiSetAnchorMin(ulong entityId, float x, float y)
+{
+    if (_uiSetAnchorMin is null) return -4;
+    return _uiSetAnchorMin(entityId, x, y);
+}
+
+public static int UiSetAnchorMax(ulong entityId, float x, float y)
+{
+    if (_uiSetAnchorMax is null) return -4;
+    return _uiSetAnchorMax(entityId, x, y);
+}
+
+public static int UiSetPivot(ulong entityId, float x, float y)
+{
+    if (_uiSetPivot is null) return -4;
+    return _uiSetPivot(entityId, x, y);
 }
 
     /// <summary>Entidad del último arrastre del Canvas (0 si aún no hubo ninguno).</summary>

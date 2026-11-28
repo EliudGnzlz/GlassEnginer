@@ -1561,6 +1561,43 @@ impl Default for UIButtonData {
     }
 }
 
+fn default_input_font_size() -> f32 {
+    18.0
+}
+
+fn default_input_color() -> [f32; 4] {
+    [1.0, 1.0, 1.0, 1.0]
+}
+
+/// Campo de entrada de texto del Canvas (V4, Q1): componente REAL, nada
+/// de cáscara. La presentación (fondo + texto, con placeholder cuando el
+/// valor está vacío) la deriva glass_ui; la conducta interactiva (teclear,
+/// caret, selección) la completa V6.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UIInputFieldData {
+    /// Valor actual del campo. Vacío = se muestra el placeholder.
+    #[serde(default)]
+    pub text: String,
+    /// Texto que se muestra cuando `text` está vacío.
+    #[serde(default)]
+    pub placeholder: String,
+    #[serde(default = "default_input_font_size")]
+    pub font_size: f32,
+    #[serde(default = "default_input_color")]
+    pub color: [f32; 4],
+}
+
+impl Default for UIInputFieldData {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            placeholder: "Escribe aquí...".into(),
+            font_size: 18.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+        }
+    }
+}
+
 /// Elemento Imagen del Canvas (v2): muestra un asset de imagen
 /// dentro de su RectTransform, con tinte multiplicativo.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1865,6 +1902,10 @@ pub struct EntityData {
     pub rect_transform: Option<RectTransformData>,
     pub ui_text: Option<UITextData>,
     pub ui_button: Option<UIButtonData>,
+    /// Campo de entrada de texto del Canvas (V4). `#[serde(default)]`:
+    /// las escenas anteriores no traen el campo.
+    #[serde(default)]
+    pub ui_input_field: Option<UIInputFieldData>,
     /// Elemento Imagen del Canvas (v2). `#[serde(default)]`: las
     /// escenas anteriores a la UI v2 no traen el campo.
     #[serde(default)]
@@ -1907,6 +1948,21 @@ pub struct EntityData {
 }
 
 impl EntityData {
+    /// `style_extra` de la componente que posee el estilo efectivo
+    /// (prioridad: imagen > texto > botón). Devuelve `None` si la
+    /// entidad no tiene ninguna componente de UI.
+    pub fn style_extra_mut(&mut self) -> Option<&mut String> {
+        if let Some(ref mut img) = self.ui_image {
+            Some(&mut img.style_extra)
+        } else if let Some(ref mut txt) = self.ui_text {
+            Some(&mut txt.style_extra)
+        } else if let Some(ref mut btn) = self.ui_button {
+            Some(&mut btn.style_extra)
+        } else {
+            None
+        }
+    }
+
     pub fn new(id: u64, name: String, components: Vec<String>) -> Self {
         let is_static = components.iter().any(|c| c == "StaticCollider");
         let mesh = if components.iter().any(|c| c == "MeshRenderer") {
@@ -2007,7 +2063,7 @@ impl EntityData {
         } else {
             None
         };
-        let rect_transform = if components.iter().any(|c| c == "RectTransform" || c == "Canvas" || c == "Text" || c == "Button") {
+        let rect_transform = if components.iter().any(|c| c == "RectTransform" || c == "Canvas" || c == "Text" || c == "Button" || c == "Image" || c == "InputField") {
             Some(RectTransformData::default())
         } else {
             None
@@ -2019,6 +2075,16 @@ impl EntityData {
         };
         let ui_button = if components.iter().any(|c| c == "Button") {
             Some(UIButtonData::default())
+        } else {
+            None
+        };
+        let ui_image = if components.iter().any(|c| c == "Image") {
+            Some(UIImageData::default())
+        } else {
+            None
+        };
+        let ui_input_field = if components.iter().any(|c| c == "InputField") {
+            Some(UIInputFieldData::default())
         } else {
             None
         };
@@ -2068,7 +2134,8 @@ impl EntityData {
             rect_transform,
             ui_text,
             ui_button,
-            ui_image: None,
+            ui_input_field,
+            ui_image,
             ui_drag: None,
             layout_group,
             portal: None,
@@ -3843,6 +3910,46 @@ mod tests {
         .unwrap();
         assert_eq!(t.font, "default");
         assert_eq!(t.align, "Left");
+    }
+
+    #[test]
+    fn entidad_antigua_sin_input_field_deserializa() {
+        let mut e = EntityData::new(9, "Campo".into(), vec!["RectTransform".into()]);
+        let v = serde_json::to_value(&e).unwrap();
+        let mut obj = v.as_object().unwrap().clone();
+        obj.remove("ui_input_field");
+        let old: EntityData =
+            serde_json::from_value(serde_json::Value::Object(obj)).unwrap();
+        assert!(old.ui_input_field.is_none());
+        e.ui_input_field = Some(UIInputFieldData {
+            text: "hola".into(),
+            ..Default::default()
+        });
+        let back: EntityData =
+            serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
+        assert_eq!(back.ui_input_field.unwrap().text, "hola");
+    }
+
+    #[test]
+    fn create_entity_materializa_input_field_e_imagen() {
+        let mut scene = SceneState::default();
+        let id = scene.create_entity(
+            "Campo".into(),
+            vec!["Transform".into(), "RectTransform".into(), "InputField".into()],
+        );
+        let ent = scene.get_entity(id).expect("la entidad existe");
+        let campo = ent.ui_input_field.as_ref().expect("trae InputField");
+        assert_eq!(campo.text, "");
+        assert_eq!(campo.placeholder, "Escribe aquí...");
+        assert_eq!(campo.font_size, 18.0);
+        assert!(ent.rect_transform.is_some());
+        let id2 = scene.create_entity(
+            "Panel".into(),
+            vec!["Transform".into(), "RectTransform".into(), "Image".into()],
+        );
+        let ent2 = scene.get_entity(id2).expect("la entidad existe");
+        assert!(ent2.ui_image.is_some());
+        assert!(ent2.rect_transform.is_some());
     }
 
     #[test]

@@ -13,6 +13,9 @@ enum AccionCanvas {
     Canvas,
     Texto { padre: u64 },
     Boton { padre: u64 },
+    Panel { padre: u64 },
+    Imagen { padre: u64 },
+    InputField { padre: u64 },
 }
 
 #[derive(Default)]
@@ -172,6 +175,15 @@ impl CanvasPanel {
                     if ui.button("➕ Botón").clicked() {
                         accion = Some(AccionCanvas::Boton { padre });
                     }
+                    if ui.button("➕ Panel").clicked() {
+                        accion = Some(AccionCanvas::Panel { padre });
+                    }
+                    if ui.button("➕ Imagen").clicked() {
+                        accion = Some(AccionCanvas::Imagen { padre });
+                    }
+                    if ui.button("➕ InputField").clicked() {
+                        accion = Some(AccionCanvas::InputField { padre });
+                    }
                 });
             }
         }
@@ -194,6 +206,21 @@ impl CanvasPanel {
                 }
                 AccionCanvas::Boton { padre } => {
                     let id = HierarchyPanel::instantiate_preset(&mut scene, EntityPreset::UIButton);
+                    let _ = scene.reparent(id, Some(padre));
+                    *seleccion = Some(id);
+                }
+                AccionCanvas::Panel { padre } => {
+                    let id = HierarchyPanel::instantiate_preset(&mut scene, EntityPreset::UIPanel);
+                    let _ = scene.reparent(id, Some(padre));
+                    *seleccion = Some(id);
+                }
+                AccionCanvas::Imagen { padre } => {
+                    let id = HierarchyPanel::instantiate_preset(&mut scene, EntityPreset::UIImage);
+                    let _ = scene.reparent(id, Some(padre));
+                    *seleccion = Some(id);
+                }
+                AccionCanvas::InputField { padre } => {
+                    let id = HierarchyPanel::instantiate_preset(&mut scene, EntityPreset::UIInputField);
                     let _ = scene.reparent(id, Some(padre));
                     *seleccion = Some(id);
                 }
