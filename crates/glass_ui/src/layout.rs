@@ -13,7 +13,10 @@ use crate::api::{
 use crate::documento::{Documento, TipoGraphic};
 use crate::estilos::{Dimension, Display, Sombra, StyleProps, TamanoColumna, TextOverflow};
 use crate::parser::resolver_estilos;
-use glass_core::scene::{canvas_scale_factor, layout_group_rects, resolve_ui_rect_in};
+use glass_core::scene::{
+    calcular_preferidos_bottom_up, canvas_scale_factor, layout_group_rects,
+    layout_group_rects_control, resolve_ui_rect_in, EntradaPreferido, LayoutElementData,
+};
 use std::sync::OnceLock;
 
 // ── MedidorTexto con ab_glyph ──────────────────────────────────────
@@ -481,9 +484,41 @@ pub fn colocar_documento_con_medidor(
         }
     }
 
+    // --- V5b-1: pasada bottom-up de preferidos ---
+    // Se corre sobre los rects del paso 1 (unidades de referencia) y
+    // antes de aplicar_flex: los preferidos alimentan el reparto con
+    // Control Size. Para cada nodo Texto se resuelve font_size /
+    // letter_spacing con el mismo estado que usa aplicar_flex.
+    let estado_pref = EstadoPseudo::default();
+    let entradas: Vec<EntradaPreferido<'_>> = doc
+        .nodos
+        .iter()
+        .enumerate()
+        .map(|(idx, nodo)| {
+            let estilos_nodo = resolver_estilos(nodo, &estado_pref);
+            let tam = estilos_nodo.font_size.unwrap_or_else(|| {
+                nodo.texto.as_ref().map(|t| t.font_size).unwrap_or(14.0)
+            });
+            let ls = estilos_nodo.letter_spacing.unwrap_or(0.0);
+            let texto = nodo.texto.as_ref().map(|txt| (txt.text.as_str(), tam, ls));
+            EntradaPreferido {
+                padre: nodo.padre,
+                hijos: &nodo.hijos,
+                activo: nodo.activo,
+                rect_actual: rects_ref[idx],
+                layout_group: nodo.layout_group.as_ref(),
+                layout_element: nodo.layout_element.as_ref(),
+                texto,
+            }
+        })
+        .collect();
+    let preferidos = calcular_preferidos_bottom_up(&entradas, &|t, tam, max, ls| {
+        medidor.medir(t, tam, max, ls)
+    });
+
     // P2b: flex — recoloca los hijos de los padres flex en rects_ref
     // (unidades de referencia); el paso 2 aplica estilos y escala.
-    aplicar_flex(doc, &mut rects_ref);
+    aplicar_flex_con_preferidos(doc, &mut rects_ref, &preferidos);
     aplicar_grid(doc, &mut rects_ref);
 
     // Segundo paso: aplicar estilos y convertir a píxeles.
@@ -862,6 +897,91 @@ pub fn aplicar_flex(doc: &Documento, rects_ref: &mut [[f32; 4]]) {
     }
 }
 
+/// Variante de `aplicar_flex` con Control Size (V5b-1): recibe los
+/// preferidos calculados en la pasada bottom-up y, para cada padre con
+/// `layout_group`, reparte con `layout_group_rects_control`. Los
+/// padres flex CSS no usan preferidos. `aplicar_flex` queda intacta
+/// como envoltorio del camino V5a.
+pub fn aplicar_flex_con_preferidos(
+    doc: &Documento,
+    rects_ref: &mut [[f32; 4]],
+    preferidos: &[[f32; 2]],
+) {
+    for (i_padre, nodo_padre) in doc.nodos.iter().enumerate() {
+        if !nodo_padre.activo || nodo_padre.hijos.is_empty() {
+            continue;
+        }
+
+        let estilos = resolver_estilos(nodo_padre, &EstadoPseudo::default());
+
+        let es_flex = matches!(estilos.display, Some(Display::Flex))
+            || nodo_padre.layout_group.is_some();
+        if !es_flex {
+            continue;
+        }
+
+        // Índices de hijos directos activos (misma lógica que aplicar_flex).
+        let hijos_idx: Vec<usize> = nodo_padre
+            .hijos
+            .iter()
+            .copied()
+            .filter(|&j| j < doc.nodos.len() && doc.nodos[j].activo)
+            .collect();
+        if hijos_idx.is_empty() {
+            continue;
+        }
+
+        let rect_padre = rects_ref[i_padre];
+
+        if let Some(grupo) = &nodo_padre.layout_group {
+            // Filtrar hijos que participan en el layout (ignore_layout = false).
+            let hijos_participantes: Vec<usize> = hijos_idx
+                .iter()
+                .copied()
+                .filter(|&j| {
+                    doc.nodos[j]
+                        .layout_element
+                        .as_ref()
+                        .map(|le| !le.ignore_layout)
+                        .unwrap_or(true)
+                })
+                .collect();
+
+            let rects_hijos: Vec<[f32; 4]> =
+                hijos_participantes.iter().map(|&j| rects_ref[j]).collect();
+            let prefs_hijos: Vec<[f32; 2]> =
+                hijos_participantes.iter().map(|&j| preferidos[j]).collect();
+            let elems_hijos: Vec<Option<&LayoutElementData>> = hijos_participantes
+                .iter()
+                .map(|&j| doc.nodos[j].layout_element.as_ref())
+                .collect();
+
+            let nuevos = layout_group_rects_control(
+                rect_padre,
+                grupo,
+                &rects_hijos,
+                &prefs_hijos,
+                &elems_hijos,
+            );
+            for (k, &j) in hijos_participantes.iter().enumerate() {
+                if let Some(nuevo) = nuevos.get(k) {
+                    rects_ref[j] = *nuevo;
+                }
+            }
+            // Hijos con ignore_layout conservan su rect tal cual (no se tocan).
+        } else {
+            // Flex CSS mínimo: sin cambios, no usa preferidos.
+            let rects_hijos: Vec<[f32; 4]> = hijos_idx.iter().map(|&j| rects_ref[j]).collect();
+            let nuevos = flex_css_hijos(&estilos, rect_padre, &rects_hijos);
+            for (k, &j) in hijos_idx.iter().enumerate() {
+                if let Some(nuevo) = nuevos.get(k) {
+                    rects_ref[j] = *nuevo;
+                }
+            }
+        }
+    }
+}
+
 /// Aplica layout grid a los padres con `display: grid` (P2c).
 /// Se llama tras `aplicar_flex`, entre el paso 1 (top-down) y el paso 2 (tamaños y escala).
 /// Un padre es flex O grid, nunca los dos, así que el orden entre ambos no altera el resultado.
@@ -1219,6 +1339,7 @@ mod tests {
             boton: None,
             drag: None,
             layout_group: None,
+            layout_element: None,
             style_extra: String::new(),
             raycast_target: false,
         };
@@ -1238,6 +1359,7 @@ mod tests {
             boton: None,
             drag: None,
             layout_group: None,
+            layout_element: None,
             style_extra: String::new(),
             raycast_target: false,
         };
@@ -1257,6 +1379,7 @@ mod tests {
             boton: None,
             drag: None,
             layout_group: None,
+            layout_element: None,
             style_extra: String::new(),
             raycast_target: false,
         };
@@ -1330,6 +1453,7 @@ mod tests {
             boton: None,
             drag: None,
             layout_group: grupo,
+            layout_element: None,
             style_extra: extra.to_string(),
             raycast_target: false,
         }
@@ -1362,6 +1486,7 @@ mod tests {
             boton: None,
             drag: None,
             layout_group: None,
+            layout_element: None,
             style_extra: String::new(),
             raycast_target: false,
         }
@@ -1390,6 +1515,10 @@ mod tests {
             spacing: 10.0,
             padding: [5.0, 5.0, 5.0, 5.0],
             alignment: "start".into(),
+            child_control_width: false,
+            child_control_height: false,
+            child_force_expand_width: false,
+            child_force_expand_height: false,
         };
         let mut canvas = canvas_flex(1, vec![1, 2], 300.0, 100.0);
         canvas.layout_group = Some(grupo);
@@ -1415,6 +1544,10 @@ mod tests {
             spacing: 10.0,
             padding: [5.0, 5.0, 5.0, 5.0],
             alignment: "center".into(),
+            child_control_width: false,
+            child_control_height: false,
+            child_force_expand_width: false,
+            child_force_expand_height: false,
         };
         let mut canvas = canvas_flex(1, vec![1, 2], 300.0, 100.0);
         canvas.layout_group = Some(grupo);
@@ -1519,7 +1652,7 @@ mod tests {
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [400.0, 80.0], anchor_min: [0.0, 0.0], anchor_max: [0.0, 0.0], pivot: [0.0, 0.0] },
                     canvas: Some(CanvasData { render_mode: "ScreenSpaceOverlay".into(), reference_resolution: [400.0, 80.0], match_width_or_height: 0.0 }),
-                    imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                    imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
                     style_extra: "display: grid; grid-template-columns: 100px 1fr; gap: 10px;".to_string(),
                     raycast_target: false,
                 },
@@ -1528,7 +1661,7 @@ mod tests {
                     graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [100.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
-                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
                     style_extra: String::new(), raycast_target: false,
                 },
                 NodoDocumento {
@@ -1536,7 +1669,7 @@ mod tests {
                     graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [80.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
-                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
                     style_extra: String::new(), raycast_target: false,
                 },
                 NodoDocumento {
@@ -1544,7 +1677,7 @@ mod tests {
                     graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [60.0, 30.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
-                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
                     style_extra: String::new(), raycast_target: false,
                 },
             ],
@@ -1575,7 +1708,7 @@ mod tests {
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [320.0, 80.0], anchor_min: [0.0, 0.0], anchor_max: [0.0, 0.0], pivot: [0.0, 0.0] },
                     canvas: Some(CanvasData { render_mode: "ScreenSpaceOverlay".into(), reference_resolution: [320.0, 80.0], match_width_or_height: 0.0 }),
-                    imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                    imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
                     style_extra: "display: grid; grid-template-columns: repeat(auto-fill, 100px); gap: 10px;".to_string(),
                     raycast_target: false,
                 },
@@ -1584,7 +1717,7 @@ mod tests {
                     graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [100.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
-                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
                     style_extra: String::new(), raycast_target: false,
                 },
                 NodoDocumento {
@@ -1592,7 +1725,7 @@ mod tests {
                     graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [100.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
-                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
                     style_extra: String::new(), raycast_target: false,
                 },
                 NodoDocumento {
@@ -1600,7 +1733,7 @@ mod tests {
                     graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
                     activo: true,
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [100.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
-                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                    canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
                     style_extra: String::new(), raycast_target: false,
                 },
             ],
@@ -1630,7 +1763,7 @@ mod tests {
                         activo: true,
                         rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [1000.0, 1000.0], anchor_min: [0.0, 0.0], anchor_max: [0.0, 0.0], pivot: [0.0, 0.0] },
                         canvas: Some(CanvasData { render_mode: "ScreenSpaceOverlay".into(), reference_resolution: [1000.0, 1000.0], match_width_or_height: 0.0 }),
-                        imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                        imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
                         style_extra: String::new(), raycast_target: false,
                     },
                     NodoDocumento {
@@ -1638,7 +1771,7 @@ mod tests {
                         graphic: TipoGraphic::Ninguno, es_canvas: false, es_canvas_raiz: false,
                         activo: true,
                         rect_transform: RectTransformData { anchored_position: [0.0, y], size_delta: [50.0, 50.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
-                        canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None,
+                        canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
                         style_extra: style_extra.to_string(), raycast_target: false,
                     },
                 ],
@@ -1994,6 +2127,7 @@ mod tests {
             boton: None,
             drag: None,
             layout_group: None,
+            layout_element: None,
             style_extra: extra.to_string(),
             raycast_target: true,
         }
@@ -2117,4 +2251,327 @@ mod tests {
         celdas_dentro_del_rect(n);
     }
 
+}
+
+// ── V5b-1: Control Size + LayoutElement ─────────────────────────────
+#[cfg(test)]
+mod tests_v5b1 {
+    use super::*;
+    use crate::documento::{Documento, NodoDocumento, TipoGraphic};
+    use glass_core::scene::{CanvasData, LayoutElementData, LayoutGroupData, RectTransformData};
+
+    /// Nodo mínimo con defaults razonables.
+    fn nodo_base(entidad: u64, padre: Option<usize>, activo: bool) -> NodoDocumento {
+        NodoDocumento {
+            entidad,
+            nombre: format!("nodo_{}", entidad),
+            padre,
+            hijos: Vec::new(),
+            graphic: TipoGraphic::Ninguno,
+            es_canvas: false,
+            es_canvas_raiz: false,
+            activo,
+            rect_transform: RectTransformData {
+                anchor_min: [0.0, 0.0],
+                anchor_max: [1.0, 1.0],
+                anchored_position: [0.0, 0.0],
+                size_delta: [0.0, 0.0],
+                pivot: [0.5, 0.5],
+            },
+            canvas: None,
+            imagen: None,
+            texto: None,
+            boton: None,
+            drag: None,
+            layout_group: None,
+            layout_element: None,
+            style_extra: String::new(),
+            raycast_target: false,
+        }
+    }
+
+    /// RectTransform que coloca el rect exactamente en (x, y) dentro del
+    /// padre: anclas en la esquina superior izquierda ([0,1]-[0,1]) y
+    /// anchored_position con la Y negada (en este motor la Y de
+    /// anchored_position sube, no baja).
+    fn rect_transform_fijo(x: f32, y: f32, w: f32, h: f32) -> RectTransformData {
+        RectTransformData {
+            anchor_min: [0.0, 1.0],
+            anchor_max: [0.0, 1.0],
+            anchored_position: [x + w * 0.5, -(y + h * 0.5)],
+            size_delta: [w, h],
+            pivot: [0.5, 0.5],
+        }
+    }
+
+    fn grupo_layout(
+        dir: &str,
+        spacing: f32,
+        padding: [f32; 4],
+        control_w: bool,
+        control_h: bool,
+        expand_w: bool,
+        expand_h: bool,
+    ) -> LayoutGroupData {
+        LayoutGroupData {
+            direction: dir.into(),
+            spacing,
+            padding,
+            alignment: "start".into(),
+            child_control_width: control_w,
+            child_control_height: control_h,
+            child_force_expand_width: expand_w,
+            child_force_expand_height: expand_h,
+        }
+    }
+
+    fn elemento(
+        min_w: Option<f32>,
+        min_h: Option<f32>,
+        pref_w: Option<f32>,
+        pref_h: Option<f32>,
+    ) -> LayoutElementData {
+        LayoutElementData {
+            min_width: min_w,
+            min_height: min_h,
+            preferred_width: pref_w,
+            preferred_height: pref_h,
+            ignore_layout: false,
+        }
+    }
+
+    /// Construye un Documento reconstruyendo `hijos` desde `padre`.
+    fn doc_de_nodos(mut nodos: Vec<NodoDocumento>) -> Documento {
+        let n = nodos.len();
+        for i in 0..n {
+            nodos[i].hijos.clear();
+        }
+        for i in 0..n {
+            if let Some(p) = nodos[i].padre {
+                let idx = i;
+                nodos[p].hijos.push(idx);
+            }
+        }
+        Documento {
+            canvas_raiz: 0,
+            nodos,
+            avisos: vec![],
+        }
+    }
+
+    fn canvas_400x300() -> NodoDocumento {
+        let mut n0 = nodo_base(0, None, true);
+        n0.es_canvas = true;
+        n0.es_canvas_raiz = true;
+        n0.canvas = Some(CanvasData {
+            render_mode: "ScreenSpaceOverlay".into(),
+            reference_resolution: [400.0, 300.0],
+            match_width_or_height: 0.5,
+        });
+        n0
+    }
+
+    // (a) Dorada: H dentro de V, ambos con Control Size.
+    // VGroup [0,0,400,300] (spacing 5, padding 10, 4 flags true).
+    // HGroup hijo (spacing 4, padding 5, 4 flags true, pref_h 60).
+    // ImgA pref_w 80, ImgB pref_w 120, ImgC pref_h 50.
+    // Preferidos: A [80,40], B [120,40], H [214,60], C [100,50],
+    // V [234,135]. Reparto V: sobrante vertical 165 → 82.5 a cada
+    // hijo (142.5 y 132.5). Reparto H: sobrante 166 → 83 a cada
+    // hijo (163 y 203).
+    #[test]
+    fn test_v5b1_dorada_h_dentro_de_v_control_size() {
+        let mut n1 = nodo_base(1, Some(0), true);
+        n1.rect_transform = rect_transform_fijo(0.0, 0.0, 400.0, 300.0);
+        n1.layout_group = Some(grupo_layout(
+            "vertical",
+            5.0,
+            [10.0, 10.0, 10.0, 10.0],
+            true,
+            true,
+            true,
+            true,
+        ));
+
+        let mut n2 = nodo_base(2, Some(1), true);
+        n2.rect_transform = rect_transform_fijo(0.0, 0.0, 200.0, 60.0);
+        n2.layout_group = Some(grupo_layout(
+            "horizontal",
+            4.0,
+            [5.0, 5.0, 5.0, 5.0],
+            true,
+            true,
+            true,
+            true,
+        ));
+        n2.layout_element = Some(elemento(None, None, None, Some(60.0)));
+
+        let mut n3 = nodo_base(3, Some(2), true);
+        n3.graphic = TipoGraphic::Imagen;
+        n3.rect_transform = rect_transform_fijo(0.0, 0.0, 50.0, 40.0);
+        n3.layout_element = Some(elemento(None, None, Some(80.0), None));
+
+        let mut n4 = nodo_base(4, Some(2), true);
+        n4.graphic = TipoGraphic::Imagen;
+        n4.rect_transform = rect_transform_fijo(0.0, 0.0, 50.0, 40.0);
+        n4.layout_element = Some(elemento(None, None, Some(120.0), None));
+
+        let mut n5 = nodo_base(5, Some(1), true);
+        n5.graphic = TipoGraphic::Imagen;
+        n5.rect_transform = rect_transform_fijo(0.0, 0.0, 100.0, 30.0);
+        n5.layout_element = Some(elemento(None, None, None, Some(50.0)));
+
+        let doc = doc_de_nodos(vec![canvas_400x300(), n1, n2, n3, n4, n5]);
+        let medidor = MedidorTexto::new();
+        let colocado =
+            colocar_documento_con_medidor(&doc, Viewport { ancho: 400.0, alto: 300.0 }, &medidor);
+
+        let r = |idx: usize| {
+            let n = &colocado.nodos[idx].rect;
+            [n.x, n.y, n.ancho, n.alto]
+        };
+        // VGroup inalterado.
+        assert!((r(1)[2] - 400.0).abs() < 0.01 && (r(1)[3] - 300.0).abs() < 0.01);
+        // HGroup: x=10, y=10, w=380, h=142.5
+        for (i, e) in [10.0, 10.0, 380.0, 142.5].iter().enumerate() {
+            assert!((r(2)[i] - e).abs() < 0.1, "HGroup[{}] = {}, esperado {}", i, r(2)[i], e);
+        }
+        // ImgA: x=15, y=15, w=163, h=132.5
+        for (i, e) in [15.0, 15.0, 163.0, 132.5].iter().enumerate() {
+            assert!((r(3)[i] - e).abs() < 0.1, "ImgA[{}] = {}, esperado {}", i, r(3)[i], e);
+        }
+        // ImgB: x=182, y=15, w=203, h=132.5
+        for (i, e) in [182.0, 15.0, 203.0, 132.5].iter().enumerate() {
+            assert!((r(4)[i] - e).abs() < 0.1, "ImgB[{}] = {}, esperado {}", i, r(4)[i], e);
+        }
+        // ImgC: x=10, y=157.5, w=380, h=132.5
+        for (i, e) in [10.0, 157.5, 380.0, 132.5].iter().enumerate() {
+            assert!((r(5)[i] - e).abs() < 0.1, "ImgC[{}] = {}, esperado {}", i, r(5)[i], e);
+        }
+    }
+
+    // (b) Flags en false, sin LayoutElement → idéntico a V5a.
+    #[test]
+    fn test_v5b1_flags_false_sin_element_identico_v5a() {
+        let mut n0 = nodo_base(0, None, true);
+        n0.es_canvas = true;
+        n0.es_canvas_raiz = true;
+        n0.canvas = Some(CanvasData {
+            render_mode: "ScreenSpaceOverlay".into(),
+            reference_resolution: [600.0, 400.0],
+            match_width_or_height: 0.5,
+        });
+
+        let mut n1 = nodo_base(1, Some(0), true);
+        n1.rect_transform = rect_transform_fijo(0.0, 0.0, 600.0, 400.0);
+        n1.layout_group = Some(grupo_layout(
+            "horizontal",
+            10.0,
+            [5.0, 5.0, 5.0, 5.0],
+            false,
+            false,
+            false,
+            false,
+        ));
+
+        let mut n2 = nodo_base(2, Some(1), true);
+        n2.graphic = TipoGraphic::Imagen;
+        n2.rect_transform = rect_transform_fijo(0.0, 0.0, 80.0, 50.0);
+
+        let mut n3 = nodo_base(3, Some(1), true);
+        n3.graphic = TipoGraphic::Imagen;
+        n3.rect_transform = rect_transform_fijo(0.0, 0.0, 120.0, 70.0);
+
+        let doc_control = doc_de_nodos(vec![n0.clone(), n1.clone(), n2.clone(), n3.clone()]);
+        let doc_v5a = doc_de_nodos(vec![n0, n1, n2, n3]);
+        let viewport = Viewport { ancho: 600.0, alto: 400.0 };
+        let medidor = MedidorTexto::new();
+
+        // Ruta V5b-1 (con preferidos).
+        let resultado_control = colocar_documento_con_medidor(&doc_control, viewport, &medidor);
+
+        // Ruta V5a: aplicar_flex directamente sobre rects del paso 1.
+        let n = doc_v5a.nodos.len();
+        let mut rects_v5a: Vec<[f32; 4]> = vec![[0.0; 4]; n];
+        rects_v5a[0] = [0.0, 0.0, 600.0, 400.0];
+        for idx in 1..n {
+            let nodo = &doc_v5a.nodos[idx];
+            let parent_rect = rects_v5a[nodo.padre.unwrap()];
+            rects_v5a[idx] = resolve_ui_rect_in(&nodo.rect_transform, parent_rect);
+        }
+        aplicar_flex(&doc_v5a, &mut rects_v5a);
+
+        for idx in 0..n {
+            let rc = &resultado_control.nodos[idx].rect;
+            let rv = rects_v5a[idx];
+            assert!(
+                (rc.x - rv[0]).abs() < 1e-4
+                    && (rc.y - rv[1]).abs() < 1e-4
+                    && (rc.ancho - rv[2]).abs() < 1e-4
+                    && (rc.alto - rv[3]).abs() < 1e-4,
+                "Nodo {} diverge: control=({},{},{},{}) vs v5a=({},{},{},{})",
+                idx,
+                rc.x, rc.y, rc.ancho, rc.alto,
+                rv[0], rv[1], rv[2], rv[3],
+            );
+        }
+    }
+
+    // (c) ignore_layout: hijo ignorado conserva rect, no consume spacing.
+    #[test]
+    fn test_v5b1_ignore_layout() {
+        let mut n1 = nodo_base(1, Some(0), true);
+        n1.rect_transform = rect_transform_fijo(0.0, 0.0, 400.0, 200.0);
+        n1.layout_group = Some(grupo_layout(
+            "horizontal",
+            10.0,
+            [0.0, 0.0, 0.0, 0.0],
+            true,
+            false,
+            false,
+            false,
+        ));
+
+        let mut n2 = nodo_base(2, Some(1), true);
+        n2.graphic = TipoGraphic::Imagen;
+        n2.rect_transform = rect_transform_fijo(0.0, 0.0, 30.0, 40.0);
+        n2.layout_element = Some(elemento(None, None, Some(50.0), None));
+
+        let mut n3 = nodo_base(3, Some(1), true);
+        n3.graphic = TipoGraphic::Imagen;
+        n3.rect_transform = rect_transform_fijo(200.0, 80.0, 60.0, 25.0);
+        let mut el_ign = elemento(None, None, Some(999.0), None);
+        el_ign.ignore_layout = true;
+        n3.layout_element = Some(el_ign);
+
+        let mut n4 = nodo_base(4, Some(1), true);
+        n4.graphic = TipoGraphic::Imagen;
+        n4.rect_transform = rect_transform_fijo(0.0, 0.0, 30.0, 40.0);
+        n4.layout_element = Some(elemento(None, None, Some(70.0), None));
+
+        let mut n0 = canvas_400x300();
+        n0.canvas = Some(CanvasData {
+            render_mode: "ScreenSpaceOverlay".into(),
+            reference_resolution: [400.0, 200.0],
+            match_width_or_height: 0.5,
+        });
+        let doc = doc_de_nodos(vec![n0, n1, n2, n3, n4]);
+        let medidor = MedidorTexto::new();
+        let colocado =
+            colocar_documento_con_medidor(&doc, Viewport { ancho: 400.0, alto: 200.0 }, &medidor);
+
+        let r = |idx: usize| {
+            let n = &colocado.nodos[idx].rect;
+            [n.x, n.y, n.ancho, n.alto]
+        };
+        // Hijo B (nodo 3) conserva su rect original.
+        for (i, e) in [200.0, 80.0, 60.0, 25.0].iter().enumerate() {
+            assert!((r(3)[i] - e).abs() < 0.1, "ignore[{}] = {}, esperado {}", i, r(3)[i], e);
+        }
+        // Solo 1 spacing (entre A y C): A en x=0 w=50; C en x=60 w=70.
+        assert!((r(2)[0] - 0.0).abs() < 0.1, "A x: {}", r(2)[0]);
+        assert!((r(2)[2] - 50.0).abs() < 0.1, "A w: {}", r(2)[2]);
+        assert!((r(4)[0] - 60.0).abs() < 0.1, "C x: {}", r(4)[0]);
+        assert!((r(4)[2] - 70.0).abs() < 0.1, "C w: {}", r(4)[2]);
+    }
 }

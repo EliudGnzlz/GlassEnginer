@@ -1,7 +1,8 @@
 use egui::{Color32, DragValue, RichText, Slider, Ui};
 use glass_core::physics_material::{MaterialCombine, PhysicsMaterial};
 use glass_core::{
-    AudioSourceData, CameraData, CanvasData, CharacterData, ColliderSpec, EntityData, LayoutGroupData, LightData,
+    AudioSourceData, CameraData, CanvasData, CharacterData, ColliderSpec, EntityData, LayoutElementData,
+    LayoutGroupData, LightData,
     MeshData, PhysicsData,
     RectTransformData, SceneState, ScriptComponentData, UIButtonData, UITextData,
     UIImageData, UIInputFieldData,
@@ -342,6 +343,7 @@ pub enum TipoComponente {
     InputField,
     DragDrop,
     LayoutGroup,
+    LayoutElement,
 }
 
 impl TipoComponente {
@@ -365,6 +367,7 @@ impl TipoComponente {
             TipoComponente::InputField => "InputField",
             TipoComponente::DragDrop => "DragDrop",
             TipoComponente::LayoutGroup => "LayoutGroup",
+            TipoComponente::LayoutElement => "LayoutElement",
         }
     }
 }
@@ -1035,6 +1038,7 @@ pub fn extraer_componente(ent: &EntityData, tipo: TipoComponente) -> Option<Stri
         TipoComponente::InputField => ent.ui_input_field.as_ref().and_then(a_json),
         TipoComponente::DragDrop => ent.ui_drag.as_ref().and_then(a_json),
         TipoComponente::LayoutGroup => ent.layout_group.as_ref().and_then(a_json),
+        TipoComponente::LayoutElement => ent.layout_element.as_ref().and_then(a_json),
         TipoComponente::Script => {
             if ent.script.is_none() && ent.script_data.is_none() {
                 None
@@ -1090,6 +1094,7 @@ pub fn aplicar_datos(ent: &mut EntityData, tipo: TipoComponente, json: &str) -> 
         TipoComponente::InputField => sustituir(&mut ent.ui_input_field, json),
         TipoComponente::DragDrop => sustituir(&mut ent.ui_drag, json),
         TipoComponente::LayoutGroup => sustituir(&mut ent.layout_group, json),
+        TipoComponente::LayoutElement => sustituir(&mut ent.layout_element, json),
         TipoComponente::Script => {
             if ent.script.is_none() && ent.script_data.is_none() {
                 return false;
@@ -1151,6 +1156,7 @@ pub fn instalar_componente(ent: &mut EntityData, tipo: TipoComponente, json: &st
         }
         TipoComponente::DragDrop => crear(&mut ent.ui_drag, json, &mut ent.components, nombre),
         TipoComponente::LayoutGroup => crear(&mut ent.layout_group, json, &mut ent.components, nombre),
+        TipoComponente::LayoutElement => crear(&mut ent.layout_element, json, &mut ent.components, nombre),
         TipoComponente::Script => {
             if ent.script.is_some() || ent.script_data.is_some() {
                 return false;
@@ -3449,6 +3455,18 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                     }
                                 }
                             });
+
+                        // Control Size y Force Expand (V5b-1): con control
+                        // el grupo toma el preferido del hijo; con expand
+                        // reparte el sobrante a partes iguales.
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut grupo.child_control_width, "Controlar ancho");
+                            ui.checkbox(&mut grupo.child_control_height, "Controlar alto");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut grupo.child_force_expand_width, "Expandir ancho");
+                            ui.checkbox(&mut grupo.child_force_expand_height, "Expandir alto");
+                        });
                     });
                     ui.separator();
                 }
@@ -3460,6 +3478,43 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                 if remove_layout {
                     entity.layout_group = None;
                     entity.components.retain(|c| c != "LayoutGroup");
+                }
+
+                // Sección LayoutElement (V5b-1): tamaños de layout del hijo.
+                // Cada tamaño opcional lleva su casilla (sin marcar = None:
+                // mínimo 0, preferido medido).
+                let mut accion_element = AccionCabecera::Nada;
+                let mut remove_element = false;
+                if let Some(ref mut el) = entity.layout_element {
+                    seccion_componente(ui, "layout_element", "📐 LayoutElement", TipoComponente::LayoutElement, true, self.portapapeles.as_ref(), &mut accion_element, |ui| {
+                        let mut fila_opcional = |ui: &mut Ui, etiqueta: &str, valor: &mut Option<f32>| {
+                            ui.horizontal(|ui| {
+                                let mut usar = valor.is_some();
+                                ui.label(etiqueta);
+                                if ui.checkbox(&mut usar, "").changed() {
+                                    *valor = if usar { Some(0.0) } else { None };
+                                }
+                                if let Some(v) = valor.as_mut() {
+                                    ui.add(egui::DragValue::new(v).speed(0.5));
+                                }
+                            });
+                        };
+                        fila_opcional(ui, "Mín. ancho", &mut el.min_width);
+                        fila_opcional(ui, "Mín. alto", &mut el.min_height);
+                        fila_opcional(ui, "Pref. ancho", &mut el.preferred_width);
+                        fila_opcional(ui, "Pref. alto", &mut el.preferred_height);
+                        ui.checkbox(&mut el.ignore_layout, "Ignorar en el layout");
+                    });
+                    ui.separator();
+                }
+                if accion_element == AccionCabecera::Quitar {
+                    remove_element = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::LayoutElement, accion_element);
+                }
+                if remove_element {
+                    entity.layout_element = None;
+                    entity.components.retain(|c| c != "LayoutElement");
                 }
 
                 // ==========================================
@@ -3513,6 +3568,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         hay_resultados |= coincide("InputField");
                         hay_resultados |= coincide("DragDrop");
                         hay_resultados |= coincide("LayoutGroup");
+                        hay_resultados |= coincide("LayoutElement");
 
                         if !hay_resultados && !q.is_empty() {
                             ui.label(RichText::new("Sin componentes que coincidan.").weak());
@@ -3642,6 +3698,12 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         if coincide("LayoutGroup") && entity.layout_group.is_none() && ui.button("🗂 LayoutGroup").clicked() {
                             entity.layout_group = Some(LayoutGroupData::default());
                             entity.components.push("LayoutGroup".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if coincide("LayoutElement") && entity.layout_element.is_none() && ui.button("📐 LayoutElement").clicked() {
+                            entity.layout_element = Some(LayoutElementData::default());
+                            entity.components.push("LayoutElement".into());
                             self.show_add_component_menu = false;
                         }
                     });

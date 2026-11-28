@@ -873,6 +873,7 @@ mod pruebas {
             boton: None,
             drag: None,
             layout_group: None,
+            layout_element: None,
             style_extra: extra.to_string(),
             raycast_target: true,
         }
@@ -976,6 +977,7 @@ mod pruebas {
                 }),
                 drag: None,
                 layout_group: None,
+                layout_element: None,
                 style_extra: String::new(),
                 raycast_target: true,
             }

@@ -533,7 +533,7 @@ impl McpServer {
                         },
                         {
                             "name": "glass_component_get",
-                            "description": "Devuelve el JSON completo de un componente de una entidad (Transform, MeshRenderer, Rigidbody, Collider, CharacterController, Camera, Light, Script, AudioSource, Canvas, RectTransform, Text, Button, Image, DragDrop, Animator, Fog, Particles, Portal, LayoutGroup).",
+                            "description": "Devuelve el JSON completo de un componente de una entidad (Transform, MeshRenderer, Rigidbody, Collider, CharacterController, Camera, Light, Script, AudioSource, Canvas, RectTransform, Text, Button, Image, DragDrop, Animator, Fog, Particles, Portal, LayoutGroup, LayoutElement).",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -5631,6 +5631,35 @@ mod tests_catchup {
         );
         assert!(r.contains("vertical"), "get LayoutGroup: {r}");
         assert!(r.contains("12.0"), "get LayoutGroup: {r}");
+    }
+
+    #[test]
+    fn component_set_get_roundtrip_layout_element() {
+        let srv = servidor();
+        srv.scene
+            .lock()
+            .unwrap()
+            .entities
+            .push(glass_core::scene::EntityData::new(
+                4244,
+                "HijoMcp".into(),
+                vec!["Transform".into()],
+            ));
+
+        let r = llamar(
+            &srv,
+            "glass_component_set",
+            json!({ "entity_id": 4244, "component": "LayoutElement", "values": { "preferred_width": 80.0, "ignore_layout": true } }),
+        );
+        assert!(!r.contains("\"error\""), "set LayoutElement: {r}");
+
+        let r = llamar(
+            &srv,
+            "glass_component_get",
+            json!({ "entity_id": 4244, "component": "LayoutElement" }),
+        );
+        assert!(r.contains("80.0"), "get LayoutElement: {r}");
+        assert!(r.contains("true"), "get LayoutElement: {r}");
     }
 
     #[test]
