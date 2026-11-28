@@ -535,6 +535,30 @@ pub fn directional_shadow_vp(
     let r = [r_raw[0] / r_len, r_raw[1] / r_len, r_raw[2] / r_len];
     let u = cross(r, f);
 
+    // SNAP A TÉXELES, en espacio de mundo: se desplaza el centro dentro
+    // del plano de la luz (ejes r, u) hasta que sus coordenadas en ese
+    // plano sean múltiplos exactos del téxel. Así la retícula del mapa
+    // queda anclada al MUNDO: al mover la cámara, el origen del mapa
+    // salta de téxel en téxel en vez de deslizarse con el centro, y las
+    // sombras no hierven (D4).
+    //
+    // Ojo: el snap anterior ajustaba la traslación de la vista para
+    // anclar (r·center + tx, u·center + ty), pero esa cantidad es
+    // idénticamente cero — el ojo es center + L·back y r,u ⊥ L, así que
+    // r·eye = r·center — y el ajuste era un no-op: la retícula se
+    // deslizaba con el centro y las sombras hervían igual. Lo cazaron
+    // los tests de cascadas del CSM (2026-11-27), que exigen que la UV
+    // de un punto fijo solo salte en téxeles enteros al mover el centro.
+    let texel = 2.0 * half_extent / resolution.max(1) as f32;
+    let sr = r[0] * center[0] + r[1] * center[1] + r[2] * center[2];
+    let su = u[0] * center[0] + u[1] * center[1] + u[2] * center[2];
+    let off_r = sr - (sr / texel).round() * texel;
+    let off_u = su - (su / texel).round() * texel;
+    let center = [
+        center[0] - r[0] * off_r - u[0] * off_u,
+        center[1] - r[1] * off_r - u[1] * off_u,
+        center[2] - r[2] * off_r - u[2] * off_u,
+    ];
     // Ojo de la luz: hacia el sol desde el centro (+L * back), mirando a
     // lo largo de f. Vista diestra espejo de la `look_at` de la app
     // (filas r, u, -f).
@@ -543,22 +567,9 @@ pub fn directional_shadow_vp(
         center[1] + l[1] * back,
         center[2] + l[2] * back,
     ];
-    let mut tx = -(r[0] * eye[0] + r[1] * eye[1] + r[2] * eye[2]);
-    let mut ty = -(u[0] * eye[0] + u[1] * eye[1] + u[2] * eye[2]);
+    let tx = -(r[0] * eye[0] + r[1] * eye[1] + r[2] * eye[2]);
+    let ty = -(u[0] * eye[0] + u[1] * eye[1] + u[2] * eye[2]);
     let tz = f[0] * eye[0] + f[1] * eye[1] + f[2] * eye[2];
-    // SNAP A TÉXELES: el centro, en espacio de vista de la luz, cae en
-    // (r·center + tx, u·center + ty) — en general NO es (0,0), porque la
-    // rotación mezcla las coordenadas del mundo. El muestreo del mapa
-    // usa esas coordenadas de vista, así que son ELLAS las que hay que
-    // anclar a la retícula: se desplaza la traslación lo justo para que
-    // la posición del centro en vista sea un múltiplo exacto del téxel.
-    // Al mover la cámara, el origen del mapa salta entonces de téxel en
-    // téxel en vez de deslizarse, y las sombras no hierven.
-    let texel = 2.0 * half_extent / resolution.max(1) as f32;
-    let cx = r[0] * center[0] + r[1] * center[1] + r[2] * center[2] + tx;
-    let cy = u[0] * center[0] + u[1] * center[1] + u[2] * center[2] + ty;
-    tx += (cx / texel).round() * texel - cx;
-    ty += (cy / texel).round() * texel - cy;
     let view: [f32; 16] = [
         r[0], u[0], -f[0], 0.0,
         r[1], u[1], -f[1], 0.0,
@@ -580,6 +591,203 @@ pub fn directional_shadow_vp(
     // en el origen del espacio de vista por construcción (x = x_vista /
     // half_extent).
     mat4_mul(ortho, view)
+}
+
+/// Resultado de una cascada de sombras: VP ortográfica de la luz más la
+/// esfera que la encuadra. Se guarda la esfera para depurar y para que el
+/// shader pueda elegir cascada por distancia (`fin`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CascadeVp {
+    pub vp: [f32; 16],
+    pub centro: [f32; 3],
+    pub radio: f32,
+    /// Distancia de split (profundidad de eje) donde termina esta cascada.
+    pub fin: f32,
+}
+
+/// Normaliza `v`. Si su longitud es ~0 o no es finita devuelve `fallback`.
+/// Así una entrada degenerada da una base válida en lugar de NaN, sin panic.
+fn csm_normalizar_o(v: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
+    let l2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    if !l2.is_finite() || l2 < 1e-12 {
+        return fallback;
+    }
+    let inv = 1.0 / l2.sqrt();
+    [v[0] * inv, v[1] * inv, v[2] * inv]
+}
+
+/// Extremos de tramo de las cascadas: esquema práctico de URP que mezcla
+/// reparto uniforme y logarítmico con `lambda` (0 = uniforme, 1 = log).
+/// El reparto log da cascadas cercanas pequeñas, con más resolución donde
+/// el ojo la nota. El uniforme evita que la última cascada sea enorme. La
+/// mezcla equilibra las dos cosas.
+/// Devuelve `n` valores estrictamente crecientes. El último es exactamente
+/// `distancia`. El primer tramo empieza en `inicio`.
+/// Con entradas degeneradas (`distancia <= inicio`, NaN) los splits se
+/// separan con un épsilon. Siguen siendo crecientes y no hay panic.
+pub fn cascade_splits(distancia: f32, n: usize, lambda: f32, inicio: f32) -> Vec<f32> {
+    let mut out = Vec::with_capacity(n);
+    if n == 0 {
+        return out;
+    }
+    // El término log necesita inicio > 0.
+    let inicio = if inicio.is_finite() && inicio > 0.0 {
+        inicio.max(1e-4)
+    } else {
+        0.1
+    };
+    let lambda = if lambda.is_finite() {
+        lambda.clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    // Paso mínimo relativo a la escala, para que sea representable en f32.
+    let eps = (inicio * 1e-5).max(1e-4);
+    let min_d = inicio + eps * n as f32;
+    let d = if distancia.is_finite() && distancia >= min_d {
+        distancia
+    } else {
+        min_d
+    };
+    let ratio = d / inicio;
+    let mut prev = inicio;
+    for i in 1..=n {
+        let t = i as f32 / n as f32;
+        let uni = inicio + (d - inicio) * t;
+        let log = inicio * ratio.powf(t);
+        let mut s = lambda * log + (1.0 - lambda) * uni;
+        if i == n {
+            // Exacto: el último tramo debe cerrar en la distancia pedida.
+            s = d;
+        }
+        if !(s > prev) {
+            s = prev + eps;
+        }
+        out.push(s);
+        prev = s;
+    }
+    out
+}
+
+/// Esfera envolvente de la rebanada del frustum entre las distancias de
+/// eje `desde` y `hasta`. Centro = media de las 8 esquinas. Radio = máxima
+/// distancia del centro a las esquinas.
+/// Se usa una esfera y no la caja ajustada por un motivo: el radio solo
+/// depende de fov, aspect y del tramo. Al rotar la cámara la caja de luz no
+/// cambia de tamaño, y el snap a téxeles elimina el parpadeo.
+/// Las esquinas son simétricas respecto al eje, así que su media es
+/// exactamente `cam_pos + dir·(desde+hasta)/2`. Se calcula así para no
+/// acumular redondeo.
+/// Base de cámara: right = normalize(cross(dir, up_hint)),
+/// upv = cross(right, dir).
+pub fn frustum_slice_sphere(
+    cam_pos: [f32; 3],
+    cam_dir: [f32; 3],
+    cam_up: [f32; 3],
+    fov_rad: f32,
+    aspect: f32,
+    desde: f32,
+    hasta: f32,
+) -> ([f32; 3], f32) {
+    let pos = if cam_pos.iter().all(|c| c.is_finite()) {
+        cam_pos
+    } else {
+        [0.0; 3]
+    };
+    let dir = csm_normalizar_o(cam_dir, [0.0, 0.0, -1.0]);
+    let up_hint = csm_normalizar_o(cam_up, [0.0, 1.0, 0.0]);
+    // Si up_hint es paralelo a dir, el producto cruz se anula. En ese caso
+    // se elige otro eje no paralelo para que la base siga existiendo.
+    let mut right = cross(dir, up_hint);
+    let l2 = right[0] * right[0] + right[1] * right[1] + right[2] * right[2];
+    if !(l2 > 1e-8) {
+        let alt = if dir[1].abs() < 0.99 {
+            [0.0, 1.0, 0.0]
+        } else {
+            [1.0, 0.0, 0.0]
+        };
+        right = cross(dir, alt);
+    }
+    let right = csm_normalizar_o(right, [1.0, 0.0, 0.0]);
+    let upv = cross(right, dir);
+
+    let fov = if fov_rad.is_finite() {
+        fov_rad.clamp(0.05, 3.0)
+    } else {
+        std::f32::consts::FRAC_PI_3
+    };
+    let aspect = if aspect.is_finite() {
+        aspect.clamp(0.1, 10.0)
+    } else {
+        1.0
+    };
+    let desde = if desde.is_finite() { desde.max(0.0) } else { 0.0 };
+    let hasta = if hasta.is_finite() { hasta.max(desde) } else { desde };
+    let tan = (fov * 0.5).tan();
+
+    let dm = 0.5 * (desde + hasta);
+    let centro = [
+        pos[0] + dir[0] * dm,
+        pos[1] + dir[1] * dm,
+        pos[2] + dir[2] * dm,
+    ];
+
+    let mut r2 = 0.0f32;
+    for &d in &[desde, hasta] {
+        let hy = tan * d;
+        let hx = hy * aspect;
+        for &sx in &[-1.0f32, 1.0] {
+            for &sy in &[-1.0f32, 1.0] {
+                let mut dist2 = 0.0;
+                for k in 0..3 {
+                    let esquina =
+                        pos[k] + dir[k] * d + right[k] * (sx * hx) + upv[k] * (sy * hy);
+                    let dk = esquina - centro[k];
+                    dist2 += dk * dk;
+                }
+                r2 = r2.max(dist2);
+            }
+        }
+    }
+    (centro, r2.sqrt())
+}
+
+/// Las 4 cascadas del frame. Los splits usan lambda 0.5 e inicio = `near`
+/// (mínimo 0.1). Cada rebanada [anterior, fin] se encuadra con su esfera y
+/// de ella sale su VP.
+/// El margen de profundidad `radio + 40` deja dentro a los ocluyentes que
+/// están fuera de la rebanada pero proyectan sombra hacia ella.
+pub fn cascade_vps(
+    cam_pos: [f32; 3],
+    cam_dir: [f32; 3],
+    cam_up: [f32; 3],
+    fov_rad: f32,
+    aspect: f32,
+    near: f32,
+    distancia: f32,
+    light_dir_to_sun: [f32; 3],
+    resolucion_capa: u32,
+) -> [CascadeVp; 4] {
+    let inicio = if near.is_finite() { near.max(0.1) } else { 0.1 };
+    let splits = cascade_splits(distancia, 4, 0.5, inicio);
+    let luz = csm_normalizar_o(light_dir_to_sun, [0.0, 1.0, 0.0]);
+    let res = resolucion_capa.max(1);
+    core::array::from_fn(|i| {
+        let desde = if i == 0 { inicio } else { splits[i - 1] };
+        let fin = splits[i];
+        let (centro, radio) =
+            frustum_slice_sphere(cam_pos, cam_dir, cam_up, fov_rad, aspect, desde, fin);
+        // Radio nulo o no finito daría una ortográfica infinita.
+        let radio = if radio.is_finite() { radio.max(1e-3) } else { 1.0 };
+        let margen = radio + 40.0;
+        let vp = directional_shadow_vp(centro, luz, radio, res, margen, margen);
+        CascadeVp {
+            vp,
+            centro,
+            radio,
+            fin,
+        }
+    })
 }
 
 fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -1205,18 +1413,34 @@ mod tests {
 
     #[test]
     fn shadow_vp_snap_mantiene_el_centro_en_un_texel_exacto() {
-        // Con snap, el centro proyectado en UV debe caer en un múltiplo
-        // exacto del téxel (el origen del mapa se mueve con la retícula).
-        for centro in [[0.13, 0.0, -0.71], [3.7, 1.0, 2.9], [-11.31, 0.0, 8.47]] {
-            let vp = directional_shadow_vp(centro, [0.35, 0.8, 0.49], 25.0, 2048, 60.0, 60.0);
+        // La propiedad que importa del snap: la retícula queda anclada al
+        // MUNDO. Al mover el centro de forma arbitraria, la NDC de un
+        // punto fijo solo puede saltar en téxeles enteros; y el centro
+        // proyectado queda a medio téxel o menos del centro del mapa.
+        // (La versión anterior de este test miraba solo la proyección del
+        // propio centro contra la retícula del mapa: como el centro cae
+        // siempre en el centro del mapa, no podía fallar — y el snap de
+        // entonces era un no-op. Lo destaparon los tests del CSM.)
+        let l = [0.35, 0.8, 0.49];
+        let p = [1.3, 0.0, -2.1];
+        let base = directional_shadow_vp([0.13, 0.0, -0.71], l, 25.0, 2048, 60.0, 60.0);
+        let ndc0 = mat4_transform_point(base, p);
+        for centro in [[3.7, 1.0, 2.9], [-11.31, 0.0, 8.47], [0.31, 0.0, 0.17]] {
+            let vp = directional_shadow_vp(centro, l, 25.0, 2048, 60.0, 60.0);
+            let ndc = mat4_transform_point(vp, p);
+            for k in 0..2 {
+                // 1 téxel NDC = 2/2048; el salto debe ser un entero.
+                let saltos = (ndc[k] - ndc0[k]) * 1024.0;
+                assert!(
+                    (saltos - saltos.round()).abs() < 0.02,
+                    "salto no entero en téxeles: {saltos}"
+                );
+            }
             let c = mat4_transform_point(vp, centro);
-            let texel_uv = 1.0 / 2048.0;
-            let u = c[0] * 0.5 + 0.5;
-            let v = c[1] * 0.5 + 0.5;
-            let ru = (u / texel_uv).round() * texel_uv;
-            let rv = (v / texel_uv).round() * texel_uv;
-            assert!((u - ru).abs() < 1.0e-4, "u no alineada a téxel: {u} vs {ru}");
-            assert!((v - rv).abs() < 1.0e-4, "v no alineada a téxel: {v} vs {rv}");
+            assert!(
+                c[0].abs() <= 1.0 / 2048.0 + 1.0e-5 && c[1].abs() <= 1.0 / 2048.0 + 1.0e-5,
+                "centro a más de medio téxel del centro del mapa: {c:?}"
+            );
         }
     }
 
@@ -1313,4 +1537,208 @@ mod tests {
         assert_mat4_casi(mat4_sin_escala(mat4_sin_escala(m)), mat4_sin_escala(m));
     }
 
+    fn csm_ndc(vp: [f32; 16], p: [f32; 3]) -> [f32; 3] {
+        let q = mat4_transform_point(vp, p);
+        [q[0], q[1], q[2]]
+    }
+
+    fn csm_norm(v: [f32; 3]) -> [f32; 3] {
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        [v[0] / l, v[1] / l, v[2] / l]
+    }
+
+    fn csm_add(a: [f32; 3], b: [f32; 3], s: f32) -> [f32; 3] {
+        [a[0] + b[0] * s, a[1] + b[1] * s, a[2] + b[2] * s]
+    }
+
+    fn csm_dist(a: [f32; 3], b: [f32; 3]) -> f32 {
+        ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+    }
+
+    #[test]
+    fn cascade_splits_crecientes_y_terminan_en_distancia() {
+        let s = cascade_splits(80.0, 4, 0.5, 0.1);
+        assert_eq!(s.len(), 4);
+        for w in s.windows(2) {
+            assert!(w[1] > w[0], "splits no crecientes: {:?}", s);
+        }
+        assert_eq!(s[3], 80.0);
+        assert!(s[0] > 0.1 && s[0] < 80.0, "primer split fuera de rango: {}", s[0]);
+    }
+
+    #[test]
+    fn cascade_splits_lambda_cero_uniforme_y_uno_logaritmico() {
+        let (d, n, ini) = (80.0f32, 4usize, 0.5f32);
+        let uni = cascade_splits(d, n, 0.0, ini);
+        let log = cascade_splits(d, n, 1.0, ini);
+        for i in 0..n {
+            let t = (i + 1) as f32 / n as f32;
+            let eu = ini + (d - ini) * t;
+            let el = ini * (d / ini).powf(t);
+            assert!((uni[i] - eu).abs() <= 1e-4 * eu.max(1.0), "uniforme {} vs {}", uni[i], eu);
+            assert!((log[i] - el).abs() <= 1e-4 * el.max(1.0), "log {} vs {}", log[i], el);
+        }
+    }
+
+    #[test]
+    fn esfera_de_rebanada_contiene_esquinas_y_centro_en_eje() {
+        let pos = [1.0f32, 2.0, 3.0];
+        let dir = csm_norm([0.3, -0.2, -1.0]);
+        let up = [0.0f32, 1.0, 0.0];
+        let (fov, aspect, desde, hasta) = (1.0f32, 1.5f32, 2.0f32, 10.0f32);
+        let (c, r) = frustum_slice_sphere(pos, dir, up, fov, aspect, desde, hasta);
+
+        let right = csm_norm(cross(dir, up));
+        let upv = cross(right, dir);
+        let tan = (fov * 0.5).tan();
+        let mut max_d = 0.0f32;
+        for &d in &[desde, hasta] {
+            for &sx in &[-1.0f32, 1.0] {
+                for &sy in &[-1.0f32, 1.0] {
+                    let e = csm_add(
+                        csm_add(csm_add(pos, dir, d), right, sx * tan * d * aspect),
+                        upv,
+                        sy * tan * d,
+                    );
+                    let dist = csm_dist(e, c);
+                    assert!(dist <= r + 1e-4, "esquina fuera: {} > {}", dist, r);
+                    max_d = max_d.max(dist);
+                }
+            }
+        }
+        // El radio es ajustado: alguna esquina toca la esfera.
+        assert!((max_d - r).abs() < 1e-3);
+        let esperado = csm_add(pos, dir, 0.5 * (desde + hasta));
+        assert!(csm_dist(c, esperado) < 1e-4, "centro fuera del eje: {:?}", c);
+    }
+
+    #[test]
+    fn cascade_vps_radios_crecientes_fin_y_centro_en_ndc() {
+        let fov = 60f32.to_radians();
+        let luz = [0.3f32, 0.8, 0.2];
+        let cs = cascade_vps(
+            [0.0, 2.0, 0.0], [0.0, -0.2, -1.0], [0.0, 1.0, 0.0],
+            fov, 16.0 / 9.0, 0.1, 80.0, luz, 2048,
+        );
+        let splits = cascade_splits(80.0, 4, 0.5, 0.1);
+        for i in 0..4 {
+            assert!((cs[i].fin - splits[i]).abs() < 1e-6);
+            if i > 0 {
+                assert!(cs[i].radio > cs[i - 1].radio, "radios no crecientes");
+            }
+        }
+        let p = csm_ndc(cs[0].vp, cs[0].centro);
+        assert!(p[0].abs() <= 1.0 && p[1].abs() <= 1.0, "xy fuera: {:?}", p);
+        assert!(p[2] >= 0.0 && p[2] <= 1.0, "z fuera: {:?}", p);
+    }
+
+    // La equivariancia exacta (mover 1 téxel ⇒ VP desplazada 1 téxel) solo se garantiza lejos de la frontera de redondeo (x/téxel ≈ n+0,5); por eso se recentra antes en la retícula.
+    #[test]
+    fn cascada0_snap_equivariante_por_texeles() {
+        let fov = 60f32.to_radians();
+        let luz = csm_norm([0.3, 0.8, 0.2]);
+        let res = 2048u32;
+        let cs = cascade_vps(
+            [0.0, 2.0, 0.0], [0.0, -0.2, -1.0], [0.0, 1.0, 0.0],
+            fov, 16.0 / 9.0, 0.1, 80.0, luz, res,
+        );
+        let c0 = cs[0];
+        let m = c0.radio + 40.0;
+        let vp_a = directional_shadow_vp(c0.centro, luz, c0.radio, res, m, m);
+        // Igualdad por tolerancia: la luz llega normalizada por dos
+        // caminos (aquí csm_norm, dentro de cascade_vps csm_normalizar_o)
+        // y el redondeo difiere en ~1e-7; la VP debe coincidir en eso.
+        for i in 0..16 {
+            assert!(
+                (vp_a[i] - c0.vp[i]).abs() < 1.0e-5,
+                "VP distinta en {i}: {} vs {}",
+                vp_a[i],
+                c0.vp[i]
+            );
+        }
+
+        let texel = 2.0 * c0.radio / res as f32;
+        let texel_ndc = 2.0 / res as f32;
+        // La fila 0 de la VP es right_luz / half_extent.
+        let r = csm_norm([vp_a[0], vp_a[4], vp_a[8]]);
+
+        // Recentrar el centro sobre la retícula de téxeles.
+        let frac = csm_ndc(vp_a, c0.centro)[0] / texel_ndc;
+        let c1 = csm_add(c0.centro, r, -frac * texel);
+        let vp1 = directional_shadow_vp(c1, luz, c0.radio, res, m, m);
+        assert!(csm_ndc(vp1, c1)[0].abs() / texel_ndc < 0.05);
+
+        let p = csm_add(c1, [3.0, -2.0, 5.0], 1.0);
+        let base = csm_ndc(vp1, p);
+        for &k in &[1i32, 3, -2] {
+            let c2 = csm_add(c1, r, (k as f32 + 0.25) * texel);
+            let vp2 = directional_shadow_vp(c2, luz, c0.radio, res, m, m);
+            let q = csm_ndc(vp2, p);
+            let dx = (q[0] - base[0]) / texel_ndc;
+            let dy = (q[1] - base[1]) / texel_ndc;
+            assert!((dx + k as f32).abs() < 0.02, "k={} dx={} téxeles", k, dx);
+            assert!(dy.abs() < 0.02, "k={} dy={} téxeles", k, dy);
+        }
+    }
+
+    #[test]
+    fn cascada0_snap_cuantiza_desplazamientos_arbitrarios() {
+        let fov = 60f32.to_radians();
+        let luz = csm_norm([0.3, 0.8, 0.2]);
+        let res = 2048u32;
+        let cs = cascade_vps(
+            [0.0, 2.0, 0.0], [0.0, -0.2, -1.0], [0.0, 1.0, 0.0],
+            fov, 16.0 / 9.0, 0.1, 80.0, luz, res,
+        );
+        let c0 = cs[0];
+        let m = c0.radio + 40.0;
+        let texel_ndc = 2.0 / res as f32;
+        let p = csm_add(c0.centro, [1.0, 0.5, -2.0], 1.0);
+        let base = csm_ndc(c0.vp, p);
+        let deltas = [
+            [0.0037f32, 0.011, -0.02],
+            [1.3, -0.7, 0.25],
+            [-0.41, 0.093, 0.77],
+            [luz[0] * 2.5, luz[1] * 2.5, luz[2] * 2.5],
+        ];
+        for d in deltas.iter() {
+            let c = csm_add(c0.centro, *d, 1.0);
+            let vp = directional_shadow_vp(c, luz, c0.radio, res, m, m);
+            let q = csm_ndc(vp, p);
+            for k in 0..2 {
+                let t = (q[k] - base[k]) / texel_ndc;
+                assert!((t - t.round()).abs() < 0.02, "delta {:?} eje {}: {} téxeles", d, k, t);
+            }
+        }
+        // Mover el centro a lo largo de la luz no cambia X/Y.
+        let c = csm_add(c0.centro, luz, 2.5);
+        let vp = directional_shadow_vp(c, luz, c0.radio, res, m, m);
+        let q = csm_ndc(vp, p);
+        assert!((q[0] - base[0]).abs() / texel_ndc < 0.02);
+        assert!((q[1] - base[1]).abs() / texel_ndc < 0.02);
+    }
+
+    #[test]
+    fn cascade_vps_entradas_degeneradas_sin_nan() {
+        let fov = 60f32.to_radians();
+        let casos: [([f32; 3], [f32; 3], f32, f32, f32, [f32; 3]); 5] = [
+            ([0.0, 0.0, -1.0], [0.0, 1.0, 0.0], fov, 16.0 / 9.0, 80.0, [0.0, 1.0, 0.0]),
+            ([0.0, 1.0, 0.0], [0.0, 1.0, 0.0], fov, 16.0 / 9.0, 80.0, [0.0, 1.0, 0.0]),
+            ([0.0, 0.0, -1.0], [0.0, 1.0, 0.0], fov, 16.0 / 9.0, 0.01, [0.3, 0.8, 0.2]),
+            ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 0.0, 0.0, 80.0, [0.0, 0.0, 0.0]),
+            ([0.0, 0.0, -1.0], [0.0, 1.0, 0.0], f32::NAN, f32::NAN, f32::NAN, [0.0, 1.0, 0.0]),
+        ];
+        for (i, (dir, up, f, a, d, l)) in casos.iter().enumerate() {
+            let cs = cascade_vps([0.0, 2.0, 0.0], *dir, *up, *f, *a, 0.1, *d, *l, 1024);
+            for (j, c) in cs.iter().enumerate() {
+                assert!(c.vp.iter().all(|v| v.is_finite()), "caso {} cascada {}: NaN en VP", i, j);
+                assert!(c.centro.iter().all(|v| v.is_finite()), "caso {} cascada {}: centro", i, j);
+                assert!(c.radio.is_finite() && c.radio > 0.0, "caso {} cascada {}: radio", i, j);
+                assert!(c.fin.is_finite());
+                if j > 0 {
+                    assert!(c.fin > cs[j - 1].fin, "caso {}: fin no creciente", i);
+                }
+            }
+        }
+    }
 }

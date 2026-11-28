@@ -7266,20 +7266,152 @@ for name in wanted {
                 .lock()
                 .map(|s| s.shadow_settings())
                 .unwrap_or_else(|_| glass_core::scene::ResolvedShadow::legacy());
-            let vp_shadow_pre = if shadow_active {
+            // Distancia del cono: el autorado de escena (half_extent)
+            // describe la caja única de antes; el cono de las cascadas
+            // llega al doble de esa semilongitud.
+            let distancia_sombra: f32 = if shadow_active {
+                2.0 * ajustes_sombra.half_extent
+            } else {
+                0.0
+            };
+            // El renderer recibe el tamaño de CAPA, no el del atlas
+            // (2x2): media resolución, con un mínimo de 512.
+            let capa_sombra: u32 = (ajustes_sombra.map_size / 2).max(512);
+
+            // El descarte de casters se queda con UNA sola caja ancha:
+            // cubre 1.25·D para no perder ningún caster que pueda
+            // proyectar en cualquiera de las cuatro cascadas. Solo
+            // descarta: no se publica.
+            let frustum_shadow = if shadow_active {
                 let sc = eye_game_opt.unwrap_or(eye_scene);
-                Some(glass_core::directional_shadow_vp(
-                    [sc[0], sc[1], sc[2]],
-                    [light_dir[0], light_dir[1], light_dir[2]],
-                    ajustes_sombra.half_extent,
-                    ajustes_sombra.map_size,
-                    glass_renderer::shadow::SHADOW_BACK,
-                    glass_renderer::shadow::SHADOW_FRONT,
+                Some(glass_core::math::Frustum::from_view_proj(
+                    &glass_core::directional_shadow_vp(
+                        [sc[0], sc[1], sc[2]],
+                        [light_dir[0], light_dir[1], light_dir[2]],
+                        1.25 * distancia_sombra,
+                        2048,
+                        glass_renderer::shadow::SHADOW_BACK,
+                        glass_renderer::shadow::SHADOW_FRONT,
+                    ),
                 ))
             } else {
                 None
             };
-            let frustum_shadow = vp_shadow_pre.map(|vp| glass_core::math::Frustum::from_view_proj(&vp));
+
+            // Las cascadas se calculan aquí, ANTES de la recolección, con
+            // los mismos datos que el bloque de publicación de más abajo
+            // (que las reutiliza tal cual: no pueden desincronizarse).
+            // Sin luz activa no hay pase de sombras: se publican
+            // inactivas.
+            // Forward de la cámara de las cascadas: viaja en el UBO
+            // (cam_dir) para que el shader seleccione cascada con la
+            // misma profundidad de eje con la que se construyeron.
+            let mut cam_dir_sombra: [f32; 3] = [0.0, 0.0, -1.0];
+            let cascadas_pre: Option<[glass_core::math::CascadeVp; 4]> = if shadow_active {
+                // Cerrojo corto para la cámara de juego: en este punto no
+                // hay ningún cerrojo de escena tomado. Forward y up salen
+                // de su matriz de rotación (forward = -columna 2, up =
+                // columna 1), la misma convención que la luz.
+                let cam_juego = self.scene_state.lock().ok().and_then(|s| {
+                    s.active_camera().map(|cam| {
+                        let cp = cam.transform.position;
+                        let m = glass_core::mat4_from_trs_euler(
+                            [0.0, 0.0, 0.0],
+                            cam.transform.rotation(),
+                            [1.0, 1.0, 1.0],
+                        );
+                        let f = [-m[8], -m[9], -m[10]];
+                        let fl = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt().max(0.001);
+                        let u = [m[4], m[5], m[6]];
+                        let ul = (u[0] * u[0] + u[1] * u[1] + u[2] * u[2]).sqrt().max(0.001);
+                        (
+                            [cp[0], cp[1], cp[2]],
+                            [f[0] / fl, f[1] / fl, f[2] / fl],
+                            [u[0] / ul, u[1] / ul, u[2] / ul],
+                            cam.camera.as_ref().map(|c| c.fov).unwrap_or(60.0),
+                            cam.camera.as_ref().map(|c| c.near_clip).unwrap_or(0.1),
+                        )
+                    })
+                });
+
+                // Cámara de las cascadas: la de juego si la hay; si no, la
+                // de escena/editor (45°, near 0.1).
+                #[cfg(feature = "editor")]
+                let (ojo, fwd, up, fov_rad, near, aspect) = match cam_juego {
+                    Some((p, f, u, fov, near)) => {
+                        // Aspect de juego: el mismo que usa proj_g (vista
+                        // de juego), acotado a 0.1.
+                        let v = &self.editor_layout.viewport;
+                        let aspect = v
+                            .game_resolution
+                            .aspect_ratio()
+                            .unwrap_or(v.game_width / v.game_height)
+                            .max(0.1);
+                        (p, f, u, fov.to_radians(), near, aspect)
+                    }
+                    None => {
+                        // Sin cámara de juego: forward = centro del editor
+                        // − ojo de escena, up = [0,1,0].
+                        let c = self.editor_layout.viewport.editor_cam_center;
+                        let f = [
+                            c[0] - eye_scene[0],
+                            c[1] - eye_scene[1],
+                            c[2] - eye_scene[2],
+                        ];
+                        let fl = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt().max(0.001);
+                        (
+                            [eye_scene[0], eye_scene[1], eye_scene[2]],
+                            [f[0] / fl, f[1] / fl, f[2] / fl],
+                            [0.0, 1.0, 0.0],
+                            45.0_f32.to_radians(),
+                            0.1,
+                            (self.editor_layout.viewport.scene_width / self.editor_layout.viewport.scene_height).max(0.1),
+                        )
+                    }
+                };
+
+                #[cfg(not(feature = "editor"))]
+                let (ojo, fwd, up, fov_rad, near, aspect) = match cam_juego {
+                    Some((p, f, u, fov, near)) => (p, f, u, fov.to_radians(), near, 16.0 / 9.0),
+                    None => {
+                        // Standalone sin cámara activa: la cámara de escena
+                        // por defecto del archivo (45°, near 0.1, 16:9).
+                        let ojo: [f32; 3] = [3.5, 3.2, 9.5];
+                        let centro: [f32; 3] = [3.5, 1.4, 0.0];
+                        let f = [
+                            centro[0] - ojo[0],
+                            centro[1] - ojo[1],
+                            centro[2] - ojo[2],
+                        ];
+                        let fl = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt().max(0.001);
+                        (
+                            ojo,
+                            [f[0] / fl, f[1] / fl, f[2] / fl],
+                            [0.0, 1.0, 0.0],
+                            45.0_f32.to_radians(),
+                            0.1,
+                            16.0 / 9.0,
+                        )
+                    }
+                };
+
+                cam_dir_sombra = fwd;
+                // light_dir apunta HACIA el sol: la misma convención que
+                // espera cascade_vps.
+                Some(glass_core::math::cascade_vps(
+                    ojo,
+                    fwd,
+                    up,
+                    fov_rad,
+                    aspect,
+                    near,
+                    distancia_sombra,
+                    [light_dir[0], light_dir[1], light_dir[2]],
+                    capa_sombra,
+                ))
+            } else {
+                None
+            };
             let mut stats_considered: u32 = 0;
             let mut stats_outline: u32 = 0;
             let mut stats_culled: u32 = 0;
@@ -8474,44 +8606,55 @@ for name in wanted {
                 }
             }
 
-            // Sombras del sol (bloque de gráficos): la caja
-            // ortográfica sigue a la cámara de juego (a la de escena
-            // en el editor sin cámara de juego) y la luz es la
-            // principal de la escena — la misma de la que salen
-            // `light_dir`/`light_color` de los lotes. Sin luz: el canal
-            // se publica inactivo y el pase ni se graba.
             {
-                // El VP ya se calculó antes de la recolección (es el
-                // frustum con el que se filtraron los casters): aquí
-                // solo se publica.
-                // El mapa sigue al map_size resuelto (Sombras): recrearlo
-                // aquí es seguro porque el pase de sombras de este frame
-                // aún no se ha grabado, y el renderer espera al device en
-                // reposo dentro de la llamada. La guardia es el tamaño
-                // actual: se dispara una vez por cambio, no cada frame.
-                if renderer.shadow.size != ajustes_sombra.map_size {
-                    if let Err(e) = renderer.set_shadow_map_size(ajustes_sombra.map_size) {
+                // Las cascadas siguen a la cámara de juego (a la de escena
+                // en el editor sin cámara de juego) y la luz es la
+                // principal de la escena — la misma de la que salen
+                // `light_dir`/`light_color` de los lotes. Sin luz: el canal
+                // se publica inactivo y el pase ni se graba.
+                // Las cascadas ya se calcularon antes de la recolección:
+                // aquí solo se publican.
+                // El mapa se recrea contra el tamaño de CAPA (el atlas es
+                // 2x2): recrearlo aquí es seguro porque el pase de sombras
+                // de este frame aún no se ha grabado, y el renderer espera
+                // al device en reposo dentro de la llamada. La guardia es
+                // el tamaño actual: se dispara una vez por cambio, no cada
+                // frame.
+                if renderer.shadow.size != capa_sombra {
+                    if let Err(e) = renderer.set_shadow_map_size(capa_sombra) {
                         eprintln!(
-                            "[sombra] no se pudo recrear el mapa a {}: {e:?}",
-                            ajustes_sombra.map_size
+                            "[sombra] no se pudo recrear la capa a {capa_sombra}: {e:?}"
                         );
                     }
                 }
-                if let Some(vp) = vp_shadow_pre {
-                    // Los mismos ajustes que alimentaron el VP: el paso de
-                    // téxel en UV y el bias de normal se calculan para la
-                    // caja y el mapa activos, no para los históricos.
-                    renderer.set_shadow_frame(vp, [
-                        1.0 / ajustes_sombra.map_size as f32,
-                        glass_renderer::shadow::SHADOW_DEPTH_BIAS,
-                        glass_renderer::shadow::bias_normal_mundo_para(
-                            ajustes_sombra.half_extent,
-                            ajustes_sombra.map_size,
-                        ),
-                        1.0,
-                    ]);
+                if let Some(cascadas) = cascadas_pre.as_ref() {
+                    // Los mismos ajustes que alimentaron las cascadas: el
+                    // bias de normal se calcula por cascada, con su radio y
+                    // el tamaño de capa activo, no con los históricos.
+                    let frames: [glass_renderer::ShadowCascadeFrame; 4] =
+                        std::array::from_fn(|i| {
+                            let c = &cascadas[i];
+                            glass_renderer::ShadowCascadeFrame {
+                                vp: c.vp,
+                                radio: c.radio,
+                                fin: c.fin,
+                                bias_normal: glass_renderer::shadow::bias_normal_mundo_para(
+                                    c.radio, capa_sombra,
+                                ),
+                            }
+                        });
+                    renderer.set_shadow_cascades(frames, distancia_sombra, true, cam_dir_sombra);
                 } else {
-                    renderer.set_shadow_frame(glass_core::mat4_identity(), [0.0, 0.0, 0.0, 0.0]);
+                    // Sin luz activa: frames inertes (identidad, radio/fin
+                    // 0) y el canal apagado.
+                    let frames: [glass_renderer::ShadowCascadeFrame; 4] =
+                        std::array::from_fn(|_| glass_renderer::ShadowCascadeFrame {
+                            vp: glass_core::mat4_identity(),
+                            radio: 0.0,
+                            fin: 0.0,
+                            bias_normal: 0.0,
+                        });
+                    renderer.set_shadow_cascades(frames, 0.0, false, cam_dir_sombra);
                 }
             }
             let shadow_casters = glass_renderer::ShadowCasters {

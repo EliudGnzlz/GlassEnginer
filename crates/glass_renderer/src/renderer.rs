@@ -773,6 +773,17 @@ pub struct GraphPropsEntry {
     pub size: u64,
 }
 
+/// Una cascada ya calculada por la app (`glass_core::math::CascadeVp`):
+/// VP de la luz, radio de la caja, distancia `fin` de la cascada y sesgo
+/// de normal en metros de mundo (viaja en `cascade_data.y`).
+#[derive(Clone, Copy, Debug)]
+pub struct ShadowCascadeFrame {
+    pub vp: [f32; 16],
+    pub radio: f32,
+    pub fin: f32,
+    pub bias_normal: f32,
+}
+
 pub struct GlassRenderer {
     pub device: Arc<ash::Device>,
     pub allocator: Arc<Mutex<Allocator>>,
@@ -863,11 +874,15 @@ pub struct GlassRenderer {
     /// ¿Sombras activas? De `GLASS_SHADOWS` (defecto: activas). Solo
     /// apaga el efecto: el pase se salta y el UBO se publica inactivo.
     pub shadows_enabled: bool,
-    /// VP de la luz del frame en curso (lado CPU; la vuelca
+    /// Cascadas del frame en curso (lado CPU; la vuelca
     /// `render_views` al UBO del set 2 tras el fence).
-    shadow_vp: [f32; 16],
-    /// Parámetros del UBO de sombras del frame (lado CPU).
-    shadow_params: [f32; 4],
+    shadow_cascades: [ShadowCascadeFrame; 4],
+    /// Distancia D del cono de sombras (el inicio del fade es 0,9·D).
+    shadow_distancia: f32,
+    /// Actividad publicada por la app; GLASS_SHADOWS=0 la apaga después.
+    shadow_activa: bool,
+    /// Dirección de la cámara activa (xyz).
+    shadow_cam_dir: [f32; 3],
     /// Niebla del frame (Fase 2): viaja en el UBO de frame junto a la
     /// sombra; la publica la app con set_fog antes de render_views.
     fog_color_dist: [f32; 4],
@@ -1542,6 +1557,7 @@ impl GlassRenderer {
         let shadow = crate::shadow::ShadowResources::new(
             device.clone(),
             &mut allocator.lock().unwrap(),
+            1024,
             shadow_set_layout,
             shadow_dummy_layout,
             skinned_pipeline
@@ -2200,13 +2216,17 @@ impl GlassRenderer {
             present_game: false,
             post_settings,
             shadows_enabled,
-            shadow_vp: IDENTITY_MAT4,
-            shadow_params: [
-                1.0 / crate::shadow::SHADOW_MAP_SIZE as f32,
-                crate::shadow::SHADOW_DEPTH_BIAS,
-                crate::shadow::bias_normal_mundo(),
-                0.0,
-            ],
+//        shadow_params: [...]` del constructor. ------------------------------
+
+            shadow_cascades: [ShadowCascadeFrame {
+                vp: IDENTITY_MAT4,
+                radio: 0.0,
+                fin: 0.0,
+                bias_normal: crate::shadow::bias_normal_mundo(),
+            }; 4],
+            shadow_distancia: 0.0,
+            shadow_activa: false,
+            shadow_cam_dir: [0.0, 0.0, -1.0],
             fog_color_dist: [0.0; 4],
             fog_far_mode: [0.0; 4],
             ambient_sky: [
@@ -2475,15 +2495,26 @@ impl GlassRenderer {
         self.frame_draw_calls.get()
     }
 
-    pub fn set_shadow_frame(&mut self, light_vp: [f32; 16], params: [f32; 4]) {
-        self.shadow_vp = light_vp;
-        self.shadow_params = params;
+    /// Publica las 4 cascadas del frame (calculadas por la app con
+    /// `glass_core::math::cascade_vps`) y los datos globales del cono.
+    /// Solo toca estado de CPU: el UBO se vuelca en `render_views`.
+    pub fn set_shadow_cascades(
+        &mut self,
+        cascades: [ShadowCascadeFrame; 4],
+        distancia: f32,
+        activa: bool,
+        cam_dir: [f32; 3],
+    ) {
+        self.shadow_cascades = cascades;
+        self.shadow_distancia = distancia;
+        self.shadow_activa = activa;
+        self.shadow_cam_dir = cam_dir;
     }
 
-    /// Recrea el mapa de sombras del sol al tamaño pedido (el `map_size`
-    /// resuelto de la escena activa). Espera al device en reposo y delega
-    /// en `ShadowResources::resize`, que solo toca imagen, vista,
-    /// asignación, framebuffer y el binding 1 del set. Si el tamaño ya
+    /// Recrea el array de sombras del sol con el nuevo TAMAÑO DE CAPA (el
+    /// `map_size` resuelto de la escena activa). Espera al device en
+    /// reposo y delega en `ShadowResources::resize`, que rehace imagen,
+    /// vistas, framebuffers y el binding 1 del set. Si el tamaño ya
     /// coincide, no hace nada.
     pub fn set_shadow_map_size(&mut self, size: u32) -> Result<(), crate::offscreen::OffscreenError> {
         if self.shadow.size == size {
@@ -2497,6 +2528,13 @@ impl GlassRenderer {
         let mut allocator = self.allocator.lock().unwrap();
         self.shadow.resize(&self.device, &mut allocator, size)
     }
+
+    /// Recrea el mapa de sombras del sol al tamaño pedido (el `map_size`
+    /// resuelto de la escena activa). Espera al device en reposo y delega
+    /// en `ShadowResources::resize`, que solo toca imagen, vista,
+    /// asignación, framebuffer y el binding 1 del set. Si el tamaño ya
+    /// coincide, no hace nada.
+
 
     /// Enlaza el set 2 en un dibujo: el set real de sombras en el PBR
     /// (su shader lo declara) y el de RELLENO en los grafos (su shader
@@ -3333,7 +3371,7 @@ impl GlassRenderer {
     /// reposo tras el fence. Devuelve los parámetros de sombra
     /// efectivos (con GLASS_SHADOWS=0 ya aplicados). Lo usan
     /// `render_views` y `render_portal_views`.
-    fn upload_frame_ubos(&mut self) -> [f32; 4] {
+    fn upload_frame_ubos(&mut self) -> bool {
         unsafe {
         // Canal global de los grafos: con la GPU ya en reposo tras el
         // fence, los dos vec4 del frame se vuelcan al UBO mapeado (el
@@ -3370,39 +3408,60 @@ impl GlassRenderer {
         // la app y los parámetros, con el flag de actividad
         // combinado con el del renderer (GLASS_SHADOWS=0 lo apaga
         // aunque la app lo publique activo).
-        let mut shadow_params = self.shadow_params;
-        if !self.shadows_enabled {
-            shadow_params[3] = 0.0;
-        }
+        // UBO de sombras del frame (CSM de 4 cascadas): las VP y los datos
+        // por cascada publicados por la app, con el flag de actividad
+        // combinado con el del renderer (GLASS_SHADOWS=0 lo apaga aunque
+        // la app lo publique activo).
+        let activa = self.shadow_activa && self.shadows_enabled;
+        let light_vp: [[f32; 16]; 4] = std::array::from_fn(|i| self.shadow_cascades[i].vp);
+        let inv_size = 1.0 / self.shadow.size as f32;
+        let cascade_data: [[f32; 4]; 4] = std::array::from_fn(|i| {
+            let c = self.shadow_cascades[i];
+            [inv_size, c.bias_normal, c.fin, c.radio]
+        });
         self.shadow.write_ubo(&crate::shadow::ShadowUbo {
-            light_vp: self.shadow_vp,
-            params: shadow_params,
+            light_vp,
+            cascade_data,
+            misc: [
+                self.shadow_distancia,
+                0.9 * self.shadow_distancia,
+                if activa { 1.0 } else { 0.0 },
+                crate::shadow::SHADOW_DEPTH_BIAS,
+            ],
+            cam_dir: [
+                self.shadow_cam_dir[0],
+                self.shadow_cam_dir[1],
+                self.shadow_cam_dir[2],
+                0.0,
+            ],
             fog_color_dist: self.fog_color_dist,
             fog_far_mode: self.fog_far_mode,
             ambient_sky: self.ambient_sky,
             ambient_equator: self.ambient_equator,
             ambient_ground: self.ambient_ground,
         });
-            shadow_params
+        activa
         }
     }
 
-
-    /// Pase de profundidad del mapa de sombras (proyectores
-    /// estáticos y con piel). Extraído de `render_views`.
+    /// Pase de profundidad del array de sombras: una capa por cascada, con
+    /// los proyectores estáticos, con piel y de grafo. La VP de cada capa
+    /// es la publicada por la app (`set_shadow_cascades`).
     fn record_shadow_pass(
         &self,
         cmd: vk::CommandBuffer,
         casters: &ShadowCasters,
-        shadow_params: [f32; 4],
+        active: bool,
     ) {
         unsafe {
-        if shadow_params[3] > 0.5
+        if active
             && (!casters.statics.is_empty()
                 || !casters.skinned.is_empty()
                 || !casters.graph_statics.is_empty())
         {
-                self.shadow.begin_pass(&self.device, cmd);
+            for layer in 0..crate::shadow::SHADOW_CASCADES {
+                let light_vp = self.shadow_cascades[layer].vp;
+                self.shadow.begin_pass_layer(&self.device, cmd, layer);
                 if !casters.statics.is_empty() {
                     self.device.cmd_bind_pipeline(
                         cmd,
@@ -3411,7 +3470,7 @@ impl GlassRenderer {
                     );
                     for (mesh, model, rangos) in casters.statics {
                         let pc = MeshPushConstants {
-                            mvp: glass_core::mat4_mul(self.shadow_vp, *model),
+                            mvp: glass_core::mat4_mul(light_vp, *model),
                             model: *model,
                             ..Default::default()
                         };
@@ -3454,7 +3513,7 @@ impl GlassRenderer {
                             &[],
                         );
                         let pc = MeshPushConstants {
-                            mvp: glass_core::mat4_mul(self.shadow_vp, *model),
+                            mvp: glass_core::mat4_mul(light_vp, *model),
                             model: *model,
                             ..Default::default()
                         };
@@ -3514,7 +3573,7 @@ impl GlassRenderer {
                             );
                         }
                         let pc = MeshPushConstants {
-                            mvp: glass_core::mat4_mul(self.shadow_vp, *model),
+                            mvp: glass_core::mat4_mul(light_vp, *model),
                             model: *model,
                             material_params: [alpha_clip.unwrap_or(0.0), 0.0, 0.0, 0.0],
                             ..Default::default()
@@ -3547,6 +3606,7 @@ impl GlassRenderer {
                 }
                 self.device.cmd_end_render_pass(cmd);
             }
+        }
         }
     }
 
@@ -4358,7 +4418,7 @@ impl GlassRenderer {
                 }
             }
 
-            let shadow_params = self.upload_frame_ubos();
+            let sombras_activas = self.upload_frame_ubos();
 
             let cmd = self.command_buffer;
             let begin_info = vk::CommandBufferBeginInfo::default()
@@ -4377,7 +4437,7 @@ impl GlassRenderer {
             // con el efecto apagado no se graba.
             // --------------------------------------------------------------------
             if let Some(casters) = shadow_casters {
-                self.record_shadow_pass(cmd, casters, shadow_params);
+                self.record_shadow_pass(cmd, casters, sombras_activas);
                 self.record_point_shadow_passes(cmd, casters);
             }
 
@@ -4481,7 +4541,7 @@ impl GlassRenderer {
         unsafe {
             self.device.wait_for_fences(&[self.fence], true, u64::MAX)?;
             self.device.reset_fences(&[self.fence])?;
-            let shadow_params = self.upload_frame_ubos();
+            let sombras_activas = self.upload_frame_ubos();
 
             let cmd = self.command_buffer;
             let begin_info = vk::CommandBufferBeginInfo::default()
@@ -4489,7 +4549,7 @@ impl GlassRenderer {
             self.device.begin_command_buffer(cmd, &begin_info)?;
 
             if let Some(casters) = shadow_casters {
-                self.record_shadow_pass(cmd, casters, shadow_params);
+                self.record_shadow_pass(cmd, casters, sombras_activas);
             }
 
             let clear = [0.06, 0.09, 0.14, 1.0];

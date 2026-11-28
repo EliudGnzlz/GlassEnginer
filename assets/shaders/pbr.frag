@@ -24,14 +24,23 @@ layout(push_constant) uniform PushConstants {
 // color plano de siempre.
 layout(set = 0, binding = 0) uniform sampler2D base_color_tex;
 
-// Mapa de sombras del sol (bloque de gráficos): UBO de frame con la VP
-// ortográfica de la luz y un sampler de COMPARACIÓN (el hardware filtra
-// la comparación: un tap devuelve ya el factor de luz en ese téxel).
-// shadow_params: x = 1/tamaño, y = bias de profundidad, z = bias de
-// normal (m), w = 1 si las sombras están activas este frame.
+// Mapa de sombras del sol (CSM, bloque de gráficos): UBO de frame con las
+// VP ortográficas de las 4 cascadas y un sampler de COMPARACIÓN sobre el
+// array (el hardware filtra la comparación: un tap devuelve ya el factor
+// de luz en ese téxel). El detalle por cascada va en el propio bloque.
 layout(set = 2, binding = 0) uniform ShadowUbo {
-    mat4 light_vp;
-    vec4 shadow_params;
+    // Layout espejo del UBO de Rust (repr(C), 432 B): no reordenar.
+    //  0: mat4[4] (256 B)  -> matrices de luz por cascada
+    // 256: vec4[4]  (64 B) -> por cascada: x = 1/tamaño de capa, y = bias
+    //                         de normal en mundo, z = fin del tramo, w = radio
+    // 320: vec4 (misc)     -> x = distancia D, y = inicio del fade (0,9*D),
+    //                         z = activa (1/0), w = bias de profundidad
+    // 336: vec4 (cam_dir)  -> xyz = dirección de la cámara activa
+    // 352/368: niebla, 384/400/416: ambiente (sin cambios)
+    mat4 light_vp[4];
+    vec4 cascade_data[4];
+    vec4 misc;
+    vec4 cam_dir;
     // Niebla (Fase 2): rgb = color, w = inicio; en fog_far_mode:
     // x = distancia total, y = 1 si activa.
     vec4 fog_color_dist;
@@ -41,7 +50,7 @@ layout(set = 2, binding = 0) uniform ShadowUbo {
     vec4 ambient_equator;
     vec4 ambient_ground;
 } u_shadow;
-layout(set = 2, binding = 1) uniform sampler2DShadow shadow_map;
+layout(set = 2, binding = 1) uniform sampler2DArrayShadow shadow_map;
 
 // Luces puntuales del frame (bloque de iluminación): hasta 8 luces
 // Point con el mismo BRDF que la direccional. Sin sombras en esta v1.
@@ -126,31 +135,62 @@ layout(set = 5, binding = 0, std140) uniform LmData {
 // se desvanece junto al borde de la caja ortográfica para que nada
 // aparezca/desaparezca de golpe al cruzar el límite, y todo fragmento
 // fuera de la caja (o tras el plano lejano de la luz) queda a pleno sol.
+// Sombra de una única cascada: mismo PCF 5x5 de siempre, pero sesgado con el
+// bias en mundo de esa capa y leyendo su nivel del array.
+float shadow_cascade(int i, vec3 world_pos, vec3 n, float factor_angulo) {
+    vec3 sp = world_pos + n * (u_shadow.cascade_data[i].y * factor_angulo);
+    vec4 lc = u_shadow.light_vp[i] * vec4(sp, 1.0);
+    vec3 proj = lc.xyz / lc.w;
+    if (proj.z < 0.0 || proj.z > 1.0) return 1.0;
+    vec2 uv = proj.xy * 0.5 + 0.5;
+    float ref = proj.z - u_shadow.misc.w;
+    // Un texel de esta capa (1/tamaño) para el PCF 5x5.
+    float texel = u_shadow.cascade_data[i].x;
+    float s = 0.0;
+    for (int x = -2; x <= 2; x++) {
+        for (int y = -2; y <= 2; y++) {
+            s += texture(shadow_map, vec4(uv + vec2(float(x), float(y)) * texel, float(i), ref));
+        }
+    }
+    return s / 25.0;
+}
+
 float shadow_factor(vec3 world_pos, vec3 n) {
-    if (u_shadow.shadow_params.w < 0.5) return 1.0;
+    if (u_shadow.misc.z < 0.5) return 1.0;
     // El desplazamiento crece a incidencia rasante (donde nace el acne) y
     // se queda en un suelo del 70 % a incidencia perpendicular, tipo URP
     // (el suelo garantiza que el desplazamiento nunca baja del valor
     // constante anterior, 0,05 m, que ya era seguro a mediodía).
     float ndotl = clamp(dot(n, u_push.light_dir.xyz), 0.0, 1.0);
     float factor_angulo = max(1.0 - ndotl, 0.7);
-    vec3 sp = world_pos + n * (u_shadow.shadow_params.z * factor_angulo);
-    vec4 lc = u_shadow.light_vp * vec4(sp, 1.0);
-    vec3 proj = lc.xyz / lc.w;
-    if (proj.z < 0.0 || proj.z > 1.0) return 1.0;
-    vec2 uv = proj.xy * 0.5 + 0.5;
-    float edge = max(abs(proj.x), abs(proj.y));
-    float fade = 1.0 - smoothstep(0.85, 1.0, edge);
-    if (fade <= 0.0) return 1.0;
-    float ref = proj.z - u_shadow.shadow_params.y;
-    float texel = u_shadow.shadow_params.x;
-    float s = 0.0;
-    for (int x = -2; x <= 2; x++) {
-        for (int y = -2; y <= 2; y++) {
-            s += texture(shadow_map, vec3(uv + vec2(float(x), float(y)) * texel, ref));
+
+    // Selección de cascada: profundidad del fragmento sobre el eje de la
+    // cámara, comparada con el fin de cada tramo. Fuera de D se
+    // usa la capa 3 (el fade global ya apaga la sombra antes de D).
+    float depth = dot(world_pos - u_push.camera_pos.xyz, u_shadow.cam_dir.xyz);
+    int k = 3;
+    for (int i = 0; i < 3; i++) {
+        if (depth <= u_shadow.cascade_data[i].z) {
+            k = i;
+            break;
         }
     }
-    return mix(1.0, s / 25.0, fade);
+    float s = shadow_cascade(k, world_pos, n, factor_angulo);
+
+    // Mezcla con la cascada siguiente en el último 15 % del tramo: el salto de
+    // resolución entre capas deja de verse como un escalón duro.
+    if (k < 3) {
+        float fin = u_shadow.cascade_data[k].z;
+        float inicio = (k == 0) ? 0.0 : u_shadow.cascade_data[k - 1].z;
+        float span = fin - inicio;
+        float blend = smoothstep(fin - 0.15 * span, fin, depth);
+        s = mix(s, shadow_cascade(k + 1, world_pos, n, factor_angulo), blend);
+    }
+
+    // Fade global a sin-sombra entre el 90 % y el 100 % de D: el borde de la
+    // última cascada se disuelve en vez de cortarse.
+    float fade = 1.0 - smoothstep(u_shadow.misc.y, u_shadow.misc.x, depth);
+    return mix(1.0, s, fade);
 }
 
 const float PI = 3.14159265359;

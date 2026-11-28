@@ -68,13 +68,24 @@ pub fn bias_normal_mundo() -> f32 {
     bias_normal_mundo_para(SHADOW_ORTHO_HALF, SHADOW_MAP_SIZE)
 }
 
-/// Contenido del UBO de frame del set 2: la VP de la luz y
-/// `params = (1/tamaño, bias de profundidad, bias de normal, activo)`.
+/// Número de cascadas del mapa de sombras del sol.
+pub const SHADOW_CASCADES: usize = 4;
+
+/// Contenido del UBO de frame del set 2 (CSM de 4 cascadas):
+/// - `light_vp[i]`: VP de la luz de la cascada `i` (0 = más cercana).
+/// - `cascade_data[i]`: (1/tamaño de capa, bias de normal en mundo,
+///   distancia `fin` de la cascada, radio de la caja).
+/// - `misc`: (distancia D, inicio del fade = 0,9·D, activa 1/0, bias de
+///   profundidad en [0,1]).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ShadowUbo {
-    pub light_vp: [f32; 16],
-    pub params: [f32; 4],
+    pub light_vp: [[f32; 16]; SHADOW_CASCADES],
+    pub cascade_data: [[f32; 4]; SHADOW_CASCADES],
+    /// (distancia D, inicio_fade, activa, bias de profundidad).
+    pub misc: [f32; 4],
+    /// Dirección de la cámara activa (xyz); w sin uso.
+    pub cam_dir: [f32; 4],
     /// Niebla (Fase 2): rgb = color, w = distancia de inicio.
     pub fog_color_dist: [f32; 4],
     /// Niebla: x = distancia total, y = 1 si activa.
@@ -87,10 +98,16 @@ pub struct ShadowUbo {
     pub ambient_ground: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<ShadowUbo>() == 160);
-const _: () = assert!(std::mem::offset_of!(ShadowUbo, ambient_sky) == 112);
-const _: () = assert!(std::mem::offset_of!(ShadowUbo, ambient_equator) == 128);
-const _: () = assert!(std::mem::offset_of!(ShadowUbo, ambient_ground) == 144);
+const _: () = assert!(std::mem::size_of::<ShadowUbo>() == 432);
+const _: () = assert!(std::mem::offset_of!(ShadowUbo, light_vp) == 0);
+const _: () = assert!(std::mem::offset_of!(ShadowUbo, cascade_data) == 256);
+const _: () = assert!(std::mem::offset_of!(ShadowUbo, misc) == 320);
+const _: () = assert!(std::mem::offset_of!(ShadowUbo, cam_dir) == 336);
+const _: () = assert!(std::mem::offset_of!(ShadowUbo, fog_color_dist) == 352);
+const _: () = assert!(std::mem::offset_of!(ShadowUbo, fog_far_mode) == 368);
+const _: () = assert!(std::mem::offset_of!(ShadowUbo, ambient_sky) == 384);
+const _: () = assert!(std::mem::offset_of!(ShadowUbo, ambient_equator) == 400);
+const _: () = assert!(std::mem::offset_of!(ShadowUbo, ambient_ground) == 416);
 
 fn pipe_err(e: PipelineError) -> OffscreenError {
     match e {
@@ -129,15 +146,23 @@ fn mapped_buffer(
 }
 
 pub struct ShadowResources {
+    /// Lado de CADA capa del array de sombras: el mapa completo mide
+    /// `size × size × SHADOW_CASCADES`.
     pub size: u32,
     image: vk::Image,
     allocation: Option<Allocation>,
+    /// Vista de muestreo del array completo (TYPE_2D_ARRAY): es la que
+    /// va al binding 1 del set 2.
     view: vk::ImageView,
+    /// Una vista 2D por capa: solo las usan los framebuffers del pase.
+    layer_views: [vk::ImageView; SHADOW_CASCADES],
     sampler: vk::Sampler,
     pub render_pass: vk::RenderPass,
-    framebuffer: vk::Framebuffer,
+    /// Un framebuffer por capa; el render pass es el mismo para las 4.
+    framebuffers: [vk::Framebuffer; SHADOW_CASCADES],
     /// Layout del set 2 real (binding 0 = UBO, binding 1 = sampler de
-    /// comparación). Lo referencia el layout de los pipelines PBR/piel.
+    /// comparación del array, binding 2 = puntuales). Lo referencia el
+    /// layout de los pipelines PBR/piel.
     pub set_layout: vk::DescriptorSetLayout,
     pool: vk::DescriptorPool,
     pub set: vk::DescriptorSet,
@@ -194,43 +219,56 @@ impl ShadowResources {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        device: Arc<ash::Device>,
+
+    /// Crea la imagen array (4 capas), la vista de muestreo 2D_ARRAY, las
+    /// 4 vistas 2D por capa y sus 4 framebuffers. Base común de `new` y
+    /// `resize`: si falla a mitad, el error es fatal (como hoy).
+    ///
+    /// # Safety
+    /// `device` y `allocator` deben ser válidos y `render_pass` debe
+    /// aceptar un attachment de profundidad D32 del tamaño pedido.
+    unsafe fn create_targets(
+        device: &ash::Device,
         allocator: &mut Allocator,
-        set_layout: vk::DescriptorSetLayout,
-        dummy_layout: vk::DescriptorSetLayout,
-        joints_set_layout: vk::DescriptorSetLayout,
-        filler_set_layout: vk::DescriptorSetLayout,
-        pbr_vert_spv: &[u8],
-        skinned_vert_spv: &[u8],
-    ) -> Result<Self, OffscreenError> {
-        let size = SHADOW_MAP_SIZE;
-        unsafe {
-            // --- Imagen de profundidad del mapa ---
-            let image_info = vk::ImageCreateInfo::default()
-                .image_type(vk::ImageType::TYPE_2D)
-                .format(vk::Format::D32_SFLOAT)
-                .extent(vk::Extent3D { width: size, height: size, depth: 1 })
-                .mip_levels(1)
-                .array_layers(1)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                .initial_layout(vk::ImageLayout::UNDEFINED);
-            let image = device.create_image(&image_info, None)?;
-            let mem_reqs = device.get_image_memory_requirements(image);
-            let allocation = allocator.allocate(&AllocationCreateDesc {
-                name: "shadow_map",
-                requirements: mem_reqs,
-                location: MemoryLocation::GpuOnly,
-                linear: false,
-                allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-            })?;
-            device.bind_image_memory(image, allocation.memory(), allocation.offset())?;
-            let view_info = vk::ImageViewCreateInfo::default()
+        render_pass: vk::RenderPass,
+        size: u32,
+    ) -> Result<
+        (
+            vk::Image,
+            Allocation,
+            vk::ImageView,
+            [vk::ImageView; SHADOW_CASCADES],
+            [vk::Framebuffer; SHADOW_CASCADES],
+        ),
+        OffscreenError,
+    > {
+        let image_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(vk::Format::D32_SFLOAT)
+            .extent(vk::Extent3D { width: size, height: size, depth: 1 })
+            .mip_levels(1)
+            .array_layers(SHADOW_CASCADES as u32)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+        let image = device.create_image(&image_info, None)?;
+        let mem_reqs = device.get_image_memory_requirements(image);
+        let allocation = allocator.allocate(&AllocationCreateDesc {
+            name: "shadow_map",
+            requirements: mem_reqs,
+            location: MemoryLocation::GpuOnly,
+            linear: false,
+            allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+        })?;
+        device.bind_image_memory(image, allocation.memory(), allocation.offset())?;
+
+        // Vista de muestreo: todas las capas (TYPE_2D_ARRAY → binding 1).
+        let view = device.create_image_view(
+            &vk::ImageViewCreateInfo::default()
                 .image(image)
-                .view_type(vk::ImageViewType::TYPE_2D)
+                .view_type(vk::ImageViewType::TYPE_2D_ARRAY)
                 .format(vk::Format::D32_SFLOAT)
                 .subresource_range(
                     vk::ImageSubresourceRange::default()
@@ -238,24 +276,94 @@ impl ShadowResources {
                         .base_mip_level(0)
                         .level_count(1)
                         .base_array_layer(0)
-                        .layer_count(1),
-                );
-            let view = device.create_image_view(&view_info, None)?;
+                        .layer_count(SHADOW_CASCADES as u32),
+                ),
+            None,
+        )?;
 
-            // Sampler de comparación: un tap devuelve el factor de luz
-            // (1 si la referencia no supera la profundidad guardada).
-            let sampler_info = vk::SamplerCreateInfo::default()
-                .mag_filter(vk::Filter::LINEAR)
-                .min_filter(vk::Filter::LINEAR)
-                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                .compare_enable(true)
-                .compare_op(vk::CompareOp::LESS_OR_EQUAL)
-                .mipmap_mode(vk::SamplerMipmapMode::NEAREST);
-            let sampler = device.create_sampler(&sampler_info, None)?;
+        // Una vista 2D por capa y su framebuffer; el render pass no cambia.
+        let mut layer_views = [vk::ImageView::null(); SHADOW_CASCADES];
+        let mut framebuffers = [vk::Framebuffer::null(); SHADOW_CASCADES];
+        for layer in 0..SHADOW_CASCADES {
+            let layer_view = device.create_image_view(
+                &vk::ImageViewCreateInfo::default()
+                    .image(image)
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(vk::Format::D32_SFLOAT)
+                    .subresource_range(
+                        vk::ImageSubresourceRange::default()
+                            .aspect_mask(vk::ImageAspectFlags::DEPTH)
+                            .base_mip_level(0)
+                            .level_count(1)
+                            .base_array_layer(layer as u32)
+                            .layer_count(1),
+                    ),
+                None,
+            )?;
+            layer_views[layer] = layer_view;
+            let attachments = [layer_view];
+            framebuffers[layer] = device.create_framebuffer(
+                &vk::FramebufferCreateInfo::default()
+                    .render_pass(render_pass)
+                    .attachments(&attachments)
+                    .width(size)
+                    .height(size)
+                    .layers(1),
+                None,
+            )?;
+        }
 
-            // --- Render pass de solo profundidad ---
+        Ok((image, allocation, view, layer_views, framebuffers))
+    }
+
+    /// Libera framebuffers, vistas, imagen y su asignación.
+    ///
+    /// # Safety
+    /// `device` debe estar en reposo y las asas no pueden haberse
+    /// destruido antes.
+    unsafe fn destroy_targets(
+        device: &ash::Device,
+        allocator: &mut Allocator,
+        image: vk::Image,
+        allocation: Option<Allocation>,
+        view: vk::ImageView,
+        layer_views: &[vk::ImageView; SHADOW_CASCADES],
+        framebuffers: &[vk::Framebuffer; SHADOW_CASCADES],
+    ) {
+        for fb in framebuffers.iter() {
+            if *fb != vk::Framebuffer::null() {
+                device.destroy_framebuffer(*fb, None);
+            }
+        }
+        for lv in layer_views.iter() {
+            if *lv != vk::ImageView::null() {
+                device.destroy_image_view(*lv, None);
+            }
+        }
+        device.destroy_image_view(view, None);
+        device.destroy_image(image, None);
+        if let Some(a) = allocation {
+            allocator.free(a).ok();
+        }
+    }
+
+    /// `layer_size` es el lado de CADA capa (el mapa es un array de
+    /// `SHADOW_CASCADES` capas de `layer_size²`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        device: Arc<ash::Device>,
+        allocator: &mut Allocator,
+        layer_size: u32,
+        set_layout: vk::DescriptorSetLayout,
+        dummy_layout: vk::DescriptorSetLayout,
+        joints_set_layout: vk::DescriptorSetLayout,
+        filler_set_layout: vk::DescriptorSetLayout,
+        pbr_vert_spv: &[u8],
+        skinned_vert_spv: &[u8],
+    ) -> Result<Self, OffscreenError> {
+        let size = layer_size;
+        unsafe {
+            // --- Render pass de solo profundidad (idéntico para las 4 capas) ---
             let attachment = [vk::AttachmentDescription::default()
                 .format(vk::Format::D32_SFLOAT)
                 .samples(vk::SampleCountFlags::TYPE_1)
@@ -295,14 +403,23 @@ impl ShadowResources {
                 .subpasses(&subpass)
                 .dependencies(&dependencies);
             let render_pass = device.create_render_pass(&pass_info, None)?;
-            let fb_attachments = [view];
-            let fb_info = vk::FramebufferCreateInfo::default()
-                .render_pass(render_pass)
-                .attachments(&fb_attachments)
-                .width(size)
-                .height(size)
-                .layers(1);
-            let framebuffer = device.create_framebuffer(&fb_info, None)?;
+
+            // --- Imagen array + vista 2D_ARRAY + 4 vistas 2D + 4 framebuffers ---
+            let (image, allocation, view, layer_views, framebuffers) =
+                Self::create_targets(&device, allocator, render_pass, size)?;
+
+            // Sampler de comparación: un tap devuelve el factor de luz
+            // (1 si la referencia no supera la profundidad guardada).
+            let sampler_info = vk::SamplerCreateInfo::default()
+                .mag_filter(vk::Filter::LINEAR)
+                .min_filter(vk::Filter::LINEAR)
+                .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                .compare_enable(true)
+                .compare_op(vk::CompareOp::LESS_OR_EQUAL)
+                .mipmap_mode(vk::SamplerMipmapMode::NEAREST);
+            let sampler = device.create_sampler(&sampler_info, None)?;
 
             // --- UBO de frame + set real ---
             let (ubo_buffer, ubo_allocation, ubo_mapped) = mapped_buffer(
@@ -353,11 +470,13 @@ impl ShadowResources {
                     .image_info(&image_desc),
             ];
             device.update_descriptor_sets(&writes, &[]);
-            // Estado inicial: sombras inactivas hasta que la app fije la
-            // primera VP (params.w = 0 → el shader devuelve 1,0).
+            // Estado inicial: sombras inactivas hasta que la app fije las
+            // primeras cascadas (misc.z = 0 → el shader devuelve 1,0).
             let initial = ShadowUbo {
-                light_vp: [0.0; 16],
-                params: [1.0 / size as f32, SHADOW_DEPTH_BIAS, bias_normal_mundo(), 0.0],
+                light_vp: [[0.0; 16]; SHADOW_CASCADES],
+                cascade_data: [[1.0 / size as f32, bias_normal_mundo(), 0.0, 0.0]; SHADOW_CASCADES],
+                misc: [0.0, 0.0, 0.0, SHADOW_DEPTH_BIAS],
+                cam_dir: [0.0; 4],
                 fog_color_dist: [0.0; 4],
                 fog_far_mode: [0.0; 4],
                 ambient_sky: [
@@ -441,9 +560,10 @@ impl ShadowResources {
                 image,
                 allocation: Some(allocation),
                 view,
+                layer_views,
                 sampler,
                 render_pass,
-                framebuffer,
+                framebuffers,
                 set_layout,
                 pool,
                 set,
@@ -507,13 +627,28 @@ impl ShadowResources {
     /// `device` y `cmd` deben ser válidos: `cmd` en estado de
     /// grabación y fuera de un render pass, y los recursos de
     /// sombras vivos durante el pase.
-    pub unsafe fn begin_pass(&self, device: &ash::Device, cmd: vk::CommandBuffer) {
+
+    /// Comienza el pase de profundidad en la capa `layer` del array:
+    /// limpia esa capa a 1,0 y fija viewport/scissor al tamaño de capa.
+    ///
+    /// # Safety
+    /// `device` y `cmd` deben ser válidos: `cmd` en estado de
+    /// grabación y fuera de un render pass, y los recursos de
+    /// sombras vivos durante el pase.
+    pub unsafe fn begin_pass_layer(
+        &self,
+        device: &ash::Device,
+        cmd: vk::CommandBuffer,
+        layer: usize,
+    ) {
+        debug_assert!(layer < SHADOW_CASCADES);
+        let layer = layer.min(SHADOW_CASCADES - 1);
         let clear = [vk::ClearValue {
             depth_stencil: vk::ClearDepthStencilValue { depth: 1.0, stencil: 0 },
         }];
         let begin_info = vk::RenderPassBeginInfo::default()
             .render_pass(self.render_pass)
-            .framebuffer(self.framebuffer)
+            .framebuffer(self.framebuffers[layer])
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent: vk::Extent2D { width: self.size, height: self.size },
@@ -540,6 +675,15 @@ impl ShadowResources {
     /// Drop, tras `device_wait_idle`).
     pub fn destroy_with_device(&mut self, device: &ash::Device, allocator: &mut Allocator) {
         unsafe {
+            Self::destroy_targets(
+                device,
+                allocator,
+                self.image,
+                self.allocation.take(),
+                self.view,
+                &self.layer_views,
+                &self.framebuffers,
+            );
             device.destroy_pipeline(self.depth_pipeline, None);
             device.destroy_pipeline_layout(self.depth_layout, None);
             device.destroy_pipeline(self.depth_skinned_pipeline, None);
@@ -554,14 +698,8 @@ impl ShadowResources {
             if let Some(a) = self.dummy_allocation.take() {
                 allocator.free(a).ok();
             }
-            device.destroy_framebuffer(self.framebuffer, None);
             device.destroy_render_pass(self.render_pass, None);
             device.destroy_sampler(self.sampler, None);
-            device.destroy_image_view(self.view, None);
-            device.destroy_image(self.image, None);
-            if let Some(a) = self.allocation.take() {
-                allocator.free(a).ok();
-            }
             device.destroy_descriptor_set_layout(self.set_layout, None);
             device.destroy_descriptor_set_layout(self.dummy_layout, None);
         }
@@ -569,88 +707,47 @@ impl ShadowResources {
 }
 
 impl ShadowResources {
-    /// Recrea el mapa de sombras al tamaño pedido, conservando render pass,
-    /// layouts, UBO y el descriptor set de sombras puntuales. Solo se
-    /// destruyen y recrean imagen, vista, asignación y framebuffer; después
-    /// se reescribe el binding 1 del set (imagen + sampler de comparación).
+    /// Recrea el array de sombras con el nuevo TAMAÑO DE CAPA, conservando
+    /// render pass, layouts, UBO y el descriptor set de sombras puntuales.
+    /// Se destruyen y recrean imagen, vista 2D_ARRAY, 4 vistas 2D, 4
+    /// framebuffers y la asignación; después se reescribe el binding 1
+    /// (imagen + sampler de comparación). El binding 2 (puntuales) no se
+    /// toca.
     ///
     /// El llamante garantiza que el device está en reposo
     /// (`device_wait_idle`) antes de llamar: aquí no se sincroniza nada.
     /// Si falla a mitad, el estado queda inconsistente y el error debe
     /// tratarse como fatal.
-    pub fn resize(&mut self, device: &ash::Device, allocator: &mut Allocator, new_size: u32) -> Result<(), OffscreenError> {
-        if new_size == self.size {
+    pub fn resize(
+        &mut self,
+        device: &ash::Device,
+        allocator: &mut Allocator,
+        new_layer_size: u32,
+    ) -> Result<(), OffscreenError> {
+        if new_layer_size == self.size {
             return Ok(());
         }
 
         // 1) Fuera lo que cuelga del descriptor set y del render pass.
-        //    El framebuffer referencia la vista, y la vista, la imagen.
+        //    Los framebuffers referencian las vistas 2D, y estas la imagen.
         unsafe {
-            device.destroy_framebuffer(self.framebuffer, None);
-            device.destroy_image_view(self.view, None);
-            device.destroy_image(self.image, None);
+            Self::destroy_targets(
+                device,
+                allocator,
+                self.image,
+                self.allocation.take(),
+                self.view,
+                &self.layer_views,
+                &self.framebuffers,
+            );
         }
-        // La memoria respaldaba la imagen recién destruida: se libera después.
-        if let Some(allocation) = self.allocation.take() {
-            allocator.free(allocation)?;
-        }
 
-        // 2) Imagen nueva: mismos formato, uso y tiling que en `new()`.
-        let extent = vk::Extent2D { width: new_size, height: new_size };
-        let image_info = vk::ImageCreateInfo::default()
-            .image_type(vk::ImageType::TYPE_2D)
-            .format(vk::Format::D32_SFLOAT)
-            .extent(vk::Extent3D { width: extent.width, height: extent.height, depth: 1 })
-            .mip_levels(1)
-            .array_layers(1)
-            .samples(vk::SampleCountFlags::TYPE_1)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .initial_layout(vk::ImageLayout::UNDEFINED);
-        let image = unsafe { device.create_image(&image_info, None)? };
+        // 2) Misma imagen array que en `new()` (formato, uso y tiling).
+        let (image, allocation, view, layer_views, framebuffers) =
+            unsafe { Self::create_targets(device, allocator, self.render_pass, new_layer_size) }?;
 
-        let requirements = unsafe { device.get_image_memory_requirements(image) };
-        let allocation = allocator.allocate(&AllocationCreateDesc {
-            name: "shadow_map",
-            requirements,
-            location: MemoryLocation::GpuOnly,
-            linear: false,
-            allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-        })?;
-        unsafe { device.bind_image_memory(image, allocation.memory(), allocation.offset())? };
-
-        let view = unsafe {
-            device.create_image_view(
-                &vk::ImageViewCreateInfo::default()
-                    .image(image)
-                    .view_type(vk::ImageViewType::TYPE_2D)
-                    .format(vk::Format::D32_SFLOAT)
-                    .subresource_range(vk::ImageSubresourceRange {
-                        aspect_mask: vk::ImageAspectFlags::DEPTH,
-                        base_mip_level: 0,
-                        level_count: 1,
-                        base_array_layer: 0,
-                        layer_count: 1,
-                    }),
-                None,
-            )?
-        };
-
-        let framebuffer = unsafe {
-            device.create_framebuffer(
-                &vk::FramebufferCreateInfo::default()
-                    .render_pass(self.render_pass)
-                    .attachments(&[view])
-                    .width(extent.width)
-                    .height(extent.height)
-                    .layers(1),
-                None,
-            )?
-        };
-
-        // 3) Binding 1: exactamente la misma image_info que escribe `new()`,
-        //    con la vista nueva y el sampler de comparación ya existente.
+        // 3) Binding 1: la vista 2D_ARRAY nueva y el sampler de
+        //    comparación ya existente.
         let descriptor = [vk::DescriptorImageInfo::default()
             .image_view(view)
             .image_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL)
@@ -670,8 +767,9 @@ impl ShadowResources {
         self.image = image;
         self.allocation = Some(allocation);
         self.view = view;
-        self.framebuffer = framebuffer;
-        self.size = new_size;
+        self.layer_views = layer_views;
+        self.framebuffers = framebuffers;
+        self.size = new_layer_size;
 
         Ok(())
     }

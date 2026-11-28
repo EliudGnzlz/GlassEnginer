@@ -28,7 +28,8 @@ pub use pipeline::GraphicsPipeline;
 pub use post::PostSettings;
 pub use renderer::{
     FrameDraws, GlassRenderer, GraphCaster, MeshDrawItem, MeshPushConstants, PointLightsUbo,
-    PointShadowLight, PortalDrawItem, PortalPushConstants, PostView, ShadowCasters, SkinnedDrawItem,
+    PointShadowLight, PortalDrawItem, PortalPushConstants, PostView, ShadowCascadeFrame,
+    ShadowCasters, SkinnedDrawItem,
     StaticCaster, MAX_POINT_LIGHTS, ParticleBuffers, ParticleVertex,
     EditorLineBuffers, EditorLineVertex,
 };
