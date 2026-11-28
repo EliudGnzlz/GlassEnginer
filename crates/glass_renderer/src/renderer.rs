@@ -2529,13 +2529,6 @@ impl GlassRenderer {
         self.shadow.resize(&self.device, &mut allocator, size)
     }
 
-    /// Recrea el mapa de sombras del sol al tamaño pedido (el `map_size`
-    /// resuelto de la escena activa). Espera al device en reposo y delega
-    /// en `ShadowResources::resize`, que solo toca imagen, vista,
-    /// asignación, framebuffer y el binding 1 del set. Si el tamaño ya
-    /// coincide, no hace nada.
-
-
     /// Enlaza el set 2 en un dibujo: el set real de sombras en el PBR
     /// (su shader lo declara) y el de RELLENO en los grafos (su shader
     /// no lo declara, pero su layout tiene la misma forma y el enlace

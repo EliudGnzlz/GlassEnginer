@@ -71,6 +71,17 @@ pub fn bias_normal_mundo() -> f32 {
 /// Número de cascadas del mapa de sombras del sol.
 pub const SHADOW_CASCADES: usize = 4;
 
+/// Recursos Vulkan del array de sombras que crea `create_targets`:
+/// (imagen, asignación, vista de muestreo 2D_ARRAY, vistas 2D por capa,
+/// framebuffers por capa).
+pub type ShadowTargets = (
+    vk::Image,
+    Allocation,
+    vk::ImageView,
+    [vk::ImageView; SHADOW_CASCADES],
+    [vk::Framebuffer; SHADOW_CASCADES],
+);
+
 /// Contenido del UBO de frame del set 2 (CSM de 4 cascadas):
 /// - `light_vp[i]`: VP de la luz de la cascada `i` (0 = más cercana).
 /// - `cascade_data[i]`: (1/tamaño de capa, bias de normal en mundo,
@@ -218,8 +229,6 @@ impl ShadowResources {
         Ok(unsafe { device.create_descriptor_set_layout(&info, None)? })
     }
 
-    #[allow(clippy::too_many_arguments)]
-
     /// Crea la imagen array (4 capas), la vista de muestreo 2D_ARRAY, las
     /// 4 vistas 2D por capa y sus 4 framebuffers. Base común de `new` y
     /// `resize`: si falla a mitad, el error es fatal (como hoy).
@@ -232,16 +241,7 @@ impl ShadowResources {
         allocator: &mut Allocator,
         render_pass: vk::RenderPass,
         size: u32,
-    ) -> Result<
-        (
-            vk::Image,
-            Allocation,
-            vk::ImageView,
-            [vk::ImageView; SHADOW_CASCADES],
-            [vk::Framebuffer; SHADOW_CASCADES],
-        ),
-        OffscreenError,
-    > {
+    ) -> Result<ShadowTargets, OffscreenError> {
         let image_info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)
             .format(vk::Format::D32_SFLOAT)
@@ -621,13 +621,6 @@ impl ShadowResources {
     }
 
     /// Comienza el pase de profundidad en el command buffer: limpia el
-    /// mapa a 1,0 y fija viewport/scissor al tamaño del mapa.
-    ///
-    /// # Safety
-    /// `device` y `cmd` deben ser válidos: `cmd` en estado de
-    /// grabación y fuera de un render pass, y los recursos de
-    /// sombras vivos durante el pase.
-
     /// Comienza el pase de profundidad en la capa `layer` del array:
     /// limpia esa capa a 1,0 y fija viewport/scissor al tamaño de capa.
     ///
@@ -1100,7 +1093,7 @@ mod tests {
     #[test]
     fn texel_world_escala_con_la_caja() {
         let t = texel_world(25.0, 2048);
-        assert!((t - 0.0244140625).abs() < 1e-6, "téxel inesperado: {t}");
+        assert!((t - 50.0 / 2048.0).abs() < 1e-6, "téxel inesperado: {t}");
     }
 
     #[test]
