@@ -2343,8 +2343,8 @@ mod tests_v5b1 {
     /// Construye un Documento reconstruyendo `hijos` desde `padre`.
     fn doc_de_nodos(mut nodos: Vec<NodoDocumento>) -> Documento {
         let n = nodos.len();
-        for i in 0..n {
-            nodos[i].hijos.clear();
+        for nodo in nodos.iter_mut() {
+            nodo.hijos.clear();
         }
         for i in 0..n {
             if let Some(p) = nodos[i].padre {
