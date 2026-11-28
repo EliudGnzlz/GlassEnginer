@@ -533,7 +533,7 @@ impl McpServer {
                         },
                         {
                             "name": "glass_component_get",
-                            "description": "Devuelve el JSON completo de un componente de una entidad (Transform, MeshRenderer, Rigidbody, Collider, CharacterController, Camera, Light, Script, AudioSource, Canvas, RectTransform, Text, Button, Image, DragDrop, Animator, Fog, Particles, Portal, LayoutGroup, LayoutElement, ContentSizeFitter, GridLayoutGroup).",
+                            "description": "Devuelve el JSON completo de un componente de una entidad (Transform, MeshRenderer, Rigidbody, Collider, CharacterController, Camera, Light, Script, AudioSource, Canvas, RectTransform, Text, Button, Image, DragDrop, Animator, Fog, Particles, Portal, LayoutGroup, LayoutElement, ContentSizeFitter, GridLayoutGroup, RectMask2D).",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -5737,6 +5737,48 @@ mod tests_catchup {
         assert!(
             r.replace(' ', "").contains("\\\"constraint_count\\\":3"),
             "get GridLayoutGroup: {r}"
+        );
+    }
+
+    #[test]
+    fn component_set_get_roundtrip_rect_mask2d() {
+        let srv = servidor();
+        srv.scene
+            .lock()
+            .unwrap()
+            .entities
+            .push(glass_core::scene::EntityData::new(
+                4247,
+                "RectMaskMcp".into(),
+                vec!["Transform".into()],
+            ));
+
+        let r = llamar(
+            &srv,
+            "glass_component_set",
+            json!({ "entity_id": 4247, "component": "RectMask2D", "values": { "padding": [8.0, 4.0, 8.0, 4.0], "softness": 2.5 } }),
+        );
+        assert!(!r.contains("\\\"error\\\""), "set RectMask2D: {r}");
+
+        let r = llamar(
+            &srv,
+            "glass_component_get",
+            json!({ "entity_id": 4247, "component": "RectMask2D" }),
+        );
+        // El get devuelve el JSON embebido como texto con las comillas
+        // escapadas (\\\"...\\\") y PRETTY: los saltos de línea son
+        // la SECUENCIA de dos caracteres `\n` (barra + n), no saltos
+        // reales, y los flotantes se imprimen con `.0`. Hay que quitar
+        // espacios y esas secuencias antes de buscar.
+        // (V5b-3: el assert de GridLayoutGroup solo miraba un escalar.)
+        let compact = r.replace(' ', "").replace("\\n", "");
+        assert!(
+            compact.contains("\\\"padding\\\":[8.0,4.0,8.0,4.0]"),
+            "get RectMask2D padding: {r}"
+        );
+        assert!(
+            compact.contains("\\\"softness\\\":2.5"),
+            "get RectMask2D softness: {r}"
         );
     }
 

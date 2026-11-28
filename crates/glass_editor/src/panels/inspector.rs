@@ -4,7 +4,7 @@ use glass_core::{
     AudioSourceData, CameraData, CanvasData, CharacterData, ColliderSpec, ContentSizeFitterData,
     EntityData, GridLayoutGroupData, LayoutElementData, LayoutGroupData, LightData,
     MeshData, PhysicsData,
-    RectTransformData, SceneState, ScriptComponentData, UIButtonData, UITextData,
+    RectMask2DData, RectTransformData, SceneState, ScriptComponentData, UIButtonData, UITextData,
     UIImageData, UIInputFieldData,
     UIDragData,
 };
@@ -346,6 +346,7 @@ pub enum TipoComponente {
     LayoutElement,
     ContentSizeFitter,
     GridLayoutGroup,
+    RectMask2D,
 }
 
 impl TipoComponente {
@@ -372,6 +373,7 @@ impl TipoComponente {
             TipoComponente::LayoutElement => "LayoutElement",
             TipoComponente::ContentSizeFitter => "ContentSizeFitter",
             TipoComponente::GridLayoutGroup => "GridLayoutGroup",
+            TipoComponente::RectMask2D => "RectMask2D",
         }
     }
 }
@@ -1045,6 +1047,7 @@ pub fn extraer_componente(ent: &EntityData, tipo: TipoComponente) -> Option<Stri
         TipoComponente::LayoutElement => ent.layout_element.as_ref().and_then(a_json),
         TipoComponente::ContentSizeFitter => ent.content_size_fitter.as_ref().and_then(a_json),
         TipoComponente::GridLayoutGroup => ent.grid_layout_group.as_ref().and_then(a_json),
+        TipoComponente::RectMask2D => ent.rect_mask2d.as_ref().and_then(a_json),
         TipoComponente::Script => {
             if ent.script.is_none() && ent.script_data.is_none() {
                 None
@@ -1103,6 +1106,7 @@ pub fn aplicar_datos(ent: &mut EntityData, tipo: TipoComponente, json: &str) -> 
         TipoComponente::LayoutElement => sustituir(&mut ent.layout_element, json),
         TipoComponente::ContentSizeFitter => sustituir(&mut ent.content_size_fitter, json),
         TipoComponente::GridLayoutGroup => sustituir(&mut ent.grid_layout_group, json),
+        TipoComponente::RectMask2D => sustituir(&mut ent.rect_mask2d, json),
         TipoComponente::Script => {
             if ent.script.is_none() && ent.script_data.is_none() {
                 return false;
@@ -1167,6 +1171,7 @@ pub fn instalar_componente(ent: &mut EntityData, tipo: TipoComponente, json: &st
         TipoComponente::LayoutElement => crear(&mut ent.layout_element, json, &mut ent.components, nombre),
         TipoComponente::ContentSizeFitter => crear(&mut ent.content_size_fitter, json, &mut ent.components, nombre),
         TipoComponente::GridLayoutGroup => crear(&mut ent.grid_layout_group, json, &mut ent.components, nombre),
+        TipoComponente::RectMask2D => crear(&mut ent.rect_mask2d, json, &mut ent.components, nombre),
         TipoComponente::Script => {
             if ent.script.is_some() || ent.script_data.is_some() {
                 return false;
@@ -3638,6 +3643,36 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                     entity.components.retain(|c| c != "GridLayoutGroup");
                 }
 
+                // Sección RectMask2D (V5c, M1+M5): la máscara recorta a
+                // sus descendientes con su rect menos el padding, con
+                // borde suave `softness` (px de pantalla).
+                let mut accion_mask = AccionCabecera::Nada;
+                let mut remove_mask = false;
+                if let Some(ref mut mask) = entity.rect_mask2d {
+                    seccion_componente(ui, "rect_mask2d", "▦ RectMask2D", TipoComponente::RectMask2D, true, self.portapapeles.as_ref(), &mut accion_mask, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Padding [izq, arr, der, aba]");
+                            for v in mask.padding.iter_mut() {
+                                ui.add(DragValue::new(v).speed(0.5));
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Softness");
+                            ui.add(DragValue::new(&mut mask.softness).speed(0.1));
+                        });
+                    });
+                    ui.separator();
+                }
+                if accion_mask == AccionCabecera::Quitar {
+                    remove_mask = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::RectMask2D, accion_mask);
+                }
+                if remove_mask {
+                    entity.rect_mask2d = None;
+                    entity.components.retain(|c| c != "RectMask2D");
+                }
+
                 // ==========================================
                 // 7. BOTÓN "AÑADIR COMPONENTE" ESTILO UNITY
                 // ==========================================
@@ -3692,6 +3727,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         hay_resultados |= coincide("LayoutElement");
                         hay_resultados |= coincide("ContentSizeFitter");
                         hay_resultados |= coincide("GridLayoutGroup");
+                        hay_resultados |= coincide("RectMask2D");
 
                         if !hay_resultados && !q.is_empty() {
                             ui.label(RichText::new("Sin componentes que coincidan.").weak());
@@ -3839,6 +3875,12 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         if coincide("GridLayoutGroup") && entity.grid_layout_group.is_none() && ui.button("▦ GridLayoutGroup").clicked() {
                             entity.grid_layout_group = Some(GridLayoutGroupData::default());
                             entity.components.push("GridLayoutGroup".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if coincide("RectMask2D") && entity.rect_mask2d.is_none() && ui.button("▦ RectMask2D").clicked() {
+                            entity.rect_mask2d = Some(RectMask2DData::default());
+                            entity.components.push("RectMask2D".into());
                             self.show_add_component_menu = false;
                         }
                     });

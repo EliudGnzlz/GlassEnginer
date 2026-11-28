@@ -34,6 +34,7 @@ const COMPONENTES: &[&str] = &[
     "LayoutElement",
     "ContentSizeFitter",
     "GridLayoutGroup",
+    "RectMask2D",
 ];
 
 /// JSON completo del componente `nombre` de la entidad, Ok(None) si la
@@ -81,6 +82,7 @@ pub fn componente_json(ent: &EntityData, nombre: &str) -> Result<Option<Value>, 
         "LayoutElement" => get_opt(&ent.layout_element, n),
         "ContentSizeFitter" => get_opt(&ent.content_size_fitter, n),
         "GridLayoutGroup" => get_opt(&ent.grid_layout_group, n),
+        "RectMask2D" => get_opt(&ent.rect_mask2d, n),
         "Animator" => get_opt(&ent.animator, n),
         "Fog" => get_opt(&ent.fog, n),
         "Particles" => get_opt(&ent.particles, n),
@@ -125,6 +127,9 @@ pub fn aplicar_componente(ent: &mut EntityData, nombre: &str, parcial: &Value) -
         }
         "GridLayoutGroup" => {
             set_opt(&mut ent.grid_layout_group, &mut ent.components, n, parcial)
+        }
+        "RectMask2D" => {
+            set_opt(&mut ent.rect_mask2d, &mut ent.components, n, parcial)
         }
         "Animator" => set_opt(&mut ent.animator, &mut ent.components, n, parcial),
         "Fog" => set_fog(ent, n, parcial),

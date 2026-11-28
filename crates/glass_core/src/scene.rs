@@ -1037,6 +1037,29 @@ impl Default for GridLayoutGroupData {
     }
 }
 
+/// Máscara rectangular (V5c, M1): recorta SOLO a sus descendientes; su
+/// propio Graphic pinta entero. El padding encoge el rect de la máscara
+/// por lado (px de canvas, escalados por el factor del canvas al
+/// pintar). `softness` (M5) es el ancho del borde suave del clip en px
+/// de pantalla: 1.0 = el mismo que el clip CSS; 0 = borde duro.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RectMask2DData {
+    /// Márgenes interiores [izquierda, arriba, derecha, abajo].
+    pub padding: [f32; 4],
+    /// Ancho del borde suave del clip en px de pantalla.
+    pub softness: f32,
+}
+
+impl Default for RectMask2DData {
+    fn default() -> Self {
+        Self {
+            padding: [0.0; 4],
+            softness: 1.0,
+        }
+    }
+}
+
 /// Tamaños de layout de un hijo (V5b-1, G7-mínimo): el grupo los lee
 /// para decidir el tamaño del hijo cuando controla ese eje. `None` en
 /// `min_*` = 0; `None` en `preferred_*` = medido (texto con el medidor
@@ -2227,6 +2250,10 @@ pub struct EntityData {
     #[serde(default)]
     pub content_size_fitter: Option<ContentSizeFitterData>,
     pub grid_layout_group: Option<GridLayoutGroupData>,
+    /// Máscara rectangular (V5c, M1). `#[serde(default)]`: las escenas
+    /// anteriores no traen el campo.
+    #[serde(default)]
+    pub rect_mask2d: Option<RectMask2DData>,
 /// Drag & drop de UI (Canvas v2). `#[serde(default)]`: las
     /// escenas anteriores no traen el campo.
     #[serde(default)]
@@ -2425,6 +2452,11 @@ impl EntityData {
         } else {
             None
         };
+        let rect_mask2d = if components.iter().any(|c| c == "RectMask2D") {
+            Some(RectMask2DData::default())
+        } else {
+            None
+        };
 
         let tag = if name.contains("Player") {
             "Player".into()
@@ -2465,6 +2497,7 @@ impl EntityData {
             layout_element,
             content_size_fitter,
             grid_layout_group,
+            rect_mask2d,
             portal: None,
             animator,
             parent: None,
@@ -5596,6 +5629,27 @@ mod tests {
         let min = calcular_minimos_bottom_up(&nodos_vacio, &medir);
         assert_eq!(pref[0], [300.0, 200.0]);
         assert_eq!(min[0], [40.0, 20.0]);
+    }
+
+    #[test]
+    fn rect_mask2d_en_entity_data() {
+        let ent = EntityData::new(4247, "Mask".into(), vec!["RectMask2D".into()]);
+        let m = ent
+            .rect_mask2d
+            .expect("RectMask2D debería materializarse desde components");
+        assert_eq!(m.padding, [0.0; 4]);
+        assert_eq!(m.softness, 1.0);
+    }
+
+    #[test]
+    fn rect_mask2d_serde_redondo() {
+        let original = RectMask2DData {
+            padding: [1.5, 2.5, 3.5, 4.5],
+            softness: 2.5,
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let leido: RectMask2DData = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, leido);
     }
 }
 

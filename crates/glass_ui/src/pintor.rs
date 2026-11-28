@@ -1,6 +1,7 @@
 use crate::api::{DocumentoColocado, NodoColocado, RectColocado};
 use crate::documento::{Documento, NodoDocumento, TipoGraphic};
 use crate::estilos::StyleProps;
+use glass_core::scene::canvas_scale_factor;
 
 /// Tipo de primitiva de pintado.
 #[derive(Debug, Clone, PartialEq)]
@@ -15,6 +16,10 @@ pub enum ModoPintado {
 
 /// Degradado de un segmento: (ángulo, t0, t1, c0, c1).
 pub type Degradado = (f32, f32, f32, [f32; 4], [f32; 4]);
+
+/// Clip heredado de un nodo: (rect, radios de esquina, softness).
+/// `None` = sin recorte.
+type ClipHeredado = Option<([f32; 4], [f32; 4], f32)>;
 
 /// Primitiva de pintado lista para rasterizar (solo CPU).
 #[derive(Debug, Clone)]
@@ -113,10 +118,13 @@ pub fn pintar_documento(
     let nodos_doc = &doc.nodos;
     let nodos_col = &colocado.nodos;
 
-    // Pre-calcular clips heredados por overflow:hidden.
+    // Pre-calcular clips heredados por overflow:hidden y RectMask2D.
     // Para cada nodo colocado (en orden DFS), almacenamos el clip activo
-    // (rect + radios de esquina del ancestro que recorta, M3).
-    let mut clips: Vec<Option<([f32; 4], [f32; 4])>> = vec![None; nodos_col.len()];
+    // (rect + radios de esquina del ancestro que recorta, M3 + softness
+    // de la máscara más interna, M5). La escala del canvas se calcula
+    // una vez: el padding de la máscara se autoriza en px de canvas.
+    let escala = escala_del_canvas(doc, colocado);
+    let mut clips: Vec<ClipHeredado> = vec![None; nodos_col.len()];
 
     for (i, nc) in nodos_col.iter().enumerate() {
         let idx = nc.nodo;
@@ -128,7 +136,7 @@ pub fn pintar_documento(
         } else {
             // Buscar el clip del padre (por la cadena de ancestros en el documento).
             if nd.padre.is_some() {
-                clips[i] = calcular_clip_para_nodo(idx, nodos_doc, nodos_col);
+                clips[i] = calcular_clip_para_nodo(idx, nodos_doc, nodos_col, escala);
             }
         }
 
@@ -166,20 +174,22 @@ pub fn pintar_documento(
         let clip_rect = if sup {
             None
         } else {
-            clips[pos_dfs].map(|(r, _)| r)
+            clips[pos_dfs].map(|(r, _, _)| r)
         };
 
         // Radios del clip (M3), limitados a la mitad del lado menor del
         // rect de clip: un radio mayor degenera el SDF en el shader.
-        let clip_radios = clips[pos_dfs].map_or([0.0; 4], |(cr, ra)| {
+        let clip_radios = clips[pos_dfs].map_or([0.0; 4], |(cr, ra, _)| {
             let tope = cr[2].min(cr[3]) * 0.5;
             [ra[0].min(tope), ra[1].min(tope), ra[2].min(tope), ra[3].min(tope)]
         });
 
+        // Softness del clip (M5): la de la máscara más interna; 1.0 si
+        // el clip es solo CSS (el comportamiento de siempre).
+        let clip_soft = clips[pos_dfs].map_or(1.0, |(_, _, s)| s);
+
         // Si el clip resulta en intersección vacía con el rect del nodo, no emitir.
-        let clip_val = clip_rect.map(|cr| {
-            (cr, 1.0_f32)
-        });
+        let clip_val = clip_rect.map(|cr| (cr, clip_soft));
 
         // Verificar si el clip hace invisible al nodo.
         if let Some(cr) = clip_rect {
@@ -474,19 +484,141 @@ pub fn pintar_documento(
 /// centros de arco distintos no cabe en un solo (rect, radios): el
 /// error residual es un filete de 1-2 px en la diagonal de la esquina
 /// cuando anidan dos ancestros redondeados con bordes desplazados.
+/// Acumulador del clip: rect + radios por esquina + por borde, el
+/// ancestro ganador (posición en la cadena) y sus radios completos, más
+/// la softness del clip (la del ancestro MÁS INTERNO que aporta clip).
+struct Acum {
+    rect: [f32; 4],
+    // gan_id[0..4] = x0, y0, x1, y1; gan_ra[i] = radios del ganador.
+    gan_id: [usize; 4],
+    gan_ra: [[f32; 4]; 4],
+    softness: f32,
+}
+
+/// Intersecta el rect aportado `(r_arr, ra, softness)` con el clip
+/// acumulado. La softness del resultado es la del aporte (el último
+/// aplicado gana: el recorrido va de raíz a padre directo, así que el
+/// ancestro más interno manda). Si la intersección queda vacía, el
+/// rect resultante tiene w/h <= 0 y el llamador devuelve el clip cero.
+fn aplicar_aporte_a_clip(
+    clip_actual: Option<Acum>,
+    pos_cadena: usize,
+    r_arr: [f32; 4],
+    ra: [f32; 4],
+    softness: f32,
+) -> Option<Acum> {
+    match clip_actual {
+        None => Some(Acum {
+            rect: r_arr,
+            gan_id: [pos_cadena; 4],
+            gan_ra: [ra; 4],
+            softness,
+        }),
+        Some(prev) => {
+            let x0 = prev.rect[0].max(r_arr[0]);
+            let y0 = prev.rect[1].max(r_arr[1]);
+            let x1 = (prev.rect[0] + prev.rect[2]).min(r_arr[0] + r_arr[2]);
+            let y1 = (prev.rect[1] + prev.rect[3]).min(r_arr[1] + r_arr[3]);
+            let w = x1 - x0;
+            let h = y1 - y0;
+            let mut gan_id = prev.gan_id;
+            let mut gan_ra = prev.gan_ra;
+            if r_arr[0] > prev.rect[0] {
+                gan_id[0] = pos_cadena;
+                gan_ra[0] = ra;
+            }
+            if r_arr[1] > prev.rect[1] {
+                gan_id[1] = pos_cadena;
+                gan_ra[1] = ra;
+            }
+            if r_arr[0] + r_arr[2] < prev.rect[0] + prev.rect[2] {
+                gan_id[2] = pos_cadena;
+                gan_ra[2] = ra;
+            }
+            if r_arr[1] + r_arr[3] < prev.rect[1] + prev.rect[3] {
+                gan_id[3] = pos_cadena;
+                gan_ra[3] = ra;
+            }
+            Some(Acum {
+                rect: [x0, y0, w, h],
+                gan_id,
+                gan_ra,
+                softness,
+            })
+        }
+    }
+}
+
+/// Factor de escala del canvas (para escalar el padding de RectMask2D,
+/// que se autoriza en px de canvas). Se calcula desde el canvas raíz:
+/// su rect colocado es el tamaño de pantalla del canvas.
+fn escala_del_canvas(doc: &Documento, colocado: &DocumentoColocado) -> f32 {
+    let idx_raiz = match doc.nodos.iter().position(|n| n.es_canvas_raiz) {
+        Some(i) => i,
+        None => return 1.0,
+    };
+    let canvas = match doc.nodos[idx_raiz].canvas.as_ref() {
+        Some(c) => c,
+        None => return 1.0,
+    };
+    let rect = match colocado.nodos.iter().find(|nc| nc.nodo == idx_raiz) {
+        Some(nc) => &nc.rect,
+        None => return 1.0,
+    };
+    canvas_scale_factor(canvas, rect.ancho, rect.alto)
+}
+
+/// Clip heredado de un nodo, para compartir entre el pintor y el
+/// hit-test (M2): calcula la escala del canvas y delega.
+pub fn clip_para_nodo(
+    doc: &Documento,
+    colocado: &DocumentoColocado,
+    doc_idx: usize,
+) -> ClipHeredado {
+    let escala = escala_del_canvas(doc, colocado);
+    calcular_clip_para_nodo(doc_idx, &doc.nodos, &colocado.nodos, escala)
+}
+
+/// ¿Está el punto dentro del rect redondeado? Misma SDF que el shader
+/// (pasos 4/6 de ui.frag): radio por cuadrante respecto al centro,
+/// `dist = length(max(q, 0)) - rad`; dentro si `dist <= 0`.
+/// Sin radios, el rect normal. La banda suave no cuenta (borde duro).
+pub(crate) fn dentro_rect_redondeado(
+    x: f32,
+    y: f32,
+    rect: [f32; 4],
+    radios: [f32; 4],
+) -> bool {
+    if radios.iter().all(|&r| r == 0.0) {
+        return x >= rect[0] && y >= rect[1] && x <= rect[0] + rect[2] && y <= rect[1] + rect[3];
+    }
+    let cx = rect[0] + rect[2] * 0.5;
+    let cy = rect[1] + rect[3] * 0.5;
+    let half = [rect[2] * 0.5, rect[3] * 0.5];
+    let rad = if x < cx {
+        if y < cy {
+            radios[0]
+        } else {
+            radios[3]
+        }
+    } else if y < cy {
+        radios[1]
+    } else {
+        radios[2]
+    };
+    let qx = (x - cx).abs() - (half[0] - rad);
+    let qy = (y - cy).abs() - (half[1] - rad);
+    let dx = qx.max(0.0);
+    let dy = qy.max(0.0);
+    (dx * dx + dy * dy).sqrt() - rad <= 0.0
+}
+
 fn calcular_clip_para_nodo(
     doc_idx: usize,
     nodos_doc: &[NodoDocumento],
     nodos_col: &[NodoColocado],
-) -> Option<([f32; 4], [f32; 4])> {
-    // Acumulador: rect + radios por esquina + por borde, el ancestro
-    // ganador (posición en la cadena) y sus radios completos.
-    struct Acum {
-        rect: [f32; 4],
-        // gan_id[0..4] = x0, y0, x1, y1; gan_ra[i] = radios del ganador.
-        gan_id: [usize; 4],
-        gan_ra: [[f32; 4]; 4],
-    }
+    escala: f32,
+) -> ClipHeredado {
     let mut clip_actual: Option<Acum> = None;
 
     // Recopilar cadena de ancestros (sin incluir el nodo mismo).
@@ -506,55 +638,46 @@ fn calcular_clip_para_nodo(
                 clip_actual = None;
                 continue;
             }
+            // Caso CSS: ancestro con overflow:hidden. Su radio es el
+            // border_radius del propio ancestro (ya escalado por D-V4-2).
             if nc.estilos.overflow.as_deref() == Some("hidden") {
                 let r = redondear_rect(&nc.rect);
                 let r_arr = [r.x, r.y, r.ancho, r.alto];
                 let ra = nc.estilos.border_radius.unwrap_or([0.0; 4]);
-                clip_actual = match clip_actual {
-                    None => Some(Acum {
-                        rect: r_arr,
-                        gan_id: [pos_cadena; 4],
-                        gan_ra: [ra; 4],
-                    }),
-                    Some(prev) => {
-                        let x0 = prev.rect[0].max(r_arr[0]);
-                        let y0 = prev.rect[1].max(r_arr[1]);
-                        let x1 = (prev.rect[0] + prev.rect[2]).min(r_arr[0] + r_arr[2]);
-                        let y1 = (prev.rect[1] + prev.rect[3]).min(r_arr[1] + r_arr[3]);
-                        let w = x1 - x0;
-                        let h = y1 - y0;
-                        if w <= 0.0 || h <= 0.0 {
-                            // Intersección vacía: el hijo no está dentro de
-                            // los dos ancestros a la vez → clip de tamaño
-                            // cero (el pintor descarta el nodo; antes
-                            // quedaba sin clip y se pintaba entero).
-                            return Some(([0.0; 4], [0.0; 4]));
-                        }
-                        let mut gan_id = prev.gan_id;
-                        let mut gan_ra = prev.gan_ra;
-                        if r_arr[0] > prev.rect[0] {
-                            gan_id[0] = pos_cadena;
-                            gan_ra[0] = ra;
-                        }
-                        if r_arr[1] > prev.rect[1] {
-                            gan_id[1] = pos_cadena;
-                            gan_ra[1] = ra;
-                        }
-                        if r_arr[0] + r_arr[2] < prev.rect[0] + prev.rect[2] {
-                            gan_id[2] = pos_cadena;
-                            gan_ra[2] = ra;
-                        }
-                        if r_arr[1] + r_arr[3] < prev.rect[1] + prev.rect[3] {
-                            gan_id[3] = pos_cadena;
-                            gan_ra[3] = ra;
-                        }
-                        Some(Acum {
-                            rect: [x0, y0, w, h],
-                            gan_id,
-                            gan_ra,
-                        })
+                clip_actual = aplicar_aporte_a_clip(clip_actual, pos_cadena, r_arr, ra, 1.0);
+                if let Some(a) = &clip_actual {
+                    if a.rect[2] <= 0.0 || a.rect[3] <= 0.0 {
+                        // Intersección vacía: el hijo no está dentro de
+                        // los dos ancestros a la vez → clip de tamaño
+                        // cero (el pintor descarta el nodo; antes
+                        // quedaba sin clip y se pintaba entero).
+                        return Some(([0.0; 4], [0.0; 4], a.softness));
                     }
-                };
+                }
+            }
+            // Caso RectMask2D (V5c, M1 + M5): el ancestro recorta a sus
+            // descendientes con su rect MENOS el padding (px de canvas
+            // escalados). Un ancestro puede aportar POR AMBOS casos a la
+            // vez (overflow:hidden en su estilo + componente máscara):
+            // por eso NO hay `continue` tras el caso CSS.
+            if let Some(mask) = &nodos_doc[anc_idx].rect_mask2d {
+                let p = mask.padding;
+                let ancho = (nc.rect.ancho - (p[0] + p[2]) * escala).max(0.0);
+                let alto = (nc.rect.alto - (p[1] + p[3]) * escala).max(0.0);
+                let r_arr = [
+                    nc.rect.x + p[0] * escala,
+                    nc.rect.y + p[1] * escala,
+                    ancho,
+                    alto,
+                ];
+                let ra = nc.estilos.border_radius.unwrap_or([0.0; 4]);
+                clip_actual =
+                    aplicar_aporte_a_clip(clip_actual, pos_cadena, r_arr, ra, mask.softness.max(0.0));
+                if let Some(a) = &clip_actual {
+                    if a.rect[2] <= 0.0 || a.rect[3] <= 0.0 {
+                        return Some(([0.0; 4], [0.0; 4], a.softness));
+                    }
+                }
             }
         }
     }
@@ -576,7 +699,7 @@ fn calcular_clip_para_nodo(
             esquina(2, 3, 2),
             esquina(0, 3, 3),
         ];
-        (a.rect, radios)
+        (a.rect, radios, a.softness)
     })
 }
 
@@ -629,7 +752,7 @@ mod tests {
     use crate::api::{DocumentoColocado, MapaTexto, NodoColocado, RectColocado};
     use crate::documento::{Documento, NodoDocumento, TipoGraphic};
     use crate::estilos::{StyleProps, Sombra};
-    use glass_core::scene::UIImageData;
+    use glass_core::scene::{RectMask2DData, UIImageData};
 
     /// Helper: crea un NodoDocumento mínimo activo sin graphic.
     fn nodo_base(entidad: u64, padre: Option<usize>, hijos: Vec<usize>) -> NodoDocumento {
@@ -657,6 +780,7 @@ mod tests {
             layout_element: None,
             content_size_fitter: None,
 grid_layout_group: None,
+rect_mask2d: None,
             style_extra: String::new(),
             raycast_target: false,
         }
@@ -999,6 +1123,193 @@ grid_layout_group: None,
         let seg_panel = segs.iter().find(|s| s.entidad == 101).unwrap();
         assert!(seg_panel.clip.is_none());
         assert_eq!(seg_panel.clip_radios, [0.0; 4]);
+    }
+
+    #[test]
+    fn pintor_mascara_recorta_descendientes_y_encoge_padding() {
+        // V5c (M1+M5): máscara con padding [10,5,10,5] y softness 2.5.
+        // El hijo lleva el rect de la máscara encogido y softness 2.5;
+        // la propia máscara NO lleva clip (recorta solo descendientes).
+        // Escala del canvas = 1.0 (nodo_base no marca canvas raíz).
+        let mut mascara = nodo_base(101, Some(0), vec![2]);
+        mascara.rect_mask2d = Some(RectMask2DData {
+            padding: [10.0, 5.0, 10.0, 5.0],
+            softness: 2.5,
+        });
+        let doc = Documento {
+            canvas_raiz: 0,
+            nodos: vec![
+                nodo_base(100, None, vec![1]), // raíz
+                mascara,                        // máscara
+                nodo_base(102, Some(1), vec![]), // hijo
+            ],
+            avisos: vec![],
+        };
+        let colocado = DocumentoColocado {
+            nodos: vec![
+                NodoColocado {
+                    nodo: 0, entidad: 100,
+                    rect: RectColocado { x: 0.0, y: 0.0, ancho: 1280.0, alto: 720.0 },
+                    estilos: StyleProps { ..Default::default() },
+                    mapa_texto: MapaTexto::default(),
+                },
+                NodoColocado {
+                    nodo: 1, entidad: 101,
+                    rect: RectColocado { x: 100.0, y: 100.0, ancho: 600.0, alto: 400.0 },
+                    estilos: StyleProps {
+                        background_color: Some([1.0, 1.0, 1.0, 1.0]),
+                        ..Default::default()
+                    },
+                    mapa_texto: MapaTexto::default(),
+                },
+                NodoColocado {
+                    nodo: 2, entidad: 102,
+                    rect: RectColocado { x: 200.0, y: 160.0, ancho: 600.0, alto: 100.0 },
+                    estilos: StyleProps {
+                        background_color: Some([1.0, 0.0, 0.0, 1.0]),
+                        ..Default::default()
+                    },
+                    mapa_texto: MapaTexto::default(),
+                },
+            ],
+        };
+        let segs = pintar_documento(&doc, &colocado, &MedidaImagenNula);
+        let seg_hijo = segs.iter().find(|s| s.entidad == 102).unwrap();
+        assert!(seg_hijo.clip.is_some());
+        let (cr, soft) = seg_hijo.clip.unwrap();
+        assert_eq!(cr, [110.0, 105.0, 580.0, 390.0]);
+        assert_eq!(soft, 2.5);
+        let seg_mascara = segs.iter().find(|s| s.entidad == 101).unwrap();
+        assert!(seg_mascara.clip.is_none());
+    }
+
+    #[test]
+    fn pintor_mascara_y_css_se_intersectan() {
+        // V5c (A6): ancestro CSS overflow:hidden [50,50,700,500] + máscara
+        // [100,100,600,400] padding 0 softness 3.0. El clip del hijo es
+        // la intersección [100,100,600,400] y la softness es la de la
+        // máscara (la más interna).
+        let mut mascara = nodo_base(102, Some(1), vec![3]);
+        mascara.rect_mask2d = Some(RectMask2DData {
+            padding: [0.0; 4],
+            softness: 3.0,
+        });
+        let doc = Documento {
+            canvas_raiz: 0,
+            nodos: vec![
+                nodo_base(100, None, vec![1]),       // raíz
+                nodo_base(101, Some(0), vec![2]),    // panel CSS
+                mascara,                             // máscara
+                nodo_base(103, Some(2), vec![]),     // hijo
+            ],
+            avisos: vec![],
+        };
+        let colocado = DocumentoColocado {
+            nodos: vec![
+                NodoColocado {
+                    nodo: 0, entidad: 100,
+                    rect: RectColocado { x: 0.0, y: 0.0, ancho: 1280.0, alto: 720.0 },
+                    estilos: StyleProps { ..Default::default() },
+                    mapa_texto: MapaTexto::default(),
+                },
+                NodoColocado {
+                    nodo: 1, entidad: 101,
+                    rect: RectColocado { x: 50.0, y: 50.0, ancho: 700.0, alto: 500.0 },
+                    estilos: StyleProps {
+                        overflow: Some("hidden".to_string()),
+                        background_color: Some([1.0, 1.0, 1.0, 1.0]),
+                        ..Default::default()
+                    },
+                    mapa_texto: MapaTexto::default(),
+                },
+                NodoColocado {
+                    nodo: 2, entidad: 102,
+                    rect: RectColocado { x: 100.0, y: 100.0, ancho: 600.0, alto: 400.0 },
+                    estilos: StyleProps {
+                        background_color: Some([1.0, 1.0, 1.0, 1.0]),
+                        ..Default::default()
+                    },
+                    mapa_texto: MapaTexto::default(),
+                },
+                NodoColocado {
+                    nodo: 3, entidad: 103,
+                    rect: RectColocado { x: 200.0, y: 160.0, ancho: 600.0, alto: 100.0 },
+                    estilos: StyleProps {
+                        background_color: Some([1.0, 0.0, 0.0, 1.0]),
+                        ..Default::default()
+                    },
+                    mapa_texto: MapaTexto::default(),
+                },
+            ],
+        };
+        let segs = pintar_documento(&doc, &colocado, &MedidaImagenNula);
+        let seg_hijo = segs.iter().find(|s| s.entidad == 103).unwrap();
+        assert!(seg_hijo.clip.is_some());
+        let (cr, soft) = seg_hijo.clip.unwrap();
+        assert_eq!(cr, [100.0, 100.0, 600.0, 400.0]);
+        assert_eq!(soft, 3.0);
+    }
+
+    #[test]
+    fn pintor_capa_superior_rompe_mascara() {
+        // V5c (A6): máscara en la raíz, capa superior en medio, hijo
+        // debajo de la capa superior → el hijo NO lleva clip de la máscara.
+        let mut mascara = nodo_base(101, Some(0), vec![2]);
+        mascara.rect_mask2d = Some(RectMask2DData {
+            padding: [0.0; 4],
+            softness: 1.0,
+        });
+        let doc = Documento {
+            canvas_raiz: 0,
+            nodos: vec![
+                nodo_base(100, None, vec![1]),       // raíz
+                mascara,                             // máscara
+                nodo_base(102, Some(1), vec![3]),    // capa superior
+                nodo_base(103, Some(2), vec![]),     // hijo
+            ],
+            avisos: vec![],
+        };
+        let colocado = DocumentoColocado {
+            nodos: vec![
+                NodoColocado {
+                    nodo: 0, entidad: 100,
+                    rect: RectColocado { x: 0.0, y: 0.0, ancho: 1280.0, alto: 720.0 },
+                    estilos: StyleProps { ..Default::default() },
+                    mapa_texto: MapaTexto::default(),
+                },
+                NodoColocado {
+                    nodo: 1, entidad: 101,
+                    rect: RectColocado { x: 100.0, y: 100.0, ancho: 600.0, alto: 400.0 },
+                    estilos: StyleProps {
+                        background_color: Some([1.0, 1.0, 1.0, 1.0]),
+                        ..Default::default()
+                    },
+                    mapa_texto: MapaTexto::default(),
+                },
+                NodoColocado {
+                    nodo: 2, entidad: 102,
+                    rect: RectColocado { x: 100.0, y: 100.0, ancho: 600.0, alto: 400.0 },
+                    estilos: StyleProps {
+                        override_sorting: Some(true),
+                        background_color: Some([0.0, 0.0, 1.0, 1.0]),
+                        ..Default::default()
+                    },
+                    mapa_texto: MapaTexto::default(),
+                },
+                NodoColocado {
+                    nodo: 3, entidad: 103,
+                    rect: RectColocado { x: 200.0, y: 160.0, ancho: 600.0, alto: 100.0 },
+                    estilos: StyleProps {
+                        background_color: Some([1.0, 0.0, 0.0, 1.0]),
+                        ..Default::default()
+                    },
+                    mapa_texto: MapaTexto::default(),
+                },
+            ],
+        };
+        let segs = pintar_documento(&doc, &colocado, &MedidaImagenNula);
+        let seg_hijo = segs.iter().find(|s| s.entidad == 103).unwrap();
+        assert!(seg_hijo.clip.is_none());
     }
 
     #[test]

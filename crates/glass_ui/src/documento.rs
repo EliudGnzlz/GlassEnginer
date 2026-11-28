@@ -4,7 +4,7 @@
 
 use glass_core::scene::{
     CanvasData, ContentSizeFitterData, GridLayoutGroupData, LayoutElementData, LayoutGroupData,
-    RectTransformData, UIButtonData, UIDragData, UIImageData, UITextData,
+    RectMask2DData, RectTransformData, UIButtonData, UIDragData, UIImageData, UITextData,
 };
 
 /// El único Graphic de un nodo (regla de Unity: un Graphic por
@@ -54,6 +54,8 @@ pub struct NodoDocumento {
     pub content_size_fitter: Option<ContentSizeFitterData>,
     /// Rejilla de celdas de tamaño fijo (V5b-3, G5).
     pub grid_layout_group: Option<GridLayoutGroupData>,
+    /// Máscara rectangular (V5c, M1).
+    pub rect_mask2d: Option<RectMask2DData>,
     /// El `style_extra` vigente del nodo: el del Graphic si lo hay;
     /// si no, el del botón; si no, vacío.
     pub style_extra: String,
