@@ -2133,11 +2133,8 @@ version = "0.1.0"
 dependencies = [
  "crossbeam-queue",
  "env_logger",
- "glass_core",
  "kira",
  "log",
- "serde",
- "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2160,7 +2157,6 @@ dependencies = [
  "ash",
  "egui",
  "egui-ash-renderer",
- "egui-winit",
  "egui_dock",
  "glass_audio",
  "glass_core",

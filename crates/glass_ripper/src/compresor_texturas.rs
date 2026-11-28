@@ -34,8 +34,8 @@ pub struct NivelComprimido {
 /// Número de bytes de UN nivel BC (16 B por bloque 4x4) desde sus
 /// dimensiones lógicas. Regla única en todo el módulo.
 pub fn bytes_nivel_bc(width: u32, height: u32) -> usize {
-    let bloques_x = ((width as usize) + 3) / 4;
-    let bloques_y = ((height as usize) + 3) / 4;
+    let bloques_x = (width as usize).div_ceil(4);
+    let bloques_y = (height as usize).div_ceil(4);
     bloques_x * bloques_y * 16
 }
 
@@ -66,8 +66,8 @@ fn validar_entrada(rgba: &[u8], width: u32, height: u32) -> Result<(), String> {
 fn rellenar_a_multiplo_4(datos: &[u8], width: u32, height: u32, componentes: usize) -> (Vec<u8>, u32, u32) {
     let w = width as usize;
     let h = height as usize;
-    let w_pad = ((w + 3) / 4) * 4;
-    let h_pad = ((h + 3) / 4) * 4;
+    let w_pad = w.div_ceil(4) * 4;
+    let h_pad = h.div_ceil(4) * 4;
     if w_pad == w && h_pad == h {
         return (datos.to_vec(), width, height);
     }
@@ -273,7 +273,7 @@ pub fn comprimir_bc7(
 ) -> Result<(FormatoComprimido, Vec<NivelComprimido>), String> {
     validar_entrada(rgba, width, height)?;
 
-    let tiene_alfa = rgba.chunks_exact(4).any(|p| p[3] < 255);
+    let tiene_alfa = rgba.as_chunks::<4>().0.iter().any(|p| p[3] < 255);
 
     let settings = match (perfil, tiene_alfa) {
         (PerfilCalidad::Rapido, false) => bc7::opaque_ultra_fast_settings(),
@@ -333,7 +333,9 @@ pub fn comprimir_bc5_normal(
 
     loop {
         let rg: Vec<u8> = nivel_actual
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[1]])
             .collect();
         let datos = comprimir_bc5_nivel(&rg, w, h);
@@ -381,8 +383,8 @@ mod tests {
         let casos: [(u32, u32); 5] = [(10, 6), (100, 37), (3, 3), (5, 3), (1, 1)];
         for (w, h) in casos {
             let esperado = {
-                let bx = ((w as usize) + 3) / 4;
-                let by = ((h as usize) + 3) / 4;
+                let bx = (w as usize).div_ceil(4);
+                let by = (h as usize).div_ceil(4);
                 bx * by * 16
             };
             assert_eq!(bytes_nivel_bc(w, h), esperado, "bytes_nivel_bc mal para {}x{}", w, h);
@@ -461,7 +463,7 @@ mod tests {
     #[test]
     fn bc7_opaco_vs_alfa() {
         let mut rgba_opaco = imagen_patron(8, 8);
-        for chunk in rgba_opaco.chunks_exact_mut(4) {
+        for chunk in rgba_opaco.as_chunks_mut::<4>().0 {
             chunk[3] = 255;
         }
         let (formato_opaco, niveles_opaco) =

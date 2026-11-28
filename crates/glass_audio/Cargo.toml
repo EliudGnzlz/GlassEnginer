@@ -6,12 +6,9 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-glass_core.workspace = true
 log.workspace = true
-thiserror.workspace = true
 kira.workspace = true
 crossbeam-queue.workspace = true
-serde.workspace = true
 
 [dev-dependencies]
 env_logger.workspace = true

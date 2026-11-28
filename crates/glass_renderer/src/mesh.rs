@@ -424,14 +424,14 @@ fn dynamic_image_to_rgba(imagen: image::DynamicImage) -> (u32, u32, Vec<u8>) {
         D::ImageRgba8(b) => (b.width(), b.height(), b.into_raw()),
         D::ImageRgb8(b) => {
             let mut out = Vec::with_capacity((b.width() * b.height()) as usize * 4);
-            for px in b.as_raw().chunks_exact(3) {
+            for px in b.as_raw().as_chunks::<3>().0 {
                 out.extend_from_slice(&[px[0], px[1], px[2], 255]);
             }
             (b.width(), b.height(), out)
         }
         D::ImageLumaA8(b) => {
             let mut out = Vec::with_capacity((b.width() * b.height()) as usize * 4);
-            for px in b.as_raw().chunks_exact(2) {
+            for px in b.as_raw().as_chunks::<2>().0 {
                 out.extend_from_slice(&[px[0], px[1], 0, 255]);
             }
             (b.width(), b.height(), out)
@@ -445,21 +445,21 @@ fn dynamic_image_to_rgba(imagen: image::DynamicImage) -> (u32, u32, Vec<u8>) {
         }
         D::ImageRgba16(b) => {
             let mut out = Vec::with_capacity((b.width() * b.height()) as usize * 4);
-            for px in b.as_raw().chunks_exact(4) {
+            for px in b.as_raw().as_chunks::<4>().0 {
                 out.extend_from_slice(&[de16(px[0]), de16(px[1]), de16(px[2]), de16(px[3])]);
             }
             (b.width(), b.height(), out)
         }
         D::ImageRgb16(b) => {
             let mut out = Vec::with_capacity((b.width() * b.height()) as usize * 4);
-            for px in b.as_raw().chunks_exact(3) {
+            for px in b.as_raw().as_chunks::<3>().0 {
                 out.extend_from_slice(&[de16(px[0]), de16(px[1]), de16(px[2]), 255]);
             }
             (b.width(), b.height(), out)
         }
         D::ImageLumaA16(b) => {
             let mut out = Vec::with_capacity((b.width() * b.height()) as usize * 4);
-            for px in b.as_raw().chunks_exact(2) {
+            for px in b.as_raw().as_chunks::<2>().0 {
                 out.extend_from_slice(&[de16(px[0]), de16(px[1]), 0, 255]);
             }
             (b.width(), b.height(), out)
@@ -474,14 +474,14 @@ fn dynamic_image_to_rgba(imagen: image::DynamicImage) -> (u32, u32, Vec<u8>) {
         }
         D::ImageRgba32F(b) => {
             let mut out = Vec::with_capacity((b.width() * b.height()) as usize * 4);
-            for px in b.as_raw().chunks_exact(4) {
+            for px in b.as_raw().as_chunks::<4>().0 {
                 out.extend_from_slice(&[de32(px[0]), de32(px[1]), de32(px[2]), de32(px[3])]);
             }
             (b.width(), b.height(), out)
         }
         D::ImageRgb32F(b) => {
             let mut out = Vec::with_capacity((b.width() * b.height()) as usize * 4);
-            for px in b.as_raw().chunks_exact(3) {
+            for px in b.as_raw().as_chunks::<3>().0 {
                 out.extend_from_slice(&[de32(px[0]), de32(px[1]), de32(px[2]), 255]);
             }
             (b.width(), b.height(), out)
@@ -501,8 +501,10 @@ fn dynamic_image_to_rgba(imagen: image::DynamicImage) -> (u32, u32, Vec<u8>) {
 /// - bufferView PNG/JPEG → crate `image` → RGBA8 → ImagenModelo::Rgba.
 /// - URI → Err (un .glb debe llevar sus imágenes en el chunk BIN).
 /// - Otro mimeType → Err con el mime.
+///
 /// Un KTX2 que no parsea hace fallar la carga del modelo entero: es mejor un
 /// error claro que un modelo a medias.
+///
 /// Decodifica los bytes de UNA imagen según su mimeType: KTX2 → parseado
 /// tal cual; PNG/JPEG → RGBA8 con las reglas de `dynamic_image_to_rgba`.
 /// Sin mimeType (solo posible en imágenes con URI) → error claro.
@@ -3385,7 +3387,7 @@ mod tests {
             None => String::new(),
         };
         let longitud_buffer = bin.len();
-        while bin.len() % 4 != 0 {
+        while !bin.len().is_multiple_of(4) {
             bin.push(0);
         }
         let json = format!(
@@ -3454,7 +3456,7 @@ mod tests {
         };
         assert_eq!((img.width, img.height), (2, 2));
         assert_eq!(img.rgba.len(), 16);
-        for px in img.rgba.chunks_exact(4) {
+        for px in img.rgba.as_chunks::<4>().0 {
             assert_eq!(px, &[255, 0, 0, 255]);
         }
         assert_eq!(modelo.materials[0].base_color_image, Some(0));
@@ -3602,7 +3604,7 @@ mod tests {
         bin.extend_from_slice(&[0, 0]);
         bin.extend_from_slice(png);
         let longitud_buffer = bin.len();
-        while bin.len() % 4 != 0 {
+        while !bin.len().is_multiple_of(4) {
             bin.push(0);
         }
         let json = format!(
@@ -3703,7 +3705,7 @@ mod tests {
         };
         assert_eq!((img.width, img.height), (8, 8));
         // JPEG es con pérdidas: se comprueba el rojo dominante, no el valor exacto.
-        for px in img.rgba.chunks_exact(4) {
+        for px in img.rgba.as_chunks::<4>().0 {
             assert!(px[0] > 200, "rojo JPEG demasiado bajo: {px:?}");
             assert!(px[1] < 60, "verde JPEG demasiado alto: {px:?}");
             assert!(px[2] < 60, "azul JPEG demasiado alto: {px:?}");

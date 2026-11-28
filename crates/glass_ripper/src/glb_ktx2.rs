@@ -124,7 +124,7 @@ fn reescribir(glb: &[u8], avisos: &mut Vec<String>) -> Result<Option<Vec<u8>>, S
         };
         let nuevo_inicio = nuevo_bin.len();
         nuevo_bin.extend_from_slice(datos);
-        while nuevo_bin.len() % 4 != 0 {
+        while !nuevo_bin.len().is_multiple_of(4) {
             nuevo_bin.push(0);
         }
         nuevas_vistas.push((nuevo_inicio, datos.len()));
@@ -249,7 +249,7 @@ fn escribir_glb(json: &Value, bin: &[u8]) -> Result<Vec<u8>, String> {
         json_bytes.push(b' ');
     }
     let mut bin_bytes = bin.to_vec();
-    while bin_bytes.len() % 4 != 0 {
+    while !bin_bytes.len().is_multiple_of(4) {
         bin_bytes.push(0);
     }
     let total = 12 + 8 + json_bytes.len() + 8 + bin_bytes.len();
@@ -292,7 +292,7 @@ mod tests {
         for i in [0u16, 1, 2] {
             bin.extend_from_slice(&i.to_le_bytes());
         }
-        while bin.len() % 4 != 0 {
+        while !bin.len().is_multiple_of(4) {
             bin.push(0);
         }
         bin
@@ -328,7 +328,7 @@ mod tests {
             json["textures"] = json!([{ "source": 0 }]);
             json["images"] = json!([{ "bufferView": 2, "mimeType": "image/png" }]);
         }
-        while bin.len() % 4 != 0 {
+        while !bin.len().is_multiple_of(4) {
             bin.push(0);
         }
         json["buffers"][0]["byteLength"] = json!(bin.len());
