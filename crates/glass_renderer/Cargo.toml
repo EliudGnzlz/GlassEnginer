@@ -23,6 +23,7 @@ bytemuck = "1.25"
 # standalone, ver src/ui.rs). Ya estaba en el árbol vía epaint/egui; aquí
 # se declara el uso directo, no entra ninguna librería nueva al proyecto.
 ab_glyph = "0.2.32"
+ttf-parser = "0.25"
 log.workspace = true
 thiserror.workspace = true
 raw-window-handle.workspace = true

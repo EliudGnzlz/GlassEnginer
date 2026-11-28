@@ -339,23 +339,32 @@ pub fn pintar_documento(
         if nd.graphic == TipoGraphic::Texto {
             if let Some(ref txt) = nd.texto {
                 tiene_texto = true;
-                let base_color = estilos.color.unwrap_or(txt.color);
-                let tc = premultiplicar(base_color, opacity);
-                let fs = estilos.font_size.unwrap_or(txt.font_size);
-                segs_nodo.push(Segmento {
-                    entidad: nc.entidad,
-                    modo: ModoPintado::Texto,
-                    rect,
-                    color: tc,
-                    degradado: None,
-                    radios,
-                    clip: clip_val,
-                    texto: Some((txt.text.clone(), fs, txt.align.clone(), txt.font.clone())),
-                    sprite: None,
-                    capa_superior: sup,
-                    orden: 0,
-                    desenfoque: 0.0,
-                });
+                // V3c: el texto visible puede quedar vacío por
+                // desbordamiento; en ese caso no se emite segmento.
+                if !nc.mapa_texto.texto_visible.is_empty() {
+                    let base_color = estilos.color.unwrap_or(txt.color);
+                    let tc = premultiplicar(base_color, opacity);
+                    let fs = estilos.font_size.unwrap_or(txt.font_size);
+                    segs_nodo.push(Segmento {
+                        entidad: nc.entidad,
+                        modo: ModoPintado::Texto,
+                        rect,
+                        color: tc,
+                        degradado: None,
+                        radios,
+                        clip: clip_val,
+                        texto: Some((
+                            nc.mapa_texto.texto_visible.clone(),
+                            fs,
+                            txt.align.clone(),
+                            txt.font.clone(),
+                        )),
+                        sprite: None,
+                        capa_superior: sup,
+                        orden: 0,
+                        desenfoque: 0.0,
+                    });
+                }
             }
         }
 
@@ -490,7 +499,7 @@ impl Pintor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{DocumentoColocado, NodoColocado, RectColocado};
+    use crate::api::{DocumentoColocado, MapaTexto, NodoColocado, RectColocado};
     use crate::documento::{Documento, NodoDocumento, TipoGraphic};
     use crate::estilos::{StyleProps, Sombra};
     use glass_core::scene::UIImageData;
@@ -543,6 +552,7 @@ mod tests {
                         background_color: Some([1.0, 1.0, 1.0, 1.0]),
                         ..Default::default()
                     },
+                    mapa_texto: MapaTexto::default(),
                 },
                 NodoColocado {
                     nodo: 1, entidad: 2,
@@ -551,6 +561,7 @@ mod tests {
                         background_color: Some([1.0, 0.0, 0.0, 1.0]),
                         ..Default::default()
                     },
+                    mapa_texto: MapaTexto::default(),
                 },
             ],
         };
@@ -589,6 +600,7 @@ mod tests {
                     ])),
                     ..Default::default()
                 },
+                mapa_texto: MapaTexto::default(),
             }],
         };
         let segs = pintar_documento(&doc, &colocado, &MedidaImagenNula);
@@ -633,6 +645,7 @@ mod tests {
                         }),
                         ..Default::default()
                     },
+                    mapa_texto: MapaTexto::default(),
                 },
                 NodoColocado {
                     nodo: 1, entidad: 21,
@@ -642,6 +655,7 @@ mod tests {
                         opacity: Some(0.0),
                         ..Default::default()
                     },
+                    mapa_texto: MapaTexto::default(),
                 },
             ],
         };
@@ -684,6 +698,7 @@ mod tests {
                     nodo: 0, entidad: 100,
                     rect: RectColocado { x: 0.0, y: 0.0, ancho: 500.0, alto: 500.0 },
                     estilos: StyleProps { ..Default::default() },
+                    mapa_texto: MapaTexto::default(),
                 },
                 NodoColocado {
                     nodo: 1, entidad: 101,
@@ -693,6 +708,7 @@ mod tests {
                         background_color: Some([0.5, 0.5, 0.5, 1.0]),
                         ..Default::default()
                     },
+                    mapa_texto: MapaTexto::default(),
                 },
                 NodoColocado {
                     nodo: 2, entidad: 102,
@@ -701,6 +717,7 @@ mod tests {
                         background_color: Some([0.0, 1.0, 0.0, 1.0]),
                         ..Default::default()
                     },
+                    mapa_texto: MapaTexto::default(),
                 },
                 NodoColocado {
                     nodo: 3, entidad: 103,
@@ -711,6 +728,7 @@ mod tests {
                         background_color: Some([0.0, 0.0, 1.0, 1.0]),
                         ..Default::default()
                     },
+                    mapa_texto: MapaTexto::default(),
                 },
             ],
         };
@@ -764,6 +782,7 @@ mod tests {
                 nodo: 0, entidad: 50,
                 rect: RectColocado { x: 0.0, y: 0.0, ancho: 200.0, alto: 100.0 },
                 estilos: StyleProps { ..Default::default() },
+                mapa_texto: MapaTexto::default(),
             }],
         };
 

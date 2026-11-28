@@ -92,5 +92,15 @@ pub struct StyleProps {
     /// `true` = el nodo se pinta en la capa superior del documento,
     /// sin heredar el clip del padre (`override-sorting`).
     pub override_sorting: Option<bool>,
+    /// Modo de desbordamiento del texto (`None` = envolver).
+    pub text_overflow: Option<TextOverflow>,
+}
+
+/// Modo de desbordamiento de texto (V3c).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextOverflow {
+    Envolver,
+    Truncar,
+    PuntosSuspensivos,
 }
 

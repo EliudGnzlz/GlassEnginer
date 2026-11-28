@@ -275,7 +275,7 @@ impl RastreadorClic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{DocumentoColocado, NodoColocado, RectColocado};
+    use crate::api::{DocumentoColocado, MapaTexto, NodoColocado, RectColocado};
     use crate::documento::{Documento, NodoDocumento, TipoGraphic};
     use crate::estilos::StyleProps;
     use glass_core::scene::{RectTransformData, UIButtonData, UIDragData};
@@ -351,12 +351,14 @@ mod tests {
                     entidad: 1,
                     rect: RectColocado { x: 0.0, y: 0.0, ancho: 1280.0, alto: 720.0 },
                     estilos: StyleProps::default(),
+                    mapa_texto: MapaTexto::default(),
                 },
                 NodoColocado {
                     nodo: 1,
                     entidad: 2,
                     rect: RectColocado { x: 530.0, y: 332.0, ancho: 220.0, alto: 56.0 },
                     estilos: StyleProps::default(),
+                    mapa_texto: MapaTexto::default(),
                 },
             ],
         };
@@ -400,7 +402,7 @@ mod tests {
     }
 
     fn nc(nodo: usize, entidad: u64, rect: RectColocado) -> NodoColocado {
-        NodoColocado { nodo, entidad, rect, estilos: StyleProps::default() }
+        NodoColocado { nodo, entidad, rect, estilos: StyleProps::default(), mapa_texto: MapaTexto::default() }
     }
 
     #[test]
@@ -497,6 +499,7 @@ mod tests {
                         sort_order: Some(0),
                         ..StyleProps::default()
                     },
+                    mapa_texto: MapaTexto::default(),
                 },
                 nc(2, 2, r),
             ],
@@ -531,6 +534,7 @@ mod tests {
                         sort_order: Some(0),
                         ..StyleProps::default()
                     },
+                    mapa_texto: MapaTexto::default(),
                 },
                 NodoColocado {
                     nodo: 2, entidad: 4, rect: r,
@@ -539,6 +543,7 @@ mod tests {
                         sort_order: Some(5),
                         ..StyleProps::default()
                     },
+                    mapa_texto: MapaTexto::default(),
                 },
                 nc(3, 2, r),
             ],

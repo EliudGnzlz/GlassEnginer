@@ -13,6 +13,7 @@ pub mod shadow;
 pub mod skin;
 pub mod swapchain;
 pub mod ui;
+pub mod sdf_atlas;
 pub mod watcher;
 
 pub use asset_cache::{global_asset_cache, register_global_asset_cache, AssetCache, TextureUpload};
@@ -33,8 +34,8 @@ pub use renderer::{
 };
 pub use skin::{AnimationClip, JointBuffer, SkinData};
 pub use swapchain::SwapchainContext;
+pub use sdf_atlas::SdfAtlas;
 pub use ui::{
-    pack_ui_image_atlas, FontAtlas, UiAtlasKind, UiBatch, UiImageAtlas, UiRenderer, UiSegment,
-    UiVertex,
+    pack_ui_image_atlas, UiAtlasKind, UiBatch, UiImageAtlas, UiRenderer, UiSegment, UiVertex,
 };
 pub use watcher::{fijar_bridge_desde_raiz, ruta_bridge_en_raiz, AssetReloadEvent, AssetWatcher};

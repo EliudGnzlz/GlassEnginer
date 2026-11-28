@@ -22,7 +22,7 @@
 
 use crate::api::{EstadoPseudo, EstilosExtra};
 use crate::documento::NodoDocumento;
-use crate::estilos::{Dimension, Display, Sombra, StyleProps, TamanoColumna};
+use crate::estilos::{Dimension, Display, Sombra, StyleProps, TamanoColumna, TextOverflow};
 
 /// Parte `texto` en `sep` sin partir dentro de paréntesis.
 fn dividir_nivel_superior(texto: &str, sep: char) -> Vec<&str> {
@@ -455,6 +455,12 @@ fn aplicar_declaracion(props: &mut StyleProps, avisos: &mut Vec<String>, prop: &
             "false" => props.override_sorting = Some(false),
             _ => aviso_invalido(avisos, prop, valor),
         },
+        "text-overflow" => match valor.to_ascii_lowercase().as_str() {
+            "wrap" => props.text_overflow = Some(TextOverflow::Envolver),
+            "truncate" => props.text_overflow = Some(TextOverflow::Truncar),
+            "ellipsis" => props.text_overflow = Some(TextOverflow::PuntosSuspensivos),
+            _ => aviso_invalido(avisos, prop, valor),
+        },
         _ => avisos.push(format!("propiedad desconocida: '{prop}'")),
     }
 }
@@ -531,6 +537,7 @@ fn fusionar(destino: &mut StyleProps, capa: &StyleProps) {
     fusionar_campo!(destino, capa, grid_template_columns);
     fusionar_campo!(destino, capa, sort_order);
     fusionar_campo!(destino, capa, override_sorting);
+    fusionar_campo!(destino, capa, text_overflow);
 }
 
 /// Defecto del tipo: absoluto; con LayoutGroup, flex del grupo.
@@ -887,4 +894,51 @@ mod pruebas {
             }
         }
     }
+
+    #[test]
+    fn text_overflow_parsea_los_tres_modos_y_rechaza_valor_desconocido() {
+        let r = parsear_estilo_extra("text-overflow: ellipsis;");
+        assert_eq!(r.base.text_overflow, Some(TextOverflow::PuntosSuspensivos));
+
+        let r = parsear_estilo_extra("text-overflow: truncate;");
+        assert_eq!(r.base.text_overflow, Some(TextOverflow::Truncar));
+
+        let r = parsear_estilo_extra("text-overflow: wrap;");
+        assert_eq!(r.base.text_overflow, Some(TextOverflow::Envolver));
+
+        // Un valor desconocido no asigna nada y genera aviso.
+        let r = parsear_estilo_extra("text-overflow: inventado;");
+        assert_eq!(r.base.text_overflow, None);
+        assert!(!r.avisos.is_empty());
+    }
+
+    #[test]
+    fn outline_no_existe_como_propiedad() {
+        // Hallazgo pez 2 (fin de módulo V3): V3b afirma contorno
+        // "verificado vacuo" sin ninguna comprobación. No hay propiedad
+        // de contorno en V3: cualquier declaración outline se rechaza
+        // con aviso y no asigna nada.
+        let r = parsear_estilo_extra("outline: 2px solid red;");
+        assert_eq!(r.base.text_overflow, None);
+        assert!(!r.avisos.is_empty());
+        let r = parsear_estilo_extra("text-outline: 1px;");
+        assert!(!r.avisos.is_empty());
+    }
+
+    #[test]
+    fn fusionar_text_overflow_respeta_la_capa() {
+        let mut destino = StyleProps::default();
+        let capa = StyleProps {
+            text_overflow: Some(TextOverflow::Truncar),
+            ..StyleProps::default()
+        };
+        fusionar(&mut destino, &capa);
+        assert_eq!(destino.text_overflow, Some(TextOverflow::Truncar));
+
+        // Una capa vacía posterior no borra el valor ya fusionado.
+        let vacia = StyleProps::default();
+        fusionar(&mut destino, &vacia);
+        assert_eq!(destino.text_overflow, Some(TextOverflow::Truncar));
+    }
+
 }

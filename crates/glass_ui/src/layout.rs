@@ -6,9 +6,12 @@
 //! - Al final, todos los rects se escalan por `s` para pasar a píxeles.
 //! - Nodos inactivos → rect (0,0,0,0); sus hijos también.
 
-use crate::api::{DocumentoColocado, EstadoPseudo, MedidaTexto, NodoColocado, RectColocado, Viewport};
+use crate::api::{
+    CeldaCaracter, DocumentoColocado, EstadoPseudo, MapaTexto, MedidaTexto, NodoColocado,
+    RectColocado, Viewport,
+};
 use crate::documento::{Documento, TipoGraphic};
-use crate::estilos::{Dimension, Display, StyleProps, TamanoColumna};
+use crate::estilos::{Dimension, Display, StyleProps, TamanoColumna, TextOverflow};
 use crate::parser::resolver_estilos;
 use glass_core::scene::{canvas_scale_factor, layout_group_rects, resolve_ui_rect_in};
 use std::sync::OnceLock;
@@ -43,76 +46,368 @@ impl Default for MedidorTexto {
     }
 }
 
+/// Calcula el avance (con kerning) de cada carácter del texto.
+/// Cada par devuelto es (carácter, avance_incluyendo_kern_con_anterior).
+fn avances_con_kern(texto: &str, tamano: f32) -> Vec<(char, f32)> {
+    use ab_glyph::{Font, ScaleFont};
+    let font = fuente_global();
+    let scale = ab_glyph::PxScale::from(tamano);
+    let scaled = font.as_scaled(scale);
+    let mut resultado = Vec::with_capacity(texto.len());
+    let mut prev: Option<ab_glyph::GlyphId> = None;
+    for c in texto.chars() {
+        let gid = scaled.glyph_id(c);
+        let mut avance = scaled.h_advance(gid);
+        if let Some(p) = prev {
+            avance += scaled.kern(p, gid);
+        }
+        resultado.push((c, avance));
+        prev = Some(gid);
+    }
+    resultado
+}
+
+/// Resultado de la partición greedy de una línea de texto en palabras.
+/// Cada línea es un slice de los avances originales: (inicio, fin) como
+/// índices en el Vec de avances, más el ancho de la línea colocada.
+struct LineaPartida {
+    inicio: usize,
+    fin: usize,       // exclusivo
+    ancho: f32,
+}
+
+/// Partición greedy por palabras (misma regla que `medir`).
+/// `avances` son los avances de un párrafo (sin '\n').
+/// Primera palabra siempre en la primera línea; espacio + palabra solo si cabe.
+/// Devuelve las líneas resultantes.
+fn partir_en_lineas(avances: &[(char, f32)], ancho_max: f32) -> Vec<LineaPartida> {
+    if avances.is_empty() {
+        return vec![LineaPartida { inicio: 0, fin: 0, ancho: 0.0 }];
+    }
+    let mut lineas: Vec<LineaPartida> = Vec::new();
+    // Dividir en palabras por espacios, conservando los índices.
+    let mut inicio_linea = 0usize;
+    let mut ancho_linea = 0.0f32;
+    let mut inicio_palabra = 0usize;
+    let mut i = 0usize;
+    let mut primera_palabra = true;
+
+    while i <= avances.len() {
+        // Detectar fin de palabra (espacio o fin de texto).
+        let es_espacio = i < avances.len() && avances[i].0 == ' ';
+        let es_fin = i == avances.len();
+
+        if (es_espacio || es_fin) && i > inicio_palabra {
+            // Tenemos una palabra [inicio_palabra..i)
+            let ancho_palabra: f32 = avances[inicio_palabra..i].iter().map(|a| a.1).sum();
+            if primera_palabra {
+                ancho_linea = ancho_palabra;
+                primera_palabra = false;
+            } else {
+                // El espacio antes de la palabra (está en avances[inicio_palabra - 1])
+                let ancho_espacio = avances[inicio_palabra - 1].1;
+                let con_espacio = ancho_linea + ancho_espacio + ancho_palabra;
+                if con_espacio <= ancho_max {
+                    ancho_linea = con_espacio;
+                } else {
+                    // Cerrar línea anterior (sin el espacio de separación).
+                    lineas.push(LineaPartida {
+                        inicio: inicio_linea,
+                        fin: inicio_palabra - 1, // excluye el espacio que provocó el salto
+                        ancho: ancho_linea,
+                    });
+                    inicio_linea = inicio_palabra;
+                    ancho_linea = ancho_palabra;
+                }
+            }
+        }
+
+        if es_espacio && i == inicio_palabra {
+            // Espacio suelto: avanzar inicio de siguiente palabra
+            inicio_palabra = i + 1;
+            i += 1;
+            continue;
+        }
+        if es_espacio {
+            // Espacio después de palabra: la siguiente palabra empieza en i+1
+            inicio_palabra = i + 1;
+        }
+        if es_fin {
+            break;
+        }
+        if !es_espacio && i == inicio_palabra {
+            // Dentro de una palabra, solo avanzar
+        }
+        i += 1;
+    }
+    // Cerrar última línea.
+    lineas.push(LineaPartida {
+        inicio: inicio_linea,
+        fin: avances.len(),
+        ancho: ancho_linea,
+    });
+    lineas
+}
+
 impl MedidaTexto for MedidorTexto {
-    /// Mide `texto` a `tamano` px. Si el ancho medido supera `ancho_max`,
-    /// parte por palabras (greedy). Devuelve (ancho_linea_mas_ancha, alto_total).
     fn medir(&self, texto: &str, tamano: f32, ancho_max: f32) -> (f32, f32) {
         use ab_glyph::{Font, ScaleFont};
-
         if texto.is_empty() {
             return (0.0, 0.0);
         }
-
         let font = fuente_global();
         let scale = ab_glyph::PxScale::from(tamano);
         let scaled = font.as_scaled(scale);
-
-        // Altura de línea = ascent - descent + line_gap
         let line_height = scaled.ascent() - scaled.descent() + scaled.line_gap();
 
-        // Función auxiliar: mide el ancho de una cadena en una sola línea.
-        let medir_linea = |s: &str| -> f32 {
-            let mut w = 0.0f32;
-            let mut prev: Option<ab_glyph::GlyphId> = None;
-            for c in s.chars() {
-                let gid = scaled.glyph_id(c);
-                if let Some(p) = prev {
-                    w += scaled.kern(p, gid);
-                }
-                w += scaled.h_advance(gid);
-                prev = Some(gid);
-            }
-            w
-        };
-
-        // Ancho total en una sola línea.
-        let ancho_total = medir_linea(texto);
-
-        if !ancho_max.is_finite() || ancho_total <= ancho_max {
-            return (ancho_total, line_height);
-        }
-
-        // Partir por palabras (greedy line-breaking).
-        let palabras: Vec<&str> = texto.split(' ').collect();
-        let mut lineas: u32 = 1;
-        let mut ancho_linea_actual = 0.0f32;
-        let mut ancho_max_linea = 0.0f32;
-        let espacio_w = medir_linea(" ");
-
-        for (i, palabra) in palabras.iter().enumerate() {
-            let pw = medir_linea(palabra);
-            if i == 0 {
-                // Primera palabra siempre va en la primera línea.
-                ancho_linea_actual = pw;
+        // '\n' es salto forzado: cada párrafo se mide por separado, igual
+        // que el mapa (antes, medir contaba '\n' como un carácter normal
+        // y devolvía una sola línea de alto; el mapa producía varias).
+        let mut ancho = 0.0f32;
+        let mut alto = 0.0f32;
+        for parrafo in texto.split('\n') {
+            let avances = avances_con_kern(parrafo, tamano);
+            let ancho_total: f32 = avances.iter().map(|a| a.1).sum();
+            if !ancho_max.is_finite() || ancho_total <= ancho_max {
+                ancho = ancho.max(ancho_total);
+                alto += line_height;
             } else {
-                let con_espacio = ancho_linea_actual + espacio_w + pw;
-                if con_espacio <= ancho_max {
-                    ancho_linea_actual = con_espacio;
-                } else {
-                    // Salto de línea.
-                    if ancho_linea_actual > ancho_max_linea {
-                        ancho_max_linea = ancho_linea_actual;
-                    }
-                    lineas += 1;
-                    ancho_linea_actual = pw;
-                }
+                let lineas = partir_en_lineas(&avances, ancho_max);
+                alto += line_height * lineas.len() as f32;
+                ancho = ancho.max(
+                    lineas.iter().map(|l| l.ancho).fold(0.0f32, f32::max),
+                );
             }
         }
-        if ancho_linea_actual > ancho_max_linea {
-            ancho_max_linea = ancho_linea_actual;
-        }
+        (ancho, alto)
+    }
+}
 
-        (ancho_max_linea, line_height * lineas as f32)
+
+/// Construye el mapa carácter→posición para un nodo de texto.
+///
+/// Usa `fuente_global()` directamente; el medidor inyectable de
+/// `colocar_documento_con_medidor` solo gobierna (ancho, alto) del rect,
+/// no el mapa.
+pub fn construir_mapa_texto(
+    texto: &str,
+    tamano: f32,
+    ancho_max: f32,
+    overflow: TextOverflow,
+    align: &str,
+    origen: [f32; 2],
+) -> MapaTexto {
+    use ab_glyph::{Font, ScaleFont};
+
+    if texto.is_empty() {
+        return MapaTexto { celdas: Vec::new(), texto_visible: String::new() };
+    }
+
+    let font = fuente_global();
+    let scale = ab_glyph::PxScale::from(tamano);
+    let scaled = font.as_scaled(scale);
+    let alto_linea = scaled.ascent() - scaled.descent() + scaled.line_gap();
+    let sin_restriccion = !ancho_max.is_finite();
+
+    // Calcular desplazamiento de alineación para una línea.
+    let despl_align = |ancho_linea: f32| -> f32 {
+        if sin_restriccion { return 0.0; }
+        match align {
+            "Center" => (ancho_max - ancho_linea) / 2.0,
+            "Right" => ancho_max - ancho_linea,
+            _ => 0.0,
+        }
+    };
+
+    match overflow {
+        TextOverflow::Truncar if !sin_restriccion => {
+            // Una sola línea: '\n' termina el texto visible (antes, los
+            // avances se calculaban sobre todo el texto incluido '\n').
+            let primera_linea = texto.split('\n').next().unwrap_or("");
+            let avances = avances_con_kern(primera_linea, tamano);
+            let mut celdas = Vec::new();
+            let mut texto_visible = String::new();
+            let mut x_acum = 0.0f32;
+            for (idx, &(c, avance)) in avances.iter().enumerate() {
+                if x_acum + avance > ancho_max {
+                    break;
+                }
+                celdas.push(CeldaCaracter {
+                    indice: idx,
+                    caracter: c,
+                    celda: [origen[0] + x_acum, origen[1], avance, alto_linea],
+                });
+                texto_visible.push(c);
+                x_acum += avance;
+            }
+            let da = despl_align(x_acum);
+            if da != 0.0 {
+                for celda in &mut celdas {
+                    celda.celda[0] += da;
+                }
+            }
+            MapaTexto { celdas, texto_visible }
+        }
+        TextOverflow::PuntosSuspensivos if !sin_restriccion => {
+            // Una sola línea: '\n' termina el texto visible.
+            let primera_linea = texto.split('\n').next().unwrap_or("");
+            let avances = avances_con_kern(primera_linea, tamano);
+            // Medir el carácter '…'
+            let ellipsis_gid = scaled.glyph_id('…');
+            let ellipsis_w = scaled.h_advance(ellipsis_gid);
+            if ellipsis_w > ancho_max {
+                return MapaTexto { celdas: Vec::new(), texto_visible: String::new() };
+            }
+            // ¿Cabe todo el texto en una línea?
+            let ancho_total: f32 = avances.iter().map(|a| a.1).sum();
+            if ancho_total <= ancho_max {
+                // No hace falta truncar.
+                let mut celdas = Vec::new();
+                let mut x_acum = 0.0f32;
+                let da = despl_align(ancho_total);
+                for (idx, &(c, avance)) in avances.iter().enumerate() {
+                    celdas.push(CeldaCaracter {
+                        indice: idx,
+                        caracter: c,
+                        celda: [origen[0] + da + x_acum, origen[1], avance, alto_linea],
+                    });
+                    x_acum += avance;
+                }
+                return MapaTexto { celdas, texto_visible: primera_linea.to_string() };
+            }
+            let mut celdas = Vec::new();
+            let mut texto_visible = String::new();
+            let mut x_acum = 0.0f32;
+            for (idx, &(c, avance)) in avances.iter().enumerate() {
+                if x_acum + avance + ellipsis_w > ancho_max {
+                    break;
+                }
+                celdas.push(CeldaCaracter {
+                    indice: idx,
+                    caracter: c,
+                    celda: [origen[0] + x_acum, origen[1], avance, alto_linea],
+                });
+                texto_visible.push(c);
+                x_acum += avance;
+            }
+            // Kern entre último carácter colocado y '…'
+            let ellipsis_avance = if let Some(last) = celdas.last() {
+                let last_gid = scaled.glyph_id(last.caracter);
+                scaled.h_advance(ellipsis_gid) + scaled.kern(last_gid, ellipsis_gid)
+            } else {
+                ellipsis_w
+            };
+            celdas.push(CeldaCaracter {
+                indice: avances.len(),
+                caracter: '…',
+                celda: [origen[0] + x_acum, origen[1], ellipsis_avance, alto_linea],
+            });
+            texto_visible.push('…');
+            let ancho_final = x_acum + ellipsis_avance;
+            let da = despl_align(ancho_final);
+            if da != 0.0 {
+                for celda in &mut celdas {
+                    celda.celda[0] += da;
+                }
+            }
+            MapaTexto { celdas, texto_visible }
+        }
+        // Envolver (o Truncar/PuntosSuspensivos sin restricción → línea única completa)
+        _ => {
+            // Partir por '\n' en párrafos; envolver cada párrafo.
+            let parrafos: Vec<&str> = texto.split('\n').collect();
+            let mut celdas = Vec::new();
+            let mut texto_visible = String::new();
+            let mut linea_actual = 0usize;
+            let mut indice_global = 0usize; // índice sobre texto.chars()
+
+            for (ip, parrafo) in parrafos.iter().enumerate() {
+                if ip > 0 {
+                    // El '\n' cuenta en indice_global pero no tiene celda.
+                    indice_global += 1;
+                    texto_visible.push('\n');
+                }
+                if parrafo.is_empty() {
+                    // Párrafo vacío: avanzar una línea.
+                    linea_actual += 1;
+                    continue;
+                }
+                let avances = avances_con_kern(parrafo, tamano);
+                if sin_restriccion {
+                    // Línea única sin restricción.
+                    let ancho_linea: f32 = avances.iter().map(|a| a.1).sum();
+                    let da = despl_align(ancho_linea);
+                    let mut x_acum = 0.0f32;
+                    for (i, &(c, avance)) in avances.iter().enumerate() {
+                        celdas.push(CeldaCaracter {
+                            indice: indice_global + i,
+                            caracter: c,
+                            celda: [
+                                origen[0] + da + x_acum,
+                                origen[1] + linea_actual as f32 * alto_linea,
+                                avance,
+                                alto_linea,
+                            ],
+                        });
+                        texto_visible.push(c);
+                        x_acum += avance;
+                    }
+                    indice_global += avances.len();
+                    linea_actual += 1;
+                } else {
+                    let lineas = partir_en_lineas(&avances, ancho_max);
+                    for linea in &lineas {
+                        let da = despl_align(linea.ancho);
+                        let mut x_acum = 0.0f32;
+                        let inicio_local = linea.inicio;
+                        let fin_local = linea.fin;
+                        for (k, &(c, avance)) in
+                            avances[inicio_local..fin_local].iter().enumerate()
+                        {
+                            let i = inicio_local + k;
+                            // El espacio que provocó un salto: está fuera del rango
+                            // [inicio..fin) de la línea, así que no se coloca aquí.
+                            celdas.push(CeldaCaracter {
+                                indice: indice_global + i,
+                                caracter: c,
+                                celda: [
+                                    origen[0] + da + x_acum,
+                                    origen[1] + linea_actual as f32 * alto_linea,
+                                    avance,
+                                    alto_linea,
+                                ],
+                            });
+                            texto_visible.push(c);
+                            x_acum += avance;
+                        }
+                        // Si hay siguiente línea en este párrafo, el espacio de
+                        // separación (entre fin_local y siguiente inicio) no se coloca.
+                        linea_actual += 1;
+                    }
+                    // Añadir los espacios intermedios al texto_visible
+                    // (ya se colocaron los caracteres de cada línea; los espacios
+                    // de salto no tienen celda pero sí deben estar en texto_visible
+                    // para Envolver — realmente texto_visible conserva todo).
+                    // Corrección: reconstruir texto_visible para este párrafo
+                    // incluyendo los espacios entre líneas.
+                    // La lógica de arriba ya pushea los chars de cada línea.
+                    // Necesitamos también los espacios de separación entre líneas
+                    // en texto_visible.
+                    // Volvemos a construir: quitar lo último y rehacerlo bien.
+                    let chars_parrafo_insertados: usize = lineas.iter()
+                        .map(|l| l.fin - l.inicio)
+                        .sum();
+                    // Eliminar los caracteres del párrafo que acabamos de insertar.
+                    for _ in 0..chars_parrafo_insertados {
+                        texto_visible.pop();
+                    }
+                    // Reinsertar el párrafo completo (texto_visible conserva todo).
+                    texto_visible.push_str(parrafo);
+                    indice_global += avances.len();
+                }
+            }
+            MapaTexto { celdas, texto_visible }
+        }
     }
 }
 
@@ -215,6 +510,7 @@ pub fn colocar_documento_con_medidor(
                     entidad: nodo.entidad,
                     rect: RectColocado::default(),
                     estilos,
+                    mapa_texto: MapaTexto::default(),
                 });
                 continue;
             }
@@ -301,11 +597,31 @@ pub fn colocar_documento_con_medidor(
             alto: alto_ref * s,
         };
 
+        // V3c: mapa carácter→posición para nodos de texto.
+        let mapa_texto = if nodo.graphic == TipoGraphic::Texto {
+            if let Some(ref txt) = nodo.texto {
+                let fs = estilos.font_size.unwrap_or(txt.font_size);
+                construir_mapa_texto(
+                    &txt.text,
+                    fs,
+                    rect.ancho,
+                    estilos.text_overflow.unwrap_or(TextOverflow::Envolver),
+                    &txt.align,
+                    [rect.x, rect.y],
+                )
+            } else {
+                MapaTexto::default()
+            }
+        } else {
+            MapaTexto::default()
+        };
+
         nodos_colocados.push(NodoColocado {
             nodo: idx,
             entidad: nodo.entidad,
             rect,
             estilos,
+            mapa_texto,
         });
     }
 
@@ -1317,6 +1633,329 @@ mod tests {
         cerca_rect(b, [310.0, 200.0, 80.0, 40.0]);
         assert!(a[0] >= g[0] && b[0] > a[0]);
         assert!(b[0] + b[2] <= g[0] + g[2] + 0.5);
+    }
+
+
+    use crate::estilos::TextOverflow;
+
+    /// Avances esperados calculados directamente con ab_glyph, kern incluido.
+    fn avances_ab_glyph(texto: &str, tamano: f32) -> Vec<f32> {
+        use ab_glyph::{Font, ScaleFont};
+        let font = fuente_global();
+        let scaled = font.as_scaled(ab_glyph::PxScale::from(tamano));
+        let mut out = Vec::new();
+        let mut prev: Option<ab_glyph::GlyphId> = None;
+        for c in texto.chars() {
+            let gid = scaled.glyph_id(c);
+            let mut w = scaled.h_advance(gid);
+            if let Some(p) = prev {
+                w += scaled.kern(p, gid);
+            }
+            out.push(w);
+            prev = Some(gid);
+        }
+        out
+    }
+
+    fn alto_linea(tamano: f32) -> f32 {
+        use ab_glyph::{Font, ScaleFont};
+        let font = fuente_global();
+        let scaled = font.as_scaled(ab_glyph::PxScale::from(tamano));
+        scaled.ascent() - scaled.descent() + scaled.line_gap()
+    }
+
+    #[test]
+    fn mapa_texto_avances_coinciden_con_ab_glyph() {
+        let texto = "Hola mundo";
+        let tam = 16.0;
+        let mapa = construir_mapa_texto(
+            texto,
+            tam,
+            f32::INFINITY,
+            TextOverflow::Envolver,
+            "Left",
+            [0.0, 0.0],
+        );
+        let esperados = avances_ab_glyph(texto, tam);
+        let alto = alto_linea(tam);
+
+        assert_eq!(mapa.celdas.len(), esperados.len());
+        assert_eq!(mapa.texto_visible, texto);
+
+        let mut x_acum = 0.0f32;
+        for (celda, (idx, &av)) in mapa.celdas.iter().zip(esperados.iter().enumerate()) {
+            assert_eq!(celda.indice, idx);
+            assert!((celda.celda[0] - x_acum).abs() <= 0.01, "x esperado {x_acum}, obtenido {}", celda.celda[0]);
+            assert!((celda.celda[1] - 0.0).abs() <= 0.01, "y debe ser 0");
+            assert!((celda.celda[2] - av).abs() <= 0.01, "ancho esperado {av}, obtenido {}", celda.celda[2]);
+            assert!((celda.celda[3] - alto).abs() <= 0.01, "alto esperado {alto}, obtenido {}", celda.celda[3]);
+            x_acum += av;
+        }
+    }
+
+
+    use crate::api::MedidaTexto;
+
+    #[test]
+    fn mapa_texto_wrap_en_varias_lineas() {
+        let texto = "aaa bbb ccc ddd";
+        let tam = 16.0;
+        // Elegir ancho para forzar al menos 2 líneas: medir una sola palabra
+        // y dejar sitio para una palabra + espacio pero no dos.
+        let medidor = MedidorTexto;
+        let una_palabra = medidor.medir("aaa", tam, f32::INFINITY).0;
+        let ancho_max = una_palabra * 2.2;
+        // Confirmar que el texto completo no cabe.
+        let (ancho_una_linea, _) = medidor.medir(texto, tam, f32::INFINITY);
+        assert!(ancho_una_linea > ancho_max, "el ancho debe forzar wrap");
+
+        let mapa = construir_mapa_texto(
+            texto,
+            tam,
+            ancho_max,
+            TextOverflow::Envolver,
+            "Left",
+            [0.0, 0.0],
+        );
+        let alto = alto_linea(tam);
+
+        // Celdas en al menos 2 valores distintos de y.
+        let mut ys: Vec<f32> = mapa.celdas.iter().map(|c| c.celda[1]).collect();
+        ys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        ys.dedup_by(|a, b| (*a - *b).abs() <= 0.01);
+        assert!(ys.len() >= 2, "debe haber al menos 2 líneas, y={ys:?}");
+
+        // y avanza exactamente alto_linea por línea.
+        for (i, y) in ys.iter().enumerate() {
+            let esperado = i as f32 * alto;
+            assert!((y - esperado).abs() <= 0.01, "y de línea {i}: esperado {esperado}, obtenido {y}");
+        }
+
+        // Ninguna celda sale del ancho.
+        for c in &mapa.celdas {
+            assert!(c.celda[0] + c.celda[2] <= ancho_max + 0.01, "celda sobresale del ancho");
+        }
+    }
+
+    #[test]
+    fn mapa_texto_truncar_y_puntos() {
+        let texto = "abcdefghijklmnopqrstuvwxyz abcdefghij";
+        let tam = 16.0;
+        let ancho_max = 50.0;
+
+        let truncado = construir_mapa_texto(
+            texto,
+            tam,
+            ancho_max,
+            TextOverflow::Truncar,
+            "Left",
+            [0.0, 0.0],
+        );
+        assert!(texto.starts_with(&truncado.texto_visible), "truncado debe ser prefijo");
+        assert!(!truncado.texto_visible.is_empty());
+        for c in &truncado.celdas {
+            assert!(c.celda[0] + c.celda[2] <= ancho_max + 0.01, "celda truncada fuera del ancho");
+        }
+
+        let puntos = construir_mapa_texto(
+            texto,
+            tam,
+            ancho_max,
+            TextOverflow::PuntosSuspensivos,
+            "Left",
+            [0.0, 0.0],
+        );
+        assert!(puntos.texto_visible.ends_with('…'), "debe terminar en puntos suspensivos");
+        for c in &puntos.celdas {
+            assert!(c.celda[0] + c.celda[2] <= ancho_max + 0.01, "celda con puntos fuera del ancho");
+        }
+        // La última celda es la de '…' con indice = chars del texto original.
+        let ultima = puntos.celdas.last().expect("debe haber celdas");
+        assert_eq!(ultima.caracter, '…');
+        assert_eq!(ultima.indice, texto.chars().count());
+    }
+
+    #[test]
+    fn mapa_texto_nueva_linea_es_salto_forzado() {
+        let texto = "AB\nCD";
+        let tam = 16.0;
+        let mapa = construir_mapa_texto(
+            texto,
+            tam,
+            f32::INFINITY,
+            TextOverflow::Envolver,
+            "Left",
+            [0.0, 0.0],
+        );
+        let alto = alto_linea(tam);
+
+        let indices: Vec<usize> = mapa.celdas.iter().map(|c| c.indice).collect();
+        for i in [0, 1, 3, 4] {
+            assert!(indices.contains(&i), "falta índice {i}");
+        }
+        assert!(!indices.contains(&2), "el '\\n' no debe tener celda");
+
+        // La 'C' (índice 3) está en la línea 1.
+        let c = mapa.celdas.iter().find(|c| c.indice == 3).expect("debe existir C");
+        assert_eq!(c.caracter, 'C');
+        assert!((c.celda[1] - alto).abs() <= 0.01, "C debe estar en la línea 1 (y={})", c.celda[1]);
+
+        // La 'A' está en la línea 0.
+        let a = mapa.celdas.iter().find(|c| c.indice == 0).expect("debe existir A");
+        assert!((a.celda[1] - 0.0).abs() <= 0.01, "A debe estar en la línea 0");
+        assert_eq!(mapa.texto_visible, texto);
+    }
+
+    #[test]
+    fn medir_con_salto_de_linea_cuenta_dos_lineas() {
+        // Hallazgo pez 1/2 (fin de módulo V3): medir contaba '\n' como
+        // un carácter normal y devolvía una sola línea de alto mientras
+        // el mapa producía dos. Ahora medir y mapa coinciden.
+        let medidor = MedidorTexto::new();
+        let tam = 16.0;
+        let (ancho, alto) = medidor.medir("AB\nCD", tam, f32::INFINITY);
+        assert!((alto - 2.0 * alto_linea(tam)).abs() <= 0.01, "alto={alto}");
+        let (ancho_ab, _) = medidor.medir("AB", tam, f32::INFINITY);
+        let (ancho_cd, _) = medidor.medir("CD", tam, f32::INFINITY);
+        assert!((ancho - ancho_ab.max(ancho_cd)).abs() <= 0.01, "ancho={ancho}");
+    }
+
+    #[test]
+    fn mapa_texto_truncar_y_puntos_se_detienen_en_salto_de_linea() {
+        // Hallazgo pez 1/2: Truncar/PuntosSuspensivos calculaban avances
+        // sobre todo el texto incluido '\n'. Una sola línea: el salto
+        // termina el texto visible.
+        let tam = 16.0;
+        let mapa = construir_mapa_texto(
+            "abc\ndef",
+            tam,
+            1000.0,
+            TextOverflow::Truncar,
+            "Left",
+            [0.0, 0.0],
+        );
+        assert_eq!(mapa.texto_visible, "abc");
+        assert!(mapa.celdas.iter().all(|c| c.indice < 3));
+
+        let mapa = construir_mapa_texto(
+            "abcdefgh\nxyz",
+            tam,
+            40.0,
+            TextOverflow::PuntosSuspensivos,
+            "Left",
+            [0.0, 0.0],
+        );
+        assert!(!mapa.texto_visible.contains('\n'), "sin salto: {}", mapa.texto_visible);
+        assert!(mapa.texto_visible.ends_with('…'), "con puntos: {}", mapa.texto_visible);
+    }
+
+
+    /// Nodo de texto bajo el canvas, centrado, con el tamaño y el
+    /// style_extra dados.
+    fn nodo_texto_escena(
+        entidad: u64,
+        texto: &str,
+        size: [f32; 2],
+        extra: &str,
+    ) -> crate::documento::NodoDocumento {
+        use glass_core::scene::UITextData;
+        crate::documento::NodoDocumento {
+            entidad, nombre: String::new(),
+            padre: Some(0),
+            hijos: vec![],
+            graphic: TipoGraphic::Texto,
+            es_canvas: false,
+            es_canvas_raiz: false,
+            activo: true,
+            rect_transform: RectTransformData {
+                anchored_position: [0.0, 0.0],
+                size_delta: size,
+                anchor_min: [0.5, 0.5],
+                anchor_max: [0.5, 0.5],
+                pivot: [0.5, 0.5],
+            },
+            canvas: None,
+            imagen: None,
+            texto: Some(UITextData {
+                text: texto.to_string(),
+                font_size: 16.0,
+                color: [1.0, 1.0, 1.0, 1.0],
+                font: "default".to_string(),
+                align: "Left".to_string(),
+                style_extra: String::new(),
+                raycast_target: true,
+            }),
+            boton: None,
+            drag: None,
+            layout_group: None,
+            style_extra: extra.to_string(),
+            raycast_target: true,
+        }
+    }
+
+    /// Escena de desbordamiento: canvas 400x100 (escala 1) con un nodo
+    /// de texto de 100 px de ancho.
+    fn doc_desbordamiento(texto: &str, extra: &str) -> Documento {
+        Documento {
+            canvas_raiz: 0,
+            nodos: vec![
+                canvas_flex(1, vec![1], 400.0, 100.0),
+                nodo_texto_escena(2, texto, [100.0, 40.0], extra),
+            ],
+            avisos: vec![],
+        }
+    }
+
+    fn nodo_texto_colocado(colocado: &DocumentoColocado) -> &NodoColocado {
+        colocado.nodos.iter().find(|n| n.entidad == 2).expect("nodo de texto")
+    }
+
+    /// Ninguna celda sale del rect colocado del nodo.
+    fn celdas_dentro_del_rect(n: &NodoColocado) {
+        for c in &n.mapa_texto.celdas {
+            assert!(
+                c.celda[0] + c.celda[2] <= n.rect.x + n.rect.ancho + 0.01,
+                "celda fuera del rect: {:?} rect {:?}",
+                c.celda,
+                n.rect
+            );
+        }
+    }
+
+    #[test]
+    fn escena_ellipsis_recorta_con_puntos() {
+        let doc = doc_desbordamiento(
+            "abcdefghijklmnopqrstuvwxyz abcdefghij",
+            "width: 100px; text-overflow: ellipsis;",
+        );
+        let colocado = colocar_documento(&doc, Viewport { ancho: 400.0, alto: 100.0 });
+        let n = nodo_texto_colocado(&colocado);
+        assert!(n.mapa_texto.texto_visible.ends_with('…'), "visible: {}", n.mapa_texto.texto_visible);
+        celdas_dentro_del_rect(n);
+    }
+
+    #[test]
+    fn escena_truncate_recorta_sin_puntos() {
+        let texto = "abcdefghijklmnopqrstuvwxyz abcdefghij";
+        let doc = doc_desbordamiento(texto, "width: 100px; text-overflow: truncate;");
+        let colocado = colocar_documento(&doc, Viewport { ancho: 400.0, alto: 100.0 });
+        let n = nodo_texto_colocado(&colocado);
+        assert!(!n.mapa_texto.texto_visible.is_empty());
+        assert!(texto.starts_with(&n.mapa_texto.texto_visible), "visible: {}", n.mapa_texto.texto_visible);
+        assert!(!n.mapa_texto.texto_visible.ends_with('…'));
+        celdas_dentro_del_rect(n);
+    }
+
+    #[test]
+    fn escena_wrap_parte_en_varias_lineas() {
+        let doc = doc_desbordamiento("aaa bbb ccc ddd", "width: 100px; text-overflow: wrap;");
+        let colocado = colocar_documento(&doc, Viewport { ancho: 400.0, alto: 100.0 });
+        let n = nodo_texto_colocado(&colocado);
+        let mut ys: Vec<f32> = n.mapa_texto.celdas.iter().map(|c| c.celda[1]).collect();
+        ys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        ys.dedup_by(|a, b| (*a - *b).abs() <= 0.01);
+        assert!(ys.len() >= 2, "debe haber al menos 2 líneas, y={ys:?}");
+        celdas_dentro_del_rect(n);
     }
 
 }

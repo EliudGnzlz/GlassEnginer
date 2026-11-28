@@ -11,7 +11,8 @@
 
 use ash::vk;
 use glass_renderer::offscreen::OffscreenTarget;
-use glass_renderer::ui::{FontAtlas, UiBatch, UiRenderer};
+use glass_renderer::sdf_atlas::SdfAtlas;
+use glass_renderer::ui::{UiBatch, UiRenderer};
 use gpu_allocator::vulkan::{AllocationCreateDesc, AllocationScheme, Allocator};
 use gpu_allocator::vulkan::AllocatorCreateDesc as AllocatorDesc;
 use gpu_allocator::MemoryLocation;
@@ -138,7 +139,7 @@ impl Drop for Ctx {
 
 /// Escena fija: fondo, panel rojo con radios, degradado azul→verde,
 /// sombra + panel encima, y "JUGAR" centrado. Semilla fija: no hay azar.
-fn lote_fijo(atlas: &FontAtlas) -> UiBatch {
+fn lote_fijo(atlas: &mut SdfAtlas) -> UiBatch {
     let mut lote = UiBatch::new();
     // Fondo completo (cubre el UNDEFINED inicial del offscreen).
     lote.push_solid(atlas, [0.0, 0.0, W as f32, H as f32], [0.10, 0.10, 0.12, 1.0]);
@@ -186,7 +187,7 @@ fn lote_fijo(atlas: &FontAtlas) -> UiBatch {
         0.0,
     );
     // Texto centrado en el panel blanco.
-    lote.push_text_centered(atlas, [80.0, 380.0, 400.0, 160.0], "JUGAR", 48.0, [0.05, 0.05, 0.05, 1.0]);
+    lote.push_text_centered(&mut *atlas, [80.0, 380.0, 400.0, 160.0], "JUGAR", 48.0, [0.05, 0.05, 0.05, 1.0]);
     lote
 }
 
@@ -253,7 +254,7 @@ fn ui_dorada_1280x720() {
     });
 
     // 2. Pintar la escena fija con el pase UI.
-    let lote = lote_fijo(ui.font());
+    let lote = lote_fijo(ui.font_mut());
     assert!(lote.vertex_count() > 0, "el lote fijo no puede estar vacío");
     ctx.una_vez(|cmd| {
         ui.record(cmd, &target, &lote);
@@ -443,7 +444,7 @@ fn texto_extendido_pinta_glifos() {
     });
     let mut lote = UiBatch::new();
     let (w_txt, ox, oy, alto_linea) = {
-        let atlas = ui.font();
+        let atlas = ui.font_mut();
         let w_txt = atlas.measure("JUGAR", 48.0);
         let alto_linea = atlas.line_height_at(48.0);
         let ox = 80.0 + (400.0 - w_txt) * 0.5;
@@ -555,14 +556,14 @@ fn texto_extendido_pinta_glifos() {
 /// el extendido para encontrar el campo que difiere.
 #[test]
 fn texto_clasico_vs_extendido_vertices() {
-    let atlas = FontAtlas::build(include_bytes!("../../../assets/fonts/DejaVuSans.ttf")).expect("atlas");
+    let mut atlas = SdfAtlas::build(include_bytes!("../../../assets/fonts/DejaVuSans.ttf")).expect("atlas");
     let mut a = UiBatch::new();
-    a.push_text_centered(&atlas, [80.0, 380.0, 400.0, 160.0], "JUGAR", 48.0, [1.0, 1.0, 1.0, 1.0]);
+    a.push_text_centered(&mut atlas, [80.0, 380.0, 400.0, 160.0], "JUGAR", 48.0, [1.0, 1.0, 1.0, 1.0]);
     let mut b = UiBatch::new();
     let w = atlas.measure("JUGAR", 48.0);
     let ox = 80.0 + (400.0 - w) * 0.5;
     let oy = 380.0 + (160.0 - atlas.line_height_at(48.0)) * 0.5;
-    b.push_text_extendido(&atlas, [ox, oy], "JUGAR", 48.0, [1.0, 1.0, 1.0, 1.0], [0.0; 4], None);
+    b.push_text_extendido(&mut atlas, [ox, oy], "JUGAR", 48.0, [1.0, 1.0, 1.0, 1.0], [0.0; 4], None);
     let va = a.vertices();
     let vb = b.vertices();
     eprintln!("vértices clásico: {}, extendido: {}", va.len(), vb.len());
@@ -579,4 +580,197 @@ fn texto_clasico_vs_extendido_vertices() {
         }
     }
     eprintln!("vértices idénticos");
+}
+
+/// Limpia el offscreen a negro opaco (mismo patrón que la dorada).
+fn limpiar_negro(ctx: &Ctx, target: &OffscreenTarget) {
+    ctx.una_vez(|cmd| unsafe {
+        let rango = vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .level_count(1)
+            .layer_count(1);
+        let a_dst = [vk::ImageMemoryBarrier::default()
+            .old_layout(vk::ImageLayout::UNDEFINED)
+            .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .src_access_mask(vk::AccessFlags::empty())
+            .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .image(target.color_image)
+            .subresource_range(rango)];
+        ctx.device.cmd_pipeline_barrier(
+            cmd,
+            vk::PipelineStageFlags::TOP_OF_PIPE,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &a_dst,
+        );
+        let color = vk::ClearColorValue { float32: [0.0, 0.0, 0.0, 1.0] };
+        ctx.device.cmd_clear_color_image(
+            cmd,
+            target.color_image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &color,
+            &[rango],
+        );
+        let a_ro = [vk::ImageMemoryBarrier::default()
+            .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ)
+            .image(target.color_image)
+            .subresource_range(rango)];
+        ctx.device.cmd_pipeline_barrier(
+            cmd,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &a_ro,
+        );
+    });
+}
+
+/// Lee el offscreen a una imagen RGBA (staging + copia + mapeo).
+fn leer_imagen(ctx: &mut Ctx, target: &OffscreenTarget) -> image::RgbaImage {
+    let nbytes = (W * H * 4) as u64;
+    let (buf, alloc) = {
+        let info = vk::BufferCreateInfo::default()
+            .size(nbytes)
+            .usage(vk::BufferUsageFlags::TRANSFER_DST)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let b = unsafe { ctx.device.create_buffer(&info, None).expect("staging") };
+        let req = unsafe { ctx.device.get_buffer_memory_requirements(b) };
+        let a = ctx
+            .allocator
+            .as_mut()
+            .expect("allocator")
+            .allocate(&AllocationCreateDesc {
+                name: "ui_dorada_staging",
+                requirements: req,
+                location: MemoryLocation::GpuToCpu,
+                linear: true,
+                allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+            })
+            .expect("staging alloc");
+        unsafe {
+            ctx.device
+                .bind_buffer_memory(b, a.memory(), a.offset())
+                .expect("bind staging");
+        }
+        (b, a)
+    };
+    ctx.una_vez(|cmd| unsafe {
+        let rango = vk::ImageSubresourceRange::default()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .level_count(1)
+            .layer_count(1);
+        let a_src = [vk::ImageMemoryBarrier::default()
+            .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            .src_access_mask(vk::AccessFlags::SHADER_READ)
+            .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
+            .image(target.color_image)
+            .subresource_range(rango)];
+        ctx.device.cmd_pipeline_barrier(
+            cmd,
+            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &a_src,
+        );
+        let region = [vk::BufferImageCopy::default()
+            .image_subresource(
+                vk::ImageSubresourceLayers::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .layer_count(1),
+            )
+            .image_extent(vk::Extent3D { width: W, height: H, depth: 1 })];
+        ctx.device.cmd_copy_image_to_buffer(
+            cmd,
+            target.color_image,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            buf,
+            &region,
+        );
+    });
+    let mut pixeles = vec![0u8; nbytes as usize];
+    if let Some(ptr) = alloc.mapped_ptr() {
+        unsafe {
+            std::ptr::copy_nonoverlapping(ptr.as_ptr() as *const u8, pixeles.as_mut_ptr(), pixeles.len());
+        }
+    }
+    ctx.allocator.as_mut().expect("allocator").free(alloc).unwrap_or(());
+    unsafe { ctx.device.destroy_buffer(buf, None) };
+    image::RgbaImage::from_raw(W, H, pixeles).expect("pixeles RGBA")
+}
+
+/// V3b (G-SDF1, borde): el texto SDF debe tener un borde de ≤ 1,5 px
+/// a 12 y a 96 px. Mide la transición 10 %→90 % de cobertura en una
+/// fila que cruza el asta vertical de la 'H' (texto blanco sobre negro).
+/// El anti-alias por `fwidth()` mantiene el borde en ~1 px de pantalla
+/// a cualquier tamaño; sin él, a 12 px el borde saldría de ~5 px.
+#[test]
+fn ancho_borde_sdf_12_y_96() {
+    for size in [12.0f32, 96.0] {
+        let mut ctx = Ctx::nuevo();
+        let mut ui = UiRenderer::new(
+            ctx.device.clone(),
+            ctx.allocator.as_mut().expect("allocator"),
+            ctx.queue,
+            ctx.pool,
+        )
+        .expect("UiRenderer");
+        let target = OffscreenTarget::new(ctx.device.clone(), ctx.allocator.as_mut().expect("allocator"), W, H)
+            .expect("offscreen 1280x720");
+        limpiar_negro(&ctx, &target);
+        // Fila a 1/4 de la celda de la 'H' (asta vertical, por encima
+        // del travesaño): misma geometría que push_text_extendido.
+        let (ox, oy, y_fila) = {
+            let atlas = ui.font();
+            let k = size / 64.0;
+            let g = atlas.glifo('H');
+            let oy = 200.0;
+            let baseline = oy + atlas.ascent * k;
+            let y_fila = baseline + (g.bearing[1] + g.size[1] * 0.25) * k;
+            (80.0, oy, y_fila as u32)
+        };
+        let mut lote = UiBatch::new();
+        lote.push_text_extendido(
+            ui.font_mut(),
+            [ox, oy],
+            "H",
+            size,
+            [1.0, 1.0, 1.0, 1.0],
+            [0.0; 4],
+            None,
+        );
+        ctx.una_vez(|cmd| {
+            ui.record(cmd, &target, &lote);
+        });
+        let img = leer_imagen(&mut ctx, &target);
+        let mut x01: Option<f32> = None;
+        let mut x09: Option<f32> = None;
+        for x in 0..W {
+            let cov = img.get_pixel(x, y_fila)[0] as f32 / 255.0;
+            if x01.is_none() && cov > 0.1 {
+                x01 = Some(x as f32);
+            }
+            if x09.is_none() && cov > 0.9 {
+                x09 = Some(x as f32);
+            }
+            if x01.is_some() && x09.is_some() {
+                break;
+            }
+        }
+        let ancho = match (x01, x09) {
+            (Some(a), Some(b)) => b - a,
+            _ => f32::INFINITY,
+        };
+        eprintln!("tamaño {size}: ancho de borde = {ancho:.2} px (fila y={y_fila})");
+        assert!(ancho <= 1.5, "borde de {ancho:.2} px a {size} px (> 1,5)");
+    }
 }
