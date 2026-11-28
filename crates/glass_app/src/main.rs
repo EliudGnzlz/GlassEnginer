@@ -2545,6 +2545,163 @@ type CandidataLuz = (f32, [f32; 4], [f32; 4], bool, [f32; 4], [f32; 4]);
 /// Entidad emisora de partículas con su matriz de mundo.
 type EntidadEmisora = (u64, glass_core::scene::ParticleEmitterData, [f32; 16]);
 
+/// Piezas del estado de la app que el pase UI necesita (P1, V7).
+/// Agrupadas para no inflar la firma (clippy: too_many_arguments) y porque
+/// el pase es función libre: los préstamos que el llamador pasa son disjuntos.
+struct EstadoUiPase<'a> {
+    scene_state: &'a std::sync::Arc<std::sync::Mutex<SceneState>>,
+    ui_images_key: &'a mut String,
+    ui_images_map: &'a mut crate::ui_v2::UiSceneImages,
+    ui_font_atlases: &'a mut std::collections::HashMap<String, glass_renderer::SdfAtlas>,
+    ui_font_failed: &'a mut std::collections::HashSet<String>,
+}
+
+/// P1 (V7): funcion libre (no metodo) a proposito: `renderer` es
+/// `&mut self.renderer` en render_frame y sigue vivo despues; un metodo
+/// `&mut self` chocaria con ese prestamo (E0499). El llamador pasa los
+/// campos por separado (prestamos disjuntos).
+/// Pase UI parametrizado (P1, V7; ADR D6): construye el lote del Canvas
+/// (atlas, fuentes, maquetado) y lo graba con `render_ui_overlay`.
+/// `camara` es la cámara ya resuelta por el llamador (ADR D1) y `modo` el
+/// `render_mode` del primer Canvas; `viewport` es el tamaño en px del
+/// objetivo donde se graba. `a_juego` elige el objetivo: la vista de juego
+/// (`final_game_offscreen`) o la de escena (`final_offscreen`), vía
+/// `present_game`, que se restaura al salir (el PRESENT posterior lo lee).
+/// P1: todos los modos se pintan como Overlay; Camera/World caen aquí
+/// hasta P2/P3 (el aviso al autor vive en el Inspector, Q11).
+fn render_ui_pase(
+    estado: EstadoUiPase<'_>,
+    renderer: &mut GlassRenderer,
+    vk_ctx: &VulkanContext,
+    camara: Option<&glass_core::scene::CameraData>,
+    viewport: (f32, f32),
+    modo: &str,
+    a_juego: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if modo != "ScreenSpaceOverlay" {
+        log::debug!("Canvas en modo {modo}: aún sin efecto (P1), se pinta como Overlay");
+    }
+    // P1: Overlay no usa la cámara; P2/P3 la usan (ADR D1). Se recibe
+    // ya resuelta por el llamador para que la firma no cambie.
+    let _ = camara;
+    let (ancho_pantalla, alto_pantalla) = viewport;
+    let batch = {
+        // Atlas de imágenes del Canvas (UI v2): se
+        // reconstruye solo cuando cambia la lista de
+        // sprites de la escena activa.
+        {
+            let key = match estado.scene_state.lock() {
+                Ok(scene) => scene
+                    .entities
+                    .iter()
+                    .filter(|e| e.active)
+                    .filter_map(|e| e.ui_image.as_ref())
+                    .map(|i| i.sprite.as_str())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                Err(_) => String::new(),
+            };
+            if key != *estado.ui_images_key {
+                *estado.ui_images_key = key;
+                let built = match estado.scene_state.lock() {
+                    Ok(scene) => crate::ui_v2::build_ui_scene_images(
+                        &scene,
+                        std::path::Path::new("assets"),
+                    ),
+                    Err(_) => (crate::ui_v2::UiSceneImages::new(), None),
+                };
+                *estado.ui_images_map = built.0;
+                match built.1 {
+                    Some(atlas) => {
+                        let _ = renderer.set_ui_image_atlas(
+                            vk_ctx.graphics_queue,
+                            atlas.rgba,
+                            atlas.size,
+                        );
+                    }
+                    None => renderer.clear_ui_image_atlas(),
+                }
+            }
+        }
+        // Fuentes con nombre (UI v2): cargar bajo demanda
+        // las que la escena use y aún no estén (CPU + GPU).
+        {
+            let wanted: Vec<String> = match estado.scene_state.lock() {
+                Ok(scene) => {
+                    let mut v: Vec<String> = scene
+                        .entities
+                        .iter()
+                        .filter(|e| e.active)
+                        .filter_map(|e| e.ui_text.as_ref())
+                        .map(|t| t.font.clone())
+                        .filter(|f| !f.is_empty() && f != "default")
+                        .collect();
+                    v.sort();
+                    v.dedup();
+                    v
+                }
+                Err(_) => Vec::new(),
+            };
+            for name in wanted {
+                if estado.ui_font_atlases.contains_key(&name)
+                    || estado.ui_font_failed.contains(&name)
+                {
+                    continue;
+                }
+                let path = format!("assets/fonts/{name}.ttf");
+                let cargada = std::fs::read(&path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|bytes| {
+                        glass_renderer::SdfAtlas::build(&bytes)
+                            .map(|atlas| (bytes, atlas))
+                    })
+                    .and_then(|(bytes, atlas)| {
+                        renderer
+                            .ensure_named_font(vk_ctx.graphics_queue, &name, &bytes)
+                            .map(|_| atlas)
+                            .map_err(|e| e.to_string())
+                    });
+                match cargada {
+                    Ok(atlas) => {
+                        estado.ui_font_atlases.insert(name, atlas);
+                    }
+                    Err(e) => {
+                        log::warn!("fuente '{name}' no disponible ({e}); se usa la de por defecto");
+                        estado.ui_font_failed.insert(name);
+                    }
+                }
+            }
+        }
+        // Presupuesto de inserción de glifos del frame (V3):
+        // una vez por frame, antes de maquetar el Canvas.
+        renderer.avanzar_frame_fuentes_ui();
+        let font = renderer.ui_font_mut();
+        match estado.scene_state.lock() {
+            Ok(scene) => crate::ui_v2::build_canvas_batch_v2(
+                &scene,
+                &mut crate::ui_v2::UiFonts {
+                    default: font,
+                    named: &mut *estado.ui_font_atlases,
+                },
+                estado.ui_images_map,
+                ancho_pantalla,
+                alto_pantalla,
+            ),
+            Err(_) => Vec::new(),
+        }
+    };
+    // Solo la grabación lee `present_game`: se fija para este pase
+    // y se restaura, porque el PRESENT posterior lo vuelve a leer.
+    let present_game_antes = renderer.present_game;
+    renderer.present_game = a_juego;
+    let resultado = renderer.render_ui_overlay(vk_ctx.graphics_queue, &batch);
+    renderer.present_game = present_game_antes;
+    resultado?;
+    Ok(())
+}
+
+
 impl GlassEngineApp {
     pub fn new(
         flags: LaunchFlags,
@@ -8299,126 +8456,69 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
             renderer.present_game = render_standalone;
         }
 
-        // Canvas de juego (UI) en el standalone: dentro del editor lo
-        // pinta la superposición de egui sobre la vista de juego, pero el
-        // binario puro no tiene egui y sin este pase el HUD de la escena
-        // no existiría en el juego compilado. Se compone sobre el
-        // offscreen (la imagen que presenta el blit) tras el 3D y antes
-        // del blit. En el modo editor normal NO se ejecuta: allí manda
-        // la ruta de egui y así nada se dibuja dos veces.
+        // P1 (V7): el pase UI parametrizado (ADR D6). En standalone pinta el
+        // Canvas sobre la vista de juego, como antes; en el editor pinta la UI
+        // runtime en la GameView (mínimo de D-V4-4). Todos los modos siguen
+        // siendo Overlay: `modo_canvas` es el `render_mode` del primer Canvas
+        // (solo alimenta el aviso de fallback) y `camara_ui` la cámara resuelta
+        // por el llamador (ADR D1; P1 aún no la usa).
+        let (modo_canvas, camara_ui) = match self.scene_state.lock() {
+            Ok(scene) => (
+                scene
+                    .entities
+                    .iter()
+                    .find_map(|e| e.canvas.as_ref())
+                    .map(|c| c.render_mode.clone())
+                    .unwrap_or_else(|| "ScreenSpaceOverlay".to_string()),
+                crate::ui_v2::resolver_camara_principal(&scene.entities),
+            ),
+            Err(_) => ("ScreenSpaceOverlay".to_string(), None),
+        };
         if render_standalone {
-            let batch = {
-                // Atlas de imágenes del Canvas (UI v2): se
-                // reconstruye solo cuando cambia la lista de
-                // sprites de la escena activa.
-                {
-                    let key = match self.scene_state.lock() {
-                        Ok(scene) => scene
-                            .entities
-                            .iter()
-                            .filter(|e| e.active)
-                            .filter_map(|e| e.ui_image.as_ref())
-                            .map(|i| i.sprite.as_str())
-                            .filter(|s| !s.is_empty())
-                            .collect::<Vec<_>>()
-                            .join("\n"),
-                        Err(_) => String::new(),
-                    };
-                    if key != self.ui_images_key {
-                        self.ui_images_key = key;
-                        let built = match self.scene_state.lock() {
-                            Ok(scene) => crate::ui_v2::build_ui_scene_images(
-                                &scene,
-                                std::path::Path::new("assets"),
-                            ),
-                            Err(_) => (crate::ui_v2::UiSceneImages::new(), None),
-                        };
-                        self.ui_images_map = built.0;
-                        match built.1 {
-                            Some(atlas) => {
-                                let _ = renderer.set_ui_image_atlas(
-                                    vk_ctx.graphics_queue,
-                                    atlas.rgba,
-                                    atlas.size,
-                                );
-                            }
-                            None => renderer.clear_ui_image_atlas(),
-                        }
-                    }
-                }
-                // Fuentes con nombre (UI v2): cargar bajo demanda
-                // las que la escena use y aún no estén (CPU + GPU).
-                {
-                    let wanted: Vec<String> = match self.scene_state.lock() {
-                        Ok(scene) => {
-                            let mut v: Vec<String> = scene
-                                .entities
-                                .iter()
-                                .filter(|e| e.active)
-                                .filter_map(|e| e.ui_text.as_ref())
-                                .map(|t| t.font.clone())
-                                .filter(|f| !f.is_empty() && f != "default")
-                                .collect();
-                            v.sort();
-                            v.dedup();
-                            v
-                        }
-                        Err(_) => Vec::new(),
-                    };
-                    for name in wanted {
-                        if self.ui_font_atlases.contains_key(&name)
-                            || self.ui_font_failed.contains(&name)
-                        {
-                            continue;
-                        }
-                        let path = format!("assets/fonts/{name}.ttf");
-                        let cargada = std::fs::read(&path)
-                            .map_err(|e| e.to_string())
-                            .and_then(|bytes| {
-                                glass_renderer::SdfAtlas::build(&bytes)
-                                    .map(|atlas| (bytes, atlas))
-                            })
-                            .and_then(|(bytes, atlas)| {
-                                renderer
-                                    .ensure_named_font(vk_ctx.graphics_queue, &name, &bytes)
-                                    .map(|_| atlas)
-                                    .map_err(|e| e.to_string())
-                            });
-                        match cargada {
-                            Ok(atlas) => {
-                                self.ui_font_atlases.insert(name, atlas);
-                            }
-                            Err(e) => {
-                                log::warn!("fuente '{name}' no disponible ({e}); se usa la de por defecto");
-                                self.ui_font_failed.insert(name);
-                            }
-                        }
-                    }
-                }
-                // Presupuesto de inserción de glifos del frame (V3):
-                // una vez por frame, antes de maquetar el Canvas.
-                renderer.avanzar_frame_fuentes_ui();
-                // El tamaño se lee antes del préstamo mutable de la fuente.
-                let (ancho_pantalla, alto_pantalla) = (
-                    renderer.offscreen.extent.width as f32,
-                    renderer.offscreen.extent.height as f32,
-                );
-                let font = renderer.ui_font_mut();
-                match self.scene_state.lock() {
-                    Ok(scene) => crate::ui_v2::build_canvas_batch_v2(
-                        &scene,
-                        &mut crate::ui_v2::UiFonts {
-                            default: font,
-                            named: &mut self.ui_font_atlases,
-                        },
-                        &self.ui_images_map,
-                        ancho_pantalla,
-                        alto_pantalla,
-                    ),
-                    Err(_) => Vec::new(),
-                }
-            };
-            renderer.render_ui_overlay(vk_ctx.graphics_queue, &batch)?;
+            let viewport = (
+                renderer.offscreen.extent.width as f32,
+                renderer.offscreen.extent.height as f32,
+            );
+            render_ui_pase(
+                EstadoUiPase {
+                    scene_state: &self.scene_state,
+                    ui_images_key: &mut self.ui_images_key,
+                    ui_images_map: &mut self.ui_images_map,
+                    ui_font_atlases: &mut self.ui_font_atlases,
+                    ui_font_failed: &mut self.ui_font_failed,
+                },
+                renderer,
+                vk_ctx,
+                camara_ui.as_ref(),
+                viewport,
+                &modo_canvas,
+                true,
+            )?;
+        }
+        // GameView del editor: solo cuando la vista de juego se renderizó
+        // este frame (vp_game_opt; game_meshes_arg es su Some exacto, pero
+        // vive dentro del bloque del render 3D y aquí no está en ámbito).
+        #[cfg(feature = "editor")]
+        if !render_standalone && vp_game_opt.is_some() {
+            let viewport = (
+                renderer.final_game_offscreen.extent.width as f32,
+                renderer.final_game_offscreen.extent.height as f32,
+            );
+            render_ui_pase(
+                EstadoUiPase {
+                    scene_state: &self.scene_state,
+                    ui_images_key: &mut self.ui_images_key,
+                    ui_images_map: &mut self.ui_images_map,
+                    ui_font_atlases: &mut self.ui_font_atlases,
+                    ui_font_failed: &mut self.ui_font_failed,
+                },
+                renderer,
+                vk_ctx,
+                camara_ui.as_ref(),
+                viewport,
+                &modo_canvas,
+                true,
+            )?;
         }
 
         if render_standalone {

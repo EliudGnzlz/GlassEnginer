@@ -1,4 +1,5 @@
 use glass_core::scene::SceneState;
+use glass_core::{CameraData, EntityData};
 use glass_renderer::sdf_atlas::SdfAtlas;
 use glass_renderer::ui::{UiAtlasKind, UiBatch, UiSegment, MODO_BORDE, MODO_COLOR, MODO_IMAGEN, MODO_SOMBRA};
 use glass_ui::pintor::{MedidaImagen, ModoPintado, Segmento};
@@ -297,6 +298,19 @@ fn segmento_mut(segs: &mut Vec<UiSegment>, kind: UiAtlasKind) -> &mut UiBatch {
 }
 
 /// Construye los segmentos de dibujo V2 en orden de pintor, agrupados
+/// Resuelve la cámara principal de una escena (P1, V7; ADR D1): la primera
+/// entidad con cámara `is_main`; si no hay ninguna, la primera con cámara;
+/// si no hay cámaras, None. El llamador resuelve; el pase solo recibe.
+/// P2/P3 usan el resultado para Camera/World; P1 lo recibe sin usarlo
+/// (Overlay no necesita cámara).
+pub fn resolver_camara_principal(entities: &[EntityData]) -> Option<CameraData> {
+    entities
+        .iter()
+        .find(|e| e.camera.as_ref().is_some_and(|c| c.is_main))
+        .or_else(|| entities.iter().find(|e| e.camera.is_some()))
+        .and_then(|e| e.camera.clone())
+}
+
 /// por atlas. Sin documento (escena sin Canvas) devuelve un vec vacío.
 pub fn build_canvas_batch_v2(
     scene: &SceneState,
@@ -349,6 +363,44 @@ mod tests {
     fn atlas() -> SdfAtlas {
         SdfAtlas::build(include_bytes!("../../../assets/fonts/DejaVuSans.ttf"))
             .expect("No se pudo construir SdfAtlas con DejaVuSans.ttf")
+    }
+
+    // --- resolver_camara_principal (P1, V7) ---
+
+    fn camara_entidad(id: u64, fov: f32, is_main: bool) -> EntityData {
+        let mut e = EntityData::new(id, format!("camara{id}"), Vec::new());
+        e.camera = Some(CameraData { fov, near_clip: 0.1, far_clip: 1000.0, is_main });
+        e
+    }
+
+    #[test]
+    fn resolver_camara_principal_prefiere_main() {
+        let entidades = vec![
+            camara_entidad(1, 50.0, false),
+            camara_entidad(2, 60.0, true),
+            camara_entidad(3, 70.0, true),
+        ];
+        let resuelta = resolver_camara_principal(&entidades).expect("debe haber cámara");
+        assert_eq!(resuelta.fov, 60.0);
+        assert!(resuelta.is_main);
+    }
+
+    #[test]
+    fn resolver_camara_principal_sin_main_toma_la_primera() {
+        let entidades = vec![
+            camara_entidad(1, 50.0, false),
+            camara_entidad(2, 60.0, false),
+        ];
+        let resuelta = resolver_camara_principal(&entidades).expect("debe haber cámara");
+        assert_eq!(resuelta.fov, 50.0);
+        assert!(!resuelta.is_main);
+    }
+
+    #[test]
+    fn resolver_camara_principal_sin_camaras_es_none() {
+        let entidades = vec![EntityData::new(1, "vacia".to_string(), Vec::new())];
+        assert!(resolver_camara_principal(&entidades).is_none());
+        assert!(resolver_camara_principal(&[]).is_none());
     }
 
     /// Función de búsqueda de UV de prueba.

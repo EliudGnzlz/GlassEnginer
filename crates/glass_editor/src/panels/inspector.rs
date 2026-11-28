@@ -3073,6 +3073,11 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                                     ui.selectable_value(&mut canvas.render_mode, "WorldSpace".into(), "World Space");
                                 });
                         });
+                        // P1 (V7, Q11): el modo aún no tiene efecto; se pinta
+                        // como Overlay hasta P2/P3. Aviso visible, sin bloquear.
+                        if canvas.render_mode != "ScreenSpaceOverlay" {
+                            ui.label("⚠ Este modo aún no tiene efecto (llega en V7, P2/P3). Se pinta como Overlay.");
+                        }
                         ui.horizontal(|ui| {
                             ui.label("Resolución Ref:");
                             ui.add(DragValue::new(&mut canvas.reference_resolution[0]).prefix("W: "));
