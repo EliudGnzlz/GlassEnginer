@@ -3487,7 +3487,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                 let mut remove_element = false;
                 if let Some(ref mut el) = entity.layout_element {
                     seccion_componente(ui, "layout_element", "📐 LayoutElement", TipoComponente::LayoutElement, true, self.portapapeles.as_ref(), &mut accion_element, |ui| {
-                        let mut fila_opcional = |ui: &mut Ui, etiqueta: &str, valor: &mut Option<f32>| {
+                        let fila_opcional = |ui: &mut Ui, etiqueta: &str, valor: &mut Option<f32>| {
                             ui.horizontal(|ui| {
                                 let mut usar = valor.is_some();
                                 ui.label(etiqueta);
