@@ -53,7 +53,7 @@ const MAX_UI_VERTICES: usize = 16_384;
 /// Degradado de un quad: (ángulo, t0, t1, c0, c1).
 pub type Degradado = (f32, f32, f32, [f32; 4], [f32; 4]);
 
-/// Vértice de UI del lote V2 (144 bytes). Todos los canales viajan por
+/// Vértice de UI del lote V2 (160 bytes, V5c). Todos los canales viajan por
 /// atributo (sin buffers uniformes por dibujo) para permitir batchear
 /// rects con distinto radio/clip/degradado en una sola llamada.
 #[repr(C)]
@@ -70,8 +70,12 @@ pub struct UiVertex {
     pub pack2: [f32; 4],   // 96: [grad_t1, desenfoque, 0, 0]
     pub grad_c0: [f32; 4], // 112: color inicial del degradado (premult)
     pub grad_c1: [f32; 4], // 128: color final del degradado (premult)
+    /// Radios de esquina del rect de clip (M3, V5c): [sup-izq, sup-der,
+    /// inf-der, inf-izq], 0 = clip rectangular. Va AL FINAL (offset 144)
+    /// para no mover las locations 0-10 existentes.
+    pub clip_radios: [f32; 4], // 144
 }
-// Total: 144 bytes. Modos: 0 color, 1 imagen, 2 texto/SDF, 3 sombra.
+// Total: 160 bytes. Modos: 0 color, 1 imagen, 2 texto/SDF, 3 sombra.
 
 impl UiVertex {
     /// Vértice V2 con radios, clip y degradado neutros (sin radio, sin
@@ -97,6 +101,7 @@ impl UiVertex {
             pack2: [0.0; 4],
             grad_c0: [0.0; 4],
             grad_c1: [0.0; 4],
+            clip_radios: [0.0; 4],
         }
     }
 }
@@ -212,9 +217,10 @@ impl UiBatch {
     }
 
     /// Quad con todos los campos V2: radios de esquina, clip en
-    /// coordenadas LOCALES al rect (restar su origen), degradado
-    /// (ángulo, t0, t1, c0, c1) y desenfoque de sombra. `clip` es
-    /// `Some((rect_local, softness))` o `None` (sin recorte).
+    /// coordenadas LOCALES al rect (restar su origen), radios del clip
+    /// (M3, [0;4] = rectangular), degradado (ángulo, t0, t1, c0, c1) y
+    /// desenfoque de sombra. `clip` es `Some((rect_local, softness))` o
+    /// `None` (sin recorte).
     /// Primitiva de lote: un quad con todos los campos V2. Los
     /// parámetros son 1:1 los campos del vértice; agruparlos en una
     /// estructura solo añadiría indirección en el camino caliente.
@@ -227,6 +233,7 @@ impl UiBatch {
         modo: f32,
         radios: [f32; 4],
         clip: Option<([f32; 4], f32)>,
+        clip_radios: [f32; 4],
         degradado: Option<Degradado>,
         desenfoque: f32,
     ) {
@@ -239,6 +246,7 @@ impl UiBatch {
             let mut v = UiVertex::nuevo(pos, uv, color, local, tamano, modo);
             v.radios = radios;
             v.clip = clip_rect;
+            v.clip_radios = clip_radios;
             v.pack1 = [softness, modo, angulo, t0];
             v.pack2 = [t1, desenfoque, 0.0, 0.0];
             v.grad_c0 = c0;
@@ -268,6 +276,7 @@ impl UiBatch {
         color: [f32; 4],
         radios: [f32; 4],
         clip: Option<([f32; 4], f32)>,
+        clip_radios: [f32; 4],
         letter_spacing: f32,
     ) {
         let k = font_size / ATLAS_RASTER_PX;
@@ -289,7 +298,7 @@ impl UiBatch {
                     g.size[0] * k,
                     g.size[1] * k,
                 ];
-                self.push_quad_extendido(quad, g.uv, color, MODO_TEXTO, radios, clip, None, 0.0);
+                self.push_quad_extendido(quad, g.uv, color, MODO_TEXTO, radios, clip, clip_radios, None, 0.0);
             }
             pen_x += g.advance * k + letter_spacing;
         }
@@ -642,7 +651,7 @@ impl UiRenderer {
                 .binding(0)
                 .stride(std::mem::size_of::<UiVertex>() as u32)
                 .input_rate(vk::VertexInputRate::VERTEX)];
-            // Vértice V2 (144 bytes): geometría, radios, clip, degradado y sombra.
+            // Vértice V2 (160 bytes): geometría, radios, clip, degradado y sombra.
             let attr_desc = [
                 vk::VertexInputAttributeDescription::default()
                     .location(0)
@@ -699,6 +708,11 @@ impl UiRenderer {
                     .binding(0)
                     .format(vk::Format::R32G32B32A32_SFLOAT)
                     .offset(128),
+                vk::VertexInputAttributeDescription::default()
+                    .location(11)
+                    .binding(0)
+                    .format(vk::Format::R32G32B32A32_SFLOAT)
+                    .offset(144),
             ];
             let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
                 .vertex_binding_descriptions(&binding_desc)

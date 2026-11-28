@@ -11,6 +11,7 @@ layout(location = 7)  in vec4  a_pack1;
 layout(location = 8)  in vec4  a_pack2;
 layout(location = 9)  in vec4  a_grad_c0;
 layout(location = 10) in vec4  a_grad_c1;
+layout(location = 11) in vec4  a_clip_radios; // M3 (V5c): radios del clip
 
 layout(push_constant) uniform Push { vec2 screen_size; } pc;
 
@@ -24,6 +25,7 @@ layout(location = 6) out vec4 v_pack1;
 layout(location = 7) out vec4 v_pack2;
 layout(location = 8) out vec4 v_grad_c0;
 layout(location = 9) out vec4 v_grad_c1;
+layout(location = 10) out vec4 v_clip_radios;
 
 void main() {
     // Píxeles (origen arriba-izquierda) -> NDC. En Vulkan el framebuffer
@@ -43,4 +45,5 @@ void main() {
     v_pack2   = a_pack2;
     v_grad_c0 = a_grad_c0;
     v_grad_c1 = a_grad_c1;
+    v_clip_radios = a_clip_radios;
 }

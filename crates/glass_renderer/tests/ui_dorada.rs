@@ -12,7 +12,7 @@
 use ash::vk;
 use glass_renderer::offscreen::OffscreenTarget;
 use glass_renderer::sdf_atlas::SdfAtlas;
-use glass_renderer::ui::{MODO_BORDE, UiBatch, UiRenderer};
+use glass_renderer::ui::{MODO_BORDE, MODO_COLOR, UiBatch, UiRenderer};
 use gpu_allocator::vulkan::{AllocationCreateDesc, AllocationScheme, Allocator};
 use gpu_allocator::vulkan::AllocatorCreateDesc as AllocatorDesc;
 use gpu_allocator::MemoryLocation;
@@ -151,6 +151,7 @@ fn lote_fijo(atlas: &mut SdfAtlas) -> UiBatch {
         glass_renderer::ui::MODO_COLOR,
         [16.0, 16.0, 16.0, 16.0],
         None,
+        [0.0; 4],
         None,
         0.0,
     );
@@ -162,6 +163,7 @@ fn lote_fijo(atlas: &mut SdfAtlas) -> UiBatch {
         glass_renderer::ui::MODO_COLOR,
         [0.0; 4],
         None,
+        [0.0; 4],
         Some((90.0, 0.0, 1.0, [0.0, 0.0, 1.0, 1.0], [0.0, 1.0, 0.0, 1.0])),
         0.0,
     );
@@ -173,6 +175,7 @@ fn lote_fijo(atlas: &mut SdfAtlas) -> UiBatch {
         glass_renderer::ui::MODO_SOMBRA,
         [12.0, 12.0, 12.0, 12.0],
         None,
+        [0.0; 4],
         None,
         12.0,
     );
@@ -183,6 +186,7 @@ fn lote_fijo(atlas: &mut SdfAtlas) -> UiBatch {
         glass_renderer::ui::MODO_COLOR,
         [12.0, 12.0, 12.0, 12.0],
         None,
+        [0.0; 4],
         None,
         0.0,
     );
@@ -449,7 +453,7 @@ fn texto_extendido_pinta_glifos() {
         let alto_linea = atlas.line_height_at(48.0);
         let ox = 80.0 + (400.0 - w_txt) * 0.5;
         let oy = 380.0 + (160.0 - alto_linea) * 0.5;
-        lote.push_text_extendido(atlas, [ox, oy], "JUGAR", 48.0, [1.0, 1.0, 1.0, 1.0], [0.0; 4], None, 0.0);
+        lote.push_text_extendido(atlas, [ox, oy], "JUGAR", 48.0, [1.0, 1.0, 1.0, 1.0], [0.0; 4], None, [0.0; 4], 0.0);
         (w_txt, ox, oy, alto_linea)
     };
     ctx.una_vez(|cmd| {
@@ -563,7 +567,7 @@ fn texto_clasico_vs_extendido_vertices() {
     let w = atlas.measure("JUGAR", 48.0);
     let ox = 80.0 + (400.0 - w) * 0.5;
     let oy = 380.0 + (160.0 - atlas.line_height_at(48.0)) * 0.5;
-    b.push_text_extendido(&mut atlas, [ox, oy], "JUGAR", 48.0, [1.0, 1.0, 1.0, 1.0], [0.0; 4], None, 0.0);
+    b.push_text_extendido(&mut atlas, [ox, oy], "JUGAR", 48.0, [1.0, 1.0, 1.0, 1.0], [0.0; 4], None, [0.0; 4], 0.0);
     let va = a.vertices();
     let vb = b.vertices();
     eprintln!("vértices clásico: {}, extendido: {}", va.len(), vb.len());
@@ -580,6 +584,65 @@ fn texto_clasico_vs_extendido_vertices() {
         }
     }
     eprintln!("vértices idénticos");
+}
+
+/// Regresión M3 (V5c): el hijo rojo [200,160,600,100] con clip del panel
+/// [-100,-60,600,400] + radios 60 NO debe pintar fuera del clip.
+/// Cubre el fallo premultiplicado (pasos 4/5/6 del shader deben escalar
+/// `base` entero, no solo `base.a`): si el clip solo escalara la alfa,
+/// (750,200) saldría rosa en vez de negro.
+#[test]
+fn clip_redondeado_recorta_en_gpu() {
+    let mut ctx = Ctx::nuevo();
+    let mut ui = UiRenderer::new(
+        ctx.device.clone(),
+        ctx.allocator.as_mut().expect("allocator"),
+        ctx.queue,
+        ctx.pool,
+    )
+    .expect("UiRenderer");
+    let target = OffscreenTarget::new(ctx.device.clone(), ctx.allocator.as_mut().expect("allocator"), W, H)
+        .expect("offscreen 1280x720");
+    limpiar_negro(&ctx, &target);
+    let (u, v) = {
+        let atlas = ui.font();
+        (atlas.solid_uv[0], atlas.solid_uv[1])
+    };
+    let mut lote = UiBatch::new();
+    // Panel blanco (sin clip).
+    lote.push_quad_extendido(
+        [100.0, 100.0, 600.0, 400.0],
+        [u, v, u, v],
+        [1.0, 1.0, 1.0, 1.0],
+        MODO_COLOR,
+        [60.0; 4],
+        None,
+        [0.0; 4],
+        None,
+        0.0,
+    );
+    // Hijo rojo con el clip del panel en coords locales + radios 60.
+    lote.push_quad_extendido(
+        [200.0, 160.0, 600.0, 100.0],
+        [u, v, u, v],
+        [0.878, 0.125, 0.125, 1.0],
+        MODO_COLOR,
+        [0.0; 4],
+        Some(([-100.0, -60.0, 600.0, 400.0], 1.0)),
+        [60.0; 4],
+        None,
+        0.0,
+    );
+    ctx.una_vez(|cmd| {
+        ui.record(cmd, &target, &lote);
+    });
+    let img = leer_imagen(&mut ctx, &target);
+    let dentro = img.get_pixel(300, 200);
+    let fuera = img.get_pixel(750, 200);
+    let esquina = img.get_pixel(110, 105);
+    assert!(dentro[0] > 200 && dentro[1] < 60, "dentro debe ser rojo, dentro={dentro:?}");
+    assert!(fuera[0] < 10 && fuera[1] < 10 && fuera[2] < 10, "fuera del clip debe ser negro, fuera={fuera:?}");
+    assert!(esquina[0] < 10 && esquina[1] < 10 && esquina[2] < 10, "la esquina propia del panel (radios 60) también recorta, esquina={esquina:?}");
 }
 
 /// Limpia el offscreen a negro opaco (mismo patrón que la dorada).
@@ -747,6 +810,7 @@ fn ancho_borde_sdf_12_y_96() {
             [1.0, 1.0, 1.0, 1.0],
             [0.0; 4],
             None,
+            [0.0; 4],
             0.0,
         );
         ctx.una_vez(|cmd| {
@@ -803,6 +867,7 @@ fn borde_solo_la_banda() {
         MODO_BORDE,
         [12.0; 4],
         None,
+        [0.0; 4],
         None,
         4.0,
     );
