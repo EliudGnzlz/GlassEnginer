@@ -3225,6 +3225,12 @@ impl SceneState {
             }
         }
 
+        self.remove_at_index(id)
+    }
+
+    /// Extrae una entidad del Vec manteniendo el índice id->posición.
+    /// No toca vínculos de jerarquía: eso es cosa del llamador.
+    fn remove_at_index(&mut self, id: u64) -> bool {
         // NOTA de orden: swap_remove reemplaza al borrado por el
         // último elemento del Vec. Único efecto observable: el orden
         // relativo de las entidades restantes en `entities` ya no se
@@ -3244,6 +3250,35 @@ impl SceneState {
         } else {
             false
         }
+    }
+
+    /// Borra una entidad y TODO su subárbol (hijos y descendientes),
+    /// devolviendo los ids eliminados. Es la semántica de destrucción
+    /// en tiempo de juego (como el Destroy de Unity sobre un
+    /// GameObject): lo que cuelga de la entidad desaparece con ella,
+    /// sin huérfanos. Difiere de [`delete_entity`], el borrado del
+    /// editor, que reemparenta a los hijos al abuelo. La raíz se
+    /// desvincula de la lista de hijos de su padre; los vínculos
+    /// internos del subárbol mueren con sus entidades.
+    pub fn delete_subtree(&mut self, id: u64) -> Vec<u64> {
+        if let Some(pid) = self.get_entity(id).and_then(|e| e.parent) {
+            if let Some(p) = self.get_entity_mut(pid) {
+                p.children.retain(|&c| c != id);
+            }
+        }
+        let mut removed = Vec::new();
+        let mut stack = vec![id];
+        while let Some(curr) = stack.pop() {
+            let children = match self.get_entity(curr) {
+                Some(e) => e.children.clone(),
+                None => continue,
+            };
+            stack.extend(children);
+            if self.remove_at_index(curr) {
+                removed.push(curr);
+            }
+        }
+        removed
     }
 
     /// Comprueba si `candidate_ancestor` es antecesor de `descendant_id` para evitar ciclos
@@ -4990,6 +5025,38 @@ mod tests {
         // El hijo debe quedar desemparentado a la raíz
         let child = scene.get_entity(c).unwrap();
         assert_eq!(child.parent, None);
+    }
+
+    #[test]
+    fn test_delete_subtree_quita_todo_el_subarbol() {
+        // Semántica de destrucción en juego (escalón 6 de la escalera,
+        // 2026-11-28): borrar la raíz elimina hijos y nietos, sin
+        // huérfanos, y la raíz sale de la lista de hijos de su padre.
+        let mut scene = SceneState::new();
+        let abuelo = scene.create_entity("Abuelo".into(), vec!["Transform".into()]);
+        let raiz = scene.create_entity("Raiz".into(), vec!["Transform".into()]);
+        let hijo = scene.create_entity("Hijo".into(), vec!["Transform".into()]);
+        let nieto = scene.create_entity("Nieto".into(), vec!["Transform".into()]);
+        let ajena = scene.create_entity("Ajena".into(), vec!["Transform".into()]);
+        scene.reparent(raiz, Some(abuelo));
+        scene.reparent(hijo, Some(raiz));
+        scene.reparent(nieto, Some(hijo));
+
+        let mut removed = scene.delete_subtree(raiz);
+        removed.sort_unstable();
+        let mut esperado = vec![raiz, hijo, nieto];
+        esperado.sort_unstable();
+        assert_eq!(removed, esperado);
+        assert!(scene.get_entity(raiz).is_none());
+        assert!(scene.get_entity(hijo).is_none());
+        assert!(scene.get_entity(nieto).is_none());
+        assert!(scene.get_entity(abuelo).is_some());
+        assert!(scene.get_entity(ajena).is_some());
+        assert!(scene.get_entity(abuelo).unwrap().children.is_empty());
+
+        // Una hoja se borra sola y un id inexistente no borra nada.
+        assert_eq!(scene.delete_subtree(ajena), vec![ajena]);
+        assert!(scene.delete_subtree(999_999).is_empty());
     }
 
     // ---- Jerarquía: composición de matrices de mundo ------------------------

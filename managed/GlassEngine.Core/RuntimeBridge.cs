@@ -1683,8 +1683,10 @@ public static int UiSetPivot(ulong entityId, float x, float y)
     }
 
     /// <summary>
-    /// Destruye una entidad: sale de la escena y su cuerpo y colliders
-    /// salen del mundo físico en la misma llamada; las instancias de
+    /// Destruye una entidad Y TODO SU SUBÁRBOL (hijos y descendientes,
+    /// como el Destroy de Unity en tiempo de juego): salen de la escena
+    /// y sus cuerpos y colliders salen del mundo físico en la misma
+    /// llamada; las instancias de
     /// script que tuviera reciben su OnDestroy en este frame (en la
     /// reconciliación del motor, nunca dentro de esta llamada).
     /// Devuelve true si la entidad existía.

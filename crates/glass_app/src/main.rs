@@ -1443,19 +1443,25 @@ impl SceneBridge for EngineSceneBridge {
     }
 
 
-    /// Despawn: la entidad sale de la escena (sus hijos se reemparentan,
-    /// la semántica de borrado del editor) y su cuerpo y colliders
-    /// salen del mundo de Rapier en la misma llamada. Sus instancias de
-    /// script las dispone la reconciliación de la app en este frame.
+    /// Despawn en tiempo de juego: la entidad y TODO su subárbol
+    /// salen de la escena (semántica de Destroy de Unity; difiere del
+    /// borrado del editor, que reemparenta a los hijos) y los cuerpos
+    /// y colliders de cada entidad eliminada salen del mundo de Rapier
+    /// en la misma llamada. Sus instancias de script las dispone la
+    /// reconciliación de la app en este frame. Antes este camino usaba
+    /// el borrado del editor y dejaba a los descendientes huérfanos en
+    /// la escena (detectado por el escalón 6 de la escalera de esferas,
+    /// 2026-11-28: tras borrar 100 raíces quedaban 11.000 entidades).
     fn destroy_entity(&self, entity_id: u64) -> bool {
-        let existed = {
+        let removed = {
             let Ok(mut state) = self.scene_state.lock() else {
                 return false;
             };
-            state.delete_entity(entity_id)
+            state.delete_subtree(entity_id)
         };
-        if existed {
-            self.remove_body(entity_id);
+        let existed = !removed.is_empty();
+        for id in removed {
+            self.remove_body(id);
         }
         existed
     }

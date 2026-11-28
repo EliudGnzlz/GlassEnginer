@@ -1,7 +1,7 @@
 use egui::{Color32, Ui};
 use glass_core::EntityData;
 use glass_mcp::SceneState;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Copy)]
@@ -106,6 +106,7 @@ impl HierarchyPanel {
     /// Aplana el árbol jerárquico respetando raíces, hijos y estado colapsado
     fn flatten_tree(
         entities: &[EntityData],
+        by_id: &HashMap<u64, &EntityData>,
         collapsed: &HashSet<u64>,
         filter: &str,
     ) -> Vec<(u64, usize, bool)> {
@@ -119,22 +120,26 @@ impl HierarchyPanel {
             return out;
         }
 
-        // Obtener todas las entidades raíz (parent == None o padre no existente)
+        // Obtener todas las entidades raíz (parent == None o padre no existente).
+        // Contra el mapa id->entidad construido una vez por frame: la versión
+        // anterior resolvía cada padre y cada nodo con un barrido lineal de la
+        // lista entera, O(N^2) por frame (a 100.000 entidades, decenas de
+        // segundos por frame en el editor).
         let root_ids: Vec<u64> = entities
             .iter()
-            .filter(|e| e.parent.is_none() || !entities.iter().any(|p| Some(p.id) == e.parent))
+            .filter(|e| e.parent.is_none_or(|pid| !by_id.contains_key(&pid)))
             .map(|e| e.id)
             .collect();
 
         fn recurse(
             id: u64,
             depth: usize,
-            entities: &[EntityData],
+            by_id: &HashMap<u64, &EntityData>,
             collapsed: &HashSet<u64>,
             out: &mut Vec<(u64, usize, bool)>,
         ) {
-            let ent = match entities.iter().find(|e| e.id == id) {
-                Some(e) => e,
+            let ent = match by_id.get(&id) {
+                Some(e) => *e,
                 None => return,
             };
             let has_children = !ent.children.is_empty();
@@ -142,13 +147,13 @@ impl HierarchyPanel {
 
             if has_children && !collapsed.contains(&id) {
                 for &child_id in &ent.children {
-                    recurse(child_id, depth + 1, entities, collapsed, out);
+                    recurse(child_id, depth + 1, by_id, collapsed, out);
                 }
             }
         }
 
         for r in root_ids {
-            recurse(r, 0, entities, collapsed, &mut out);
+            recurse(r, 0, by_id, collapsed, &mut out);
         }
 
         out
@@ -301,14 +306,20 @@ impl HierarchyPanel {
         let search_term = self.search_filter.trim().to_lowercase();
         let mut current_frame_drop: Option<(u64, DropPosition)> = None;
 
+        // Mapa id->entidad del frame: todas las resoluciones de la
+        // Jerarquía (aplanado, filas y fantasma de arrastre) van contra
+        // él en vez de barrer la lista por nodo (era O(N^2) por frame).
+        let by_id: HashMap<u64, &EntityData> =
+            scene.entities.iter().map(|e| (e.id, e)).collect();
+
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                let flat_tree = Self::flatten_tree(&scene.entities, &self.collapsed_nodes, &search_term);
+                let flat_tree = Self::flatten_tree(&scene.entities, &by_id, &self.collapsed_nodes, &search_term);
 
                 for (entity_id, depth, has_children) in flat_tree {
-                    let entity = match scene.entities.iter().find(|e| e.id == entity_id) {
-                        Some(e) => e,
+                    let entity = match by_id.get(&entity_id) {
+                        Some(e) => *e,
                         None => continue,
                     };
 
@@ -614,7 +625,7 @@ impl HierarchyPanel {
             // usuario el 2026-11-06).
             if let Some(drag_id) = self.dragging_entity {
                 if let Some(mp) = mouse_pos {
-                    if let Some(drag_ent) = scene.entities.iter().find(|e| e.id == drag_id) {
+                    if let Some(drag_ent) = by_id.get(&drag_id) {
                         let painter = ui.ctx().layer_painter(egui::LayerId::new(
                             egui::Order::Foreground,
                             egui::Id::new("fantasma_jerarquia"),
@@ -1253,5 +1264,82 @@ mod preset_physics_tests {
         panel.nota_creacion(EntityPreset::Cube, 7);
         assert_eq!(panel.selected_entity, Some(7));
         assert!(!panel.abrir_panel_canvas);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entidad(id: u64, nombre: &str, parent: Option<u64>, children: Vec<u64>) -> EntityData {
+        let mut e = EntityData::new(id, nombre.to_string(), vec!["Transform".to_string()]);
+        e.parent = parent;
+        e.children = children;
+        e
+    }
+
+    fn mapa(entities: &[EntityData]) -> HashMap<u64, &EntityData> {
+        entities.iter().map(|e| (e.id, e)).collect()
+    }
+
+    #[test]
+    fn flatten_respeta_orden_profundidad_y_colapsados() {
+        // Bosque: 1 -> [2, 3], 2 -> [4]; 5 con padre inexistente (raíz
+    // huérfana); 6 raíz simple.
+        let entities = vec![
+            entidad(1, "A", None, vec![2, 3]),
+            entidad(2, "B", Some(1), vec![4]),
+            entidad(3, "C", Some(1), vec![]),
+            entidad(4, "D", Some(2), vec![]),
+            entidad(5, "E", Some(999), vec![]),
+            entidad(6, "F", None, vec![]),
+        ];
+        let by_id = mapa(&entities);
+        let flat = HierarchyPanel::flatten_tree(&entities, &by_id, &HashSet::new(), "");
+        assert_eq!(
+            flat,
+            vec![
+                (1, 0, true),
+                (2, 1, true),
+                (4, 2, false),
+                (3, 1, false),
+                (5, 0, false),
+                (6, 0, false),
+            ]
+        );
+
+        let mut collapsed = HashSet::new();
+        collapsed.insert(1);
+        let flat = HierarchyPanel::flatten_tree(&entities, &by_id, &collapsed, "");
+        assert_eq!(flat, vec![(1, 0, true), (5, 0, false), (6, 0, false)]);
+
+        let flat = HierarchyPanel::flatten_tree(&entities, &by_id, &HashSet::new(), "d");
+        assert_eq!(flat, vec![(4, 0, false)]);
+    }
+
+    #[test]
+    fn flatten_de_50k_entidades_no_es_cuadratico() {
+        // Regresión del defecto de la escalera de esferas: con el barrido
+        // lineal por nodo esto tardaba decenas de segundos; contra el
+        // mapa debe ser inmediato incluso en debug.
+        let mut entities = Vec::new();
+        for r in 0..10_000u64 {
+            let base = r * 5 + 1;
+            let hijos: Vec<u64> = (1..=4).map(|i| base + i).collect();
+            entities.push(entidad(base, "raiz", None, hijos.clone()));
+            for h in hijos {
+                entities.push(entidad(h, "hijo", Some(base), vec![]));
+            }
+        }
+        assert_eq!(entities.len(), 50_000);
+        let by_id = mapa(&entities);
+        let t = std::time::Instant::now();
+        let flat = HierarchyPanel::flatten_tree(&entities, &by_id, &HashSet::new(), "");
+        assert_eq!(flat.len(), 50_000);
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(10),
+            "flatten_tree tardó {:?} con 50.000 entidades",
+            t.elapsed()
+        );
     }
 }

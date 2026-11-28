@@ -1689,12 +1689,98 @@ impl McpServer {
         }
     }
 
+    /// Foto de contadores para `glass_profiler_snapshot`, sin bloquear:
+    /// try_lock en la escena y en el mundo físico. Si cualquiera está
+    /// ocupado (el bucle principal está en un frame), devuelve el error
+    /// -32003 al instante en vez de esperar: la tool nunca puede colgar
+    /// el editor, ni siquiera llamada en alta frecuencia durante Play.
+    fn profiler_snapshot(&self, id: Option<serde_json::Value>) -> McpResponse {
+        let scene = match self.scene.try_lock() {
+            Ok(s) => s,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return McpResponse::error(
+                    id,
+                    -32003,
+                    "escena ocupada (frame en curso); reintenta el snapshot",
+                )
+            }
+            Err(std::sync::TryLockError::Poisoned(e)) => {
+                return McpResponse::error(id, -32000, format!("Mutex poison error: {}", e))
+            }
+        };
+        let entities_total = scene.entities.len();
+        let mut entities_with_mesh = 0usize;
+        let mut entities_with_physics = 0usize;
+        let mut entities_with_script = 0usize;
+        for e in &scene.entities {
+            if e.mesh.is_some() {
+                entities_with_mesh += 1;
+            }
+            if e.physics.is_some() {
+                entities_with_physics += 1;
+            }
+            if e.script.is_some() {
+                entities_with_script += 1;
+            }
+        }
+        let next_entity_id = scene.next_entity_id;
+        let shaders_reloaded_flag = scene.shaders_reloaded_flag;
+        drop(scene);
+
+        let fisica = self.get_physics();
+        let (physics_bodies, physics_colliders) = {
+            let mundo = match fisica.try_lock() {
+                Ok(w) => w,
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    return McpResponse::error(
+                        id,
+                        -32003,
+                        "mundo físico ocupado (frame en curso); reintenta el snapshot",
+                    )
+                }
+                Err(std::sync::TryLockError::Poisoned(e)) => {
+                    return McpResponse::error(
+                        id,
+                        -32000,
+                        format!("Mutex poison error: {}", e),
+                    )
+                }
+            };
+            (mundo.rigid_body_set.len(), mundo.collider_set.len())
+        };
+
+        let snapshot = json!({
+            "entities_total": entities_total,
+            "entities_with_mesh": entities_with_mesh,
+            "entities_with_physics": entities_with_physics,
+            "entities_with_script": entities_with_script,
+            "next_entity_id": next_entity_id,
+            "shaders_reloaded_flag": shaders_reloaded_flag,
+            "physics_bodies": physics_bodies,
+            "physics_colliders": physics_colliders,
+        });
+        let pretty = serde_json::to_string_pretty(&snapshot).unwrap_or_else(|_| snapshot.to_string());
+        McpResponse::success(id, json!({"content":[{"type":"text","text": pretty}]}))
+    }
+
     fn execute_tool(
         &self,
         id: Option<serde_json::Value>,
         name: &str,
         args: serde_json::Value,
     ) -> McpResponse {
+        // glass_profiler_snapshot NO pasa por el candado general: es una
+        // lectura de contadores que un cliente puede pedir en alta
+        // frecuencia durante Play, y con lock() cada llamada esperaba al
+        // bucle principal y luego le robaba el mutex durante el conteo,
+        // hasta dejar el editor colgado (defecto de la escalera de
+        // esferas, 2026-11-28). Su método usa try_lock en escena y en
+        // física: si están ocupados responde «ocupado» al instante, sin
+        // esperar nunca ni retener el bucle.
+        if name == "glass_profiler_snapshot" {
+            return self.profiler_snapshot(id);
+        }
+
         let mut scene = match self.scene.lock() {
             Ok(s) => s,
             Err(e) => return McpResponse::error(id, -32000, format!("Mutex poison error: {}", e)),
@@ -2027,56 +2113,6 @@ impl McpServer {
 
             // Foto honesta de los contadores medibles en este crate
             // (sin VRAM ni tiempos de frame: no viven aquí).
-            "glass_profiler_snapshot" => {
-                let entities_total = scene.entities.len();
-                let mut entities_with_mesh = 0usize;
-                let mut entities_with_physics = 0usize;
-                let mut entities_with_script = 0usize;
-                for e in &scene.entities {
-                    if e.mesh.is_some() {
-                        entities_with_mesh += 1;
-                    }
-                    if e.physics.is_some() {
-                        entities_with_physics += 1;
-                    }
-                    if e.script.is_some() {
-                        entities_with_script += 1;
-                    }
-                }
-                let next_entity_id = scene.next_entity_id;
-                let shaders_reloaded_flag = scene.shaders_reloaded_flag;
-
-                // Mismo orden establecido que otros brazos: candado
-                // de escena tomado, luego el del mundo físico.
-                let (physics_bodies, physics_colliders) = {
-                    let fisica = self.get_physics();
-                    let mundo = match fisica.lock() {
-                        Ok(w) => w,
-                        Err(_) => {
-                            return McpResponse::error(
-                                id,
-                                -32003,
-                                "no se pudo bloquear el mundo físico",
-                            )
-                        }
-                    };
-                    (mundo.rigid_body_set.len(), mundo.collider_set.len())
-                };
-
-                let snapshot = json!({
-                    "entities_total": entities_total,
-                    "entities_with_mesh": entities_with_mesh,
-                    "entities_with_physics": entities_with_physics,
-                    "entities_with_script": entities_with_script,
-                    "next_entity_id": next_entity_id,
-                    "shaders_reloaded_flag": shaders_reloaded_flag,
-                    "physics_bodies": physics_bodies,
-                    "physics_colliders": physics_colliders,
-                });
-                let pretty = serde_json::to_string_pretty(&snapshot).unwrap_or_else(|_| snapshot.to_string());
-                McpResponse::success(id, json!({"content":[{"type":"text","text": pretty}]}))
-            }
-
             // Portales de la escena (bloque Portales): inventario de
             // superficies con su pareja declarada.
             "glass_list_portals" => {
@@ -6638,6 +6674,35 @@ mod tests_catchup {
             tool, args
         );
         srv.handle_json(&req).unwrap_or_default()
+    }
+
+    #[test]
+    fn profiler_snapshot_sin_contienda_devuelve_contadores() {
+        let srv = servidor();
+        let resp = llamar(&srv, "glass_profiler_snapshot", json!({}));
+        let v: serde_json::Value = serde_json::from_str(&resp).expect("respuesta JSON válida");
+        let texto = v["result"]["content"][0]["text"]
+            .as_str()
+            .expect("content[0].text");
+        let snap: serde_json::Value = serde_json::from_str(texto).expect("snapshot JSON válido");
+        // SceneState::new() siembra entidades por defecto: el conteo del
+        // snapshot debe coincidir con el de la escena viva, sea el que sea.
+        let esperado = srv.scene.lock().unwrap().entities.len() as u64;
+        assert_eq!(snap["entities_total"], esperado);
+        assert!(snap["physics_bodies"].is_number());
+    }
+
+    #[test]
+    fn profiler_snapshot_con_escena_ocupada_no_bloquea() {
+        // Regresión del defecto de la escalera (2026-11-28): con el
+        // candado de escena tomado (un frame en curso), la tool debe
+        // responder «ocupado» al instante. Con el lock() de antes, esta
+        // llamada se quedaba esperando y el test colgaba el editor.
+        let srv = servidor();
+        let _guardia = srv.scene.lock().unwrap();
+        let resp = llamar(&srv, "glass_profiler_snapshot", json!({}));
+        let v: serde_json::Value = serde_json::from_str(&resp).expect("respuesta JSON válida");
+        assert_eq!(v["error"]["code"], -32003, "respuesta: {resp}");
     }
 
     #[test]
