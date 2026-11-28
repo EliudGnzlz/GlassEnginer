@@ -713,7 +713,7 @@ impl McpServer {
                         },
                         {
                             "name": "glass_component_get",
-                            "description": "Devuelve el JSON completo de un componente de una entidad (Transform, MeshRenderer, Rigidbody, Collider, CharacterController, Camera, Light, Script, AudioSource, Canvas, RectTransform, Text, Button, Image, DragDrop, Animator, Fog, Particles, Portal).",
+                            "description": "Devuelve el JSON completo de un componente de una entidad (Transform, MeshRenderer, Rigidbody, Collider, CharacterController, Camera, Light, Script, AudioSource, Canvas, RectTransform, Text, Button, Image, DragDrop, Animator, Fog, Particles, Portal, LayoutGroup, LayoutElement, ContentSizeFitter, GridLayoutGroup, RectMask2D).",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -6764,6 +6764,184 @@ mod tests_catchup {
             json!({ "entity_id": 4242, "component": "NoExiste", "values": {} }),
         );
         assert!(r.contains("-32602"), "set desconocido: {r}");
+    }
+
+    #[test]
+    fn component_set_get_roundtrip_layout_group() {
+        let srv = servidor();
+        srv.scene
+            .lock()
+            .unwrap()
+            .entities
+            .push(glass_core::scene::EntityData::new(
+                4243,
+                "GrupoMcp".into(),
+                vec!["Transform".into()],
+            ));
+
+        let r = llamar(
+            &srv,
+            "glass_component_set",
+            json!({ "entity_id": 4243, "component": "LayoutGroup", "values": { "direction": "vertical", "spacing": 12.0 } }),
+        );
+        assert!(!r.contains("\"error\""), "set LayoutGroup: {r}");
+
+        let r = llamar(
+            &srv,
+            "glass_component_get",
+            json!({ "entity_id": 4243, "component": "LayoutGroup" }),
+        );
+        assert!(r.contains("vertical"), "get LayoutGroup: {r}");
+        assert!(r.contains("12.0"), "get LayoutGroup: {r}");
+    }
+
+    #[test]
+    fn component_set_get_roundtrip_layout_element() {
+        let srv = servidor();
+        srv.scene
+            .lock()
+            .unwrap()
+            .entities
+            .push(glass_core::scene::EntityData::new(
+                4244,
+                "HijoMcp".into(),
+                vec!["Transform".into()],
+            ));
+
+        let r = llamar(
+            &srv,
+            "glass_component_set",
+            json!({ "entity_id": 4244, "component": "LayoutElement", "values": { "preferred_width": 80.0, "ignore_layout": true } }),
+        );
+        assert!(!r.contains("\"error\""), "set LayoutElement: {r}");
+
+        let r = llamar(
+            &srv,
+            "glass_component_get",
+            json!({ "entity_id": 4244, "component": "LayoutElement" }),
+        );
+        assert!(r.contains("80.0"), "get LayoutElement: {r}");
+        assert!(r.contains("true"), "get LayoutElement: {r}");
+    }
+
+    #[test]
+    fn component_set_get_roundtrip_content_size_fitter() {
+        let srv = servidor();
+        srv.scene
+            .lock()
+            .unwrap()
+            .entities
+            .push(glass_core::scene::EntityData::new(
+                4245,
+                "FitterMcp".into(),
+                vec!["Transform".into()],
+            ));
+
+        let r = llamar(
+            &srv,
+            "glass_component_set",
+            json!({ "entity_id": 4245, "component": "ContentSizeFitter", "values": { "horizontal_fit": "preferred", "vertical_fit": "min" } }),
+        );
+        assert!(!r.contains("\"error\""), "set ContentSizeFitter: {r}");
+
+        let r = llamar(
+            &srv,
+            "glass_component_get",
+            json!({ "entity_id": 4245, "component": "ContentSizeFitter" }),
+        );
+        assert!(r.contains("preferred"), "get ContentSizeFitter: {r}");
+        assert!(r.contains("min"), "get ContentSizeFitter: {r}");
+
+        // Flexible de LayoutElement también viaja por MCP.
+        let r = llamar(
+            &srv,
+            "glass_component_set",
+            json!({ "entity_id": 4245, "component": "LayoutElement", "values": { "flexible_width": 2.0 } }),
+        );
+        assert!(!r.contains("\"error\""), "set flexible: {r}");
+        let r = llamar(
+            &srv,
+            "glass_component_get",
+            json!({ "entity_id": 4245, "component": "LayoutElement" }),
+        );
+        assert!(r.contains("2.0"), "get flexible: {r}");
+    }
+
+    #[test]
+    fn component_set_get_roundtrip_grid_layout_group() {
+        let srv = servidor();
+        srv.scene
+            .lock()
+            .unwrap()
+            .entities
+            .push(glass_core::scene::EntityData::new(
+                4246,
+                "GridMcp".into(),
+                vec!["Transform".into()],
+            ));
+
+        let r = llamar(
+            &srv,
+            "glass_component_set",
+            json!({ "entity_id": 4246, "component": "GridLayoutGroup", "values": { "cell_size": [120.0, 60.0], "constraint": "fixed_column_count", "constraint_count": 3 } }),
+        );
+        assert!(!r.contains("\"error\""), "set GridLayoutGroup: {r}");
+
+        let r = llamar(
+            &srv,
+            "glass_component_get",
+            json!({ "entity_id": 4246, "component": "GridLayoutGroup" }),
+        );
+        assert!(r.contains("120.0"), "get GridLayoutGroup: {r}");
+        assert!(r.contains("fixed_column_count"), "get GridLayoutGroup: {r}");
+        // El get devuelve el JSON embebido como texto con las comillas
+        // escapadas (\"...\"): el patrón lleva esas barras.
+        assert!(
+            r.replace(' ', "").contains("\\\"constraint_count\\\":3"),
+            "get GridLayoutGroup: {r}"
+        );
+    }
+
+    #[test]
+    fn component_set_get_roundtrip_rect_mask2d() {
+        let srv = servidor();
+        srv.scene
+            .lock()
+            .unwrap()
+            .entities
+            .push(glass_core::scene::EntityData::new(
+                4247,
+                "RectMaskMcp".into(),
+                vec!["Transform".into()],
+            ));
+
+        let r = llamar(
+            &srv,
+            "glass_component_set",
+            json!({ "entity_id": 4247, "component": "RectMask2D", "values": { "padding": [8.0, 4.0, 8.0, 4.0], "softness": 2.5 } }),
+        );
+        assert!(!r.contains("\\\"error\\\""), "set RectMask2D: {r}");
+
+        let r = llamar(
+            &srv,
+            "glass_component_get",
+            json!({ "entity_id": 4247, "component": "RectMask2D" }),
+        );
+        // El get devuelve el JSON embebido como texto con las comillas
+        // escapadas (\\\"...\\\") y PRETTY: los saltos de línea son
+        // la SECUENCIA de dos caracteres `\n` (barra + n), no saltos
+        // reales, y los flotantes se imprimen con `.0`. Hay que quitar
+        // espacios y esas secuencias antes de buscar.
+        // (V5b-3: el assert de GridLayoutGroup solo miraba un escalar.)
+        let compact = r.replace(' ', "").replace("\\n", "");
+        assert!(
+            compact.contains("\\\"padding\\\":[8.0,4.0,8.0,4.0]"),
+            "get RectMask2D padding: {r}"
+        );
+        assert!(
+            compact.contains("\\\"softness\\\":2.5"),
+            "get RectMask2D softness: {r}"
+        );
     }
 
     #[test]

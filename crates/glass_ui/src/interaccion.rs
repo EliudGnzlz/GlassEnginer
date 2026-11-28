@@ -1,5 +1,6 @@
 use crate::api::{DestinoSoltar, DocumentoColocado, SesionArrastre};
 use crate::documento::Documento;
+use crate::pintor::{clip_para_nodo, dentro_rect_redondeado};
 
 /// Devuelve los índices de `doc.nodos` en orden de pintado:
 /// primero los nodos normales en orden DFS (0, 1, 2, …),
@@ -67,6 +68,14 @@ pub fn hit_test(
         if !nc.rect.contiene(x, y) {
             continue;
         }
+        // M2 (V5c): el punto debe estar dentro del clip heredado del
+        // pintor (mismo rect + radios). La máscara en sí no se recorta
+        // (el clip solo mira ancestros), así que sigue clicable entera.
+        if let Some((clip_rect, clip_radios, _soft)) = clip_para_nodo(doc, colocado, idx) {
+            if !dentro_rect_redondeado(x, y, clip_rect, clip_radios) {
+                continue;
+            }
+        }
         // Si tiene botón, debe ser interactable
         if let Some(ref btn) = nodo.boton {
             if !btn.interactable {
@@ -115,6 +124,13 @@ pub fn arrastre_pulsar(
         }
         if !nc.rect.contiene(x, y) {
             continue;
+        }
+        // M2 (V5c): igual que hit_test, el arrastre no empieza fuera
+        // del clip heredado.
+        if let Some((clip_rect, clip_radios, _soft)) = clip_para_nodo(doc, colocado, idx) {
+            if !dentro_rect_redondeado(x, y, clip_rect, clip_radios) {
+                continue;
+            }
         }
 
         let agarre = [x - nc.rect.x, y - nc.rect.y];
@@ -278,7 +294,7 @@ mod tests {
     use crate::api::{DocumentoColocado, MapaTexto, NodoColocado, RectColocado};
     use crate::documento::{Documento, NodoDocumento, TipoGraphic};
     use crate::estilos::StyleProps;
-    use glass_core::scene::{RectTransformData, UIButtonData, UIDragData};
+    use glass_core::scene::{RectMask2DData, RectTransformData, UIButtonData, UIDragData};
 
     /// Helper: documento con canvas raíz + un botón.
     fn doc_boton(interactable: bool) -> (Documento, DocumentoColocado) {
@@ -305,6 +321,10 @@ mod tests {
                 boton: None,
                 drag: None,
                 layout_group: None,
+                layout_element: None,
+            content_size_fitter: None,
+grid_layout_group: None,
+rect_mask2d: None,
                 style_extra: String::new(),
                 raycast_target: false,
             },
@@ -335,6 +355,10 @@ mod tests {
                 }),
                 drag: None,
                 layout_group: None,
+                layout_element: None,
+            content_size_fitter: None,
+grid_layout_group: None,
+rect_mask2d: None,
                 style_extra: String::new(),
                 raycast_target: true,
             },
@@ -388,6 +412,10 @@ mod tests {
             boton: None,
             drag: None,
             layout_group: None,
+            layout_element: None,
+            content_size_fitter: None,
+grid_layout_group: None,
+rect_mask2d: None,
             style_extra: String::new(),
             raycast_target: true,
         }
@@ -550,6 +578,73 @@ mod tests {
         };
         // sort_order 5 (entidad 4) gana sobre sort_order 0 (entidad 3)
         assert_eq!(hit_test(&doc2, &colocado2, 640.0, 360.0), Some(4));
+    }
+
+    #[test]
+    fn hit_test_respeta_clip_de_mascara_y_esquina_redondeada() {
+        // V5c (M2): canvas -> fondo (idx 1, entidad 13, debajo) + mascara
+        // (idx 2, entidad 11, [100,100,600,400] radios 60) -> hijo
+        // (idx 3, entidad 12, [100,60,700,200], sobresale por arriba y
+        // por la derecha). El orden de pintado es el orden del vec:
+        // el fondo va ANTES que la mascara para quedar debajo.
+        let mut mascara = nodo_base(11, Some(0), vec![3]);
+        mascara.rect_mask2d = Some(RectMask2DData {
+            padding: [0.0; 4],
+            softness: 1.0,
+        });
+        let hijo = nodo_base(12, Some(2), vec![]);
+        let fondo = nodo_base(13, Some(0), vec![]);
+        let doc = Documento {
+            canvas_raiz: 0,
+            nodos: vec![canvas_raiz(vec![1, 2]), fondo.clone(), mascara, hijo],
+            avisos: vec![],
+        };
+        let colocado = DocumentoColocado {
+            nodos: vec![
+                nc(0, 1, RectColocado { x: 0.0, y: 0.0, ancho: 1280.0, alto: 720.0 }),
+                nc(1, 13, RectColocado { x: 0.0, y: 0.0, ancho: 1280.0, alto: 720.0 }),
+                NodoColocado {
+                    nodo: 2, entidad: 11,
+                    rect: RectColocado { x: 100.0, y: 100.0, ancho: 600.0, alto: 400.0 },
+                    estilos: StyleProps {
+                        border_radius: Some([60.0; 4]),
+                        ..StyleProps::default()
+                    },
+                    mapa_texto: MapaTexto::default(),
+                },
+                nc(3, 12, RectColocado { x: 100.0, y: 60.0, ancho: 700.0, alto: 200.0 }),
+            ],
+        };
+        // (a) Dentro del hijo y del clip -> el hijo.
+        assert_eq!(hit_test(&doc, &colocado, 300.0, 200.0), Some(12));
+        // (b) Dentro del rect del hijo pero fuera del clip (x > 700) ->
+        // gana el fondo que hay detras.
+        assert_eq!(hit_test(&doc, &colocado, 750.0, 200.0), Some(13));
+        // (c) En la esquina cuadrada del rect del hijo pero fuera del
+        // arco de la mascara (dist a (160,160) = 74 > 60): el hijo no
+        // es clicable; la propia mascara si (su clip no se aplica a si
+        // misma).
+        assert_eq!(hit_test(&doc, &colocado, 110.0, 105.0), Some(11));
+        // (d) El arrastre tampoco empieza fuera del clip.
+        let mut hijo_drag = nodo_base(12, Some(2), vec![]);
+        hijo_drag.drag = Some(UIDragData {
+            draggable: true,
+            accepts_drop: false,
+            on_begin_drag: "begin".to_string(),
+            on_drag_end: "end".to_string(),
+            on_drop: String::new(),
+        });
+        let doc_drag = Documento {
+            canvas_raiz: 0,
+            nodos: vec![canvas_raiz(vec![1, 2]), fondo, {
+                let mut m = nodo_base(11, Some(0), vec![3]);
+                m.rect_mask2d = Some(RectMask2DData { padding: [0.0; 4], softness: 1.0 });
+                m
+            }, hijo_drag],
+            avisos: vec![],
+        };
+        assert!(arrastre_pulsar(&doc_drag, &colocado, 750.0, 200.0).is_none());
+        assert!(arrastre_pulsar(&doc_drag, &colocado, 300.0, 200.0).is_some());
     }
 
     #[test]

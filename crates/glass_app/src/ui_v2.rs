@@ -151,6 +151,7 @@ pub fn push_segmento(
                 MODO_COLOR,
                 seg.radios,
                 cl,
+                seg.clip_radios,
                 None,       // sin degradado
                 0.0,        // sin desenfoque
             );
@@ -168,6 +169,7 @@ pub fn push_segmento(
                 MODO_COLOR,
                 seg.radios,
                 cl,
+                seg.clip_radios,
                 seg.degradado, // parámetros de degradado
                 0.0,
             );
@@ -185,6 +187,7 @@ pub fn push_segmento(
                 MODO_SOMBRA,
                 seg.radios,
                 cl,
+                seg.clip_radios,
                 None,
                 seg.desenfoque,
             );
@@ -208,6 +211,7 @@ pub fn push_segmento(
                 MODO_IMAGEN,
                 seg.radios,
                 cl,
+                seg.clip_radios,
                 None,
                 0.0,
             );
@@ -243,6 +247,7 @@ pub fn push_segmento(
                 seg.color,
                 seg.radios,
                 cl,
+                seg.clip_radios,
                 espaciado,
             );
             true
@@ -259,6 +264,7 @@ pub fn push_segmento(
                 MODO_BORDE,
                 seg.radios,
                 cl,
+                seg.clip_radios,
                 None,
                 seg.desenfoque,
             );
@@ -364,6 +370,7 @@ mod tests {
             degradado: None,
             radios: [0.0; 4],
             clip: None,
+            clip_radios: [0.0; 4],
             texto: None,
             sprite: None,
             capa_superior: false,
@@ -384,6 +391,7 @@ mod tests {
             degradado: None,
             radios: [0.0; 4],
             clip: None,
+            clip_radios: [0.0; 4],
             texto: Some((texto.to_string(), font_size, align.to_string(), "default".to_string(), 0.0)),
             sprite: None,
             capa_superior: false,

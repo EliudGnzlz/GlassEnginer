@@ -1,9 +1,10 @@
 use egui::{Color32, DragValue, RichText, Slider, Ui};
 use glass_core::physics_material::{MaterialCombine, PhysicsMaterial};
 use glass_core::{
-    AudioSourceData, CameraData, CanvasData, CharacterData, ColliderSpec, EntityData, LightData,
+    AudioSourceData, CameraData, CanvasData, CharacterData, ColliderSpec, ContentSizeFitterData,
+    EntityData, GridLayoutGroupData, LayoutElementData, LayoutGroupData, LightData,
     MeshData, PhysicsData,
-    RectTransformData, SceneState, ScriptComponentData, UIButtonData, UITextData,
+    RectMask2DData, RectTransformData, SceneState, ScriptComponentData, UIButtonData, UITextData,
     UIImageData, UIInputFieldData,
     UIDragData,
 };
@@ -343,6 +344,11 @@ pub enum TipoComponente {
     Imagen,
     InputField,
     DragDrop,
+    LayoutGroup,
+    LayoutElement,
+    ContentSizeFitter,
+    GridLayoutGroup,
+    RectMask2D,
 }
 
 impl TipoComponente {
@@ -367,6 +373,11 @@ impl TipoComponente {
             TipoComponente::Imagen => "Image",
             TipoComponente::InputField => "InputField",
             TipoComponente::DragDrop => "DragDrop",
+            TipoComponente::LayoutGroup => "LayoutGroup",
+            TipoComponente::LayoutElement => "LayoutElement",
+            TipoComponente::ContentSizeFitter => "ContentSizeFitter",
+            TipoComponente::GridLayoutGroup => "GridLayoutGroup",
+            TipoComponente::RectMask2D => "RectMask2D",
         }
     }
 }
@@ -1038,6 +1049,11 @@ pub fn extraer_componente(ent: &EntityData, tipo: TipoComponente) -> Option<Stri
         TipoComponente::Imagen => ent.ui_image.as_ref().and_then(a_json),
         TipoComponente::InputField => ent.ui_input_field.as_ref().and_then(a_json),
         TipoComponente::DragDrop => ent.ui_drag.as_ref().and_then(a_json),
+        TipoComponente::LayoutGroup => ent.layout_group.as_ref().and_then(a_json),
+        TipoComponente::LayoutElement => ent.layout_element.as_ref().and_then(a_json),
+        TipoComponente::ContentSizeFitter => ent.content_size_fitter.as_ref().and_then(a_json),
+        TipoComponente::GridLayoutGroup => ent.grid_layout_group.as_ref().and_then(a_json),
+        TipoComponente::RectMask2D => ent.rect_mask2d.as_ref().and_then(a_json),
         TipoComponente::Script => {
             if ent.script.is_none() && ent.script_data.is_none() {
                 None
@@ -1094,6 +1110,11 @@ pub fn aplicar_datos(ent: &mut EntityData, tipo: TipoComponente, json: &str) -> 
         TipoComponente::Imagen => sustituir(&mut ent.ui_image, json),
         TipoComponente::InputField => sustituir(&mut ent.ui_input_field, json),
         TipoComponente::DragDrop => sustituir(&mut ent.ui_drag, json),
+        TipoComponente::LayoutGroup => sustituir(&mut ent.layout_group, json),
+        TipoComponente::LayoutElement => sustituir(&mut ent.layout_element, json),
+        TipoComponente::ContentSizeFitter => sustituir(&mut ent.content_size_fitter, json),
+        TipoComponente::GridLayoutGroup => sustituir(&mut ent.grid_layout_group, json),
+        TipoComponente::RectMask2D => sustituir(&mut ent.rect_mask2d, json),
         TipoComponente::Script => {
             if ent.script.is_none() && ent.script_data.is_none() {
                 return false;
@@ -1156,6 +1177,11 @@ pub fn instalar_componente(ent: &mut EntityData, tipo: TipoComponente, json: &st
             crear(&mut ent.ui_input_field, json, &mut ent.components, nombre)
         }
         TipoComponente::DragDrop => crear(&mut ent.ui_drag, json, &mut ent.components, nombre),
+        TipoComponente::LayoutGroup => crear(&mut ent.layout_group, json, &mut ent.components, nombre),
+        TipoComponente::LayoutElement => crear(&mut ent.layout_element, json, &mut ent.components, nombre),
+        TipoComponente::ContentSizeFitter => crear(&mut ent.content_size_fitter, json, &mut ent.components, nombre),
+        TipoComponente::GridLayoutGroup => crear(&mut ent.grid_layout_group, json, &mut ent.components, nombre),
+        TipoComponente::RectMask2D => crear(&mut ent.rect_mask2d, json, &mut ent.components, nombre),
         TipoComponente::Script => {
             if ent.script.is_some() || ent.script_data.is_some() {
                 return false;
@@ -3467,6 +3493,262 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                     entity.components.retain(|c| c != "DragDrop");
                 }
 
+                // Sección LayoutGroup (V5a): dirección, espaciado, padding y
+                // alineación de 9 posiciones (+ alias legados).
+                let mut accion_layout = AccionCabecera::Nada;
+
+                let mut remove_layout = false;
+                if let Some(ref mut grupo) = entity.layout_group {
+                    seccion_componente(ui, "layout_group", "🗂 LayoutGroup", TipoComponente::LayoutGroup, true, self.portapapeles.as_ref(), &mut accion_layout, |ui| {
+                        // Dirección.
+                        egui::ComboBox::from_id_salt("layout_dir")
+                            .selected_text(if grupo.direction == "vertical" { "Vertical" } else { "Horizontal" })
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(grupo.direction == "horizontal", "Horizontal").clicked() {
+                                    grupo.direction = "horizontal".into();
+                                }
+                                if ui.selectable_label(grupo.direction == "vertical", "Vertical").clicked() {
+                                    grupo.direction = "vertical".into();
+                                }
+                            });
+
+                        // Espaciado.
+                        ui.horizontal(|ui| {
+                            ui.label("Espaciado");
+                            ui.add(egui::DragValue::new(&mut grupo.spacing).speed(0.5));
+                        });
+
+                        // Padding [izq, arriba, der, abajo].
+                        ui.label("Padding [izq, arriba, der, abajo]");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::DragValue::new(&mut grupo.padding[0]).speed(0.5));
+                            ui.add(egui::DragValue::new(&mut grupo.padding[1]).speed(0.5));
+                            ui.add(egui::DragValue::new(&mut grupo.padding[2]).speed(0.5));
+                            ui.add(egui::DragValue::new(&mut grupo.padding[3]).speed(0.5));
+                        });
+
+                        // Alineación: 9 posiciones + alias legados start/end
+                        // ("center" ya es una de las 9). Se muestra el valor
+                        // guardado tal cual, incluido un alias legado.
+                        let opciones = [
+                            "upper_left", "upper_center", "upper_right",
+                            "middle_left", "center", "middle_right",
+                            "lower_left", "lower_center", "lower_right",
+                            "start", "end",
+                        ];
+                        let etiqueta = grupo.alignment.clone();
+                        egui::ComboBox::from_id_salt("layout_align")
+                            .selected_text(etiqueta)
+                            .show_ui(ui, |ui| {
+                                for v in opciones.iter() {
+                                    if ui.selectable_label(grupo.alignment == *v, *v).clicked() {
+                                        grupo.alignment = (*v).to_string();
+                                    }
+                                }
+                            });
+
+                        // Control Size y Force Expand (V5b-1): con control
+                        // el grupo toma el preferido del hijo; con expand
+                        // reparte el sobrante a partes iguales.
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut grupo.child_control_width, "Controlar ancho");
+                            ui.checkbox(&mut grupo.child_control_height, "Controlar alto");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut grupo.child_force_expand_width, "Expandir ancho");
+                            ui.checkbox(&mut grupo.child_force_expand_height, "Expandir alto");
+                        });
+                    });
+                    ui.separator();
+                }
+                if accion_layout == AccionCabecera::Quitar {
+                    remove_layout = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::LayoutGroup, accion_layout);
+                }
+                if remove_layout {
+                    entity.layout_group = None;
+                    entity.components.retain(|c| c != "LayoutGroup");
+                }
+
+                // Sección LayoutElement (V5b-1): tamaños de layout del hijo.
+                // Cada tamaño opcional lleva su casilla (sin marcar = None:
+                // mínimo 0, preferido medido).
+                let mut accion_element = AccionCabecera::Nada;
+                let mut remove_element = false;
+                if let Some(ref mut el) = entity.layout_element {
+                    seccion_componente(ui, "layout_element", "📐 LayoutElement", TipoComponente::LayoutElement, true, self.portapapeles.as_ref(), &mut accion_element, |ui| {
+                        let fila_opcional = |ui: &mut Ui, etiqueta: &str, valor: &mut Option<f32>| {
+                            ui.horizontal(|ui| {
+                                let mut usar = valor.is_some();
+                                ui.label(etiqueta);
+                                if ui.checkbox(&mut usar, "").changed() {
+                                    *valor = if usar { Some(0.0) } else { None };
+                                }
+                                if let Some(v) = valor.as_mut() {
+                                    ui.add(egui::DragValue::new(v).speed(0.5));
+                                }
+                            });
+                        };
+                        fila_opcional(ui, "Mín. ancho", &mut el.min_width);
+                        fila_opcional(ui, "Mín. alto", &mut el.min_height);
+                        fila_opcional(ui, "Pref. ancho", &mut el.preferred_width);
+                        fila_opcional(ui, "Pref. alto", &mut el.preferred_height);
+                        // Pesos flexibles (V5b-2): con Force Expand en el
+                        // grupo, el sobrante se reparte en proporción a
+                        // estos pesos; 0 = sin peso.
+                        ui.horizontal(|ui| {
+                            ui.label("Flex. ancho");
+                            ui.add(egui::DragValue::new(&mut el.flexible_width).speed(0.5));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Flex. alto");
+                            ui.add(egui::DragValue::new(&mut el.flexible_height).speed(0.5));
+                        });
+                        ui.checkbox(&mut el.ignore_layout, "Ignorar en el layout");
+                    });
+                    ui.separator();
+                }
+                if accion_element == AccionCabecera::Quitar {
+                    remove_element = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::LayoutElement, accion_element);
+                }
+                if remove_element {
+                    entity.layout_element = None;
+                    entity.components.retain(|c| c != "LayoutElement");
+                }
+
+                // Sección ContentSizeFitter (V5b-2, G6): el grupo se ajusta
+                // a su contenido por eje (none / min / preferred).
+                let mut accion_fitter = AccionCabecera::Nada;
+                let mut remove_fitter = false;
+                if let Some(ref mut fitter) = entity.content_size_fitter {
+                    seccion_componente(ui, "content_size_fitter", "📏 ContentSizeFitter", TipoComponente::ContentSizeFitter, true, self.portapapeles.as_ref(), &mut accion_fitter, |ui| {
+                        let opciones = ["none", "min", "preferred"];
+                        for (etiqueta, campo) in [
+                            ("Ajuste ancho", &mut fitter.horizontal_fit),
+                            ("Ajuste alto", &mut fitter.vertical_fit),
+                        ] {
+                            let salt = format!("fitter_{}", etiqueta);
+                            let actual = campo.clone();
+                            ui.horizontal(|ui| {
+                                ui.label(etiqueta);
+                                egui::ComboBox::from_id_salt(salt)
+                                    .selected_text(actual)
+                                    .show_ui(ui, |ui| {
+                                        for v in opciones.iter() {
+                                            if ui.selectable_label(*campo == *v, *v).clicked() {
+                                                *campo = (*v).to_string();
+                                            }
+                                        }
+                                    });
+                            });
+                        }
+                    });
+                    ui.separator();
+                }
+                if accion_fitter == AccionCabecera::Quitar {
+                    remove_fitter = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::ContentSizeFitter, accion_fitter);
+                }
+                if remove_fitter {
+                    entity.content_size_fitter = None;
+                    entity.components.retain(|c| c != "ContentSizeFitter");
+                }
+
+                // Sección GridLayoutGroup (V5b-3, G5): rejilla de celdas
+                // de tamaño fijo (cell_size, spacing, padding, esquina y
+                // eje de llenado, alineación del bloque, constraint).
+                let mut accion_grid = AccionCabecera::Nada;
+                let mut remove_grid = false;
+                if let Some(ref mut grid) = entity.grid_layout_group {
+                    seccion_componente(ui, "grid_layout_group", "▦ GridLayoutGroup", TipoComponente::GridLayoutGroup, true, self.portapapeles.as_ref(), &mut accion_grid, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Tamaño celda");
+                            ui.add(DragValue::new(&mut grid.cell_size[0]).speed(0.5));
+                            ui.add(DragValue::new(&mut grid.cell_size[1]).speed(0.5));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Espaciado");
+                            ui.add(DragValue::new(&mut grid.spacing[0]).speed(0.5));
+                            ui.add(DragValue::new(&mut grid.spacing[1]).speed(0.5));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Padding [izq, arr, der, aba]");
+                            for v in grid.padding.iter_mut() {
+                                ui.add(DragValue::new(v).speed(0.5));
+                            }
+                        });
+                        for (etiqueta, campo, opciones) in [
+                            ("Esquina inicio", &mut grid.start_corner, ["upper_left", "upper_right", "lower_left", "lower_right"].as_slice()),
+                            ("Eje llenado", &mut grid.start_axis, ["horizontal", "vertical"].as_slice()),
+                            ("Alineación", &mut grid.alignment, ["upper_left", "upper_center", "upper_right", "middle_left", "center", "middle_right", "lower_left", "lower_center", "lower_right", "start", "end"].as_slice()),
+                            ("Constraint", &mut grid.constraint, ["flexible", "fixed_column_count", "fixed_row_count"].as_slice()),
+                        ] {
+                            let salt = format!("grid_{}", etiqueta);
+                            let actual = campo.clone();
+                            ui.horizontal(|ui| {
+                                ui.label(etiqueta);
+                                egui::ComboBox::from_id_salt(salt)
+                                    .selected_text(actual)
+                                    .show_ui(ui, |ui| {
+                                        for v in opciones.iter() {
+                                            if ui.selectable_label(*campo == *v, *v).clicked() {
+                                                *campo = (*v).to_string();
+                                            }
+                                        }
+                                    });
+                            });
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("Nº columnas/filas");
+                            ui.add(DragValue::new(&mut grid.constraint_count));
+                        });
+                    });
+                    ui.separator();
+                }
+                if accion_grid == AccionCabecera::Quitar {
+                    remove_grid = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::GridLayoutGroup, accion_grid);
+                }
+                if remove_grid {
+                    entity.grid_layout_group = None;
+                    entity.components.retain(|c| c != "GridLayoutGroup");
+                }
+
+                // Sección RectMask2D (V5c, M1+M5): la máscara recorta a
+                // sus descendientes con su rect menos el padding, con
+                // borde suave `softness` (px de pantalla).
+                let mut accion_mask = AccionCabecera::Nada;
+                let mut remove_mask = false;
+                if let Some(ref mut mask) = entity.rect_mask2d {
+                    seccion_componente(ui, "rect_mask2d", "▦ RectMask2D", TipoComponente::RectMask2D, true, self.portapapeles.as_ref(), &mut accion_mask, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Padding [izq, arr, der, aba]");
+                            for v in mask.padding.iter_mut() {
+                                ui.add(DragValue::new(v).speed(0.5));
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Softness");
+                            ui.add(DragValue::new(&mut mask.softness).speed(0.1));
+                        });
+                    });
+                    ui.separator();
+                }
+                if accion_mask == AccionCabecera::Quitar {
+                    remove_mask = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::RectMask2D, accion_mask);
+                }
+                if remove_mask {
+                    entity.rect_mask2d = None;
+                    entity.components.retain(|c| c != "RectMask2D");
+                }
+
                 // ==========================================
                 // 7. BOTÓN "AÑADIR COMPONENTE" ESTILO UNITY
                 // ==========================================
@@ -3519,6 +3801,11 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         hay_resultados |= coincide("Image");
                         hay_resultados |= coincide("InputField");
                         hay_resultados |= coincide("DragDrop");
+                        hay_resultados |= coincide("LayoutGroup");
+                        hay_resultados |= coincide("LayoutElement");
+                        hay_resultados |= coincide("ContentSizeFitter");
+                        hay_resultados |= coincide("GridLayoutGroup");
+                        hay_resultados |= coincide("RectMask2D");
 
                         if !hay_resultados && !q.is_empty() {
                             ui.label(RichText::new("Sin componentes que coincidan.").weak());
@@ -3666,6 +3953,36 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         if entity.ui_drag.is_none() && ui.button("✋ Drag & Drop").clicked() {
                             entity.ui_drag = Some(UIDragData::default());
                             entity.components.push("DragDrop".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if coincide("LayoutGroup") && entity.layout_group.is_none() && ui.button("🗂 LayoutGroup").clicked() {
+                            entity.layout_group = Some(LayoutGroupData::default());
+                            entity.components.push("LayoutGroup".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if coincide("LayoutElement") && entity.layout_element.is_none() && ui.button("📐 LayoutElement").clicked() {
+                            entity.layout_element = Some(LayoutElementData::default());
+                            entity.components.push("LayoutElement".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if coincide("ContentSizeFitter") && entity.content_size_fitter.is_none() && ui.button("📏 ContentSizeFitter").clicked() {
+                            entity.content_size_fitter = Some(ContentSizeFitterData::default());
+                            entity.components.push("ContentSizeFitter".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if coincide("GridLayoutGroup") && entity.grid_layout_group.is_none() && ui.button("▦ GridLayoutGroup").clicked() {
+                            entity.grid_layout_group = Some(GridLayoutGroupData::default());
+                            entity.components.push("GridLayoutGroup".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if coincide("RectMask2D") && entity.rect_mask2d.is_none() && ui.button("▦ RectMask2D").clicked() {
+                            entity.rect_mask2d = Some(RectMask2DData::default());
+                            entity.components.push("RectMask2D".into());
                             self.show_add_component_menu = false;
                         }
                     });

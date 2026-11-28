@@ -3,8 +3,8 @@
 //! de la escena, no un segundo formato guardado.
 
 use glass_core::scene::{
-    CanvasData, LayoutGroupData, RectTransformData, UIButtonData, UIDragData, UIImageData,
-    UITextData,
+    CanvasData, ContentSizeFitterData, GridLayoutGroupData, LayoutElementData, LayoutGroupData,
+    RectMask2DData, RectTransformData, UIButtonData, UIDragData, UIImageData, UITextData,
 };
 
 /// El único Graphic de un nodo (regla de Unity: un Graphic por
@@ -48,6 +48,14 @@ pub struct NodoDocumento {
     pub boton: Option<UIButtonData>,
     pub drag: Option<UIDragData>,
     pub layout_group: Option<LayoutGroupData>,
+    /// Tamaños de layout del hijo (V5b-1, G7-mínimo).
+    pub layout_element: Option<LayoutElementData>,
+    /// Ajuste del grupo a su contenido (V5b-2, G6).
+    pub content_size_fitter: Option<ContentSizeFitterData>,
+    /// Rejilla de celdas de tamaño fijo (V5b-3, G5).
+    pub grid_layout_group: Option<GridLayoutGroupData>,
+    /// Máscara rectangular (V5c, M1).
+    pub rect_mask2d: Option<RectMask2DData>,
     /// El `style_extra` vigente del nodo: el del Graphic si lo hay;
     /// si no, el del botón; si no, vacío.
     pub style_extra: String,

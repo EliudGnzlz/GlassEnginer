@@ -30,6 +30,11 @@ const COMPONENTES: &[&str] = &[
     "Fog",
     "Particles",
     "Portal",
+    "LayoutGroup",
+    "LayoutElement",
+    "ContentSizeFitter",
+    "GridLayoutGroup",
+    "RectMask2D",
 ];
 
 /// JSON completo del componente `nombre` de la entidad, Ok(None) si la
@@ -73,6 +78,11 @@ pub fn componente_json(ent: &EntityData, nombre: &str) -> Result<Option<Value>, 
         "Button" => get_opt(&ent.ui_button, n),
         "Image" => get_opt(&ent.ui_image, n),
         "DragDrop" => get_opt(&ent.ui_drag, n),
+        "LayoutGroup" => get_opt(&ent.layout_group, n),
+        "LayoutElement" => get_opt(&ent.layout_element, n),
+        "ContentSizeFitter" => get_opt(&ent.content_size_fitter, n),
+        "GridLayoutGroup" => get_opt(&ent.grid_layout_group, n),
+        "RectMask2D" => get_opt(&ent.rect_mask2d, n),
         "Animator" => get_opt(&ent.animator, n),
         "Fog" => get_opt(&ent.fog, n),
         "Particles" => get_opt(&ent.particles, n),
@@ -110,6 +120,17 @@ pub fn aplicar_componente(ent: &mut EntityData, nombre: &str, parcial: &Value) -
         "Button" => set_opt(&mut ent.ui_button, &mut ent.components, n, parcial),
         "Image" => set_opt(&mut ent.ui_image, &mut ent.components, n, parcial),
         "DragDrop" => set_opt(&mut ent.ui_drag, &mut ent.components, n, parcial),
+        "LayoutGroup" => set_opt(&mut ent.layout_group, &mut ent.components, n, parcial),
+        "LayoutElement" => set_opt(&mut ent.layout_element, &mut ent.components, n, parcial),
+        "ContentSizeFitter" => {
+            set_opt(&mut ent.content_size_fitter, &mut ent.components, n, parcial)
+        }
+        "GridLayoutGroup" => {
+            set_opt(&mut ent.grid_layout_group, &mut ent.components, n, parcial)
+        }
+        "RectMask2D" => {
+            set_opt(&mut ent.rect_mask2d, &mut ent.components, n, parcial)
+        }
         "Animator" => set_opt(&mut ent.animator, &mut ent.components, n, parcial),
         "Fog" => set_fog(ent, n, parcial),
         "Particles" => set_opt(&mut ent.particles, &mut ent.components, n, parcial),

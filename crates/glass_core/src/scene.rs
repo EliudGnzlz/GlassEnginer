@@ -1383,8 +1383,11 @@ pub struct RectTransformData {
 
 /// Grupo de layout (Fase 5): recoloca a los hijos UI directos de la
 /// entidad en fila o columna dentro de su rect, estilo Unity
-/// (Horizontal/VerticalLayoutGroup reducido: sin Control Size — cada
-/// hijo conserva su tamaño — y con padding y alineación del bloque).
+/// (Horizontal/VerticalLayoutGroup reducido: padding y alineación del
+/// bloque; V5b-1 añade Control Size — `child_control_*` toma el tamaño
+/// preferido del hijo — y Force Expand — `child_force_expand_*`
+/// reparte el sobrante a partes iguales entre los hijos que lo piden;
+/// con los cuatro en `false` cada hijo conserva su tamaño, como antes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayoutGroupData {
     /// "horizontal" o "vertical".
@@ -1396,9 +1399,32 @@ pub struct LayoutGroupData {
     /// Márgenes interiores [izquierda, arriba, derecha, abajo].
     #[serde(default)]
     pub padding: [f32; 4],
-    /// Alineación del bloque: "start", "center" o "end".
+    /// Alineación del bloque en el interior del grupo. Acepta las 9
+    /// posiciones de cuadrícula (`upper_left`, `upper_center`, `upper_right`,
+    /// `middle_left`, `center`, `middle_right`, `lower_left`, `lower_center`,
+    /// `lower_right`) o los alias heredados `start`, `center`, `end`.
+    /// Para un grupo horizontal el eje principal toma la parte horizontal
+    /// (left/center/right) y el eje cruzado la parte vertical
+    /// (upper/middle/lower); en vertical se intercambian. Los alias
+    /// equivalen a (start,start) / (center,center) / (end,end) y los valores
+    /// desconocidos se comportan como `start`.
     #[serde(default = "default_layout_alignment")]
     pub alignment: String,
+    /// Control Size (V5b-1): el grupo toma el tamaño preferido del hijo
+    /// en ese eje (limitado por su mínimo). Sin control, el hijo conserva
+    /// su tamaño de rect.
+    #[serde(default)]
+    pub child_control_width: bool,
+    #[serde(default)]
+    pub child_control_height: bool,
+    /// Force Expand (V5b-1): con Control Size en ese eje, el sobrante se
+    /// reparte entre los participantes. V5b-2: en proporción a los pesos
+    /// `flexible_*` de cada hijo cuando hay alguno > 0; si no hay pesos,
+    /// a partes iguales. Sin control en el eje, no tiene efecto.
+    #[serde(default)]
+    pub child_force_expand_width: bool,
+    #[serde(default)]
+    pub child_force_expand_height: bool,
 }
 
 fn default_layout_direction() -> String {
@@ -1416,7 +1442,220 @@ impl Default for LayoutGroupData {
             spacing: 8.0,
             padding: [0.0, 0.0, 0.0, 0.0],
             alignment: "start".into(),
+            child_control_width: false,
+            child_control_height: false,
+            child_force_expand_width: false,
+            child_force_expand_height: false,
         }
+    }
+}
+
+fn default_grid_cell_size() -> [f32; 2] {
+    [100.0, 100.0]
+}
+
+fn default_grid_start_corner() -> String {
+    "upper_left".into()
+}
+
+fn default_grid_start_axis() -> String {
+    "horizontal".into()
+}
+
+fn default_grid_constraint() -> String {
+    "flexible".into()
+}
+
+/// Componente Unity `GridLayoutGroup` (V5b-3, G5): rejilla de celdas
+/// de tamaño fijo. La rejilla ignora los preferred/min/flexible de los
+/// hijos (el tamaño de celda manda); solo respeta `ignore_layout`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GridLayoutGroupData {
+    /// Tamaño de cada celda [ancho, alto] (px de referencia).
+    #[serde(default = "default_grid_cell_size")]
+    pub cell_size: [f32; 2],
+    /// Separación entre celdas [horizontal, vertical].
+    #[serde(default)]
+    pub spacing: [f32; 2],
+    /// Márgenes interiores [izquierda, arriba, derecha, abajo].
+    #[serde(default)]
+    pub padding: [f32; 4],
+    /// Esquina de inicio: "upper_left" | "upper_right" | "lower_left" | "lower_right".
+    #[serde(default = "default_grid_start_corner")]
+    pub start_corner: String,
+    /// Eje de llenado: "horizontal" (fila a fila) | "vertical" (columna a columna).
+    #[serde(default = "default_grid_start_axis")]
+    pub start_axis: String,
+    /// Alineación del BLOQUE de la rejilla dentro del interior del grupo.
+    /// Mismo vocabulario que LayoutGroup: 9 posiciones + alias
+    /// "start"/"center"/"end" (se resuelve con `resolver_alineacion`).
+    #[serde(default = "default_layout_alignment")]
+    pub alignment: String,
+    /// "flexible" | "fixed_column_count" | "fixed_row_count".
+    #[serde(default = "default_grid_constraint")]
+    pub constraint: String,
+    /// Número de columnas (fixed_column_count) o de filas (fixed_row_count). 0 = ignorado.
+    #[serde(default)]
+    pub constraint_count: u32,
+}
+
+impl Default for GridLayoutGroupData {
+    fn default() -> Self {
+        Self {
+            cell_size: [100.0, 100.0],
+            spacing: [0.0, 0.0],
+            padding: [0.0; 4],
+            start_corner: "upper_left".into(),
+            start_axis: "horizontal".into(),
+            alignment: "start".into(),
+            constraint: "flexible".into(),
+            constraint_count: 0,
+        }
+    }
+}
+
+/// Máscara rectangular (V5c, M1): recorta SOLO a sus descendientes; su
+/// propio Graphic pinta entero. El padding encoge el rect de la máscara
+/// por lado (px de canvas, escalados por el factor del canvas al
+/// pintar). `softness` (M5) es el ancho del borde suave del clip en px
+/// de pantalla: 1.0 = el mismo que el clip CSS; 0 = borde duro.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RectMask2DData {
+    /// Márgenes interiores [izquierda, arriba, derecha, abajo].
+    pub padding: [f32; 4],
+    /// Ancho del borde suave del clip en px de pantalla.
+    pub softness: f32,
+}
+
+impl Default for RectMask2DData {
+    fn default() -> Self {
+        Self {
+            padding: [0.0; 4],
+            softness: 1.0,
+        }
+    }
+}
+
+/// Tamaños de layout de un hijo (V5b-1, G7-mínimo): el grupo los lee
+/// para decidir el tamaño del hijo cuando controla ese eje. `None` en
+/// `min_*` = 0; `None` en `preferred_*` = medido (texto con el medidor
+/// SDF, imagen y resto con su rect actual). `preferred_*` explícito
+/// manda sobre lo medido. `ignore_layout` excluye al hijo del reparto:
+/// conserva su rect y no consume espacio ni spacing. V5b-2 añade los
+/// pesos `flexible_*` para el reparto del sobrante con Force Expand.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct LayoutElementData {
+    #[serde(default)]
+    pub min_width: Option<f32>,
+    #[serde(default)]
+    pub min_height: Option<f32>,
+    #[serde(default)]
+    pub preferred_width: Option<f32>,
+    #[serde(default)]
+    pub preferred_height: Option<f32>,
+    /// Peso flexible en el eje horizontal (V5b-2): con Force Expand en
+    /// el grupo, el sobrante se reparte en proporción a este peso.
+    /// 0 = sin peso (reparto a partes iguales con los demás sin peso).
+    #[serde(default)]
+    pub flexible_width: f32,
+    /// Peso flexible en el eje vertical (V5b-2). Igual que el horizontal.
+    #[serde(default)]
+    pub flexible_height: f32,
+    #[serde(default)]
+    pub ignore_layout: bool,
+}
+
+/// Ajuste de tamaño al contenido (V5b-2, G6): el RectTransform del
+/// grupo se redimensiona a su contenido por eje, estilo Unity
+/// (ContentSizeFitter: Unconstrained / MinSize / PreferredSize).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentSizeFitterData {
+    /// "none" | "min" | "preferred" para el ancho.
+    #[serde(default = "default_fit_none")]
+    pub horizontal_fit: String,
+    /// "none" | "min" | "preferred" para el alto.
+    #[serde(default = "default_fit_none")]
+    pub vertical_fit: String,
+}
+
+fn default_fit_none() -> String {
+    "none".into()
+}
+
+impl Default for ContentSizeFitterData {
+    fn default() -> Self {
+        Self {
+            horizontal_fit: "none".into(),
+            vertical_fit: "none".into(),
+        }
+    }
+}
+
+/// Modo de ajuste de un eje del ContentSizeFitter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModoAjuste {
+    Ninguno,
+    Minimo,
+    Preferido,
+}
+
+/// Resuelve un modo de ajuste ("none"/"min"/"preferred"). Valores
+/// desconocidos caen a Ninguno.
+pub fn resolver_ajuste(fit: &str) -> ModoAjuste {
+    match fit {
+        "min" => ModoAjuste::Minimo,
+        "preferred" => ModoAjuste::Preferido,
+        _ => ModoAjuste::Ninguno,
+    }
+}
+
+/// Resuelve `alignment` en la pareja (eje principal, eje cruzado) del
+/// grupo, cada componente en {"start", "center", "end"}. Acepta las 9
+/// posiciones (upper/middle/lower × left/center/right) y los alias
+/// legados "start"/"center"/"end" (mismo valor en ambos ejes). Cualquier
+/// valor desconocido cae a ("start", "start").
+pub fn resolver_alineacion(alignment: &str, horizontal: bool) -> (&'static str, &'static str) {
+    // Alias legados: mismo valor en ambos ejes. "center" de las 9 posiciones
+    // resuelve a ("center", "center") por este mismo camino, así que no
+    // necesita brazo adicional abajo.
+    match alignment {
+        "start" => return ("start", "start"),
+        "center" => return ("center", "center"),
+        "end" => return ("end", "end"),
+        _ => {}
+    }
+
+    // Descomponer las 9 posiciones en (parte vertical, parte horizontal).
+    let (vert, horiz) = match alignment {
+        "upper_left" => ("upper", "left"),
+        "upper_center" => ("upper", "center"),
+        "upper_right" => ("upper", "right"),
+        "middle_left" => ("middle", "left"),
+        "middle_right" => ("middle", "right"),
+        "lower_left" => ("lower", "left"),
+        "lower_center" => ("lower", "center"),
+        "lower_right" => ("lower", "right"),
+        // Desconocido → start en ambos ejes.
+        _ => ("upper", "left"),
+    };
+
+    // Mapear cada parte al eje correspondiente.
+    let eje = |parte: &str| -> &'static str {
+        match parte {
+            "left" | "upper" => "start",
+            "center" | "middle" => "center",
+            "right" | "lower" => "end",
+            _ => "start",
+        }
+    };
+
+    if horizontal {
+        // Principal = horizontal (left/center/right); cruzado = vertical (upper/middle/lower).
+        (eje(horiz), eje(vert))
+    } else {
+        // Principal = vertical (upper/middle/lower); cruzado = horizontal (left/center/right).
+        (eje(vert), eje(horiz))
     }
 }
 
@@ -1439,11 +1678,12 @@ pub fn layout_group_rects(
         (group_rect[3] - group.padding[1] - group.padding[3]).max(0.0),
     ];
     let horizontal = group.direction != "vertical";
+    let (main_align, cross_align) = resolver_alineacion(&group.alignment, horizontal);
     let main = |r: &[f32; 4]| if horizontal { r[2] } else { r[3] };
     let total: f32 = children.iter().map(main).sum::<f32>()
         + group.spacing * (children.len() as f32 - 1.0);
     let inner_main = if horizontal { inner[2] } else { inner[3] };
-    let bloque = match group.alignment.as_str() {
+    let bloque = match main_align {
         "center" => (inner_main - total) * 0.5,
         "end" => inner_main - total,
         _ => 0.0,
@@ -1453,7 +1693,7 @@ pub fn layout_group_rects(
     for r in children {
         let cross_size = if horizontal { r[3] } else { r[2] };
         let inner_cross = if horizontal { inner[3] } else { inner[2] };
-        let off_cross = match group.alignment.as_str() {
+        let off_cross = match cross_align {
             "center" => (inner_cross - cross_size) * 0.5,
             "end" => inner_cross - cross_size,
             _ => 0.0,
@@ -1469,6 +1709,581 @@ pub fn layout_group_rects(
             cursor += r[3] + group.spacing;
         }
         out.push(nr);
+    }
+    out
+}
+
+/// Calcula el número de columnas de la rejilla según `constraint`
+/// (V5b-3, G5). fixed_column_count -> max(count, 1); fixed_row_count
+/// -> ceil(n / max(count, 1)); flexible -> floor((inner_w + spacing_x)
+/// / (cell_w + spacing_x)), mínimo 1; si cell_w + spacing_x <= 0 -> 1.
+/// Un `constraint` desconocido se comporta como flexible.
+pub fn calcular_columnas_grid(grid: &GridLayoutGroupData, n: usize, inner_w: f32) -> usize {
+    match grid.constraint.as_str() {
+        "fixed_column_count" => grid.constraint_count.max(1) as usize,
+        "fixed_row_count" => {
+            let filas = grid.constraint_count.max(1) as usize;
+            n.div_ceil(filas)
+        }
+        _ => {
+            let cw = grid.cell_size[0];
+            let sp = grid.spacing[0];
+            if cw + sp <= 0.0 {
+                1
+            } else {
+                (((inner_w + sp) / (cw + sp)).floor() as usize).max(1)
+            }
+        }
+    }
+}
+
+/// Coloca los rects de los hijos en una rejilla de celdas de tamaño
+/// fijo (V5b-3, G5), estilo Unity GridLayoutGroup. `children` ya viene
+/// filtrado por el llamador (solo participantes). El tamaño de celda
+/// manda: no respeta min/preferred/flexible de los hijos. El bloque
+/// completo se alinea dentro del interior del grupo. Función pura.
+pub fn layout_grid_rects(
+    group_rect: [f32; 4],
+    grid: &GridLayoutGroupData,
+    children: &[[f32; 4]],
+) -> Vec<[f32; 4]> {
+    if children.is_empty() {
+        return Vec::new();
+    }
+    let n = children.len();
+    let inner = [
+        group_rect[0] + grid.padding[0],
+        group_rect[1] + grid.padding[1],
+        (group_rect[2] - grid.padding[0] - grid.padding[2]).max(0.0),
+        (group_rect[3] - grid.padding[1] - grid.padding[3]).max(0.0),
+    ];
+    let cell_w = grid.cell_size[0];
+    let cell_h = grid.cell_size[1];
+    let sp_x = grid.spacing[0];
+    let sp_y = grid.spacing[1];
+    let cols = calcular_columnas_grid(grid, n, inner[2]);
+    let filas = n.div_ceil(cols);
+    let block_w = cols as f32 * cell_w + sp_x * (cols as f32 - 1.0);
+    let block_h = filas as f32 * cell_h + sp_y * (filas as f32 - 1.0);
+    // horizontal=true siempre: la pareja se lee como (horizontal, vertical).
+    let (h_align, v_align) = resolver_alineacion(&grid.alignment, true);
+    let x0 = inner[0]
+        + match h_align {
+            "center" => (inner[2] - block_w) * 0.5,
+            "end" => inner[2] - block_w,
+            _ => 0.0,
+        };
+    let y0 = inner[1]
+        + match v_align {
+            "center" => (inner[3] - block_h) * 0.5,
+            "end" => inner[3] - block_h,
+            _ => 0.0,
+        };
+    let vertical = grid.start_axis == "vertical";
+    let mut out = Vec::with_capacity(n);
+    for k in 0..n {
+        let (mut fila, mut col) = if vertical {
+            (k % filas, k / filas)
+        } else {
+            (k / cols, k % cols)
+        };
+        match grid.start_corner.as_str() {
+            "upper_right" => col = cols - 1 - col,
+            "lower_left" => fila = filas - 1 - fila,
+            "lower_right" => {
+                col = cols - 1 - col;
+                fila = filas - 1 - fila;
+            }
+            _ => {}
+        }
+        out.push([
+            x0 + col as f32 * (cell_w + sp_x),
+            y0 + fila as f32 * (cell_h + sp_y),
+            cell_w.max(10.0),
+            cell_h.max(10.0),
+        ]);
+    }
+    out
+}
+
+/// Entrada por nodo que necesita la pasada bottom-up de preferidos
+/// (V5b-1). Se construye en glass_ui porque los datos de texto/imagen
+/// viven en NodoDocumento.
+pub struct EntradaPreferido<'a> {
+    pub padre: Option<usize>,
+    pub hijos: &'a [usize],
+    pub activo: bool,
+    pub rect_actual: [f32; 4],
+    pub layout_group: Option<&'a LayoutGroupData>,
+    pub layout_element: Option<&'a LayoutElementData>,
+    /// (contenido, font_size resuelto, letter_spacing resuelto).
+    pub texto: Option<(&'a str, f32, f32)>,
+    /// Rejilla (V5b-3, G5). Gana a `layout_group` si ambos coexisten.
+    pub grid_layout: Option<&'a GridLayoutGroupData>,
+}
+
+/// Medidor de texto para la pasada bottom-up: (contenido, font_size,
+/// ancho_max, letter_spacing) -> (ancho, alto) preferidos.
+pub type MedirTextoFn<'a> = dyn Fn(&str, f32, f32, f32) -> (f32, f32) + 'a;
+
+/// Post-orden: hijos antes que el padre. Devuelve [ancho, alto]
+/// preferido por nodo, en unidades de referencia. Nodo inactivo =>
+/// (0,0). Función pura (el medidor entra como clausura para no acoplar
+/// glass_core a ab_glyph).
+pub fn calcular_preferidos_bottom_up(
+    nodos: &[EntradaPreferido<'_>],
+    medir: &MedirTextoFn<'_>,
+) -> Vec<[f32; 2]> {
+    calcular_tamanos_bottom_up(nodos, medir, false)
+}
+
+/// Post-orden de tamaños MÍNIMOS (V5b-2, G6): misma pasada que los
+/// preferidos, agregando mínimos. Nodo inactivo => (0,0). Un mínimo
+/// explícito por eje manda; un grupo sin mínimo explícito agrega los
+/// mínimos de sus participantes (+ spacing + padding); grupo vacío =
+/// solo padding; Texto/Imagen sin mínimo explícito = (0,0) (pueden
+/// encoger a cero). Sin clamp final: el mínimo ES el suelo.
+pub fn calcular_minimos_bottom_up(
+    nodos: &[EntradaPreferido<'_>],
+    medir: &MedirTextoFn<'_>,
+) -> Vec<[f32; 2]> {
+    calcular_tamanos_bottom_up(nodos, medir, true)
+}
+
+fn calcular_tamanos_bottom_up(
+    nodos: &[EntradaPreferido<'_>],
+    medir: &MedirTextoFn<'_>,
+    minimo: bool,
+) -> Vec<[f32; 2]> {
+    let mut tam = vec![[0.0f32; 2]; nodos.len()];
+
+    // Orden post-orden explícito por pila (sin recursión).
+    fn post_orden(nodos: &[EntradaPreferido<'_>]) -> Vec<usize> {
+        let mut out = Vec::with_capacity(nodos.len());
+        let mut pila: Vec<(usize, bool)> = Vec::new();
+        for raiz in 0..nodos.len() {
+            if nodos[raiz].padre.is_some() {
+                continue;
+            }
+            pila.push((raiz, false));
+            while let Some((i, expandido)) = pila.pop() {
+                if expandido {
+                    out.push(i);
+                } else {
+                    pila.push((i, true));
+                    for &h in nodos[i].hijos.iter().rev() {
+                        if h < nodos.len() {
+                            pila.push((h, false));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    for i in post_orden(nodos) {
+        let n = &nodos[i];
+        if !n.activo {
+            tam[i] = [0.0, 0.0];
+            continue;
+        }
+        // Explícito por eje manda siempre (preferred_* o min_* según modo).
+        let exp_a = n.layout_element.and_then(|e| {
+            if minimo {
+                e.min_width
+            } else {
+                e.preferred_width
+            }
+        });
+        let exp_b = n.layout_element.and_then(|e| {
+            if minimo {
+                e.min_height
+            } else {
+                e.preferred_height
+            }
+        });
+
+        let (mut tw, mut th) = match (exp_a, exp_b) {
+            (Some(w), Some(h)) => (w, h),
+            _ => {
+                if let Some(grid) = n.grid_layout {
+                    // Rejilla (V5b-3, G5): la extensión es cols*celda +
+                    // spacing + padding; el mínimo es el mismo (celdas
+                    // fijas). Gana a layout_group si ambos coexisten.
+                    let pad_x = grid.padding[0] + grid.padding[2];
+                    let pad_y = grid.padding[1] + grid.padding[3];
+                    let mut n_part = 0usize;
+                    for &h in n.hijos {
+                        if h >= nodos.len() {
+                            continue;
+                        }
+                        let hijo = &nodos[h];
+                        if !hijo.activo {
+                            continue;
+                        }
+                        if hijo
+                            .layout_element
+                            .map(|e| e.ignore_layout)
+                            .unwrap_or(false)
+                        {
+                            continue;
+                        }
+                        n_part += 1;
+                    }
+                    if n_part == 0 {
+                        if minimo {
+                            (pad_x, pad_y)
+                        } else {
+                            (n.rect_actual[2], n.rect_actual[3])
+                        }
+                    } else {
+                        let inner_w = (n.rect_actual[2] - pad_x).max(0.0);
+                        let cols = calcular_columnas_grid(grid, n_part, inner_w);
+                        let filas = n_part.div_ceil(cols);
+                        let pw = cols as f32 * grid.cell_size[0]
+                            + grid.spacing[0] * (cols as f32 - 1.0)
+                            + pad_x;
+                        let ph = filas as f32 * grid.cell_size[1]
+                            + grid.spacing[1] * (filas as f32 - 1.0)
+                            + pad_y;
+                        (pw, ph)
+                    }
+                } else if let Some(g) = n.layout_group {
+                    let horizontal = g.direction != "vertical";
+                    let mut suma = 0.0f32;
+                    let mut n_part = 0.0f32;
+                    let mut max_cruz = 0.0f32;
+                    for &h in n.hijos {
+                        if h >= nodos.len() {
+                            continue;
+                        }
+                        let hijo = &nodos[h];
+                        if !hijo.activo {
+                            continue;
+                        }
+                        if hijo
+                            .layout_element
+                            .map(|e| e.ignore_layout)
+                            .unwrap_or(false)
+                        {
+                            continue;
+                        }
+                        let p = tam[h];
+                        let principal = if horizontal { p[0] } else { p[1] };
+                        let cruzado = if horizontal { p[1] } else { p[0] };
+                        suma += principal;
+                        n_part += 1.0;
+                        if cruzado > max_cruz {
+                            max_cruz = cruzado;
+                        }
+                    }
+                    if n_part == 0.0 {
+                        if minimo {
+                            // Sin hijos no hay contenido: solo padding.
+                            (g.padding[0] + g.padding[2], g.padding[1] + g.padding[3])
+                        } else {
+                            (n.rect_actual[2], n.rect_actual[3])
+                        }
+                    } else {
+                        let interior_principal = suma + g.spacing * (n_part - 1.0);
+                        let pad_principal = if horizontal {
+                            g.padding[0] + g.padding[2]
+                        } else {
+                            g.padding[1] + g.padding[3]
+                        };
+                        let pad_cruzado = if horizontal {
+                            g.padding[1] + g.padding[3]
+                        } else {
+                            g.padding[0] + g.padding[2]
+                        };
+                        let p_pr = interior_principal + pad_principal;
+                        let p_cr = max_cruz + pad_cruzado;
+                        if horizontal { (p_pr, p_cr) } else { (p_cr, p_pr) }
+                    }
+                } else if let Some((txt, tam_f, ls)) = n.texto {
+                    if minimo {
+                        // Un texto puede encoger a cero; su mínimo es 0.
+                        (0.0, 0.0)
+                    } else {
+                        let w = medir(txt, tam_f, f32::INFINITY, ls).0;
+                        let h = medir(txt, tam_f, w, ls).1;
+                        (w, h)
+                    }
+                } else {
+                    // Imagen y cualquier otra hoja: rect actual (preferido)
+                    // o cero (mínimo: puede encoger a nada).
+                    if minimo {
+                        (0.0, 0.0)
+                    } else {
+                        (n.rect_actual[2], n.rect_actual[3])
+                    }
+                }
+            }
+        };
+
+        if let Some(w) = exp_a {
+            tw = w;
+        }
+        if let Some(h) = exp_b {
+            th = h;
+        }
+        if minimo {
+            tam[i] = [tw, th];
+        } else {
+            let minw = n.layout_element.and_then(|e| e.min_width).unwrap_or(0.0);
+            let minh = n.layout_element.and_then(|e| e.min_height).unwrap_or(0.0);
+            tam[i] = [tw.max(minw), th.max(minh)];
+        }
+    }
+    tam
+}
+
+/// Aplica el ContentSizeFitter a un rect de grupo (V5b-2): devuelve el
+/// rect con el tamaño ajustado por eje según el modo (none = intacto,
+/// min = contenido mínimo, preferred = contenido preferido). La posición
+/// no cambia. Función pura.
+pub fn ajustar_fitter(
+    rect_grupo: [f32; 4],
+    fitter: &ContentSizeFitterData,
+    min_contenido: [f32; 2],
+    pref_contenido: [f32; 2],
+) -> [f32; 4] {
+    let mut r = rect_grupo;
+    match resolver_ajuste(&fitter.horizontal_fit) {
+        ModoAjuste::Minimo => r[2] = min_contenido[0],
+        ModoAjuste::Preferido => r[2] = pref_contenido[0],
+        ModoAjuste::Ninguno => {}
+    }
+    match resolver_ajuste(&fitter.vertical_fit) {
+        ModoAjuste::Minimo => r[3] = min_contenido[1],
+        ModoAjuste::Preferido => r[3] = pref_contenido[1],
+        ModoAjuste::Ninguno => {}
+    }
+    r
+}
+
+/// Reparto top-down con Control Size (V5b-1). `preferidos` y
+/// `elementos` van alineados con `children`. `elementos[i]` =
+/// LayoutElement del hijo i (si lo tiene). Con los cuatro flags en
+/// `false` y sin `ignore_layout`, delega en `layout_group_rects`
+/// (camino V5a intacto). Función pura.
+pub fn layout_group_rects_control(
+    group_rect: [f32; 4],
+    group: &LayoutGroupData,
+    children: &[[f32; 4]],
+    preferidos: &[[f32; 2]],
+    elementos: &[Option<&LayoutElementData>],
+) -> Vec<[f32; 4]> {
+    // Sin ningún control ni layouts activos: camino V5a intacto, byte a byte.
+    let sin_control = !group.child_control_width
+        && !group.child_control_height
+        && !group.child_force_expand_width
+        && !group.child_force_expand_height
+        && elementos
+            .iter()
+            .all(|e| e.map(|x| !x.ignore_layout).unwrap_or(true));
+    if sin_control {
+        return layout_group_rects(group_rect, group, children);
+    }
+
+    if children.is_empty() {
+        return Vec::new();
+    }
+    let inner = [
+        group_rect[0] + group.padding[0],
+        group_rect[1] + group.padding[1],
+        (group_rect[2] - group.padding[0] - group.padding[2]).max(0.0),
+        (group_rect[3] - group.padding[1] - group.padding[3]).max(0.0),
+    ];
+    let horizontal = group.direction != "vertical";
+    let (main_align, cross_align) = resolver_alineacion(&group.alignment, horizontal);
+    let inner_main = if horizontal { inner[2] } else { inner[3] };
+    let inner_cross = if horizontal { inner[3] } else { inner[2] };
+    let control_main = if horizontal {
+        group.child_control_width
+    } else {
+        group.child_control_height
+    };
+    let control_cross = if horizontal {
+        group.child_control_height
+    } else {
+        group.child_control_width
+    };
+    let expand_main = if horizontal {
+        group.child_force_expand_width
+    } else {
+        group.child_force_expand_height
+    };
+
+    // 1) Participantes: todo hijo salvo `ignore_layout`.
+    let ignorado = |i: usize| {
+        elementos
+            .get(i)
+            .and_then(|e| *e)
+            .map(|e| e.ignore_layout)
+            .unwrap_or(false)
+    };
+    let participantes: Vec<usize> =
+        (0..children.len()).filter(|&i| !ignorado(i)).collect();
+    let n_part = participantes.len() as f32;
+
+    // 2) Tamaño objetivo por eje para cada participante.
+    let min_de = |i: usize, horizontal_eje: bool| {
+        elementos
+            .get(i)
+            .and_then(|x| *x)
+            .and_then(|e| {
+                if horizontal_eje {
+                    e.min_width
+                } else {
+                    e.min_height
+                }
+            })
+            .unwrap_or(0.0)
+    };
+    let mut tam_main = vec![0.0f32; children.len()];
+    let mut tam_cross = vec![0.0f32; children.len()];
+    for &i in &participantes {
+        let r = children[i];
+        let p = preferidos.get(i).copied().unwrap_or([r[2], r[3]]);
+        let p_main = if horizontal { p[0] } else { p[1] };
+        let min_main = min_de(i, horizontal);
+        let min_cross = min_de(i, !horizontal);
+        // Principal: con control, preferido limitado por el mínimo; sin
+        // control, el tamaño de rect.
+        tam_main[i] = if control_main {
+            p_main.max(min_main)
+        } else if horizontal {
+            r[2]
+        } else {
+            r[3]
+        };
+        // Cruzado: con control, todo el interior limitado por el mínimo;
+        // sin control, el tamaño de rect.
+        tam_cross[i] = if control_cross {
+            inner_cross.max(min_cross)
+        } else if horizontal {
+            r[3]
+        } else {
+            r[2]
+        };
+    }
+
+    // 3) Encogido / reparto del sobrante en el eje principal. Solo con
+    // control en ese eje; force-expand solo reparte entre los hijos que
+    // lo piden (sin control en el eje, no tiene efecto).
+    if control_main && !participantes.is_empty() {
+        let spacing_total = group.spacing * (n_part - 1.0).max(0.0);
+        let suma: f32 = participantes.iter().map(|&i| tam_main[i]).sum();
+        let disponible = (inner_main - spacing_total).max(0.0);
+        if suma > disponible && suma > 0.0 {
+            // Encoger proporcionalmente hacia min.
+            let min_sum: f32 = participantes
+                .iter()
+                .map(|&i| min_de(i, horizontal))
+                .sum();
+            if min_sum >= disponible {
+                // Se toca min; si aún desborda, desborda (documentado).
+                for &i in &participantes {
+                    tam_main[i] = min_de(i, horizontal);
+                }
+            } else {
+                let margen = suma - min_sum;
+                let exceso = suma - disponible;
+                let factor = if margen > 0.0 {
+                    (margen - exceso) / margen
+                } else {
+                    0.0
+                };
+                for &i in &participantes {
+                    let m = min_de(i, horizontal);
+                    tam_main[i] = m + (tam_main[i] - m) * factor;
+                }
+            }
+        } else if expand_main && disponible > suma {
+            // Sobrante con Force Expand (V5b-2): con pesos flexibles en el
+            // eje principal se reparte en proporción a los pesos (solo los
+            // hijos con peso > 0 reciben extra); sin pesos, a partes
+            // iguales entre los participantes (V5b-1).
+            let peso = |i: usize| {
+                let f = elementos
+                    .get(i)
+                    .and_then(|e| *e)
+                    .map(|e| {
+                        if horizontal {
+                            e.flexible_width
+                        } else {
+                            e.flexible_height
+                        }
+                    })
+                    .unwrap_or(0.0);
+                f.max(0.0)
+            };
+            let peso_total: f32 = participantes.iter().map(|&i| peso(i)).sum();
+            let sobrante = disponible - suma;
+            if peso_total > 0.0 {
+                for &i in &participantes {
+                    tam_main[i] += sobrante * peso(i) / peso_total;
+                }
+            } else {
+                let cuota = sobrante / n_part.max(1.0);
+                for &i in &participantes {
+                    tam_main[i] += cuota;
+                }
+            }
+        }
+    }
+
+    // 4) Posicionar.
+    let total: f32 = if control_main {
+        participantes.iter().map(|&i| tam_main[i]).sum::<f32>()
+            + group.spacing * (n_part - 1.0).max(0.0)
+    } else {
+        participantes
+            .iter()
+            .map(|&i| if horizontal { children[i][2] } else { children[i][3] })
+            .sum::<f32>()
+            + group.spacing * (n_part - 1.0).max(0.0)
+    };
+
+    let bloque = match main_align {
+        "center" => (inner_main - total) * 0.5,
+        "end" => inner_main - total,
+        _ => 0.0,
+    };
+    let mut cursor = (if horizontal { inner[0] } else { inner[1] }) + bloque;
+    let mut out = children.to_vec();
+
+    for (i, child) in children.iter().enumerate() {
+        if !participantes.contains(&i) {
+            // ignore_layout: conserva rect completo, no consume cursor ni spacing.
+            continue;
+        }
+        let mut nr = *child;
+        let off_cross = match cross_align {
+            "center" => (inner_cross - tam_cross[i]) * 0.5,
+            "end" => inner_cross - tam_cross[i],
+            _ => 0.0,
+        };
+
+        if horizontal {
+            nr[0] = cursor;
+            nr[1] = inner[1] + if control_cross { 0.0 } else { off_cross };
+            nr[2] = if control_main { tam_main[i] } else { child[2] };
+            nr[3] = if control_cross { tam_cross[i] } else { child[3] };
+            cursor += nr[2] + group.spacing;
+        } else {
+            nr[1] = cursor;
+            nr[0] = inner[0] + if control_cross { 0.0 } else { off_cross };
+            nr[2] = if control_cross { tam_cross[i] } else { child[2] };
+            nr[3] = if control_main { tam_main[i] } else { child[3] };
+            cursor += nr[3] + group.spacing;
+        }
+        // Mínimo absoluto 10.0 (coherente con resolve_ui_rect_in).
+        nr[2] = nr[2].max(10.0);
+        nr[3] = nr[3].max(10.0);
+        out[i] = nr;
     }
     out
 }
@@ -1915,6 +2730,19 @@ pub struct EntityData {
     /// escenas anteriores no traen el campo.
     #[serde(default)]
     pub layout_group: Option<LayoutGroupData>,
+    /// Tamaños de layout del hijo (V5b-1, G7-mínimo). `#[serde(default)]`:
+    /// las escenas anteriores no traen el campo.
+    #[serde(default)]
+    pub layout_element: Option<LayoutElementData>,
+    /// Ajuste del grupo a su contenido (V5b-2, G6). `#[serde(default)]`:
+    /// las escenas anteriores no traen el campo.
+    #[serde(default)]
+    pub content_size_fitter: Option<ContentSizeFitterData>,
+    pub grid_layout_group: Option<GridLayoutGroupData>,
+    /// Máscara rectangular (V5c, M1). `#[serde(default)]`: las escenas
+    /// anteriores no traen el campo.
+    #[serde(default)]
+    pub rect_mask2d: Option<RectMask2DData>,
 /// Drag & drop de UI (Canvas v2). `#[serde(default)]`: las
     /// escenas anteriores no traen el campo.
     #[serde(default)]
@@ -2098,6 +2926,26 @@ impl EntityData {
         } else {
             None
         };
+        let layout_element = if components.iter().any(|c| c == "LayoutElement") {
+            Some(LayoutElementData::default())
+        } else {
+            None
+        };
+        let content_size_fitter = if components.iter().any(|c| c == "ContentSizeFitter") {
+            Some(ContentSizeFitterData::default())
+        } else {
+            None
+        };
+        let grid_layout_group = if components.iter().any(|c| c == "GridLayoutGroup") {
+            Some(GridLayoutGroupData::default())
+        } else {
+            None
+        };
+        let rect_mask2d = if components.iter().any(|c| c == "RectMask2D") {
+            Some(RectMask2DData::default())
+        } else {
+            None
+        };
 
         let tag = if name.contains("Player") {
             "Player".into()
@@ -2138,6 +2986,10 @@ impl EntityData {
             ui_image,
             ui_drag: None,
             layout_group,
+            layout_element,
+            content_size_fitter,
+            grid_layout_group,
+            rect_mask2d,
             portal: None,
             animator,
             parent: None,
@@ -4016,6 +4868,10 @@ mod tests {
             spacing: 10.0,
             padding: [5.0, 5.0, 5.0, 5.0],
             alignment: "start".into(),
+            child_control_width: false,
+            child_control_height: false,
+            child_force_expand_width: false,
+            child_force_expand_height: false,
         };
         let hijos = [[0.0, 0.0, 100.0, 40.0], [0.0, 0.0, 50.0, 40.0]];
         let out = layout_group_rects([0.0, 0.0, 300.0, 100.0], &g, &hijos);
@@ -4513,6 +5369,916 @@ mod tests {
         let b = back.rotation_quat();
         let dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
         assert!((dot.abs() - 1.0).abs() < 1.0e-6, "dot = {dot}");
+    }
+
+    // Rect [0,0,400,200] con padding [10,20,10,20] y spacing 10.
+    // Hijos de tamaños conocidos (las posiciones iniciales no importan).
+    fn rect_grupo() -> [f32; 4] {
+        [0.0, 0.0, 400.0, 200.0]
+    }
+    fn hijos_grupo() -> Vec<[f32; 4]> {
+        vec![[0.0, 0.0, 100.0, 40.0], [0.0, 0.0, 60.0, 30.0]]
+    }
+    fn grupo(dir: &str, align: &str) -> LayoutGroupData {
+        LayoutGroupData {
+            direction: dir.into(),
+            spacing: 10.0,
+            padding: [10.0, 20.0, 10.0, 20.0],
+            alignment: align.into(),
+            child_control_width: false,
+            child_control_height: false,
+            child_force_expand_width: false,
+            child_force_expand_height: false,
+        }
+    }
+    fn assert_rects(real: &[[f32; 4]], esperado: &[[f32; 4]]) {
+        assert_eq!(real.len(), esperado.len(), "número de rects distinto");
+        for (i, (r, e)) in real.iter().zip(esperado.iter()).enumerate() {
+            for j in 0..4 {
+                assert!(
+                    (r[j] - e[j]).abs() < 1e-4,
+                    "rect[{i}].{j} = {} != {}",
+                    r[j],
+                    e[j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn layout_horizontal_9_posiciones() {
+        // inner = 380x160; total = 100+60+10 = 170.
+        // main: start=0, center=105, end=210.
+        // cross (upper=start, middle=center, lower=end) sobre 160:
+        //   hijo0(h=40): 0 / 60 / 120 ; hijo1(h=30): 0 / 65 / 130.
+        let casos: &[(&str, [[f32; 4]; 2])] = &[
+            ("upper_left",   [[10.0, 20.0, 100.0, 40.0], [120.0, 20.0, 60.0, 30.0]]),
+            ("upper_center", [[115.0, 20.0, 100.0, 40.0], [225.0, 20.0, 60.0, 30.0]]),
+            ("upper_right",  [[220.0, 20.0, 100.0, 40.0], [330.0, 20.0, 60.0, 30.0]]),
+            ("middle_left",  [[10.0, 80.0, 100.0, 40.0], [120.0, 85.0, 60.0, 30.0]]),
+            ("center",       [[115.0, 80.0, 100.0, 40.0], [225.0, 85.0, 60.0, 30.0]]),
+            ("middle_right", [[220.0, 80.0, 100.0, 40.0], [330.0, 85.0, 60.0, 30.0]]),
+            ("lower_left",   [[10.0, 140.0, 100.0, 40.0], [120.0, 150.0, 60.0, 30.0]]),
+            ("lower_center", [[115.0, 140.0, 100.0, 40.0], [225.0, 150.0, 60.0, 30.0]]),
+            ("lower_right",  [[220.0, 140.0, 100.0, 40.0], [330.0, 150.0, 60.0, 30.0]]),
+        ];
+        for (align, esperado) in casos {
+            let real = layout_group_rects(rect_grupo(), &grupo("horizontal", align), &hijos_grupo());
+            assert_rects(&real, esperado);
+        }
+    }
+
+    #[test]
+    fn layout_vertical_9_posiciones() {
+        // inner = 380x160; main(vertical) = 160; total = 40+30+10 = 80.
+        // main: start=0, center=40, end=80.
+        // cross (left=start, center=center, right=end) sobre 380:
+        //   hijo0(w=100): 0 / 140 / 280 ; hijo1(w=60): 0 / 160 / 320.
+        let casos: &[(&str, [[f32; 4]; 2])] = &[
+            ("upper_left",   [[10.0, 20.0, 100.0, 40.0], [10.0, 70.0, 60.0, 30.0]]),
+            ("upper_center", [[150.0, 20.0, 100.0, 40.0], [170.0, 70.0, 60.0, 30.0]]),
+            ("upper_right",  [[290.0, 20.0, 100.0, 40.0], [330.0, 70.0, 60.0, 30.0]]),
+            ("middle_left",  [[10.0, 60.0, 100.0, 40.0], [10.0, 110.0, 60.0, 30.0]]),
+            ("center",       [[150.0, 60.0, 100.0, 40.0], [170.0, 110.0, 60.0, 30.0]]),
+            ("middle_right", [[290.0, 60.0, 100.0, 40.0], [330.0, 110.0, 60.0, 30.0]]),
+            ("lower_left",   [[10.0, 100.0, 100.0, 40.0], [10.0, 150.0, 60.0, 30.0]]),
+            ("lower_center", [[150.0, 100.0, 100.0, 40.0], [170.0, 150.0, 60.0, 30.0]]),
+            ("lower_right",  [[290.0, 100.0, 100.0, 40.0], [330.0, 150.0, 60.0, 30.0]]),
+        ];
+        for (align, esperado) in casos {
+            let real = layout_group_rects(rect_grupo(), &grupo("vertical", align), &hijos_grupo());
+            assert_rects(&real, esperado);
+        }
+    }
+
+    #[test]
+    fn layout_alias_legados() {
+        // "start"/"center"/"end" en horizontal deben reproducir el
+        // comportamiento previo (mismo valor en ambos ejes).
+        let g = rect_grupo();
+        let h = hijos_grupo();
+        let start = layout_group_rects(g, &grupo("horizontal", "start"), &h);
+        assert_rects(&start, &[[10.0, 20.0, 100.0, 40.0], [120.0, 20.0, 60.0, 30.0]]);
+        let center = layout_group_rects(g, &grupo("horizontal", "center"), &h);
+        assert_rects(&center, &[[115.0, 80.0, 100.0, 40.0], [225.0, 85.0, 60.0, 30.0]]);
+        let end = layout_group_rects(g, &grupo("horizontal", "end"), &h);
+        assert_rects(&end, &[[220.0, 140.0, 100.0, 40.0], [330.0, 150.0, 60.0, 30.0]]);
+
+        // Y lo mismo en vertical (bit a bit con el comportamiento previo).
+        let v_start = layout_group_rects(g, &grupo("vertical", "start"), &h);
+        assert_rects(&v_start, &[[10.0, 20.0, 100.0, 40.0], [10.0, 70.0, 60.0, 30.0]]);
+        let v_center = layout_group_rects(g, &grupo("vertical", "center"), &h);
+        assert_rects(&v_center, &[[150.0, 60.0, 100.0, 40.0], [170.0, 110.0, 60.0, 30.0]]);
+        let v_end = layout_group_rects(g, &grupo("vertical", "end"), &h);
+        assert_rects(&v_end, &[[290.0, 100.0, 100.0, 40.0], [330.0, 150.0, 60.0, 30.0]]);
+    }
+
+    #[test]
+    fn layout_desconocido_igual_a_start() {
+        let g = rect_grupo();
+        let h = hijos_grupo();
+        let desconocido = layout_group_rects(g, &grupo("horizontal", "lo_que_sea"), &h);
+        let start = layout_group_rects(g, &grupo("horizontal", "start"), &h);
+        assert_rects(&desconocido, &start);
+        let desconocido_v = layout_group_rects(g, &grupo("vertical", "xyz"), &h);
+        let start_v = layout_group_rects(g, &grupo("vertical", "start"), &h);
+        assert_rects(&desconocido_v, &start_v);
+    }
+
+    #[test]
+    fn resolver_alineacion_basico() {
+        assert_eq!(resolver_alineacion("start", true), ("start", "start"));
+        assert_eq!(resolver_alineacion("center", false), ("center", "center"));
+        assert_eq!(resolver_alineacion("end", true), ("end", "end"));
+        assert_eq!(resolver_alineacion("upper_left", true), ("start", "start"));
+        assert_eq!(resolver_alineacion("upper_left", false), ("start", "start"));
+        assert_eq!(resolver_alineacion("lower_right", true), ("end", "end"));
+        assert_eq!(resolver_alineacion("lower_right", false), ("end", "end"));
+        assert_eq!(resolver_alineacion("upper_right", true), ("end", "start"));
+        assert_eq!(resolver_alineacion("upper_right", false), ("start", "end"));
+        assert_eq!(resolver_alineacion("basura", true), ("start", "start"));
+    }
+
+    // ── V5b-1: Control Size + LayoutElement ──────────────────────────
+
+    fn grupo_control(
+        dir: &str,
+        control_w: bool,
+        control_h: bool,
+        expand_w: bool,
+        expand_h: bool,
+    ) -> LayoutGroupData {
+        LayoutGroupData {
+            direction: dir.into(),
+            spacing: 10.0,
+            padding: [10.0, 20.0, 10.0, 20.0],
+            alignment: "start".into(),
+            child_control_width: control_w,
+            child_control_height: control_h,
+            child_force_expand_width: expand_w,
+            child_force_expand_height: expand_h,
+        }
+    }
+
+    fn elemento(
+        min_w: Option<f32>,
+        min_h: Option<f32>,
+        pref_w: Option<f32>,
+        pref_h: Option<f32>,
+    ) -> LayoutElementData {
+        LayoutElementData {
+            min_width: min_w,
+            min_height: min_h,
+            preferred_width: pref_w,
+            preferred_height: pref_h,
+            flexible_width: 0.0,
+            flexible_height: 0.0,
+            ignore_layout: false,
+        }
+    }
+
+    #[test]
+    fn layout_control_width_toma_preferido() {
+        // inner = 380x160; preferidos 80 y 120; total 80+120+10 = 210.
+        let g = grupo_control("horizontal", true, false, false, false);
+        let el0 = elemento(None, None, Some(80.0), None);
+        let el1 = elemento(None, None, Some(120.0), None);
+        let out = layout_group_rects_control(
+            rect_grupo(),
+            &g,
+            &hijos_grupo(),
+            &[[80.0, 40.0], [120.0, 30.0]],
+            &[Some(&el0), Some(&el1)],
+        );
+        assert_rects(
+            &out,
+            &[[10.0, 20.0, 80.0, 40.0], [100.0, 20.0, 120.0, 30.0]],
+        );
+    }
+
+    #[test]
+    fn layout_control_height_y_cruzado_llena_interior() {
+        // Vertical, control en ambos ejes: alto desde preferido, ancho =
+        // todo el interior (380).
+        let g = grupo_control("vertical", true, true, false, false);
+        let el0 = elemento(None, None, None, Some(40.0));
+        let el1 = elemento(None, None, None, Some(30.0));
+        let out = layout_group_rects_control(
+            rect_grupo(),
+            &g,
+            &hijos_grupo(),
+            &[[80.0, 40.0], [120.0, 30.0]],
+            &[Some(&el0), Some(&el1)],
+        );
+        assert_rects(
+            &out,
+            &[[10.0, 20.0, 380.0, 40.0], [10.0, 70.0, 380.0, 30.0]],
+        );
+    }
+
+    #[test]
+    fn layout_force_expand_reparte_sobrante_a_partes_iguales() {
+        // inner_main 380; preferidos 80+120 = 200; spacing 10; sobrante
+        // 170 → 85 a cada hijo: 165 y 205.
+        let g = grupo_control("horizontal", true, false, true, false);
+        let el0 = elemento(None, None, Some(80.0), None);
+        let el1 = elemento(None, None, Some(120.0), None);
+        let out = layout_group_rects_control(
+            rect_grupo(),
+            &g,
+            &hijos_grupo(),
+            &[[80.0, 40.0], [120.0, 30.0]],
+            &[Some(&el0), Some(&el1)],
+        );
+        assert_rects(
+            &out,
+            &[[10.0, 20.0, 165.0, 40.0], [185.0, 20.0, 205.0, 30.0]],
+        );
+    }
+
+    #[test]
+    fn layout_encoge_hacia_min_sin_bajar_de_min() {
+        // Preferidos 300+200 = 500; disponible 370; mins 100 y 50
+        // (suma 150 < 370): encoge proporcionalmente hacia min.
+        // factor = (350-130)/350; tam0 = 100+200*factor = 225.7143;
+        // tam1 = 50+150*factor = 144.2857.
+        let g = grupo_control("horizontal", true, false, false, false);
+        let el0 = elemento(Some(100.0), None, Some(300.0), None);
+        let el1 = elemento(Some(50.0), None, Some(200.0), None);
+        let out = layout_group_rects_control(
+            rect_grupo(),
+            &g,
+            &hijos_grupo(),
+            &[[300.0, 40.0], [200.0, 30.0]],
+            &[Some(&el0), Some(&el1)],
+        );
+        assert_rects(
+            &out,
+            &[
+                [10.0, 20.0, 225.7143, 40.0],
+                [245.7143, 20.0, 144.2857, 30.0],
+            ],
+        );
+
+        // Mins que suman más que lo disponible: todos quedan en su min
+        // (y el bloque desborda, documentado).
+        let el0b = elemento(Some(250.0), None, Some(300.0), None);
+        let el1b = elemento(Some(200.0), None, Some(200.0), None);
+        let out2 = layout_group_rects_control(
+            rect_grupo(),
+            &g,
+            &hijos_grupo(),
+            &[[300.0, 40.0], [200.0, 30.0]],
+            &[Some(&el0b), Some(&el1b)],
+        );
+        assert_rects(
+            &out2,
+            &[[10.0, 20.0, 250.0, 40.0], [270.0, 20.0, 200.0, 30.0]],
+        );
+    }
+
+    #[test]
+    fn layout_ignore_layout_no_consume_espacio() {
+        // Hijo 1 ignorado: conserva su rect y no consume spacing; solo
+        // hay 1 spacing (entre el 0 y el 2).
+        let g = grupo_control("horizontal", true, false, false, false);
+        let el0 = elemento(None, None, Some(80.0), None);
+        let mut el1 = elemento(None, None, Some(999.0), None);
+        el1.ignore_layout = true;
+        let el2 = elemento(None, None, Some(70.0), None);
+        let hijos = [
+            [0.0, 0.0, 100.0, 40.0],
+            [0.0, 0.0, 60.0, 30.0],
+            [0.0, 0.0, 50.0, 50.0],
+        ];
+        let out = layout_group_rects_control(
+            rect_grupo(),
+            &g,
+            &hijos,
+            &[[80.0, 40.0], [999.0, 30.0], [70.0, 50.0]],
+            &[Some(&el0), Some(&el1), Some(&el2)],
+        );
+        assert_rects(
+            &out,
+            &[
+                [10.0, 20.0, 80.0, 40.0],
+                [0.0, 0.0, 60.0, 30.0],
+                [100.0, 20.0, 70.0, 50.0],
+            ],
+        );
+    }
+
+    #[test]
+    fn layout_control_sin_control_identico_v5a() {
+        // Los 4 flags en false y sin ignore_layout: byte a byte igual
+        // que layout_group_rects, también con LayoutElement por defecto.
+        let g = grupo_control("horizontal", false, false, false, false);
+        let prefs = [[100.0, 40.0], [60.0, 30.0]];
+        let esperado = layout_group_rects(rect_grupo(), &g, &hijos_grupo());
+        let out = layout_group_rects_control(
+            rect_grupo(),
+            &g,
+            &hijos_grupo(),
+            &prefs,
+            &[None, None],
+        );
+        assert_eq!(out, esperado);
+        let el = LayoutElementData::default();
+        let out2 = layout_group_rects_control(
+            rect_grupo(),
+            &g,
+            &hijos_grupo(),
+            &prefs,
+            &[Some(&el), Some(&el)],
+        );
+        assert_eq!(out2, esperado);
+    }
+
+    #[test]
+    fn preferidos_bottom_up_h_dentro_de_v() {
+        // Árbol: raíz → VGroup → [HGroup → [ImgA, ImgB], ImgC].
+        // ImgA pref [80,40], ImgB [120,40], HGroup [214,60] (alto
+        // explícito 60), ImgC [100,50], VGroup [234,135], raíz [400,300].
+        let mut gv = grupo_control("vertical", true, true, false, false);
+        gv.spacing = 5.0;
+        gv.padding = [10.0, 10.0, 10.0, 10.0];
+        let mut gh = grupo_control("horizontal", true, true, false, false);
+        gh.spacing = 4.0;
+        gh.padding = [5.0, 5.0, 5.0, 5.0];
+        let el_h = elemento(None, None, None, Some(60.0));
+        let el_a = elemento(None, None, Some(80.0), None);
+        let el_b = elemento(None, None, Some(120.0), None);
+        let el_c = elemento(None, None, None, Some(50.0));
+        let entradas = vec![
+            EntradaPreferido {
+                padre: None,
+                hijos: &[1],
+                activo: true,
+                rect_actual: [0.0, 0.0, 400.0, 300.0],
+                layout_group: None,
+                layout_element: None,
+                texto: None,
+                grid_layout: None,
+            },
+            EntradaPreferido {
+                padre: Some(0),
+                hijos: &[2, 5],
+                activo: true,
+                rect_actual: [0.0, 0.0, 400.0, 300.0],
+                layout_group: Some(&gv),
+                layout_element: None,
+                texto: None,
+                grid_layout: None,
+            },
+            EntradaPreferido {
+                padre: Some(1),
+                hijos: &[3, 4],
+                activo: true,
+                rect_actual: [0.0, 0.0, 200.0, 60.0],
+                layout_group: Some(&gh),
+                layout_element: Some(&el_h),
+                texto: None,
+                grid_layout: None,
+            },
+            EntradaPreferido {
+                padre: Some(2),
+                hijos: &[],
+                activo: true,
+                rect_actual: [0.0, 0.0, 50.0, 40.0],
+                layout_group: None,
+                layout_element: Some(&el_a),
+                texto: None,
+                grid_layout: None,
+            },
+            EntradaPreferido {
+                padre: Some(2),
+                hijos: &[],
+                activo: true,
+                rect_actual: [0.0, 0.0, 50.0, 40.0],
+                layout_group: None,
+                layout_element: Some(&el_b),
+                texto: None,
+                grid_layout: None,
+            },
+            EntradaPreferido {
+                padre: Some(1),
+                hijos: &[],
+                activo: true,
+                rect_actual: [0.0, 0.0, 100.0, 30.0],
+                layout_group: None,
+                layout_element: Some(&el_c),
+                texto: None,
+                grid_layout: None,
+            },
+        ];
+        let medir = |_t: &str, _tam: f32, _max: f32, _ls: f32| (0.0, 0.0);
+        let pref = calcular_preferidos_bottom_up(&entradas, &medir);
+        assert_eq!(pref[0], [400.0, 300.0]);
+        assert_eq!(pref[1], [234.0, 135.0]);
+        assert_eq!(pref[2], [214.0, 60.0]);
+        assert_eq!(pref[3], [80.0, 40.0]);
+        assert_eq!(pref[4], [120.0, 40.0]);
+        assert_eq!(pref[5], [100.0, 50.0]);
+    }
+
+    #[test]
+    fn preferidos_texto_usa_medidor_y_min_limita() {
+        // Medidor falso: ancho = len * tam * 0.5, alto = tam * 1.2.
+        let medir = |t: &str, tam: f32, _max: f32, _ls: f32| {
+            (t.len() as f32 * tam * 0.5, tam * 1.2)
+        };
+        let el_min = elemento(Some(100.0), None, Some(50.0), None);
+        let entradas = vec![
+            EntradaPreferido {
+                padre: None,
+                hijos: &[1, 2],
+                activo: true,
+                rect_actual: [0.0, 0.0, 400.0, 300.0],
+                layout_group: None,
+                layout_element: None,
+                texto: None,
+                grid_layout: None,
+            },
+            EntradaPreferido {
+                padre: Some(0),
+                hijos: &[],
+                activo: true,
+                rect_actual: [0.0, 0.0, 10.0, 10.0],
+                layout_group: None,
+                layout_element: None,
+                texto: Some(("Hola", 20.0, 0.0)),
+                grid_layout: None,
+            },
+            EntradaPreferido {
+                padre: Some(0),
+                hijos: &[],
+                activo: true,
+                rect_actual: [0.0, 0.0, 10.0, 10.0],
+                layout_group: None,
+                layout_element: Some(&el_min),
+                texto: Some(("Hola", 20.0, 0.0)),
+                grid_layout: None,
+            },
+        ];
+        let pref = calcular_preferidos_bottom_up(&entradas, &medir);
+        // "Hola" a 20: ancho 4*20*0.5 = 40, alto 20*1.2 = 24.
+        assert_eq!(pref[1], [40.0, 24.0]);
+        // Preferido explícito 50, pero min 100 manda.
+        assert_eq!(pref[2], [100.0, 24.0]);
+    }
+
+    // ---- V5b-2: flexible, mínimos, contenido y fitter ----
+
+    fn elemento_flex(
+        pref_w: Option<f32>,
+        pref_h: Option<f32>,
+        flex_w: f32,
+        flex_h: f32,
+    ) -> LayoutElementData {
+        LayoutElementData {
+            min_width: None,
+            min_height: None,
+            preferred_width: pref_w,
+            preferred_height: pref_h,
+            flexible_width: flex_w,
+            flexible_height: flex_h,
+            ignore_layout: false,
+        }
+    }
+
+    fn cerca(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    #[test]
+    fn flexible_reparte_sobrante_en_proporcion_a_pesos() {
+        // Grupo horizontal, control + expand en ancho. inner_main = 380,
+        // preferidos 80 y 120, spacing 10: disponible 370, sobrante 170.
+        // Pesos 1:2 → 170/3 y 340/3.
+        let g = grupo_control("horizontal", true, false, true, false);
+        let el0 = elemento_flex(Some(80.0), None, 1.0, 0.0);
+        let el1 = elemento_flex(Some(120.0), None, 2.0, 0.0);
+        let out = layout_group_rects_control(
+            rect_grupo(),
+            &g,
+            &hijos_grupo(),
+            &[[80.0, 40.0], [120.0, 30.0]],
+            &[Some(&el0), Some(&el1)],
+        );
+        assert!(cerca(out[0][2], 80.0 + 170.0 / 3.0), "w0 = {}", out[0][2]);
+        assert!(cerca(out[1][2], 120.0 + 340.0 / 3.0), "w1 = {}", out[1][2]);
+        assert!(cerca(out[0][0], 10.0), "x0 = {}", out[0][0]);
+        assert!(
+            cerca(out[1][0], 10.0 + (80.0 + 170.0 / 3.0) + 10.0),
+            "x1 = {}",
+            out[1][0]
+        );
+    }
+
+    #[test]
+    fn flexible_sin_expand_no_reparte() {
+        // Mismo reparto sin force-expand: los tamaños quedan en preferido.
+        let g = grupo_control("horizontal", true, false, false, false);
+        let el0 = elemento_flex(Some(80.0), None, 1.0, 0.0);
+        let el1 = elemento_flex(Some(120.0), None, 2.0, 0.0);
+        let out = layout_group_rects_control(
+            rect_grupo(),
+            &g,
+            &hijos_grupo(),
+            &[[80.0, 40.0], [120.0, 30.0]],
+            &[Some(&el0), Some(&el1)],
+        );
+        assert_eq!(out[0], [10.0, 20.0, 80.0, 40.0]);
+        assert_eq!(out[1], [100.0, 20.0, 120.0, 30.0]);
+    }
+
+    #[test]
+    fn flexible_cero_en_todos_reparte_a_partes_iguales() {
+        // Sin pesos: comportamiento V5b-1 intacto (sobrante 170 / 2 = 85).
+        let g = grupo_control("horizontal", true, false, true, false);
+        let el0 = elemento_flex(Some(80.0), None, 0.0, 0.0);
+        let el1 = elemento_flex(Some(120.0), None, 0.0, 0.0);
+        let out = layout_group_rects_control(
+            rect_grupo(),
+            &g,
+            &hijos_grupo(),
+            &[[80.0, 40.0], [120.0, 30.0]],
+            &[Some(&el0), Some(&el1)],
+        );
+        assert_eq!(out[0], [10.0, 20.0, 165.0, 40.0]);
+        assert_eq!(out[1], [185.0, 20.0, 205.0, 30.0]);
+    }
+
+    #[test]
+    fn flexible_negativo_se_trata_como_cero() {
+        // Peso -5 en el primero: solo el segundo (peso 2) recibe sobrante.
+        let g = grupo_control("horizontal", true, false, true, false);
+        let el0 = elemento_flex(Some(80.0), None, -5.0, 0.0);
+        let el1 = elemento_flex(Some(120.0), None, 2.0, 0.0);
+        let out = layout_group_rects_control(
+            rect_grupo(),
+            &g,
+            &hijos_grupo(),
+            &[[80.0, 40.0], [120.0, 30.0]],
+            &[Some(&el0), Some(&el1)],
+        );
+        assert_eq!(out[0], [10.0, 20.0, 80.0, 40.0]);
+        assert_eq!(out[1], [100.0, 20.0, 290.0, 30.0]);
+    }
+
+    #[test]
+    fn minimos_bottom_up_agrega_minimos() {
+        // Mismo árbol que preferidos_bottom_up_h_dentro_de_v, con mínimos:
+        // ImgA min_w 50, ImgB min_w 60, ImgC min_h 30, HGroup min_h 40.
+        let mut gv = grupo_control("vertical", true, true, false, false);
+        gv.spacing = 5.0;
+        gv.padding = [10.0, 10.0, 10.0, 10.0];
+        let mut gh = grupo_control("horizontal", true, true, false, false);
+        gh.spacing = 4.0;
+        gh.padding = [5.0, 5.0, 5.0, 5.0];
+        let el_h = LayoutElementData {
+            min_width: None,
+            min_height: Some(40.0),
+            preferred_width: None,
+            preferred_height: Some(60.0),
+            flexible_width: 0.0,
+            flexible_height: 0.0,
+            ignore_layout: false,
+        };
+        let el_a = LayoutElementData {
+            min_width: Some(50.0),
+            min_height: None,
+            preferred_width: Some(80.0),
+            preferred_height: None,
+            flexible_width: 0.0,
+            flexible_height: 0.0,
+            ignore_layout: false,
+        };
+        let el_b = LayoutElementData {
+            min_width: Some(60.0),
+            min_height: None,
+            preferred_width: Some(120.0),
+            preferred_height: None,
+            flexible_width: 0.0,
+            flexible_height: 0.0,
+            ignore_layout: false,
+        };
+        let el_c = LayoutElementData {
+            min_width: None,
+            min_height: Some(30.0),
+            preferred_width: None,
+            preferred_height: Some(50.0),
+            flexible_width: 0.0,
+            flexible_height: 0.0,
+            ignore_layout: false,
+        };
+        let entradas = vec![
+            EntradaPreferido {
+                padre: None,
+                hijos: &[1],
+                activo: true,
+                rect_actual: [0.0, 0.0, 400.0, 300.0],
+                layout_group: None,
+                layout_element: None,
+                texto: None,
+                grid_layout: None,
+            },
+            EntradaPreferido {
+                padre: Some(0),
+                hijos: &[2, 5],
+                activo: true,
+                rect_actual: [0.0, 0.0, 400.0, 300.0],
+                layout_group: Some(&gv),
+                layout_element: None,
+                texto: None,
+                grid_layout: None,
+            },
+            EntradaPreferido {
+                padre: Some(1),
+                hijos: &[3, 4],
+                activo: true,
+                rect_actual: [0.0, 0.0, 200.0, 60.0],
+                layout_group: Some(&gh),
+                layout_element: Some(&el_h),
+                texto: None,
+                grid_layout: None,
+            },
+            EntradaPreferido {
+                padre: Some(2),
+                hijos: &[],
+                activo: true,
+                rect_actual: [0.0, 0.0, 50.0, 40.0],
+                layout_group: None,
+                layout_element: Some(&el_a),
+                texto: None,
+                grid_layout: None,
+            },
+            EntradaPreferido {
+                padre: Some(2),
+                hijos: &[],
+                activo: true,
+                rect_actual: [0.0, 0.0, 50.0, 40.0],
+                layout_group: None,
+                layout_element: Some(&el_b),
+                texto: None,
+                grid_layout: None,
+            },
+            EntradaPreferido {
+                padre: Some(1),
+                hijos: &[],
+                activo: true,
+                rect_actual: [0.0, 0.0, 100.0, 30.0],
+                layout_group: None,
+                layout_element: Some(&el_c),
+                texto: None,
+                grid_layout: None,
+            },
+        ];
+        let medir = |_t: &str, _tam: f32, _max: f32, _ls: f32| (0.0, 0.0);
+        let min = calcular_minimos_bottom_up(&entradas, &medir);
+        // Hojas: solo su mínimo explícito por eje.
+        assert_eq!(min[3], [50.0, 0.0]);
+        assert_eq!(min[4], [60.0, 0.0]);
+        assert_eq!(min[5], [0.0, 30.0]);
+        // HGroup: ancho 50+60+4+10 = 124; alto explícito 40.
+        assert_eq!(min[2], [124.0, 40.0]);
+        // VGroup: alto 40+30+5+20 = 95; ancho máx(124, 0)+20 = 144.
+        assert_eq!(min[1], [144.0, 95.0]);
+        // Raíz sin grupo ni mínimo: (0,0).
+        assert_eq!(min[0], [0.0, 0.0]);
+    }
+
+    #[test]
+    fn minimos_grupo_vacio_es_solo_padding() {
+        let g = grupo_control("horizontal", false, false, false, false);
+        let entradas = vec![EntradaPreferido {
+            padre: None,
+            hijos: &[],
+            activo: true,
+            rect_actual: [0.0, 0.0, 400.0, 200.0],
+            layout_group: Some(&g),
+            layout_element: None,
+            texto: None,
+            grid_layout: None,
+        }];
+        let medir = |_t: &str, _tam: f32, _max: f32, _ls: f32| (0.0, 0.0);
+        // Padding [10,20,10,20]: mínimo [20,40]; preferido = rect.
+        assert_eq!(calcular_minimos_bottom_up(&entradas, &medir)[0], [20.0, 40.0]);
+        assert_eq!(
+            calcular_preferidos_bottom_up(&entradas, &medir)[0],
+            [400.0, 200.0]
+        );
+    }
+
+    #[test]
+    fn ajustar_fitter_respeta_modos_por_eje() {
+        let f = ContentSizeFitterData {
+            horizontal_fit: "preferred".into(),
+            vertical_fit: "min".into(),
+        };
+        assert_eq!(
+            ajustar_fitter([5.0, 7.0, 100.0, 50.0], &f, [140.0, 70.0], [230.0, 80.0]),
+            [5.0, 7.0, 230.0, 70.0]
+        );
+        let ninguno = ContentSizeFitterData::default();
+        assert_eq!(
+            ajustar_fitter([5.0, 7.0, 100.0, 50.0], &ninguno, [140.0, 70.0], [230.0, 80.0]),
+            [5.0, 7.0, 100.0, 50.0]
+        );
+        // Valores desconocidos caen a none.
+        let raro = ContentSizeFitterData {
+            horizontal_fit: "expand".into(),
+            vertical_fit: "".into(),
+        };
+        assert_eq!(
+            ajustar_fitter([5.0, 7.0, 100.0, 50.0], &raro, [140.0, 70.0], [230.0, 80.0]),
+            [5.0, 7.0, 100.0, 50.0]
+        );
+        assert_eq!(resolver_ajuste("min"), ModoAjuste::Minimo);
+        assert_eq!(resolver_ajuste("preferred"), ModoAjuste::Preferido);
+        assert_eq!(resolver_ajuste("none"), ModoAjuste::Ninguno);
+        assert_eq!(resolver_ajuste("otra"), ModoAjuste::Ninguno);
+    }
+
+    #[test]
+    fn fitter_serde_parcial_usa_none() {
+        let f: ContentSizeFitterData =
+            serde_json::from_str(r#"{"horizontal_fit":"preferred"}"#).unwrap();
+        assert_eq!(f.horizontal_fit, "preferred");
+        assert_eq!(f.vertical_fit, "none");
+        let f2 = ContentSizeFitterData::default();
+        assert_eq!(f2.horizontal_fit, "none");
+        assert_eq!(f2.vertical_fit, "none");
+    }
+
+    fn grid_base_3x2() -> GridLayoutGroupData {
+        GridLayoutGroupData {
+            cell_size: [100.0, 50.0],
+            spacing: [10.0, 5.0],
+            padding: [20.0, 10.0, 20.0, 10.0],
+            start_corner: "upper_left".into(),
+            start_axis: "horizontal".into(),
+            alignment: "start".into(),
+            constraint: "fixed_column_count".into(),
+            constraint_count: 3,
+        }
+    }
+
+    #[test]
+    fn grid_columnas_fijas_3x2() {
+        let grid = grid_base_3x2();
+        let hijos = vec![[0.0, 0.0, 10.0, 10.0]; 6];
+        let rects = layout_grid_rects([0.0, 0.0, 400.0, 300.0], &grid, &hijos);
+        assert_eq!(
+            rects,
+            vec![
+                [20.0, 10.0, 100.0, 50.0],
+                [130.0, 10.0, 100.0, 50.0],
+                [240.0, 10.0, 100.0, 50.0],
+                [20.0, 65.0, 100.0, 50.0],
+                [130.0, 65.0, 100.0, 50.0],
+                [240.0, 65.0, 100.0, 50.0],
+            ]
+        );
+    }
+
+    #[test]
+    fn grid_flexible_calcula_columnas_por_ancho() {
+        let grid = GridLayoutGroupData {
+            cell_size: [100.0, 50.0],
+            spacing: [10.0, 10.0],
+            padding: [0.0; 4],
+            constraint: "flexible".into(),
+            ..Default::default()
+        };
+        let hijos = vec![[0.0, 0.0, 10.0, 10.0]; 5];
+        let rects = layout_grid_rects([0.0, 0.0, 350.0, 200.0], &grid, &hijos);
+        assert_eq!(
+            rects,
+            vec![
+                [0.0, 0.0, 100.0, 50.0],
+                [110.0, 0.0, 100.0, 50.0],
+                [220.0, 0.0, 100.0, 50.0],
+                [0.0, 60.0, 100.0, 50.0],
+                [110.0, 60.0, 100.0, 50.0],
+            ]
+        );
+    }
+
+    #[test]
+    fn grid_filas_fijas_eje_vertical_y_esquina_lower_right() {
+        let grid = GridLayoutGroupData {
+            cell_size: [80.0, 40.0],
+            spacing: [5.0, 5.0],
+            padding: [0.0; 4],
+            start_corner: "lower_right".into(),
+            start_axis: "vertical".into(),
+            constraint: "fixed_row_count".into(),
+            constraint_count: 2,
+            ..Default::default()
+        };
+        let hijos = vec![[0.0, 0.0, 10.0, 10.0]; 5];
+        let rects = layout_grid_rects([0.0, 0.0, 400.0, 300.0], &grid, &hijos);
+        assert_eq!(
+            rects,
+            vec![
+                [170.0, 45.0, 80.0, 40.0],
+                [170.0, 0.0, 80.0, 40.0],
+                [85.0, 45.0, 80.0, 40.0],
+                [85.0, 0.0, 80.0, 40.0],
+                [0.0, 45.0, 80.0, 40.0],
+            ]
+        );
+    }
+
+    #[test]
+    fn grid_alineacion_center_centra_bloque() {
+        let grid = GridLayoutGroupData {
+            cell_size: [100.0, 100.0],
+            spacing: [0.0, 0.0],
+            padding: [0.0; 4],
+            alignment: "center".into(),
+            constraint: "fixed_column_count".into(),
+            constraint_count: 2,
+            ..Default::default()
+        };
+        let hijos = vec![[0.0, 0.0, 10.0, 10.0]; 2];
+        let rects = layout_grid_rects([0.0, 0.0, 400.0, 300.0], &grid, &hijos);
+        assert_eq!(
+            rects,
+            vec![[100.0, 100.0, 100.0, 100.0], [200.0, 100.0, 100.0, 100.0]]
+        );
+    }
+
+    #[test]
+    fn grid_preferido_y_minimo_son_la_extension() {
+        // Medidor falso: nunca se llama (sin texto en el árbol).
+        let medir = |_t: &str, _tam: f32, _max: f32, _ls: f32| (0.0, 0.0);
+        let grid = grid_base_3x2();
+        let hijos_idx: Vec<usize> = (1..=5).collect();
+        let mut entradas = vec![EntradaPreferido {
+            padre: None,
+            hijos: &hijos_idx,
+            activo: true,
+            rect_actual: [0.0, 0.0, 300.0, 200.0],
+            layout_group: None,
+            layout_element: None,
+            texto: None,
+            grid_layout: Some(&grid),
+        }];
+        for _ in 0..5 {
+            entradas.push(EntradaPreferido {
+                padre: Some(0),
+                hijos: &[],
+                activo: true,
+                rect_actual: [0.0, 0.0, 50.0, 50.0],
+                layout_group: None,
+                layout_element: None,
+                texto: None,
+                grid_layout: None,
+            });
+        }
+        let pref = calcular_preferidos_bottom_up(&entradas, &medir);
+        let min = calcular_minimos_bottom_up(&entradas, &medir);
+        assert_eq!(pref[0], [360.0, 125.0]);
+        assert_eq!(min[0], [360.0, 125.0]);
+
+        // Rejilla vacía con el mismo grid: pref = rect actual, min = padding.
+        let nodos_vacio = vec![EntradaPreferido {
+            padre: None,
+            hijos: &[],
+            activo: true,
+            rect_actual: [0.0, 0.0, 300.0, 200.0],
+            layout_group: None,
+            layout_element: None,
+            texto: None,
+            grid_layout: Some(&grid),
+        }];
+        let pref = calcular_preferidos_bottom_up(&nodos_vacio, &medir);
+        let min = calcular_minimos_bottom_up(&nodos_vacio, &medir);
+        assert_eq!(pref[0], [300.0, 200.0]);
+        assert_eq!(min[0], [40.0, 20.0]);
+    }
+
+    #[test]
+    fn rect_mask2d_en_entity_data() {
+        let ent = EntityData::new(4247, "Mask".into(), vec!["RectMask2D".into()]);
+        let m = ent
+            .rect_mask2d
+            .expect("RectMask2D debería materializarse desde components");
+        assert_eq!(m.padding, [0.0; 4]);
+        assert_eq!(m.softness, 1.0);
+    }
+
+    #[test]
+    fn rect_mask2d_serde_redondo() {
+        let original = RectMask2DData {
+            padding: [1.5, 2.5, 3.5, 4.5],
+            softness: 2.5,
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let leido: RectMask2DData = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, leido);
     }
 }
 

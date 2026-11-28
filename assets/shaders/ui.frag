@@ -10,6 +10,7 @@ layout(location = 6) in vec4 v_pack1;
 layout(location = 7) in vec4 v_pack2;
 layout(location = 8) in vec4 v_grad_c0;
 layout(location = 9) in vec4 v_grad_c1;
+layout(location = 10) in vec4 v_clip_radios; // M3 (V5c): radios del clip
 
 layout(set = 0, binding = 0) uniform sampler2D atlas_tex;
 
@@ -51,6 +52,11 @@ void main() {
     // modo 3 (sombra) y modo 0 (color) no tocan base aquí.
 
     // 4. SDF de rect redondeado. dist se calcula una sola vez y se reutiliza.
+    // PREMULTIPLICADO: se escala `base` ENTERO (rgb + alfa), no solo el
+    // alfa — con la mezcla ONE/ONE_MINUS_SRC_ALPHA, bajar solo el alfa
+    // no recorta nada: el rgb seguiría sumándose a plena intensidad
+    // (cazado por el spike M3, V5c: el clip rectangular tampoco recortaba
+    // nunca; el borde 5b y el texto ya lo hacían así).
     float rad = (v_local.x < v_tamano.x * 0.5)
         ? (v_local.y < v_tamano.y * 0.5 ? v_radios.x : v_radios.w)
         : (v_local.y < v_tamano.y * 0.5 ? v_radios.y : v_radios.z);
@@ -59,13 +65,13 @@ void main() {
         ? length(max(q, 0.0)) - rad
         : length(max(abs(v_local - v_tamano * 0.5) - v_tamano * 0.5, 0.0));
     if (rad > 0.0) {
-        base.a *= 1.0 - smoothstep(0.0, 1.0, dist);
+        base *= 1.0 - smoothstep(0.0, 1.0, dist);
     }
 
     // 5. Sombra (modo 3): mismo SDF difuminado por el radio de desenfoque.
     if (modo > 2.5 && modo < 3.5) {
         float b = max(v_pack2.y, 1.0);
-        base.a *= 1.0 - smoothstep(0.0, b, dist);
+        base *= 1.0 - smoothstep(0.0, b, dist);
     }
 
     // 5b. Borde (V4/Q3, modo 4): banda de `ancho` px hacia dentro del
@@ -88,11 +94,23 @@ void main() {
 
     // 6. Clip. NOTA: v_clip llega en coordenadas LOCALES al rect del nodo
     // (el conversor de P3b2 resta la posición del nodo); no en pantalla.
+    // M3 (V5c): el clip puede ser redondeado (v_clip_radios del ancestro
+    // que recorta). SDF con signo del rect redondeado; con radios 0 es el
+    // rect de antes, bit a bit (max(dclip, 0) conserva el borde suave
+    // entero fuera del rect, como el código anterior). Se escala `base`
+    // ENTERO (ver paso 4): bajar solo el alfa no recorta nada con la
+    // mezcla ONE/ONE_MINUS_SRC_ALPHA.
     if (v_clip.z > 0.0) {
-        vec2 fuera = max(max(v_clip.xy - v_local, v_local - (v_clip.xy + v_clip.zw)), vec2(0.0));
-        float dclip = length(fuera);
+        float crad = (v_local.x < v_clip.x + v_clip.z * 0.5)
+            ? (v_local.y < v_clip.y + v_clip.w * 0.5 ? v_clip_radios.x : v_clip_radios.w)
+            : (v_local.y < v_clip.y + v_clip.w * 0.5 ? v_clip_radios.y : v_clip_radios.z);
+        vec2 cc = v_clip.xy + v_clip.zw * 0.5;
+        vec2 qc = abs(v_local - cc) - (v_clip.zw * 0.5 - vec2(crad));
+        float dclip = (crad > 0.0)
+            ? length(max(qc, 0.0)) + min(max(qc.x, qc.y), 0.0) - crad
+            : length(max(max(v_clip.xy - v_local, v_local - (v_clip.xy + v_clip.zw)), vec2(0.0)));
         float s = max(v_pack1.x, 0.0);
-        base.a *= 1.0 - smoothstep(0.0, max(s, 0.001), dclip);
+        base *= 1.0 - smoothstep(0.0, max(s, 0.001), max(dclip, 0.0));
     }
 
     // 7. Ya premultiplicado: la mezcla ONE/ONE_MINUS_SRC_ALPHA hace el resto.
