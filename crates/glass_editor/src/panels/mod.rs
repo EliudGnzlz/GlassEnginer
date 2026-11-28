@@ -1,5 +1,11 @@
 pub mod canvas_ui;
 pub mod console;
+
+/// Aviso Q11 (P1, V7): el modo de Canvas aún no tiene efecto; se pinta
+/// como Overlay hasta P2/P3. Texto único para el Inspector y el panel
+/// Canvas; P2/P3 lo retiran cuando el modo empiece a tener efecto.
+pub const AVISO_MODO_UI_SIN_EFECTO: &str =
+    "⚠ Este modo aún no tiene efecto (llega en V7, P2/P3). Se pinta como Overlay.";
 pub mod gizmo_3d;
 pub mod hierarchy;
 pub mod inspector;

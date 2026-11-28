@@ -297,20 +297,44 @@ fn segmento_mut(segs: &mut Vec<UiSegment>, kind: UiAtlasKind) -> &mut UiBatch {
     &mut segs.last_mut().expect("segmento recién creado").batch
 }
 
-/// Construye los segmentos de dibujo V2 en orden de pintor, agrupados
 /// Resuelve la cámara principal de una escena (P1, V7; ADR D1): la primera
-/// entidad con cámara `is_main`; si no hay ninguna, la primera con cámara;
-/// si no hay cámaras, None. El llamador resuelve; el pase solo recibe.
-/// P2/P3 usan el resultado para Camera/World; P1 lo recibe sin usarlo
-/// (Overlay no necesita cámara).
+/// entidad ACTIVA con cámara `is_main`; si no hay ninguna, la primera
+/// ACTIVA con cámara; si no hay cámaras activas, None. El llamador resuelve;
+/// el pase solo recibe. P2/P3 usan el resultado para Camera/World; P1 lo
+/// recibe sin usarlo (Overlay no necesita cámara).
+/// NOTA (pez P1, M3): la GameView elige su cámara por
+/// `selected_camera_id` o `Scene::active_camera()` (primera activa, sin
+/// preferir `is_main`); P2 debe alinear esta política con la de la vista
+/// antes de consumir la cámara.
 pub fn resolver_camara_principal(entities: &[EntityData]) -> Option<CameraData> {
     entities
         .iter()
+        .filter(|e| e.active)
         .find(|e| e.camera.as_ref().is_some_and(|c| c.is_main))
-        .or_else(|| entities.iter().find(|e| e.camera.is_some()))
+        .or_else(|| {
+            entities
+                .iter()
+                .filter(|e| e.active)
+                .find(|e| e.camera.is_some())
+        })
         .and_then(|e| e.camera.clone())
 }
 
+/// Modo de render del Canvas que gobierna la UI (P1, V7): el `render_mode`
+/// del primer Canvas en una entidad ACTIVA; si no hay Canvas activo,
+/// "ScreenSpaceOverlay". Solo alimenta el aviso de fallback de P1; P2/P3
+/// lo consumen para Camera/World (y P4, con varios Canvas, redefine la
+/// elección).
+pub fn modo_canvas_principal(entities: &[EntityData]) -> String {
+    entities
+        .iter()
+        .filter(|e| e.active)
+        .find_map(|e| e.canvas.as_ref())
+        .map(|c| c.render_mode.clone())
+        .unwrap_or_else(|| "ScreenSpaceOverlay".to_string())
+}
+
+/// Construye los segmentos de dibujo V2 en orden de pintor, agrupados
 /// por atlas. Sin documento (escena sin Canvas) devuelve un vec vacío.
 pub fn build_canvas_batch_v2(
     scene: &SceneState,
@@ -354,6 +378,7 @@ pub fn build_canvas_batch_v2(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glass_core::scene::CanvasData;
     use glass_ui::api::RectColocado;
     use glass_ui::pintor::{ModoPintado, Segmento};
     use glass_renderer::sdf_atlas::SdfAtlas;
@@ -401,6 +426,56 @@ mod tests {
         let entidades = vec![EntityData::new(1, "vacia".to_string(), Vec::new())];
         assert!(resolver_camara_principal(&entidades).is_none());
         assert!(resolver_camara_principal(&[]).is_none());
+    }
+
+    #[test]
+    fn resolver_camara_principal_salta_camara_inactiva() {
+        let mut principal_inactiva = camara_entidad(1, 50.0, true);
+        principal_inactiva.active = false;
+        let entidades = vec![
+            principal_inactiva,
+            camara_entidad(2, 60.0, false),
+        ];
+        let resuelta = resolver_camara_principal(&entidades).expect("debe haber cámara");
+        assert_eq!(resuelta.fov, 60.0);
+        let solo_inactiva = vec![{
+            let mut e = camara_entidad(1, 50.0, true);
+            e.active = false;
+            e
+        }];
+        assert!(resolver_camara_principal(&solo_inactiva).is_none());
+    }
+
+    // --- modo_canvas_principal (P1, V7; peces P1: solo Canvas activo) ---
+
+    fn canvas_entidad(id: u64, modo: &str) -> EntityData {
+        let mut e = EntityData::new(id, format!("canvas{id}"), Vec::new());
+        e.canvas = Some(CanvasData { render_mode: modo.to_string(), ..Default::default() });
+        e
+    }
+
+    #[test]
+    fn modo_canvas_principal_toma_el_primer_canvas_activo() {
+        let entidades = vec![
+            canvas_entidad(1, "WorldSpace"),
+            canvas_entidad(2, "ScreenSpaceCamera"),
+        ];
+        assert_eq!(modo_canvas_principal(&entidades), "WorldSpace");
+    }
+
+    #[test]
+    fn modo_canvas_principal_salta_canvas_inactivo() {
+        let mut inactivo = canvas_entidad(1, "WorldSpace");
+        inactivo.active = false;
+        let entidades = vec![inactivo, canvas_entidad(2, "ScreenSpaceCamera")];
+        assert_eq!(modo_canvas_principal(&entidades), "ScreenSpaceCamera");
+        let solo_inactivo = vec![{
+            let mut e = canvas_entidad(1, "WorldSpace");
+            e.active = false;
+            e
+        }];
+        assert_eq!(modo_canvas_principal(&solo_inactivo), "ScreenSpaceOverlay");
+        assert_eq!(modo_canvas_principal(&[]), "ScreenSpaceOverlay");
     }
 
     /// Función de búsqueda de UV de prueba.

@@ -3076,7 +3076,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         // P1 (V7, Q11): el modo aún no tiene efecto; se pinta
                         // como Overlay hasta P2/P3. Aviso visible, sin bloquear.
                         if canvas.render_mode != "ScreenSpaceOverlay" {
-                            ui.label("⚠ Este modo aún no tiene efecto (llega en V7, P2/P3). Se pinta como Overlay.");
+                            ui.label(super::AVISO_MODO_UI_SIN_EFECTO);
                         }
                         ui.horizontal(|ui| {
                             ui.label("Resolución Ref:");

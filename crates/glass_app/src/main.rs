@@ -2556,10 +2556,10 @@ struct EstadoUiPase<'a> {
     ui_font_failed: &'a mut std::collections::HashSet<String>,
 }
 
-/// P1 (V7): funcion libre (no metodo) a proposito: `renderer` es
-/// `&mut self.renderer` en render_frame y sigue vivo despues; un metodo
-/// `&mut self` chocaria con ese prestamo (E0499). El llamador pasa los
-/// campos por separado (prestamos disjuntos).
+/// P1 (V7): función libre (no método) a propósito: `renderer` es
+/// `&mut self.renderer` en render_frame y sigue vivo después; un método
+/// `&mut self` chocaría con ese préstamo (E0499). El llamador pasa los
+/// campos por separado (préstamos disjuntos).
 /// Pase UI parametrizado (P1, V7; ADR D6): construye el lote del Canvas
 /// (atlas, fuentes, maquetado) y lo graba con `render_ui_overlay`.
 /// `camara` es la cámara ya resuelta por el llamador (ADR D1) y `modo` el
@@ -2700,7 +2700,6 @@ fn render_ui_pase(
     resultado?;
     Ok(())
 }
-
 
 impl GlassEngineApp {
     pub fn new(
@@ -8464,12 +8463,7 @@ let (ubo_luces, luces_sombra) = match self.scene_state.lock() {
         // por el llamador (ADR D1; P1 aún no la usa).
         let (modo_canvas, camara_ui) = match self.scene_state.lock() {
             Ok(scene) => (
-                scene
-                    .entities
-                    .iter()
-                    .find_map(|e| e.canvas.as_ref())
-                    .map(|c| c.render_mode.clone())
-                    .unwrap_or_else(|| "ScreenSpaceOverlay".to_string()),
+                crate::ui_v2::modo_canvas_principal(&scene.entities),
                 crate::ui_v2::resolver_camara_principal(&scene.entities),
             ),
             Err(_) => ("ScreenSpaceOverlay".to_string(), None),
