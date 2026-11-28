@@ -27,6 +27,7 @@ pub enum EntityPreset {
     UIInputField,
     UIGroupRow,
     UIGroupColumn,
+    UIGrid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,6 +245,10 @@ impl HierarchyPanel {
             }
             if ui.button("↕ Panel con columna").clicked() {
                 *pending_action = Some(HierarchyAction::Create(EntityPreset::UIGroupColumn));
+                ui.close();
+            }
+            if ui.button("▦ Panel con rejilla").clicked() {
+                *pending_action = Some(HierarchyAction::Create(EntityPreset::UIGrid));
                 ui.close();
             }
         });
@@ -1113,6 +1118,21 @@ impl HierarchyPanel {
                         lg.spacing = 8.0;
                         lg.padding = [0.0; 4];
                         lg.alignment = "start".into();
+                    }
+                }
+                id
+            }
+            EntityPreset::UIGrid => {
+                let id = scene.create_entity(
+                    "Panel con rejilla".into(),
+                    vec!["Transform".into(), "RectTransform".into(), "Image".into(), "GridLayoutGroup".into()],
+                );
+                if let Some(ent) = scene.get_entity_mut(id) {
+                    if let Some(rt) = &mut ent.rect_transform {
+                        rt.size_delta = [400.0, 300.0];
+                    }
+                    if let Some(img) = &mut ent.ui_image {
+                        img.style_extra = "background-color: #ffffff;".into();
                     }
                 }
                 id

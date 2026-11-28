@@ -2,7 +2,7 @@ use egui::{Color32, DragValue, RichText, Slider, Ui};
 use glass_core::physics_material::{MaterialCombine, PhysicsMaterial};
 use glass_core::{
     AudioSourceData, CameraData, CanvasData, CharacterData, ColliderSpec, ContentSizeFitterData,
-    EntityData, LayoutElementData, LayoutGroupData, LightData,
+    EntityData, GridLayoutGroupData, LayoutElementData, LayoutGroupData, LightData,
     MeshData, PhysicsData,
     RectTransformData, SceneState, ScriptComponentData, UIButtonData, UITextData,
     UIImageData, UIInputFieldData,
@@ -345,6 +345,7 @@ pub enum TipoComponente {
     LayoutGroup,
     LayoutElement,
     ContentSizeFitter,
+    GridLayoutGroup,
 }
 
 impl TipoComponente {
@@ -370,6 +371,7 @@ impl TipoComponente {
             TipoComponente::LayoutGroup => "LayoutGroup",
             TipoComponente::LayoutElement => "LayoutElement",
             TipoComponente::ContentSizeFitter => "ContentSizeFitter",
+            TipoComponente::GridLayoutGroup => "GridLayoutGroup",
         }
     }
 }
@@ -1042,6 +1044,7 @@ pub fn extraer_componente(ent: &EntityData, tipo: TipoComponente) -> Option<Stri
         TipoComponente::LayoutGroup => ent.layout_group.as_ref().and_then(a_json),
         TipoComponente::LayoutElement => ent.layout_element.as_ref().and_then(a_json),
         TipoComponente::ContentSizeFitter => ent.content_size_fitter.as_ref().and_then(a_json),
+        TipoComponente::GridLayoutGroup => ent.grid_layout_group.as_ref().and_then(a_json),
         TipoComponente::Script => {
             if ent.script.is_none() && ent.script_data.is_none() {
                 None
@@ -1099,6 +1102,7 @@ pub fn aplicar_datos(ent: &mut EntityData, tipo: TipoComponente, json: &str) -> 
         TipoComponente::LayoutGroup => sustituir(&mut ent.layout_group, json),
         TipoComponente::LayoutElement => sustituir(&mut ent.layout_element, json),
         TipoComponente::ContentSizeFitter => sustituir(&mut ent.content_size_fitter, json),
+        TipoComponente::GridLayoutGroup => sustituir(&mut ent.grid_layout_group, json),
         TipoComponente::Script => {
             if ent.script.is_none() && ent.script_data.is_none() {
                 return false;
@@ -1162,6 +1166,7 @@ pub fn instalar_componente(ent: &mut EntityData, tipo: TipoComponente, json: &st
         TipoComponente::LayoutGroup => crear(&mut ent.layout_group, json, &mut ent.components, nombre),
         TipoComponente::LayoutElement => crear(&mut ent.layout_element, json, &mut ent.components, nombre),
         TipoComponente::ContentSizeFitter => crear(&mut ent.content_size_fitter, json, &mut ent.components, nombre),
+        TipoComponente::GridLayoutGroup => crear(&mut ent.grid_layout_group, json, &mut ent.components, nombre),
         TipoComponente::Script => {
             if ent.script.is_some() || ent.script_data.is_some() {
                 return false;
@@ -3572,6 +3577,67 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                     entity.components.retain(|c| c != "ContentSizeFitter");
                 }
 
+                // Sección GridLayoutGroup (V5b-3, G5): rejilla de celdas
+                // de tamaño fijo (cell_size, spacing, padding, esquina y
+                // eje de llenado, alineación del bloque, constraint).
+                let mut accion_grid = AccionCabecera::Nada;
+                let mut remove_grid = false;
+                if let Some(ref mut grid) = entity.grid_layout_group {
+                    seccion_componente(ui, "grid_layout_group", "▦ GridLayoutGroup", TipoComponente::GridLayoutGroup, true, self.portapapeles.as_ref(), &mut accion_grid, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Tamaño celda");
+                            ui.add(DragValue::new(&mut grid.cell_size[0]).speed(0.5));
+                            ui.add(DragValue::new(&mut grid.cell_size[1]).speed(0.5));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Espaciado");
+                            ui.add(DragValue::new(&mut grid.spacing[0]).speed(0.5));
+                            ui.add(DragValue::new(&mut grid.spacing[1]).speed(0.5));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Padding [izq, arr, der, aba]");
+                            for v in grid.padding.iter_mut() {
+                                ui.add(DragValue::new(v).speed(0.5));
+                            }
+                        });
+                        for (etiqueta, campo, opciones) in [
+                            ("Esquina inicio", &mut grid.start_corner, ["upper_left", "upper_right", "lower_left", "lower_right"].as_slice()),
+                            ("Eje llenado", &mut grid.start_axis, ["horizontal", "vertical"].as_slice()),
+                            ("Alineación", &mut grid.alignment, ["upper_left", "upper_center", "upper_right", "middle_left", "center", "middle_right", "lower_left", "lower_center", "lower_right", "start", "end"].as_slice()),
+                            ("Constraint", &mut grid.constraint, ["flexible", "fixed_column_count", "fixed_row_count"].as_slice()),
+                        ] {
+                            let salt = format!("grid_{}", etiqueta);
+                            let actual = campo.clone();
+                            ui.horizontal(|ui| {
+                                ui.label(etiqueta);
+                                egui::ComboBox::from_id_salt(salt)
+                                    .selected_text(actual)
+                                    .show_ui(ui, |ui| {
+                                        for v in opciones.iter() {
+                                            if ui.selectable_label(*campo == *v, *v).clicked() {
+                                                *campo = (*v).to_string();
+                                            }
+                                        }
+                                    });
+                            });
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("Nº columnas/filas");
+                            ui.add(DragValue::new(&mut grid.constraint_count));
+                        });
+                    });
+                    ui.separator();
+                }
+                if accion_grid == AccionCabecera::Quitar {
+                    remove_grid = true;
+                } else {
+                    self.ejecutar_accion_cabecera(entity, TipoComponente::GridLayoutGroup, accion_grid);
+                }
+                if remove_grid {
+                    entity.grid_layout_group = None;
+                    entity.components.retain(|c| c != "GridLayoutGroup");
+                }
+
                 // ==========================================
                 // 7. BOTÓN "AÑADIR COMPONENTE" ESTILO UNITY
                 // ==========================================
@@ -3625,6 +3691,7 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         hay_resultados |= coincide("LayoutGroup");
                         hay_resultados |= coincide("LayoutElement");
                         hay_resultados |= coincide("ContentSizeFitter");
+                        hay_resultados |= coincide("GridLayoutGroup");
 
                         if !hay_resultados && !q.is_empty() {
                             ui.label(RichText::new("Sin componentes que coincidan.").weak());
@@ -3766,6 +3833,12 @@ seccion_componente(ui, "light", "☼ Luz (Light)", TipoComponente::Light, true, 
                         if coincide("ContentSizeFitter") && entity.content_size_fitter.is_none() && ui.button("📏 ContentSizeFitter").clicked() {
                             entity.content_size_fitter = Some(ContentSizeFitterData::default());
                             entity.components.push("ContentSizeFitter".into());
+                            self.show_add_component_menu = false;
+                        }
+
+                        if coincide("GridLayoutGroup") && entity.grid_layout_group.is_none() && ui.button("▦ GridLayoutGroup").clicked() {
+                            entity.grid_layout_group = Some(GridLayoutGroupData::default());
+                            entity.components.push("GridLayoutGroup".into());
                             self.show_add_component_menu = false;
                         }
                     });

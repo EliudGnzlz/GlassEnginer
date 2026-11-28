@@ -552,6 +552,7 @@ mod tests {
             layout_group: None,
             layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
             style_extra: String::new(),
             raycast_target: false,
         }

@@ -15,7 +15,7 @@ use crate::estilos::{Dimension, Display, Sombra, StyleProps, TamanoColumna, Text
 use crate::parser::resolver_estilos;
 use glass_core::scene::{
     ajustar_fitter, calcular_minimos_bottom_up, calcular_preferidos_bottom_up,
-    canvas_scale_factor, layout_group_rects, layout_group_rects_control,
+    canvas_scale_factor, layout_grid_rects, layout_group_rects, layout_group_rects_control,
     resolve_ui_rect_in, EntradaPreferido, LayoutElementData,
 };
 use std::sync::OnceLock;
@@ -510,6 +510,7 @@ pub fn colocar_documento_con_medidor(
                 layout_group: nodo.layout_group.as_ref(),
                 layout_element: nodo.layout_element.as_ref(),
                 texto,
+                grid_layout: nodo.grid_layout_group.as_ref(),
             }
         })
         .collect();
@@ -928,7 +929,8 @@ pub fn aplicar_flex_con_preferidos(
         let estilos = resolver_estilos(nodo_padre, &EstadoPseudo::default());
 
         let es_flex = matches!(estilos.display, Some(Display::Flex))
-            || nodo_padre.layout_group.is_some();
+            || nodo_padre.layout_group.is_some()
+            || nodo_padre.grid_layout_group.is_some();
         if !es_flex {
             continue;
         }
@@ -944,9 +946,28 @@ pub fn aplicar_flex_con_preferidos(
             continue;
         }
 
-        let rect_padre = rects_ref[i_padre];
+        let mut rect_padre = rects_ref[i_padre];
 
-        if let Some(grupo) = &nodo_padre.layout_group {
+        // V5b-2 (G6) + V5b-3: el fitter ajusta el rect del grupo a su
+        // tamaño (mínimo o preferido de la pasada bottom-up, que ya agrega
+        // el contenido y respeta un explícito del propio grupo — como el
+        // LayoutElement.preferred de Unity) ANTES de repartir a los hijos;
+        // el reparto usa el rect ajustado. Vale para LayoutGroup y para
+        // la rejilla.
+        if nodo_padre.layout_group.is_some() || nodo_padre.grid_layout_group.is_some() {
+            if let Some(fitter) = &nodo_padre.content_size_fitter {
+                rect_padre = ajustar_fitter(
+                    rect_padre,
+                    fitter,
+                    minimos[i_padre],
+                    preferidos[i_padre],
+                );
+                rects_ref[i_padre] = rect_padre;
+            }
+        }
+
+        if let Some(grid) = &nodo_padre.grid_layout_group {
+            // Rejilla (V5b-3, G5): gana a layout_group si ambos coexisten.
             // Filtrar hijos que participan en el layout (ignore_layout = false).
             let hijos_participantes: Vec<usize> = hijos_idx
                 .iter()
@@ -959,22 +980,28 @@ pub fn aplicar_flex_con_preferidos(
                         .unwrap_or(true)
                 })
                 .collect();
-
-            // V5b-2 (G6): el fitter ajusta el rect del grupo a su tamaño
-            // (mínimo o preferido de la pasada bottom-up, que ya agrega
-            // el contenido y respeta un explícito del propio grupo — como
-            // el LayoutElement.preferred de Unity) ANTES de repartir a
-            // los hijos; el reparto usa el rect ajustado.
-            let mut rect_padre = rect_padre;
-            if let Some(fitter) = &nodo_padre.content_size_fitter {
-                rect_padre = ajustar_fitter(
-                    rect_padre,
-                    fitter,
-                    minimos[i_padre],
-                    preferidos[i_padre],
-                );
-                rects_ref[i_padre] = rect_padre;
+            let rects_hijos: Vec<[f32; 4]> =
+                hijos_participantes.iter().map(|&j| rects_ref[j]).collect();
+            let nuevos = layout_grid_rects(rect_padre, grid, &rects_hijos);
+            for (k, &j) in hijos_participantes.iter().enumerate() {
+                if let Some(nuevo) = nuevos.get(k) {
+                    rects_ref[j] = *nuevo;
+                }
             }
+            // Hijos con ignore_layout conservan su rect tal cual (no se tocan).
+        } else if let Some(grupo) = &nodo_padre.layout_group {
+            // Filtrar hijos que participan en el layout (ignore_layout = false).
+            let hijos_participantes: Vec<usize> = hijos_idx
+                .iter()
+                .copied()
+                .filter(|&j| {
+                    doc.nodos[j]
+                        .layout_element
+                        .as_ref()
+                        .map(|le| !le.ignore_layout)
+                        .unwrap_or(true)
+                })
+                .collect();
 
             let rects_hijos: Vec<[f32; 4]> =
                 hijos_participantes.iter().map(|&j| rects_ref[j]).collect();
@@ -1370,6 +1397,7 @@ mod tests {
             layout_group: None,
             layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
             style_extra: String::new(),
             raycast_target: false,
         };
@@ -1391,6 +1419,7 @@ mod tests {
             layout_group: None,
             layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
             style_extra: String::new(),
             raycast_target: false,
         };
@@ -1412,6 +1441,7 @@ mod tests {
             layout_group: None,
             layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
             style_extra: String::new(),
             raycast_target: false,
         };
@@ -1487,6 +1517,7 @@ mod tests {
             layout_group: grupo,
             layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
             style_extra: extra.to_string(),
             raycast_target: false,
         }
@@ -1521,6 +1552,7 @@ mod tests {
             layout_group: None,
             layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
             style_extra: String::new(),
             raycast_target: false,
         }
@@ -1688,6 +1720,7 @@ mod tests {
                     canvas: Some(CanvasData { render_mode: "ScreenSpaceOverlay".into(), reference_resolution: [400.0, 80.0], match_width_or_height: 0.0 }),
                     imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
                     style_extra: "display: grid; grid-template-columns: 100px 1fr; gap: 10px;".to_string(),
                     raycast_target: false,
                 },
@@ -1698,6 +1731,7 @@ mod tests {
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [100.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
                     canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
                     style_extra: String::new(), raycast_target: false,
                 },
                 NodoDocumento {
@@ -1707,6 +1741,7 @@ mod tests {
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [80.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
                     canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
                     style_extra: String::new(), raycast_target: false,
                 },
                 NodoDocumento {
@@ -1716,6 +1751,7 @@ mod tests {
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [60.0, 30.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
                     canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
                     style_extra: String::new(), raycast_target: false,
                 },
             ],
@@ -1748,6 +1784,7 @@ mod tests {
                     canvas: Some(CanvasData { render_mode: "ScreenSpaceOverlay".into(), reference_resolution: [320.0, 80.0], match_width_or_height: 0.0 }),
                     imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
                     style_extra: "display: grid; grid-template-columns: repeat(auto-fill, 100px); gap: 10px;".to_string(),
                     raycast_target: false,
                 },
@@ -1758,6 +1795,7 @@ mod tests {
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [100.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
                     canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
                     style_extra: String::new(), raycast_target: false,
                 },
                 NodoDocumento {
@@ -1767,6 +1805,7 @@ mod tests {
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [100.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
                     canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
                     style_extra: String::new(), raycast_target: false,
                 },
                 NodoDocumento {
@@ -1776,6 +1815,7 @@ mod tests {
                     rect_transform: RectTransformData { anchored_position: [0.0, 0.0], size_delta: [100.0, 40.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
                     canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
                     style_extra: String::new(), raycast_target: false,
                 },
             ],
@@ -1807,6 +1847,7 @@ mod tests {
                         canvas: Some(CanvasData { render_mode: "ScreenSpaceOverlay".into(), reference_resolution: [1000.0, 1000.0], match_width_or_height: 0.0 }),
                         imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
                         style_extra: String::new(), raycast_target: false,
                     },
                     NodoDocumento {
@@ -1816,6 +1857,7 @@ mod tests {
                         rect_transform: RectTransformData { anchored_position: [0.0, y], size_delta: [50.0, 50.0], anchor_min: [0.5, 0.5], anchor_max: [0.5, 0.5], pivot: [0.5, 0.5] },
                         canvas: None, imagen: None, texto: None, boton: None, drag: None, layout_group: None, layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
                         style_extra: style_extra.to_string(), raycast_target: false,
                     },
                 ],
@@ -2173,6 +2215,7 @@ mod tests {
             layout_group: None,
             layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
             style_extra: extra.to_string(),
             raycast_target: true,
         }
@@ -2331,6 +2374,7 @@ mod tests_v5b1 {
             layout_group: None,
             layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
             style_extra: String::new(),
             raycast_target: false,
         }
@@ -2658,6 +2702,7 @@ mod tests_v5b2 {
             layout_group: None,
             layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
             style_extra: String::new(),
             raycast_target: false,
         }
@@ -2871,5 +2916,361 @@ mod tests_v5b2 {
         assert_rect(&rects, 3, [15.0, 15.0, 80.0, 50.0]);
         assert_rect(&rects, 4, [99.0, 15.0, 120.0, 50.0]);
         assert_rect(&rects, 5, [10.0, 157.5, 380.0, 132.5]);
+    }
+}
+
+#[cfg(test)]
+mod tests_v5b3 {
+    use super::*;
+    use crate::documento::{Documento, NodoDocumento, TipoGraphic};
+    use glass_core::scene::{
+        calcular_preferidos_bottom_up, CanvasData, ContentSizeFitterData, EntradaPreferido,
+        GridLayoutGroupData, LayoutElementData, LayoutGroupData, RectTransformData,
+    };
+
+    fn nodo_base(entidad: u64, padre: Option<usize>, activo: bool) -> NodoDocumento {
+        NodoDocumento {
+            entidad,
+            nombre: format!("nodo_{}", entidad),
+            padre,
+            hijos: Vec::new(),
+            graphic: TipoGraphic::Ninguno,
+            es_canvas: false,
+            es_canvas_raiz: false,
+            activo,
+            rect_transform: RectTransformData {
+                anchor_min: [0.0, 0.0],
+                anchor_max: [1.0, 1.0],
+                anchored_position: [0.0, 0.0],
+                size_delta: [0.0, 0.0],
+                pivot: [0.5, 0.5],
+            },
+            canvas: None,
+            imagen: None,
+            texto: None,
+            boton: None,
+            drag: None,
+            layout_group: None,
+            layout_element: None,
+            content_size_fitter: None,
+            grid_layout_group: None,
+            style_extra: String::new(),
+            raycast_target: false,
+        }
+    }
+
+    fn rect_transform_fijo(x: f32, y: f32, w: f32, h: f32) -> RectTransformData {
+        RectTransformData {
+            anchor_min: [0.0, 1.0],
+            anchor_max: [0.0, 1.0],
+            anchored_position: [x + w * 0.5, -(y + h * 0.5)],
+            size_delta: [w, h],
+            pivot: [0.5, 0.5],
+        }
+    }
+
+    fn grupo_layout(
+        dir: &str,
+        spacing: f32,
+        padding: [f32; 4],
+        control_w: bool,
+        control_h: bool,
+        expand_w: bool,
+        expand_h: bool,
+    ) -> LayoutGroupData {
+        LayoutGroupData {
+            direction: dir.into(),
+            spacing,
+            padding,
+            alignment: "start".into(),
+            child_control_width: control_w,
+            child_control_height: control_h,
+            child_force_expand_width: expand_w,
+            child_force_expand_height: expand_h,
+        }
+    }
+
+    fn elemento(
+        min_w: Option<f32>,
+        min_h: Option<f32>,
+        pref_w: Option<f32>,
+        pref_h: Option<f32>,
+        flex_w: f32,
+        flex_h: f32,
+    ) -> LayoutElementData {
+        LayoutElementData {
+            min_width: min_w,
+            min_height: min_h,
+            preferred_width: pref_w,
+            preferred_height: pref_h,
+            flexible_width: flex_w,
+            flexible_height: flex_h,
+            ignore_layout: false,
+        }
+    }
+
+    fn fitter(h: &str, v: &str) -> ContentSizeFitterData {
+        ContentSizeFitterData {
+            horizontal_fit: h.into(),
+            vertical_fit: v.into(),
+        }
+    }
+
+    fn grid(
+        cell: [f32; 2],
+        spacing: [f32; 2],
+        padding: [f32; 4],
+        constraint: &str,
+        count: u32,
+    ) -> GridLayoutGroupData {
+        GridLayoutGroupData {
+            cell_size: cell,
+            spacing,
+            padding,
+            start_corner: "upper_left".into(),
+            start_axis: "horizontal".into(),
+            alignment: "start".into(),
+            constraint: constraint.into(),
+            constraint_count: count,
+        }
+    }
+
+    fn doc_de_nodos(mut nodos: Vec<NodoDocumento>) -> Documento {
+        let n = nodos.len();
+        for nodo in nodos.iter_mut() {
+            nodo.hijos.clear();
+        }
+        for i in 0..n {
+            if let Some(p) = nodos[i].padre {
+                let idx = i;
+                nodos[p].hijos.push(idx);
+            }
+        }
+        Documento {
+            canvas_raiz: 0,
+            nodos,
+            avisos: vec![],
+        }
+    }
+
+    fn canvas_400x300() -> NodoDocumento {
+        let mut n0 = nodo_base(0, None, true);
+        n0.es_canvas = true;
+        n0.es_canvas_raiz = true;
+        n0.canvas = Some(CanvasData {
+            render_mode: "ScreenSpaceOverlay".into(),
+            reference_resolution: [400.0, 300.0],
+            match_width_or_height: 0.5,
+        });
+        n0
+    }
+
+    fn rects_colocados(doc: Documento) -> Vec<[f32; 4]> {
+        let medidor = MedidorTexto::new();
+        let colocado =
+            colocar_documento_con_medidor(&doc, Viewport { ancho: 400.0, alto: 300.0 }, &medidor);
+        colocado
+            .nodos
+            .iter()
+            .map(|n| [n.rect.x, n.rect.y, n.rect.ancho, n.rect.alto])
+            .collect()
+    }
+
+    fn cerca(a: f32, b: f32) -> bool {
+        (a - b).abs() < 0.1
+    }
+
+    fn assert_rect(rects: &[[f32; 4]], idx: usize, esperado: [f32; 4]) {
+        let r = rects[idx];
+        assert!(
+            cerca(r[0], esperado[0])
+                && cerca(r[1], esperado[1])
+                && cerca(r[2], esperado[2])
+                && cerca(r[3], esperado[3]),
+            "nodo {}: {:?}, esperado {:?}",
+            idx,
+            r,
+            esperado
+        );
+    }
+
+    /// Árbol (a): VGroup → [Grid → [ImgA..ImgD], ImgC]. Grid celda
+    /// [100,50], spacing [10,5], padding [10,5,10,5], 2 columnas fijas,
+    /// pref_h 120. Preferidos: celdas [50,50], Grid [230,120], C [100,50].
+    fn arbol_v5b3_a() -> Vec<NodoDocumento> {
+        let mut n1 = nodo_base(1, Some(0), true);
+        n1.rect_transform = rect_transform_fijo(0.0, 0.0, 400.0, 300.0);
+        // Control Size sin Force Expand: los tamaños quedan en los
+        // preferidos (la dorada es sobre la rejilla, no sobre el expand).
+        n1.layout_group = Some(grupo_layout("vertical", 5.0, [10.0; 4], true, true, false, false));
+
+        let mut n2 = nodo_base(2, Some(1), true);
+        n2.rect_transform = rect_transform_fijo(0.0, 0.0, 200.0, 60.0);
+        n2.grid_layout_group = Some(grid(
+            [100.0, 50.0],
+            [10.0, 5.0],
+            [10.0, 5.0, 10.0, 5.0],
+            "fixed_column_count",
+            2,
+        ));
+        n2.layout_element = Some(elemento(None, None, None, Some(120.0), 0.0, 0.0));
+
+        let mut celdas = Vec::new();
+        for id in 3..=6 {
+            let mut c = nodo_base(id, Some(2), true);
+            c.graphic = TipoGraphic::Imagen;
+            c.rect_transform = rect_transform_fijo(0.0, 0.0, 50.0, 50.0);
+            celdas.push(c);
+        }
+
+        let mut n7 = nodo_base(7, Some(1), true);
+        n7.graphic = TipoGraphic::Imagen;
+        n7.rect_transform = rect_transform_fijo(0.0, 0.0, 100.0, 30.0);
+        n7.layout_element = Some(elemento(None, None, None, Some(50.0), 0.0, 0.0));
+
+        let mut nodos = vec![canvas_400x300(), n1, n2];
+        nodos.extend(celdas);
+        nodos.push(n7);
+        nodos
+    }
+
+    #[test]
+    fn test_v5b3_dorada_grid_dentro_de_v() {
+        let doc = doc_de_nodos(arbol_v5b3_a());
+        let rects = rects_colocados(doc);
+        assert_rect(&rects, 1, [0.0, 0.0, 400.0, 300.0]); // V
+        assert_rect(&rects, 2, [10.0, 10.0, 380.0, 120.0]); // Grid
+        assert_rect(&rects, 3, [20.0, 15.0, 100.0, 50.0]);
+        assert_rect(&rects, 4, [130.0, 15.0, 100.0, 50.0]);
+        assert_rect(&rects, 5, [20.0, 70.0, 100.0, 50.0]);
+        assert_rect(&rects, 6, [130.0, 70.0, 100.0, 50.0]);
+        assert_rect(&rects, 7, [10.0, 135.0, 380.0, 50.0]); // ImgC
+    }
+
+    #[test]
+    fn test_v5b3_fitter_en_grid() {
+        // VGroup controla SOLO el ancho. La colocación es top-down de una
+        // sola pasada: V coloca a Grid con su rect actual (alto 60) y el
+        // fitter lo expande luego a su preferido (115). Por eso ImgC queda
+        // en y=75 (= 10 + 60 + 5) y no en 130.
+        let mut nodos = arbol_v5b3_a();
+        nodos[1].layout_group = Some(grupo_layout("vertical", 5.0, [10.0; 4], true, false, false, false));
+        nodos[2].layout_element = None;
+        nodos[2].content_size_fitter = Some(fitter("none", "preferred"));
+        nodos[7].layout_element = None;
+        let doc = doc_de_nodos(nodos);
+        let rects = rects_colocados(doc);
+        assert_rect(&rects, 2, [10.0, 10.0, 380.0, 115.0]); // fitter expande a 115
+        assert_rect(&rects, 3, [20.0, 15.0, 100.0, 50.0]);
+        assert_rect(&rects, 4, [130.0, 15.0, 100.0, 50.0]);
+        assert_rect(&rects, 5, [20.0, 70.0, 100.0, 50.0]);
+        assert_rect(&rects, 6, [130.0, 70.0, 100.0, 50.0]);
+        assert_rect(&rects, 7, [10.0, 75.0, 380.0, 30.0]); // una sola pasada
+    }
+
+    #[test]
+    fn test_v5b3_grid_gana_a_layout_group_e_ignore_layout() {
+        // Nodo hijo directo del canvas con GridLayoutGroup Y LayoutGroup.
+        let mut n1 = nodo_base(1, Some(0), true);
+        n1.rect_transform = rect_transform_fijo(0.0, 0.0, 400.0, 300.0);
+        n1.grid_layout_group = Some(grid(
+            [100.0, 50.0],
+            [10.0, 0.0],
+            [0.0; 4],
+            "fixed_column_count",
+            2,
+        ));
+        n1.layout_group = Some(grupo_layout("horizontal", 0.0, [0.0; 4], false, false, false, false));
+
+        let mut n2 = nodo_base(2, Some(1), true);
+        n2.graphic = TipoGraphic::Imagen;
+        n2.rect_transform = rect_transform_fijo(0.0, 0.0, 50.0, 50.0);
+        let mut n3 = nodo_base(3, Some(1), true);
+        n3.graphic = TipoGraphic::Imagen;
+        n3.rect_transform = rect_transform_fijo(0.0, 0.0, 50.0, 50.0);
+        n3.layout_element = Some(LayoutElementData {
+            ignore_layout: true,
+            ..Default::default()
+        });
+        let mut n4 = nodo_base(4, Some(1), true);
+        n4.graphic = TipoGraphic::Imagen;
+        n4.rect_transform = rect_transform_fijo(0.0, 0.0, 50.0, 50.0);
+
+        let doc = doc_de_nodos(vec![canvas_400x300(), n1, n2, n3, n4]);
+        let rects = rects_colocados(doc);
+        assert_rect(&rects, 2, [0.0, 0.0, 100.0, 50.0]); // A
+        assert_rect(&rects, 3, [0.0, 0.0, 50.0, 50.0]); // B conserva su rect
+        assert_rect(&rects, 4, [110.0, 0.0, 100.0, 50.0]); // C
+
+        // Preferido del nodo: el de la rejilla ([210,50]), no el del LayoutGroup.
+        let medir = |_t: &str, _tam: f32, _max: f32, _ls: f32| (0.0, 0.0);
+        let grid_n1 = grid(
+            [100.0, 50.0],
+            [10.0, 0.0],
+            [0.0; 4],
+            "fixed_column_count",
+            2,
+        );
+        let grupo_n1 = grupo_layout("horizontal", 0.0, [0.0; 4], false, false, false, false);
+        let el_ignora = LayoutElementData {
+            ignore_layout: true,
+            ..Default::default()
+        };
+        let hijos: Vec<usize> = vec![2, 3, 4];
+        let hijos_canvas: Vec<usize> = vec![1];
+        let entradas = vec![
+            EntradaPreferido {
+                padre: None,
+                hijos: &hijos_canvas,
+                activo: true,
+                rect_actual: [0.0, 0.0, 400.0, 300.0],
+                layout_group: None,
+                layout_element: None,
+                texto: None,
+                grid_layout: None,
+            },
+            EntradaPreferido {
+                padre: Some(0),
+                hijos: &hijos,
+                activo: true,
+                rect_actual: [0.0, 0.0, 400.0, 300.0],
+                layout_group: Some(&grupo_n1),
+                layout_element: None,
+                texto: None,
+                grid_layout: Some(&grid_n1),
+            },
+            EntradaPreferido {
+                padre: Some(1),
+                hijos: &[],
+                activo: true,
+                rect_actual: [0.0, 0.0, 50.0, 50.0],
+                layout_group: None,
+                layout_element: None,
+                texto: None,
+                grid_layout: None,
+            },
+            EntradaPreferido {
+                padre: Some(1),
+                hijos: &[],
+                activo: true,
+                rect_actual: [0.0, 0.0, 50.0, 50.0],
+                layout_group: None,
+                layout_element: Some(&el_ignora),
+                texto: None,
+                grid_layout: None,
+            },
+            EntradaPreferido {
+                padre: Some(1),
+                hijos: &[],
+                activo: true,
+                rect_actual: [0.0, 0.0, 50.0, 50.0],
+                layout_group: None,
+                layout_element: None,
+                texto: None,
+                grid_layout: None,
+            },
+        ];
+        let pref = calcular_preferidos_bottom_up(&entradas, &medir);
+        assert_eq!(pref[1], [210.0, 50.0]);
     }
 }

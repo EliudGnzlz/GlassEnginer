@@ -230,6 +230,7 @@ fn construir_nodo(
         layout_group: ent.layout_group.clone(),
         layout_element: ent.layout_element.clone(),
         content_size_fitter: ent.content_size_fitter.clone(),
+        grid_layout_group: ent.grid_layout_group.clone(),
         style_extra,
         raycast_target,
     }

@@ -533,7 +533,7 @@ impl McpServer {
                         },
                         {
                             "name": "glass_component_get",
-                            "description": "Devuelve el JSON completo de un componente de una entidad (Transform, MeshRenderer, Rigidbody, Collider, CharacterController, Camera, Light, Script, AudioSource, Canvas, RectTransform, Text, Button, Image, DragDrop, Animator, Fog, Particles, Portal, LayoutGroup, LayoutElement, ContentSizeFitter).",
+                            "description": "Devuelve el JSON completo de un componente de una entidad (Transform, MeshRenderer, Rigidbody, Collider, CharacterController, Camera, Light, Script, AudioSource, Canvas, RectTransform, Text, Button, Image, DragDrop, Animator, Fog, Particles, Portal, LayoutGroup, LayoutElement, ContentSizeFitter, GridLayoutGroup).",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -5703,6 +5703,41 @@ mod tests_catchup {
             json!({ "entity_id": 4245, "component": "LayoutElement" }),
         );
         assert!(r.contains("2.0"), "get flexible: {r}");
+    }
+
+    #[test]
+    fn component_set_get_roundtrip_grid_layout_group() {
+        let srv = servidor();
+        srv.scene
+            .lock()
+            .unwrap()
+            .entities
+            .push(glass_core::scene::EntityData::new(
+                4246,
+                "GridMcp".into(),
+                vec!["Transform".into()],
+            ));
+
+        let r = llamar(
+            &srv,
+            "glass_component_set",
+            json!({ "entity_id": 4246, "component": "GridLayoutGroup", "values": { "cell_size": [120.0, 60.0], "constraint": "fixed_column_count", "constraint_count": 3 } }),
+        );
+        assert!(!r.contains("\"error\""), "set GridLayoutGroup: {r}");
+
+        let r = llamar(
+            &srv,
+            "glass_component_get",
+            json!({ "entity_id": 4246, "component": "GridLayoutGroup" }),
+        );
+        assert!(r.contains("120.0"), "get GridLayoutGroup: {r}");
+        assert!(r.contains("fixed_column_count"), "get GridLayoutGroup: {r}");
+        // El get devuelve el JSON embebido como texto con las comillas
+        // escapadas (\"...\"): el patrón lleva esas barras.
+        assert!(
+            r.replace(' ', "").contains("\\\"constraint_count\\\":3"),
+            "get GridLayoutGroup: {r}"
+        );
     }
 
     #[test]

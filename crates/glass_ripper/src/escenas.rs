@@ -314,6 +314,7 @@ fn entidad_vacia(id: u64) -> EntityData {
         layout_group: None,
         layout_element: None,
         content_size_fitter: None,
+grid_layout_group: None,
         ui_drag: None,
         animator: None,
         portal: None,

@@ -875,6 +875,7 @@ mod pruebas {
             layout_group: None,
             layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
             style_extra: extra.to_string(),
             raycast_target: true,
         }
@@ -980,6 +981,7 @@ mod pruebas {
                 layout_group: None,
                 layout_element: None,
             content_size_fitter: None,
+grid_layout_group: None,
                 style_extra: String::new(),
                 raycast_target: true,
             }
